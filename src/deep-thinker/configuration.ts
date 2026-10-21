@@ -31,9 +31,9 @@ interface Preferences { revision: number; configuration_json: string | null; dra
 export class DeepConfigurationUI {
   constructor(readonly store: DeepStore, readonly catalog: DshModelCatalog | undefined, readonly questions: DshUserQuestions | undefined,
     readonly routes: readonly ModelRoute[], readonly compatibility: DshModelCompatibility | undefined, readonly budget: DeepBudget) {}
-  async problems(configuration: DeepConfiguration): Promise<string[]> {
+  async problems(configuration: DeepConfiguration, validation: 'catalog' | 'connection' = 'connection'): Promise<string[]> {
     if (!this.catalog) return ['DSHのモデル一覧がありません']
-    const catalog = await readModelCatalog(this.catalog, [...new Set([
+    const catalog = await readModelCatalog(this.catalog, validation === 'catalog' ? undefined : [...new Set([
       ...DEEP_ROLES.map(role => configuration.roles[role].provider),
       ...(configuration.reasoningMode === 'quality' && configuration.alternativeSolver ? [configuration.alternativeSolver.provider] : []),
     ])])
@@ -41,9 +41,9 @@ export class DeepConfigurationUI {
     const bindings = DEEP_ROLES.map(role => ({ label: labels[role] as string, binding: configuration.roles[role] }))
     if (configuration.reasoningMode === 'quality' && configuration.alternativeSolver) bindings.push({ label: '別案のモデル', binding: configuration.alternativeSolver })
     return modelBindingProblems(bindings, catalog,
-      modelRoutesForCatalog(catalog, [...this.routes, ...configuration.routeBindings.filter(r => !this.routes.some(known => known.provider === r.provider))]), this.compatibility)
+      modelRoutesForCatalog(catalog, [...this.routes, ...configuration.routeBindings.filter(r => !this.routes.some(known => known.provider === r.provider))]), this.compatibility, validation)
   }
-  async resolve(workspace: string, agent: DeepNativeAgent): Promise<DeepConfiguration | null> {
+  async resolve(workspace: string, agent: DeepNativeAgent, validation: 'catalog' | 'connection' = 'connection'): Promise<DeepConfiguration | null> {
     const saved = await this.store.database(db => db.prepare('SELECT configuration_json FROM dsh_deep_preferences WHERE workspace=?').get<{configuration_json:string|null}>(workspace))
     if (saved?.configuration_json) return LegacyDeepConfigurationSchema.parse(JSON.parse(saved.configuration_json))
     const binding = currentDeepModel(agent)
@@ -51,7 +51,7 @@ export class DeepConfigurationUI {
     const routes = this.catalog ? modelRoutesForCatalog(await readModelCatalog(this.catalog), this.routes) : this.routes
     const configuration = DeepConfigurationSchema.parse({ roles: Object.fromEntries(DEEP_ROLES.map(role => [role, binding])), budget: this.budget,
       routeBindings: routes.filter(r => r.family !== 'orcarouter'), localProviders: routes.filter(route => route.connection === 'local').map(route => route.provider) })
-    return (await this.problems(configuration)).length ? null : configuration
+    return (await this.problems(configuration, validation)).length ? null : configuration
   }
   async #save(workspace: string, revision: number, draft: Draft, apply: boolean): Promise<number> {
     return this.store.transaction(db => {
@@ -66,24 +66,28 @@ export class DeepConfigurationUI {
     if (!this.catalog) throw new DeepConfigurationPending('モデル一覧の機能がありません')
     const saved = await this.store.database(db => db.prepare('SELECT * FROM dsh_deep_preferences WHERE workspace=?').get<Preferences & Record<string, unknown>>(workspace))
     let revision = saved?.revision ?? 0
-    let draft = DraftSchema.parse(saved?.draft_json ? JSON.parse(saved.draft_json) : saved?.configuration_json ? JSON.parse(saved.configuration_json) : await this.resolve(workspace, agent) ?? { roles: {}, budget: this.budget })
+    let draft = DraftSchema.parse(saved?.draft_json ? JSON.parse(saved.draft_json) : saved?.configuration_json ? JSON.parse(saved.configuration_json) : await this.resolve(workspace, agent, 'catalog') ?? { roles: {}, budget: this.budget })
+    let validationProblems: string[] = []
     while (true) {
       const catalog = await readModelCatalog(this.catalog)
       const retired = new Set(['orcarouter', ...draft.routeBindings.filter(r => r.family === 'orcarouter').map(r => r.provider)])
       draft = { ...draft, roles: Object.fromEntries(Object.entries(draft.roles).filter(([, binding]) => !retired.has(binding!.provider))), routeBindings: draft.routeBindings.filter(r => r.family !== 'orcarouter'), ...(draft.alternativeSolver && retired.has(draft.alternativeSolver.provider) ? {alternativeSolver: undefined} : {}) }
       const complete = DeepConfigurationSchema.safeParse(draft)
-      const problems = complete.success ? await this.problems(complete.data) : ['四つの役割にモデルを設定してください']
+      const problems = complete.success ? await this.problems(complete.data, 'catalog') : ['四つの役割にモデルを設定してください']
       const roleChoices = DEEP_ROLES.map(role => `${labels[role]}: ${draft.roles[role] ? `${draft.roles[role]!.provider} / ${draft.roles[role]!.model}` : '未設定'}`)
       const modeChoice = `推論: ${draft.reasoningMode === 'quality' ? '品質重視（実験）' : '通常'}`
       const alternativeChoice = `別案のモデル: ${draft.alternativeSolver ? `${draft.alternativeSolver.provider} / ${draft.alternativeSolver.model}` : '未設定'}`
       const choice = await deepQuestion(this.questions, agent, signal, 'deep-configuration', 'Deepのモデルと予算', [...roleChoices, modeChoice, ...(draft.reasoningMode === 'quality' ? [alternativeChoice] : []), '予算を編集', ...(complete.success && !problems.length ? ['保存'] : [])],
-        `同じworkspaceの今後の開始に適用します。予約・実行中の構成は自動変更しません。\n${problems.join('\n')}\n${(Object.keys(budgetLabels) as (keyof DeepBudget)[]).map(key => `${budgetLabels[key]}: ${draft.budget[key]}`).join('\n')}\nトークン数は推定を含みます。provider内部の再送や料金の厳密な上限は保証しません。`)
-      if (choice === '保存' && complete.success && !(await this.problems(complete.data)).length) {
+        `同じworkspaceの今後の開始に適用します。予約・実行中の構成は自動変更しません。\n${[...problems, ...validationProblems].join('\n')}\n${(Object.keys(budgetLabels) as (keyof DeepBudget)[]).map(key => `${budgetLabels[key]}: ${draft.budget[key]}`).join('\n')}\nトークン数は推定を含みます。provider内部の再送や料金の厳密な上限は保証しません。`)
+      if (choice === '保存' && complete.success) {
+        validationProblems = await this.problems(complete.data)
+        if (validationProblems.length) continue
         const routes = modelRoutesForCatalog(catalog, [...this.routes, ...complete.data.routeBindings]).filter(r => r.family !== 'orcarouter')
         draft = { ...complete.data, routeBindings: routes.filter(r => r.family !== 'orcarouter'), localProviders: routes.filter(r => r.connection === 'local').map(r => r.provider) }
         revision = await this.#save(workspace, revision, draft, true)
         return DeepConfigurationSchema.parse(draft)
       }
+      validationProblems = []
       if (choice === modeChoice) {
         const mode = await deepQuestion(this.questions, agent, signal, 'deep-reasoning-mode', '推論の進め方', ['通常', '品質重視（実験）', '戻る'], '品質重視は2案を比較し、必要なら1回修正して再検証します。総予算は増やしません。同じモデルでも利用できますが、一致は正しさの証明ではありません。')
         if (mode === '戻る') continue

@@ -15,9 +15,9 @@ export async function modelAutoCandidates(catalog: DshModelCatalog | undefined, 
     return { routes: [], digest: '', reason: 'candidate_unavailable' }
   try {
     const providers = await catalog.listProviders()
-    const eligible = providers.filter(p => p.route
+    const eligible = providers.filter(p => (!config.routes || config.routes.some(route => route.binding.provider === p.id)) && (p.route
       ? p.route.family === 'openai' && p.route.connection === 'codex' && p.route.protocol === 'responses'
-      : p.id === 'openai-codex') // The native adapter validates its legacy canonical route.
+      : p.id === 'openai-codex')) // The native adapter validates its legacy canonical route.
     if (!eligible.length) return { routes: [], digest: '', reason: 'candidate_unavailable' }
     const catalogs = await Promise.allSettled(eligible.map(p => catalog.listModels(p.id)))
     const listed = catalogs.flatMap(result => result.status === 'fulfilled' ? [...result.value] : [])

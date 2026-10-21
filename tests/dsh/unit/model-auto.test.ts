@@ -137,6 +137,18 @@ test('catalog rejects unsupported effort and retains only exact validated bindin
   assert.deepEqual(candidates.routes.map(route => route.id), ['luna-low', 'luna-high', 'sol-high'])
 })
 
+test('explicit model-auto routes do not list an unselected Codex connection', async () => {
+  const base = catalog(), listed: string[] = []
+  const selected = DEFAULT_MODEL_AUTO_ROUTES.slice(0, 2)
+  const result = await modelAutoCandidates({ ...base,
+    listProviders: () => [...base.listProviders() as readonly { id: string; name: string }[],
+      { id: 'unused-codex', name: 'Unused', route: { provider: 'unused-codex', family: 'openai', connection: 'codex', protocol: 'responses' } }],
+    listModels: async provider => { listed.push(provider); return base.listModels(provider) },
+  }, ModelAutoConfig.parse({ mode: 'auto', routes: selected }), [], signal, 0)
+  assert.deepEqual(listed, ['openai-codex'])
+  assert.equal(result.routes.length, 2)
+})
+
 test('configuration change resets persisted session mode so off plus restart disables routing', async t => {
   const f = await fixture(); t.after(f.close)
   assert.equal((await f.store.session('s1')).mode, 'auto')

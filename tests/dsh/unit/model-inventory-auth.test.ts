@@ -23,7 +23,7 @@ test('head/worker inventory checks membership without resolving credentials or i
 
 test('template display never resolves unselected providers; confirmation resolves each selected binding once', async () => {
   for (const reject of [false, true]) {
-    let confirmed = false, rejected = false, credentialWrites = 0
+    let confirmed = false, rejected = false, credentialWrites = 0, errorDisplayed = false
     const resolved: string[] = [], listedAfterConfirmation: string[] = []
     let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'enno', status: 'selecting' } }
     const llm = { listProviders: () => providers,
@@ -42,6 +42,7 @@ test('template display never resolves unselected providers; confirmation resolve
       save: async (revision, value) => stored = { revision: revision + 1, value },
       questions: { ask: async r => {
         const q = r.questions[0]
+        if (rejected && q.detail?.includes('synthetic credential unavailable')) errorDisplayed = true
         if (!confirmed) assert.equal(credentialWrites, 0)
         const value = q.id === 'enno-model-source' ? 'おすすめテンプレートから選ぶ'
           : q.id === 'enno-template' ? q.options!.find(o => o.label.startsWith('OpenAI —'))!.label
@@ -51,6 +52,7 @@ test('template display never resolves unselected providers; confirmation resolve
       } },
     }).catch(e => { if (!(e instanceof ExecutionSelectionPending)) throw e; return undefined })
     assert.equal(outcome?.value.status, reject ? undefined : 'ready')
+    if (reject) assert.equal(errorDisplayed, true, 'confirmation failure must remain visible in the next review')
     assert.equal(new Set(resolved).size, 3)
     assert.equal(resolved.length, 3)
     assert.ok(listedAfterConfirmation.length > 0)

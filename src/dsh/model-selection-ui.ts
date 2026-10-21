@@ -211,6 +211,7 @@ export async function selectExecution(input: SelectionUiInput): Promise<StoredEx
 
 async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredExecutionSelection> {
   let stored = input.stored
+  let validationProblems: string[] = []
   const save = async (value: ExecutionSelection) => { stored = await input.save(stored.revision, value) }
   if (stored.value.status === 'ready' || stored.value.discussion) return stored
   const savedPair = stored.value.headWorker ?? input.savedHeadWorker
@@ -293,23 +294,27 @@ async function selectExecutionChoices(input: SelectionUiInput): Promise<StoredEx
     const problems = complete.success ? await configurationProblems(complete.data, catalog, input.routes, undefined, 'catalog') : ['未設定の役割を選択してください。']
     const detail = [draft.custom ? 'カスタム' : MODEL_TEMPLATES.find(t => t.id === draft.template?.id)?.name ?? (draft.template?.id === HEAD_WORKER_PRESET ? HEAD_WORKER_LABEL : 'カスタム'),
       ...MODEL_ROLES.map(role => `${ROLE_LABELS[role]}: ${draft.roles[role] ? modelLabel(catalog, draft.roles[role]!) : '未設定'}`),
-      ...problems, ...(catalog.failures.length ? [`一覧取得失敗: ${catalog.failures.join(', ')}`] : []),
+      ...problems, ...validationProblems, ...(catalog.failures.length ? [`一覧取得失敗: ${catalog.failures.join(', ')}`] : []),
       'reasoningはモデルの既定値。カタログへの登録は契約上の利用成功を保証しません。',
     ].join('\n')
     const roleLabels = MODEL_ROLES.map(role => `${ROLE_LABELS[role]}を変更`)
     const selected = await ask(input, 'enno-model-review', '構成を確認して開始', [...(complete.success && !problems.length ? ['この構成で開始'] : []), ...roleLabels, RELOAD, BACK], detail)
-    if (selected === BACK) { screen = 'source'; continue }
+    if (selected === BACK) { validationProblems = []; screen = 'source'; continue }
     if (selected === 'この構成で開始' && complete.success && !problems.length) {
       // Revalidate immediately before adoption. No provider defaults or credentials are written.
       const latest = await selectionCatalog(input, [...new Set(MODEL_ROLES.map(role => complete.data.roles[role].provider))])
       const headWorker = savedPair && MODEL_ROLES.every(role => { const actual = complete.data.roles[role], expected = role === 'worker' ? savedPair.worker : savedPair.head; return actual.provider === expected.provider && actual.model === expected.model && actual.reasoningEffort === expected.reasoningEffort }) ? savedPair : undefined
-      if ((await configurationProblems(complete.data, latest, input.routes, input.compatibility)).length) continue
-      if (headWorker && !(await headWorkerCandidates(latest, input.routes)).workers.some(binding => binding.provider === headWorker.worker.provider && binding.model === headWorker.worker.model)) continue
+      validationProblems = await configurationProblems(complete.data, latest, input.routes, input.compatibility)
+      if (validationProblems.length) continue
+      if (headWorker && !(await headWorkerCandidates(latest, input.routes)).workers.some(binding => binding.provider === headWorker.worker.provider && binding.model === headWorker.worker.model)) {
+        validationProblems = ['サブエージェントの接続とモデルIDが一致しません。接続を選び直してください。']; continue
+      }
       const routes = modelRoutesForCatalog(latest, [...input.routes, ...(complete.data.routeBindings ?? [])])
       const usesOllama = MODEL_ROLES.some(role => routes.some(r => r.provider === complete.data.roles[role].provider && (r.family === 'ollama' || r.connection === 'local')))
       await save({ mode: 'enno', status: 'ready', ...(headWorker ? { headWorker } : {}), ...(stored.value.ordinaryModel ? { ordinaryModel: stored.value.ordinaryModel } : {}), configuration: { ...complete.data, maxConcurrentChildren: usesOllama ? 1 : complete.data.maxConcurrentChildren } })
       return stored
     }
+    validationProblems = []
     const role = MODEL_ROLES[roleLabels.indexOf(selected)]
     if (role) {
       const binding = await pickModel(input, catalog, draft, role)

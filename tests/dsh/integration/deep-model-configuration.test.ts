@@ -14,6 +14,36 @@ test('Deep budget option labels remain exact numbers instead of being reinterpre
   }
 })
 
+test('Deep settings authenticate only after Save, once per exact binding, and retain drafts on failure', async () => {
+  for (const action of ['cancel', 'save', 'unavailable']) {
+    const f = await deepFixture()
+    let confirmed = false, listings = 0, resolutions = 0, errorDisplayed = false
+    const catalog: DshModelCatalog = {
+      listProviders: () => [{ id: 'selected', name: 'Selected' }, { id: 'unused', name: 'Unused' }],
+      listModelsForDisplay: async provider => [{ provider, id: 'configured-model', name: 'Model' }],
+      listModels: async provider => { listings++; assert.equal(provider, 'selected'); return [{ provider, id: 'configured-model', name: 'Model' }] },
+      resolveCallConfig: async binding => { resolutions++; if (action === 'unavailable') throw Error('synthetic authentication unavailable'); return binding },
+    }
+    const ui = new DeepConfigurationUI(f.store, catalog, { ask: async request => {
+      if (confirmed && request.questions[0].detail?.includes('synthetic authentication unavailable')) errorDisplayed = true
+      if (!confirmed) { assert.equal(listings, 0); assert.equal(resolutions, 0) }
+      const selected = action === 'cancel' || confirmed ? '閉じる・下書きを保持' : '保存'
+      if (selected === '保存') confirmed = true
+      return { answers: [{ id: request.questions[0].id, selected: [selected] }] }
+    } }, [], undefined, f.configuration.budget)
+    try {
+      const run = ui.configure(f.state.workspace, { id: 'parent', options: { provider: 'selected', model: 'configured-model' } }, new AbortController().signal)
+      if (action === 'save') assert.equal((await run).roles.solver.provider, 'selected')
+      else await assert.rejects(run, /設定待ち/)
+      assert.equal(listings, action === 'cancel' ? 0 : 1)
+      assert.equal(resolutions, action === 'cancel' ? 0 : 1)
+      if (action === 'unavailable') assert.equal(errorDisplayed, true, 'failed Save must show its diagnostic')
+      const persisted = await f.store.database(db => db.prepare('SELECT configuration_json FROM dsh_deep_preferences WHERE workspace=?').get<{ configuration_json: string | null }>(f.state.workspace))
+      assert.equal(!!persisted?.configuration_json, action === 'save')
+    } finally { await f.close() }
+  }
+})
+
 for (const family of ['deepseek', 'openrouter'] as const) test(`Deep configuration accepts, saves and reloads the shared ${family} route`, async () => {
   const f = await deepFixture()
   const routes: ModelRoute[] = (['other', family] as const).map((family, index) => ({ provider: `route-${index}`, family, connection: 'api', protocol: 'chat-completions' }))
