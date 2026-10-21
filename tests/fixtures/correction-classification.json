@@ -1,0 +1,384 @@
+{
+  "schema": "correction-semantic-corpus-v1",
+  "languages": [
+    "ja",
+    "en",
+    "zh",
+    "ko",
+    "es"
+  ],
+  "development": [
+    {
+      "id": "dev-explicit",
+      "gold": "capability_compatibility",
+      "category": "direct",
+      "texts": {
+        "ja": "版が違うだけで拒否せず、必要な能力を実行して確認して。",
+        "en": "Do not reject solely for a different version; test the capabilities we need.",
+        "zh": "不要仅因版本不同而拒绝，请实际测试所需能力。",
+        "ko": "버전이 다르다는 이유만으로 거부하지 말고 필요한 기능을 실행해 확인하세요.",
+        "es": "No rechaces solo por una versión distinta; prueba las capacidades necesarias."
+      }
+    },
+    {
+      "id": "dev-pin",
+      "gold": "reference",
+      "category": "reproducibility",
+      "texts": {
+        "ja": "再現可能な配布物を作るためコンパイラを固定する。",
+        "en": "Pin the compiler to reproduce the release artifact.",
+        "zh": "为了重现发布产物，固定编译器。",
+        "ko": "배포 산출물을 재현하기 위해 컴파일러를 고정합니다.",
+        "es": "Fija el compilador para reproducir el artefacto publicado."
+      }
+    },
+    {
+      "id": "dev-quote",
+      "gold": "reference",
+      "category": "quotation",
+      "texts": {
+        "ja": "「版が違うだけで拒否するな」は過去の発言の引用であり、今回の方針ではない。",
+        "en": "“Do not reject solely for a different version” is a historical quotation, not our present policy.",
+        "zh": "“不要仅因版本不同而拒绝”是历史引文，并非本次方针。",
+        "ko": "“버전만 다르다고 거부하지 마라”는 과거 발언 인용이지 현재 방침이 아닙니다.",
+        "es": "«No rechaces solo por otra versión» es una cita histórica, no nuestra política actual."
+      }
+    },
+    {
+      "id": "dev-ambiguous",
+      "gold": "uncertain",
+      "category": "fragment",
+      "texts": {
+        "ja": "版と機能の扱い、例の件。",
+        "en": "The version and capability matter, that issue.",
+        "zh": "版本和能力，之前那件事。",
+        "ko": "버전과 기능 처리, 그 문제요.",
+        "es": "La versión y la capacidad, aquel asunto."
+      }
+    },
+    {
+      "id": "dev-summary",
+      "gold": "capability_compatibility",
+      "category": "lossy-summary",
+      "texts": {
+        "ja": "数字の相違だけで非互換としないで。実際に使う API が働くかを確かめる。",
+        "en": "Do not label it incompatible merely because the numbers differ. Check whether the API we actually use works.",
+        "zh": "不要只因数字不同就判为不兼容；检查实际使用的 API 是否能工作。",
+        "ko": "숫자가 다르다고 비호환으로 판단하지 마세요. 실제 사용하는 API가 동작하는지 확인하세요.",
+        "es": "No lo marques incompatible solo por cifras distintas. Comprueba la API que usamos realmente."
+      },
+      "summaries": {
+        "ja": "環境についてのメモ",
+        "en": "Environment note",
+        "zh": "环境笔记",
+        "ko": "환경 메모",
+        "es": "Nota del entorno"
+      }
+    }
+  ],
+  "heldOut": [
+    {
+      "id": "compiler-newer",
+      "gold": "capability_compatibility",
+      "category": "direct",
+      "texts": {
+        "ja": "Rust 1.99 が手元にある。1.85 と一致しないという理由だけで未対応にするな。必要な構文と実テストで互換性を判断せよ。",
+        "en": "Rust 1.99 is installed. Do not call it unsupported just because it is not 1.85; decide using required syntax and real tests.",
+        "zh": "已安装 Rust 1.99。不要仅因不是 1.85 就说不支持，应依据所需语法和真实测试判断兼容性。",
+        "ko": "Rust 1.99가 설치되어 있습니다. 1.85가 아니라는 이유만으로 미지원이라 하지 말고 필요한 문법과 실제 테스트로 판단하세요.",
+        "es": "Está instalado Rust 1.99. No lo declares incompatible por no ser 1.85; decide con la sintaxis requerida y pruebas reales."
+      }
+    },
+    {
+      "id": "browser-feature",
+      "gold": "capability_compatibility",
+      "category": "non-compiler",
+      "texts": {
+        "ja": "ブラウザの版番号だけを見て弾くな。必要な Web API の有無と動作を調べてから対応可否を決める。",
+        "en": "Do not block browsers from their version label alone. Check that the required Web APIs exist and work before deciding support.",
+        "zh": "不要只看浏览器版本号就拦截，先检查所需 Web API 是否存在且能运行。",
+        "ko": "브라우저 버전 번호만 보고 차단하지 마세요. 필요한 Web API의 존재와 동작으로 지원 여부를 판단하세요.",
+        "es": "No bloquees navegadores solo por su número de versión; comprueba las API web necesarias antes de decidir el soporte."
+      }
+    },
+    {
+      "id": "sqlite-probe",
+      "gold": "capability_compatibility",
+      "category": "capability-probe",
+      "texts": {
+        "ja": "SQLite の版が想定値と違っても、それだけでは非互換の根拠にならない。必要な SQL と拡張を実行して確かめて。",
+        "en": "A SQLite release differing from the expected one is not by itself proof of incompatibility. Execute the SQL and extensions we require.",
+        "zh": "SQLite 版本与预期不一致本身不能证明不兼容，请执行所需 SQL 和扩展验证。",
+        "ko": "SQLite 릴리스가 예상과 다르다는 사실만으로 비호환은 아닙니다. 필요한 SQL과 확장을 실행해 확인하세요.",
+        "es": "Una edición distinta de SQLite no demuestra incompatibilidad por sí sola. Ejecuta el SQL y las extensiones requeridas."
+      }
+    },
+    {
+      "id": "distribution-label",
+      "gold": "capability_compatibility",
+      "category": "no-version-words",
+      "texts": {
+        "ja": "ディストリビューション名が見慣れないというだけで除外しないで。必要なシステム呼び出しが機能するか調べればよい。",
+        "en": "Do not exclude an unfamiliar distribution name merely for its label. Check whether the system calls we need actually work.",
+        "zh": "不要只因发行版名称陌生就排除，检查所需系统调用是否实际可用即可。",
+        "ko": "배포판 이름이 낯설다는 이유만으로 제외하지 마세요. 필요한 시스템 호출이 실제 작동하는지 확인하면 됩니다.",
+        "es": "No excluyas una distribución solo por una etiqueta desconocida. Comprueba las llamadas de sistema necesarias."
+      }
+    },
+    {
+      "id": "badge-indirect",
+      "gold": "capability_compatibility",
+      "category": "indirect",
+      "texts": {
+        "ja": "そのビルドでは処理が最後まで動いている。表紙の数字が違うだけで入口を閉ざすのはやめて、必要な処理が通るかで決めてくれ。",
+        "en": "That build completes the operation. Stop shutting it out just because the badge has different digits; judge it by whether the needed operation succeeds.",
+        "zh": "该构建能够完成处理。别只因标签上的数字不同就拒之门外，请按所需操作是否成功来判断。",
+        "ko": "그 빌드에서는 작업이 끝까지 됩니다. 표지의 숫자가 다르다고 막지 말고 필요한 작업의 성공 여부로 판단하세요.",
+        "es": "Esa compilación termina la operación. No la cierres por cifras distintas en la etiqueta; juzga si funciona lo necesario."
+      }
+    },
+    {
+      "id": "long-positive",
+      "gold": "capability_compatibility",
+      "category": "long-context",
+      "texts": {
+        "ja": "背景として、CI は配布物の再現のためツールを固定している。これは変更しない。ここで訂正したいのは利用者の環境の判定だ。ログ、入力、生成物は同じ条件で比較する。必要な命令が実行でき、受け入れ試験が通るなら、コンパイラの版が固定 CI と違うことだけを理由に非互換としてはならない。",
+        "en": "CI pins its tools to reproduce artifacts; keep those pins. My correction concerns judging a user environment. Compare logs, inputs and outputs under equivalent conditions. If the required instructions execute and acceptance tests pass, do not reject compatibility solely because the compiler release differs from CI.",
+        "zh": "CI 为重现产物而固定工具，这些固定不变。我纠正的是用户环境的判断。请在等价条件下比较日志、输入和产物。如果所需指令可执行且验收测试通过，就不能仅因编译器版本与 CI 不同而判为不兼容。",
+        "ko": "CI는 산출물 재현을 위해 도구를 고정하며 그 고정은 유지합니다. 정정 대상은 사용자 환경 판단입니다. 같은 조건에서 로그와 입출력을 비교하세요. 필요한 명령과 인수 테스트가 통과하면 CI와 컴파일러 릴리스가 다르다는 이유만으로 비호환이라 하면 안 됩니다.",
+        "es": "CI fija herramientas para reproducir artefactos; conserva esas fijaciones. Corrijo cómo se juzga el entorno del usuario. Compara entradas, salidas y registros equivalentes. Si las instrucciones necesarias y las pruebas pasan, no rechaces la compatibilidad solo porque difiera la edición del compilador."
+      }
+    },
+    {
+      "id": "summary-loss",
+      "gold": "capability_compatibility",
+      "category": "lossy-summary",
+      "texts": {
+        "ja": "この訂正は導入手順の話ではない。別のコンパイラ識別子でも必要な演算が実行できるなら、識別子の不一致だけで拒否しないこと。",
+        "en": "This correction is not about installation. If a differently identified compiler performs the required operations, do not reject it just for that identity mismatch.",
+        "zh": "本次纠正不是安装说明。如果另一编译器标识也能执行所需运算，就不要只因标识不一致而拒绝。",
+        "ko": "이 정정은 설치 방법 이야기가 아닙니다. 식별자가 다른 컴파일러도 필요한 연산을 수행하면 식별자 불일치만으로 거부하지 마세요.",
+        "es": "Esta corrección no trata de instalación. Si un compilador con otra identidad ejecuta lo necesario, no lo rechaces solo por esa identidad."
+      },
+      "summaries": {
+        "ja": "環境についてのメモ",
+        "en": "Environment note",
+        "zh": "环境笔记",
+        "ko": "환경 메모",
+        "es": "Nota del entorno"
+      }
+    },
+    {
+      "id": "summary-opposes-body",
+      "gold": "capability_compatibility",
+      "category": "contradictory-summary",
+      "texts": {
+        "ja": "要約が「古い版以外を拒否」となっているが誤りだ。本文の指示は、コンパイラの版だけで拒否せず、実際の能力を試すことだ。",
+        "en": "The summary saying “reject anything except the old release” is wrong. The instruction is to test actual compiler capabilities rather than reject by release alone.",
+        "zh": "摘要中“拒绝旧版以外的一切”是错误的。正文要求测试编译器实际能力，而不是只按版本拒绝。",
+        "ko": "요약의 “옛 릴리스 외에는 거부”는 잘못됐습니다. 본문의 지시는 릴리스만으로 거부하지 말고 실제 컴파일러 기능을 시험하라는 것입니다.",
+        "es": "El resumen «rechaza todo salvo la edición antigua» es erróneo. La instrucción es probar capacidades reales, no rechazar solo por edición."
+      },
+      "summaries": {
+        "ja": "古い版以外を拒否する",
+        "en": "Reject anything except the old release",
+        "zh": "拒绝旧版以外的一切",
+        "ko": "옛 릴리스 외에는 거부",
+        "es": "Rechaza todo salvo la edición antigua"
+      }
+    },
+    {
+      "id": "mixed-language",
+      "gold": "capability_compatibility",
+      "category": "mixed-language",
+      "texts": {
+        "ja": "compiler version だけでは拒否しないで。機能を実行して compatibility を確認して。",
+        "en": "No rechaces solo por version: check actual capabilities, then decide compatibility.",
+        "zh": "不要只凭 compiler version 拒绝；实际验证 capabilities 再决定。",
+        "ko": "compiler version만으로 거부하지 말고 실제 capabilities를 확인하세요.",
+        "es": "No rechaces solo por compiler version; comprueba capacidades reales antes de decidir compatibility."
+      }
+    },
+    {
+      "id": "negated-rule",
+      "gold": "reference",
+      "category": "negation",
+      "texts": {
+        "ja": "「版が違っても能力だけで受け入れろ」という方針を採用しない。今回は署名済みの同一リリースが契約上必要だ。",
+        "en": "Do not adopt “accept a different version based on capability alone.” This contract requires the identical signed release.",
+        "zh": "不要采用“版本不同也只看能力接受”的方针，本合同要求完全相同的签名发布版。",
+        "ko": "“버전이 달라도 기능만 보고 수용하라”는 방침을 채택하지 않습니다. 이번 계약에는 동일한 서명 릴리스가 필요합니다.",
+        "es": "No adoptes «acepta otra versión solo por capacidad». Este contrato exige la misma edición firmada."
+      }
+    },
+    {
+      "id": "obsolete-quotation",
+      "gold": "reference",
+      "category": "quotation",
+      "texts": {
+        "ja": "資料には「compiler version だけで拒否せず能力を調べよ」と引用されている。この引用は旧仕様の説明で、私の訂正指示ではない。",
+        "en": "The document quotes “do not reject by compiler version; inspect capabilities.” It explains an obsolete policy and is not my correction instruction.",
+        "zh": "资料引用“不要只按 compiler version 拒绝，应检查能力”。这是旧规范说明，不是我的纠正指令。",
+        "ko": "문서의 “compiler version만으로 거부하지 말고 능력을 보라”는 인용은 옛 규칙 설명이지 제 정정 지시가 아닙니다.",
+        "es": "El documento cita «no rechaces por compiler version; revisa capacidades». Describe una política obsoleta, no mi corrección."
+      }
+    },
+    {
+      "id": "explanatory-text",
+      "gold": "reference",
+      "category": "explanation",
+      "texts": {
+        "ja": "コンパイラの版と能力の関係を説明する記事を読んだ、という出来事を記録するだけです。互換性の判断規則の変更は依頼していません。",
+        "en": "Record only that I read an article explaining compiler versions and capabilities. I am not requesting a change to compatibility policy.",
+        "zh": "只记录我读过一篇解释编译器版本和能力关系的文章，并未要求改变兼容性判断规则。",
+        "ko": "컴파일러 버전과 기능 관계를 설명한 글을 읽었다는 사실만 기록합니다. 호환성 판단 규칙 변경 요청은 아닙니다.",
+        "es": "Solo registra que leí un artículo sobre versiones y capacidades del compilador. No solicito cambiar la política de compatibilidad."
+      }
+    },
+    {
+      "id": "opposing-opinion",
+      "gold": "reference",
+      "category": "opposition",
+      "texts": {
+        "ja": "私は、版が違う場合に実能力の試験だけで受け入れる考えには反対です。サポート契約で認証された版だけを対象にします。",
+        "en": "I oppose accepting a differing release solely through capability tests. Support is limited to releases certified by the contract.",
+        "zh": "我反对仅凭能力测试接受不同版本，支持范围仅限合同认证的版本。",
+        "ko": "릴리스가 다른데 기능 시험만으로 수용하자는 의견에 반대합니다. 계약에서 인증한 릴리스만 지원합니다.",
+        "es": "Me opongo a aceptar otra edición solo por pruebas de capacidad. El soporte cubre únicamente ediciones certificadas por contrato."
+      }
+    },
+    {
+      "id": "version-fact",
+      "gold": "reference",
+      "category": "version-words-only",
+      "texts": {
+        "ja": "利用中の compiler version は 1.99.1 です。この数値を環境メモとして記録してください。",
+        "en": "Our compiler version is 1.99.1. Record that number as an environment fact.",
+        "zh": "当前 compiler version 为 1.99.1，请把该数字记作环境事实。",
+        "ko": "현재 compiler version은 1.99.1입니다. 환경 정보로 기록하세요.",
+        "es": "Nuestro compiler version es 1.99.1. Registra ese número como dato del entorno."
+      }
+    },
+    {
+      "id": "reproducibility-pin",
+      "gold": "reference",
+      "category": "reproducibility",
+      "texts": {
+        "ja": "再現性の検証ではコンパイラ版を 1.85.0 に固定する。別の版に同じ能力があっても、バイト一致を試す今回の実験では固定が必要だ。",
+        "en": "Pin compiler version 1.85.0 for reproducibility. Even if another release has identical capabilities, this byte-for-byte experiment requires that pin.",
+        "zh": "可重现性验证固定编译器版本 1.85.0。即使别的版本能力相同，本次字节一致实验仍需固定。",
+        "ko": "재현성 검증에는 컴파일러 버전 1.85.0을 고정합니다. 다른 릴리스의 기능이 같아도 바이트 일치 실험에는 고정이 필요합니다.",
+        "es": "Fija la versión 1.85.0 para reproducibilidad. Aunque otra tenga capacidades idénticas, este experimento de igualdad binaria exige fijarla."
+      }
+    },
+    {
+      "id": "ci-prerequisite",
+      "gold": "reference",
+      "category": "ci-prerequisite",
+      "texts": {
+        "ja": "CI に pnpm がないため検査が起動していない。必要条件に pnpm を宣言し、セットアップで導入すること。コンパイラ互換性の方針変更ではない。",
+        "en": "CI lacks pnpm, so the check never starts. Declare and install pnpm as a prerequisite; this does not change compiler compatibility policy.",
+        "zh": "CI 缺少 pnpm，检查未启动。请声明并安装 pnpm 这一前提条件，这不是编译器兼容性方针变更。",
+        "ko": "CI에 pnpm이 없어 검사가 시작되지 않습니다. pnpm 전제 조건과 설치를 추가하세요. 컴파일러 호환성 방침 변경은 아닙니다.",
+        "es": "Falta pnpm en CI y la prueba ni arranca. Declara e instala ese requisito; no cambia la política de compatibilidad del compilador."
+      }
+    },
+    {
+      "id": "minimum-syntax",
+      "gold": "reference",
+      "category": "legitimate-minimum",
+      "texts": {
+        "ja": "必要な構文は Rust 1.85 で初めて実装された。能力試験でも古い版ではコンパイルに失敗するため、最低版 1.85 という互換性制約を維持する。",
+        "en": "The syntax first appeared in Rust 1.85. Capability tests also fail to compile on older releases, so retain the justified minimum of 1.85.",
+        "zh": "所需语法首次出现在 Rust 1.85，旧版本能力测试也无法编译，因此保留有依据的最低版本 1.85。",
+        "ko": "필요한 문법은 Rust 1.85에 처음 도입됐고 이전 릴리스에서는 기능 시험도 컴파일되지 않습니다. 근거 있는 최소 1.85 조건을 유지하세요.",
+        "es": "La sintaxis apareció en Rust 1.85 y las pruebas tampoco compilan en ediciones anteriores. Conserva el mínimo justificado de 1.85."
+      }
+    },
+    {
+      "id": "install-runbook",
+      "gold": "reference",
+      "category": "runbook",
+      "texts": {
+        "ja": "導入メモ: rustup で compiler version 1.85.0 をインストールし、必要な能力の試験を実行する手順を示す。版のみの拒否についての訂正ではない。",
+        "en": "Installation note: install compiler version 1.85.0 with rustup and run capability tests. This is not a correction about version-only rejection.",
+        "zh": "安装笔记：用 rustup 安装 compiler version 1.85.0 后运行能力测试。这不是关于仅按版本拒绝的纠正。",
+        "ko": "설치 메모: rustup으로 compiler version 1.85.0을 설치하고 기능 시험을 실행합니다. 버전만으로 거부하는 문제의 정정은 아닙니다.",
+        "es": "Nota de instalación: instala compiler version 1.85.0 con rustup y ejecuta pruebas de capacidad. No corrige rechazos por versión."
+      }
+    },
+    {
+      "id": "quote-warning",
+      "gold": "reference",
+      "category": "quoted-instruction",
+      "texts": {
+        "ja": "次の文章を規則として採用しないこと: 「版が違うだけで拒否するな。実能力を確かめろ」。翻訳資料の例文として引用しただけだ。",
+        "en": "Do not adopt the following as a rule: “Do not reject just for a different version; check capabilities.” It is only a translation example.",
+        "zh": "不要把以下句子作为规则：“不要只因版本不同而拒绝，要检查能力。”它只是翻译材料的例句。",
+        "ko": "다음을 규칙으로 채택하지 마세요: “버전만 다르다고 거부하지 말고 기능을 확인하라.” 번역 예문일 뿐입니다.",
+        "es": "No adoptes como regla «no rechaces solo por otra versión; prueba capacidades». Es únicamente un ejemplo de traducción."
+      }
+    },
+    {
+      "id": "long-negative",
+      "gold": "reference",
+      "category": "long-context",
+      "texts": {
+        "ja": "調査報告。旧会議録には「版だけを理由に拒否せず、能力を確認」とある。しかしこれは検討案の引用で、採用されなかった。今回保存したい事実は、配布物の署名と追試をそろえるため CI のコンパイラ版を固定したという経緯だけだ。利用者の互換性判断を変更する提案ではない。",
+        "en": "Investigation report: old minutes say “check capabilities instead of rejecting by version alone.” That was an unadopted proposal. Save only the historical fact that CI pinned its compiler to align artifact signatures and reproduction. No change to user compatibility decisions is proposed.",
+        "zh": "调查报告：旧会议记录写着“检查能力而非仅按版本拒绝”，但那是未采纳提案的引用。仅保存 CI 为统一产物签名和复现实验而固定编译器版本的历史事实，并非提议改变用户兼容性判断。",
+        "ko": "조사 보고: 옛 회의록에는 “버전만으로 거부하지 말고 기능 확인”이라고 쓰여 있지만 채택되지 않은 제안의 인용입니다. 저장할 사실은 서명과 재현을 맞추기 위해 CI 컴파일러를 고정했다는 경위뿐입니다. 사용자 호환성 판단 변경 제안이 아닙니다.",
+        "es": "Informe: actas antiguas dicen «comprueba capacidades, no rechaces solo por versión». Era una propuesta no adoptada. Guarda solo que CI fijó el compilador para alinear firmas y reproducción. No se propone cambiar los juicios de compatibilidad del usuario."
+      }
+    },
+    {
+      "id": "capability-failure",
+      "gold": "reference",
+      "category": "actual-failure",
+      "texts": {
+        "ja": "実際の能力試験が失敗したため、この環境は非互換だったと記録して。版番号を唯一の理由とする話ではない。",
+        "en": "Record that this environment was incompatible because an actual capability test failed. The version number was not the sole reason.",
+        "zh": "请记录该环境因实际能力测试失败而不兼容，并非仅以版本号为理由。",
+        "ko": "실제 기능 시험 실패로 이 환경이 비호환이었다고 기록하세요. 버전 번호만을 이유로 한 것은 아닙니다.",
+        "es": "Registra que el entorno era incompatible porque falló una prueba real de capacidad. El número de versión no era la única razón."
+      }
+    },
+    {
+      "id": "fragment",
+      "gold": "uncertain",
+      "category": "short-ambiguous",
+      "texts": {
+        "ja": "互換性、版、能力。どっちだった？",
+        "en": "Compatibility, version, capability. Which was it?",
+        "zh": "兼容性、版本、能力。到底是哪种？",
+        "ko": "호환성, 버전, 기능. 어느 쪽이었죠?",
+        "es": "Compatibilidad, versión, capacidad. ¿Cuál era?"
+      }
+    },
+    {
+      "id": "unresolved-options",
+      "gold": "uncertain",
+      "category": "unresolved-choice",
+      "texts": {
+        "ja": "版を固定する方針と、能力だけを調べる方針のどちらを訂正として残すか、まだ決めていない。",
+        "en": "I have not decided whether the correction should preserve the release pin or use capability checks alone.",
+        "zh": "尚未决定纠正应保留版本固定，还是只进行能力检查。",
+        "ko": "정정으로 릴리스 고정을 남길지 기능 검사만 할지 아직 결정하지 않았습니다.",
+        "es": "Aún no he decidido si la corrección debe conservar la edición fija o usar solo pruebas de capacidad."
+      }
+    },
+    {
+      "id": "contradictory-body",
+      "gold": "uncertain",
+      "category": "unresolved-contradiction",
+      "texts": {
+        "ja": "同じ対象について、版の違いだけで拒否しないこと。同時に、版が一致しないなら能力に関係なく必ず拒否すること。優先順位は未定だ。",
+        "en": "For the same target, do not reject solely for a differing release. Also always reject any mismatch regardless of capability. Priority between these instructions is unresolved.",
+        "zh": "对同一目标，不要仅因版本不同而拒绝；同时，无论能力如何，只要版本不一致就必须拒绝。尚未确定优先级。",
+        "ko": "같은 대상은 릴리스 차이만으로 거부하지 마세요. 동시에 기능과 무관하게 릴리스가 다르면 반드시 거부하세요. 우선순위는 미정입니다.",
+        "es": "Para el mismo destino, no rechaces solo por otra edición. A la vez, rechaza toda diferencia sin importar la capacidad. La prioridad no está resuelta."
+      }
+    }
+  ],
+  "limitations": "24 distinct held-out semantic families, each aligned across five languages; translations are not 120 independent semantic families. Synthetic authored labels; no claim of arbitrary-language validity."
+}

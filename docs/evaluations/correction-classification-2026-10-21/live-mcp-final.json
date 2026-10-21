@@ -1,0 +1,32 @@
+{
+  "schema": "correction-live-mcp-v1",
+  "status": "passed",
+  "dshSourceSha": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+  "mainSourceSha": "5289ed72e347e65eb9a17d8b1d90f51958f8b333",
+  "provider": "typesafe",
+  "model": "jev-1.13.0",
+  "syntheticEntries": 2,
+  "providerCalls": 2,
+  "repeatProviderCalls": 0,
+  "cachedResults": 2,
+  "observedRules": [
+    {
+      "rule": "uncertain",
+      "observed": "reference",
+      "model": "jev-1.13.0",
+      "mode": "shadow",
+      "inputTokens": 565
+    },
+    {
+      "rule": "uncertain",
+      "observed": "capability_compatibility",
+      "model": "jev-1.13.0",
+      "mode": "shadow",
+      "inputTokens": 571
+    }
+  ],
+  "modelInput": "unobserved",
+  "verification": "unverified",
+  "authorizationGranted": false,
+  "qualityMeasurement": "separate held-out corpus, not these two handoff cases"
+}

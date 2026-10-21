@@ -1,0 +1,57 @@
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [info] Setup complete: Skills 43 created, 0 updated (/private/tmp/kiokuko-correction-semantics-20261021/kiokuko-skill-home-OvP6sH/.agents/skills); AGENTS.md unmanaged-or-absent (/private/tmp/kiokuko-correction-semantics-20261021/skill-delivery-4a7URB/AGENTS.md). Reload existing sessions to refresh their instructions.
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native correction handoff and scoped version-gate rejection (public, drop=false) (1696.796375ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native correction handoff and scoped version-gate rejection (public, drop=true) (891.448209ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native correction handoff and scoped version-gate rejection (adapter, drop=false) (882.449708ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native correction handoff and scoped version-gate rejection (adapter, drop=true) (877.614667ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native shadow never invokes special correction handling (public) (688.143416ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native reference never invokes special correction handling (public) (689.047875ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native uncertain never invokes special correction handling (public) (687.386333ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native unavailable never invokes special correction handling (public) (686.763709ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native shadow never invokes special correction handling (adapter) (705.926292ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native reference never invokes special correction handling (adapter) (694.795375ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native uncertain never invokes special correction handling (adapter) (696.069417ms)
+[kiokuko-dsh] [info] plugin loaded
+[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: auto:unbound:turn_record_missing
+[kiokuko-dsh] toolExposure projection {"requestedMode":"auto","mode":"lean","reason":"task_execution:build:projected","toolCountBefore":30,"toolCountAfter":23,"taskFilteredCount":0,"phaseFilteredCount":7,"descriptionTransformedCount":1,"descriptionBytesBefore":20450,"descriptionBytesAfter":8083,"parameterBytesBefore":32907,"parameterBytesAfter":25395,"unownedSurfaceReductionCount":0,"unownedSurfaceReductionReason":"registration_provenance_unavailable"}
+✔ native unavailable never invokes special correction handling (adapter) (692.837084ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 10280.6255

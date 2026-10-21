@@ -1,0 +1,199 @@
+{
+  "schema": "correction-verification-v1",
+  "host": "dkmkbkair2k21.local",
+  "platform": "darwin-arm64",
+  "node": "24.16.0",
+  "rust": "1.99.1 (58cf8f9c3 2026-10-13)",
+  "checks": [
+    {
+      "label": "dsh-final-2-unit",
+      "exit": 0,
+      "seconds": 5.5123971659999995,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "--import",
+        "tsx",
+        "--test",
+        "tests/dsh/unit/correction-classification.test.ts",
+        "tests/dsh/unit/correction-decision.test.ts",
+        "tests/dsh/unit/correction-evaluation.test.ts",
+        "tests/dsh/unit/decisions/correction.test.ts",
+        "tests/dsh/unit/decisions/contracts.test.ts",
+        "tests/dsh/unit/decisions/laya-coreml.test.ts",
+        "tests/dsh/integration/correction-workflow.test.ts",
+        "tests/dsh/unit/migration-assets-regression.test.mjs"
+      ]
+    },
+    {
+      "label": "dsh-final-2-typecheck",
+      "exit": 0,
+      "seconds": 8.841066542,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json",
+        "--noEmit"
+      ]
+    },
+    {
+      "label": "main-final-2-unit",
+      "exit": 0,
+      "seconds": 5.981610584,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "--import",
+        "tsx",
+        "--test",
+        "tests/unit/correction-classification.test.ts",
+        "tests/integration/correction-review.test.ts",
+        "tests/unit/chatgpt-contract.test.ts",
+        "tests/integration/chatgpt-mcp.test.ts",
+        "tests/integration/chatgpt-capture.test.ts",
+        "tests/integration/migrations.test.ts"
+      ]
+    },
+    {
+      "label": "main-final-2-typecheck",
+      "exit": 0,
+      "seconds": 5.775224207999999,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json",
+        "--noEmit"
+      ]
+    },
+    {
+      "label": "native-final",
+      "exit": 0,
+      "seconds": 10.414792249968741,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "--import",
+        "tsx",
+        "--test",
+        "tests/dsh/integration/correction-native.test.ts"
+      ]
+    },
+    {
+      "label": "metrics-final",
+      "exit": 0,
+      "seconds": 0.11212245800000001,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "--import",
+        "tsx",
+        "--test",
+        "tests/dsh/unit/correction-evaluation.test.ts"
+      ]
+    },
+    {
+      "label": "dsh-final-3-typecheck",
+      "exit": 0,
+      "seconds": 9.412363375,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "node_modules/typescript/bin/tsc",
+        "-p",
+        "tsconfig.json",
+        "--noEmit"
+      ]
+    },
+    {
+      "label": "live-mcp-final-2",
+      "exit": 0,
+      "seconds": 1.292674209,
+      "args": [
+        "/tmp/kiokuko-ci-repair-20261020/runtime/node-v24.16.0-darwin-arm64/bin/node",
+        "--import",
+        "tsx",
+        "/tmp/kiokuko-correction-semantics-20261021/live-mcp-launch.mts",
+        "/Users/dkc/Sites/Src/kiokuko",
+        "/tmp/kiokuko-correction-semantics-20261021/jev-config.json",
+        "/tmp/kiokuko-correction-semantics-20261021/live-mcp-final-2.json"
+      ]
+    }
+  ],
+  "builds": [
+    {
+      "label": "main-build",
+      "exit": 0,
+      "seconds": 5.04937791696284,
+      "timedOut": false
+    },
+    {
+      "label": "dsh-build",
+      "exit": 0,
+      "seconds": 8.328844834002666,
+      "timedOut": false
+    },
+    {
+      "label": "built-product-pair",
+      "exit": 0,
+      "seconds": 6.806159999978263,
+      "timedOut": false
+    }
+  ],
+  "compiledProductPair": [
+    {
+      "label": "built-both-product-pair",
+      "exit": 0,
+      "seconds": 8.074469084036537,
+      "timedOut": false
+    }
+  ],
+  "packageEvidence": "package-evidence.json",
+  "ci": "Not run on GitHub/Linux for this uncommitted diff",
+  "scope": "Disposable DBs and isolated build/dependency environment; no live configuration/database/plugin changes, commit or push",
+  "sources": {
+    "kiokuko-dsh": {
+      "head": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+      "originMain": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+      "sha256": {
+        "migrations/045_correction_classification.sql": "bb738eeba688a295cb7890219e6f7672b3f44f4cb055ef998768a89ad73c3973",
+        "scripts/correction-evaluation.mjs": "92ae63e451af93f620d502cb846396a115e8ddebcd6b6997309276556fe560ba",
+        "scripts/evaluate-correction-classification.mjs": "8e600f0dd8cecc0e3116ee2f91380c419070d09422933aa43a33864b4fe06708",
+        "scripts/module-compatibility-assets.json": "1e940d01d6a2ad070841bca87567ca3f2d8759f20763bcb78cbbc24d67035ab9",
+        "scripts/pack-check.mjs": "51f4d2e06a8503347c00a3cbd0ce9145f7dab8ad4540f78623e8098c3050e59e",
+        "scripts/verify-correction-mcp-live.mts": "3982240121a0ce02091eefc830eab220309c600d2689fc5f4dc61d699dad895b",
+        "scripts/verify-correction-product-pair.ts": "3680ebffff06ddf115c4ada69cf2558db3230d0e188701da5884c3878124c9e7",
+        "src/dsh/core/tasks.ts": "4e7a1a0679db58b5745ab3b3576ed5f427a699677fae9d84137a7b921df3fe16",
+        "src/dsh/correction-context.ts": "6286ac5fbb70404fa4412e45576bc95cbfccbedda6dc238280bc537798d869f0",
+        "src/dsh/decisions/config.ts": "3a0eda0899c9567c67cf0c1933684f5264f6eb8db8aaec566bb66709f27be4a7",
+        "src/dsh/decisions/contracts.ts": "829121e8788ee4cea9f34335985ca368bca638924d04c170a444e41fd9f971b3",
+        "src/dsh/decisions/correction.ts": "cf0524467e9e6c084a4f208c6afc6c415665e1284792266b73ff4837391315cc",
+        "src/dsh/decisions/diagnostics.ts": "b8892d538879ea747d9e9421053049940b2beb0a9ba17543ffffea71bc410e81",
+        "src/dsh/decisions/service.ts": "f7423d0a82b8fab07189f419507f539d53641ac941e99845b902ebc8c89b4f44",
+        "src/dsh/host-adapter.ts": "5ea88eb5bb2a7839bcb6a81ad3170218b33d21e68a70178a76a93e40bfb1c386",
+        "src/dsh/host-adapter/context.ts": "cfb782626c97cc418285d8702e135692e53ac304b6f98108baf6545c47c55caf",
+        "src/memory/correction-classification.ts": "fe1fb793025600249d630ec5b08c6fae67a291f433e41b8f6d68e4b74de41fb5",
+        "src/memory/correction-contract.ts": "3b815bc09b5fe1d3211a1332f8cd2a161f02528f1050716e1f5976434a9cb881",
+        "tests/dsh/helpers/correction-decisions.ts": "45a9c5e652a788856d5232a191814e20ba1c0a9d431f8c80edf3bc8abc110fe1",
+        "tests/dsh/integration/correction-native.test.ts": "bd231e82e6ca843b0d1be7acf873f479fc43efea6f61ca6675c9fde2f18e6988",
+        "tests/dsh/unit/correction-classification.test.ts": "c23a7126d56d9079ddc337d723a18beef844f7962a47bb6c019160857aa07767",
+        "tests/dsh/unit/correction-decision.test.ts": "053142c3694b7755e2c0e7a7b274fa1ebefad5cfc812fe5f15b445a0ff3a5852",
+        "tests/dsh/unit/correction-evaluation.test.ts": "4f548beabd3cf4f021b6c447fa7c18f2813ad31df9b0f17f6be50fba4f58c873",
+        "tests/dsh/unit/decisions/correction.test.ts": "9d5d460701e4eb715139617fd04f7a8c029660604739cc662788205e958caa40",
+        "tests/fixtures/correction-classification.json": "55350662ade98aaeb475829cfc5158828d629da2ac06ae72b93d959afb20c80d"
+      },
+      "sourceSetSha256": "3c1f1ab47b1ad046206769bc039d379607543801ab5c73011b1dcd038591d0a1"
+    },
+    "kiokuko": {
+      "head": "5289ed72e347e65eb9a17d8b1d90f51958f8b333",
+      "originMain": "5289ed72e347e65eb9a17d8b1d90f51958f8b333",
+      "sha256": {
+        "migrations/015_correction_classification.sql": "bb738eeba688a295cb7890219e6f7672b3f44f4cb055ef998768a89ad73c3973",
+        "src/mcp/chatgpt-contract.ts": "320182b3daef87a9480cae1154e33d592c85087c24e2056ef97fb43e023800b9",
+        "src/mcp/chatgpt-server.ts": "b7320aa5e515f82e54fe676d7c693eb6b9b43e6a853003f1f3ba2461102b01ab",
+        "src/mcp/correction-review.ts": "ea4f48b7e4b1d814da2431c35c6db4a3d8d023f488b77a4dd45e9fb0d3def33d",
+        "src/memory/correction-classification.ts": "fe1fb793025600249d630ec5b08c6fae67a291f433e41b8f6d68e4b74de41fb5",
+        "src/memory/correction-contract.ts": "3b815bc09b5fe1d3211a1332f8cd2a161f02528f1050716e1f5976434a9cb881",
+        "tests/integration/correction-review.test.ts": "4d2fad0711f06c326b0be3060a183ae90411011444ad8fcd5344a9728e00d9ae",
+        "tests/unit/correction-classification.test.ts": "59272ce20f1fb8193ee5a0eb66baa6a228cd6091f75e37f1b65e1add1bca6476"
+      },
+      "sourceSetSha256": "704ab45cf28523074b1736923fe154725a1412fec0ab8fde76bcb5da78082899"
+    }
+  }
+}

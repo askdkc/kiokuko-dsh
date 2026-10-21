@@ -831,7 +831,7 @@ export function createDshHostAdapter(ctx: Context, options: DshHostAdapterOption
     refreshMemoryOwner: admission.refreshMemoryOwner,
   })
   const contextMessages = createContextMessages({
-    ctx, runtime, memoryRetrievalConfig, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
+    ctx, runtime, memoryRetrievalConfig, decisions, deepPlanning, executionSupport, continuityMode: continuityConfig.mode,
     getSkillPrompts: () => skillPrompts, systemSkillsFor: routing.systemSkillsFor,
     getSelection: runId => selections.get(runId), currentForAgentEvent, advisoryEvidenceFor: (item, state) => toolHostModule.advisoryEvidenceFor(item, state),
     executionBinding, sessionEventSource,

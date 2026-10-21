@@ -1,0 +1,717 @@
+{
+  "schema": "correction-assessment-v1",
+  "originalLiveReportSha256": "11ba14264c4945d2e6dd15fc254cd81b4ed2bbc53b866c8bd90ea524d92e6c54",
+  "sourceSha": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+  "model": "jev-1.13.0",
+  "policy": "correction-meaning-v1",
+  "corpusSha256": "55350662ade98aaeb475829cfc5158828d629da2ac06ae72b93d959afb20c80d",
+  "batchContractSha256": "fc16c03dae9fac288f713acc0e1e64cdff2bc338600e8cf2b3b873441f63054e",
+  "semantic": {
+    "overall": {
+      "attempted": 120,
+      "correct": 107,
+      "confusion": {
+        "capability_compatibility": {
+          "capability_compatibility": 45,
+          "reference": 0,
+          "uncertain": 0,
+          "provider_failure": 0
+        },
+        "reference": {
+          "capability_compatibility": 7,
+          "reference": 47,
+          "uncertain": 6,
+          "provider_failure": 0
+        },
+        "uncertain": {
+          "capability_compatibility": 0,
+          "reference": 0,
+          "uncertain": 15,
+          "provider_failure": 0
+        }
+      },
+      "accuracy": 0.8916666666666667,
+      "semanticOnlyAccuracy": 0.9292929292929293,
+      "coverage": 0.825,
+      "trueSpecial": 45,
+      "falseSpecial": 7,
+      "falseNonSpecial": 0,
+      "trueNonSpecial": 68,
+      "goldSpecial": 45,
+      "goldNonSpecial": 75,
+      "specialPrecision": 0.8653846153846154,
+      "specialRecall": 1,
+      "falseSpecialRate": 0.09333333333333334,
+      "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+      "abstentionRate": 0.175,
+      "providerFailureRate": 0,
+      "providerFailures": 0,
+      "latencyMs": {
+        "mean": 165.68923816666666,
+        "p50": 157.47154099999898,
+        "p95": 210.27695900000072
+      },
+      "inputTokens": {
+        "reportedCases": 120,
+        "total": 71438,
+        "mean": 595.3166666666667
+      },
+      "denominatorZero": "null, never zero or success"
+    },
+    "languages": {
+      "ja": {
+        "attempted": 24,
+        "correct": 22,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 9,
+            "reference": 0,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 1,
+            "reference": 10,
+            "uncertain": 1,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 0,
+            "uncertain": 3,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.9166666666666666,
+        "semanticOnlyAccuracy": 0.95,
+        "coverage": 0.8333333333333334,
+        "trueSpecial": 9,
+        "falseSpecial": 1,
+        "falseNonSpecial": 0,
+        "trueNonSpecial": 14,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.9,
+        "specialRecall": 1,
+        "falseSpecialRate": 0.06666666666666667,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0.16666666666666666,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 181.37440104166672,
+          "p50": 166.34016699999984,
+          "p95": 290.30345799999986
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 14745,
+          "mean": 614.375
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "en": {
+        "attempted": 24,
+        "correct": 22,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 9,
+            "reference": 0,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 1,
+            "reference": 10,
+            "uncertain": 1,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 0,
+            "uncertain": 3,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.9166666666666666,
+        "semanticOnlyAccuracy": 0.95,
+        "coverage": 0.8333333333333334,
+        "trueSpecial": 9,
+        "falseSpecial": 1,
+        "falseNonSpecial": 0,
+        "trueNonSpecial": 14,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.9,
+        "specialRecall": 1,
+        "falseSpecialRate": 0.06666666666666667,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0.16666666666666666,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 157.6844443749999,
+          "p50": 158.0545000000002,
+          "p95": 171.3648750000002
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 13941,
+          "mean": 580.875
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "zh": {
+        "attempted": 24,
+        "correct": 20,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 9,
+            "reference": 0,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 2,
+            "reference": 8,
+            "uncertain": 2,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 0,
+            "uncertain": 3,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.8333333333333334,
+        "semanticOnlyAccuracy": 0.8947368421052632,
+        "coverage": 0.7916666666666666,
+        "trueSpecial": 9,
+        "falseSpecial": 2,
+        "falseNonSpecial": 0,
+        "trueNonSpecial": 13,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.8181818181818182,
+        "specialRecall": 1,
+        "falseSpecialRate": 0.13333333333333333,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0.20833333333333334,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 163.86785587500003,
+          "p50": 155.27112500000112,
+          "p95": 177.3324590000011
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 14267,
+          "mean": 594.4583333333334
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "ko": {
+        "attempted": 24,
+        "correct": 22,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 9,
+            "reference": 0,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 2,
+            "reference": 10,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 0,
+            "uncertain": 3,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.9166666666666666,
+        "semanticOnlyAccuracy": 0.9047619047619048,
+        "coverage": 0.875,
+        "trueSpecial": 9,
+        "falseSpecial": 2,
+        "falseNonSpecial": 0,
+        "trueNonSpecial": 13,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.8181818181818182,
+        "specialRecall": 1,
+        "falseSpecialRate": 0.13333333333333333,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0.125,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 159.04671354166643,
+          "p50": 153.05062499999985,
+          "p95": 192.79079099999944
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 14452,
+          "mean": 602.1666666666666
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "es": {
+        "attempted": 24,
+        "correct": 21,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 9,
+            "reference": 0,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 1,
+            "reference": 9,
+            "uncertain": 2,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 0,
+            "uncertain": 3,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.875,
+        "semanticOnlyAccuracy": 0.9473684210526315,
+        "coverage": 0.7916666666666666,
+        "trueSpecial": 9,
+        "falseSpecial": 1,
+        "falseNonSpecial": 0,
+        "trueNonSpecial": 14,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.9,
+        "specialRecall": 1,
+        "falseSpecialRate": 0.06666666666666667,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0.20833333333333334,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 166.47277600000038,
+          "p50": 155.445499999998,
+          "p95": 230.20254200000272
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 14033,
+          "mean": 584.7083333333334
+        },
+        "denominatorZero": "null, never zero or success"
+      }
+    },
+    "gates": {
+      "specialPrecision": 0.95,
+      "specialRecall": 0.9,
+      "falseSpecialRate": 0.02,
+      "noSharplyFailingLanguage": "each tested language meets the precision and recall gates",
+      "qualified": false
+    }
+  },
+  "baseline": {
+    "overall": {
+      "attempted": 120,
+      "correct": 52,
+      "confusion": {
+        "capability_compatibility": {
+          "capability_compatibility": 5,
+          "reference": 40,
+          "uncertain": 0,
+          "provider_failure": 0
+        },
+        "reference": {
+          "capability_compatibility": 13,
+          "reference": 47,
+          "uncertain": 0,
+          "provider_failure": 0
+        },
+        "uncertain": {
+          "capability_compatibility": 1,
+          "reference": 14,
+          "uncertain": 0,
+          "provider_failure": 0
+        }
+      },
+      "accuracy": 0.43333333333333335,
+      "semanticOnlyAccuracy": 0.43333333333333335,
+      "coverage": 1,
+      "trueSpecial": 5,
+      "falseSpecial": 14,
+      "falseNonSpecial": 40,
+      "trueNonSpecial": 61,
+      "goldSpecial": 45,
+      "goldNonSpecial": 75,
+      "specialPrecision": 0.2631578947368421,
+      "specialRecall": 0.1111111111111111,
+      "falseSpecialRate": 0.18666666666666668,
+      "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+      "abstentionRate": 0,
+      "providerFailureRate": 0,
+      "providerFailures": 0,
+      "latencyMs": {
+        "mean": 0.0001807618249999986,
+        "p50": 0.0001452910000000429,
+        "p95": 0.00026858299999997823
+      },
+      "inputTokens": {
+        "reportedCases": 120,
+        "total": 0,
+        "mean": 0
+      },
+      "denominatorZero": "null, never zero or success"
+    },
+    "languages": {
+      "ja": {
+        "attempted": 24,
+        "correct": 10,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 1,
+            "reference": 8,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 3,
+            "reference": 9,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 3,
+            "uncertain": 0,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.4166666666666667,
+        "semanticOnlyAccuracy": 0.4166666666666667,
+        "coverage": 1,
+        "trueSpecial": 1,
+        "falseSpecial": 3,
+        "falseNonSpecial": 8,
+        "trueNonSpecial": 12,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.25,
+        "specialRecall": 0.1111111111111111,
+        "falseSpecialRate": 0.2,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 0.00019138024999999694,
+          "p50": 0.00016729099999997744,
+          "p95": 0.00026858299999997823
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 0,
+          "mean": 0
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "en": {
+        "attempted": 24,
+        "correct": 6,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 2,
+            "reference": 7,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 8,
+            "reference": 4,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 1,
+            "reference": 2,
+            "uncertain": 0,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.25,
+        "semanticOnlyAccuracy": 0.25,
+        "coverage": 1,
+        "trueSpecial": 2,
+        "falseSpecial": 9,
+        "falseNonSpecial": 7,
+        "trueNonSpecial": 6,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.18181818181818182,
+        "specialRecall": 0.2222222222222222,
+        "falseSpecialRate": 0.6,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 0.00022948783333333016,
+          "p50": 0.00017116699999996854,
+          "p95": 0.00026358300000003964
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 0,
+          "mean": 0
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "zh": {
+        "attempted": 24,
+        "correct": 11,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 1,
+            "reference": 8,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 2,
+            "reference": 10,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 3,
+            "uncertain": 0,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.4583333333333333,
+        "semanticOnlyAccuracy": 0.4583333333333333,
+        "coverage": 1,
+        "trueSpecial": 1,
+        "falseSpecial": 2,
+        "falseNonSpecial": 8,
+        "trueNonSpecial": 13,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 0.3333333333333333,
+        "specialRecall": 0.1111111111111111,
+        "falseSpecialRate": 0.13333333333333333,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 0.00018282125000000348,
+          "p50": 0.000136333000000036,
+          "p95": 0.0005663339999999835
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 0,
+          "mean": 0
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "ko": {
+        "attempted": 24,
+        "correct": 13,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 1,
+            "reference": 8,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 0,
+            "reference": 12,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 3,
+            "uncertain": 0,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.5416666666666666,
+        "semanticOnlyAccuracy": 0.5416666666666666,
+        "coverage": 1,
+        "trueSpecial": 1,
+        "falseSpecial": 0,
+        "falseNonSpecial": 8,
+        "trueNonSpecial": 15,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": 1,
+        "specialRecall": 0.1111111111111111,
+        "falseSpecialRate": 0,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 0.00015534366666666461,
+          "p50": 0.00012225000000000818,
+          "p95": 0.00020162500000003546
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 0,
+          "mean": 0
+        },
+        "denominatorZero": "null, never zero or success"
+      },
+      "es": {
+        "attempted": 24,
+        "correct": 12,
+        "confusion": {
+          "capability_compatibility": {
+            "capability_compatibility": 0,
+            "reference": 9,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "reference": {
+            "capability_compatibility": 0,
+            "reference": 12,
+            "uncertain": 0,
+            "provider_failure": 0
+          },
+          "uncertain": {
+            "capability_compatibility": 0,
+            "reference": 3,
+            "uncertain": 0,
+            "provider_failure": 0
+          }
+        },
+        "accuracy": 0.5,
+        "semanticOnlyAccuracy": 0.5,
+        "coverage": 1,
+        "trueSpecial": 0,
+        "falseSpecial": 0,
+        "falseNonSpecial": 9,
+        "trueNonSpecial": 15,
+        "goldSpecial": 9,
+        "goldNonSpecial": 15,
+        "specialPrecision": null,
+        "specialRecall": 0,
+        "falseSpecialRate": 0,
+        "falseSpecialDenominator": "all gold non-special cases, including gold uncertain",
+        "abstentionRate": 0,
+        "providerFailureRate": 0,
+        "providerFailures": 0,
+        "latencyMs": {
+          "mean": 0.00014477612499999755,
+          "p50": 0.00013620800000001054,
+          "p95": 0.00021516699999995126
+        },
+        "inputTokens": {
+          "reportedCases": 24,
+          "total": 0,
+          "mean": 0
+        },
+        "denominatorZero": "null, never zero or success"
+      }
+    },
+    "latencyMethod": "Frozen regex CPU time: 20 warmup calls and mean of 1000 repetitions per each of the same 120 inputs; repeats are timing only, not extra semantic coverage.",
+    "inputTokens": "zero: no model request"
+  },
+  "accuracyDefinition": "Three-way accuracy counts a genuine abstention on gold uncertain as correct. Gold special abstentions and provider failures are misses. Conditional semantic-only accuracy uses classified answers only. Provider failures are a separate confusion column, never gold uncertain successes.",
+  "cacheEditEvidence": {
+    "originalReportPreserved": true,
+    "finalModelContractMatchesOriginal": true,
+    "changes": "Cache current-entry checks before lookup and inside publish; no prompt, provider, model, acceptance threshold, corpus or gold-label change. Final-source live MCP handoff and timing prototype were re-run; the original quality measurement is not relabeled."
+  },
+  "finalPrototype": {
+    "capture": {
+      "writeMs": 4.670458999999994,
+      "totalMs": 233.71345900000006,
+      "inferenceMs": 229.04137500000007,
+      "inputTokens": 571
+    },
+    "firstUse": {
+      "captureMs": 2.964375000000018,
+      "coldLookupMs": 155.61066600000004,
+      "cachedLookupMeanMs": 0.9485958499999981,
+      "repeatedLookups": 20,
+      "repeatedProviderCalls": 0,
+      "inputTokens": 570
+    },
+    "changedEntry": {
+      "providerCalls": 1,
+      "elapsedMs": 160.63212499999997,
+      "oldObjectState": "stale"
+    },
+    "selection": "first-use with durable content/revision/policy/configuration cache",
+    "rationale": "Capture does not wait for inference; unused corrections cause no model calls. First use pays one inference; unchanged repeated use pays cache I/O. A changed entry is reclassified."
+  },
+  "finalLiveMcp": {
+    "schema": "correction-live-mcp-v1",
+    "status": "passed",
+    "dshSourceSha": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+    "mainSourceSha": "5289ed72e347e65eb9a17d8b1d90f51958f8b333",
+    "provider": "typesafe",
+    "model": "jev-1.13.0",
+    "syntheticEntries": 2,
+    "providerCalls": 2,
+    "repeatProviderCalls": 0,
+    "cachedResults": 2,
+    "observedRules": [
+      {
+        "rule": "uncertain",
+        "observed": "reference",
+        "model": "jev-1.13.0",
+        "mode": "shadow",
+        "inputTokens": 565
+      },
+      {
+        "rule": "uncertain",
+        "observed": "capability_compatibility",
+        "model": "jev-1.13.0",
+        "mode": "shadow",
+        "inputTokens": 571
+      }
+    ],
+    "modelInput": "unobserved",
+    "verification": "unverified",
+    "authorizationGranted": false,
+    "qualityMeasurement": "separate held-out corpus, not these two handoff cases"
+  },
+  "recommendation": "Keep default shadow; provisional release gates failed. No automatic production enablement or arbitrary-language correctness claim.",
+  "scope": {
+    "heldOutCases": 120,
+    "distinctHeldOutSemanticFamilies": 24,
+    "languages": [
+      "ja",
+      "en",
+      "zh",
+      "ko",
+      "es"
+    ],
+    "gold": {
+      "special": 45,
+      "reference": 60,
+      "uncertain": 15
+    },
+    "independence": "Aligned translations are not 120 independent semantic families."
+  }
+}

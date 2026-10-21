@@ -1,3 +1,5 @@
+import type {CorrectionBackend} from '../../../src/memory/correction-classification.js'
+import {canonicalContentHash} from '../../../src/serialization/validate.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
@@ -18,6 +20,8 @@ import {mountMemoryApplication} from '../../../src/dsh/memory-application.js'
 import {mountTaskCompletion} from '../../../src/dsh/task-completion-host.js'
 import {observeProcessResult} from '../../../src/dsh/execution-result.js'
 
+// Scripted transport/gate fixture, not evidence of semantic quality.
+const backend:CorrectionBackend={configurationDigest:canonicalContentHash('correction-gate-fixture'),async evaluate(){return {status:'completed',attested:true,result:{provider:'fixture',requestedModel:'gate-fixture',policyVersion:'fixture-v1',answers:[{id:'correction-rule',status:'selected',choiceId:'capability_compatibility'}]}}}}
 test('retrieval failure, no match, missing delivery, source tampering and version-only decisions remain distinct',async()=>{
   const root=realpathSync(await mkdtemp(join(tmpdir(),'correction-stages-')))
   await mkdir(join(root,'.git'));await writeFile(join(root,'package.json'),'{"name":"stage-fixture","private":true}')
@@ -25,10 +29,10 @@ test('retrieval failure, no match, missing delivery, source tampering and versio
   try {
     const project=(await resolveProjectWorkspace(db,root))!
     const profile={taskType:'build' as const,target:'Rust',expected:'native acceptance',constraints:null},signal=new AbortController().signal
-    const noCorrection=await readTaskCorrections(db,{project,runId:'fixture',task:'Rust compiler compatibility',profile,signal})
+    const noCorrection=await readTaskCorrections(db,{project,runId:'fixture',task:'Rust compiler compatibility',profile,signal,backend,correctionMode:'auto'})
     assert.equal(noCorrection.corrections.retrieval,'no_correction')
     recordEntry(db,{workspace:project.workspace,kind:'lesson',title:'Rust compatibility',body:'Do not reject Rust only because compiler versions differ. Validate actual compiler capabilities.',scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
-    const selected=await readTaskCorrections(db,{project,runId:'fixture',task:'Rust compiler compatibility',profile,signal})
+    const selected=await readTaskCorrections(db,{project,runId:'fixture',task:'Rust compiler compatibility',profile,signal,backend,correctionMode:'auto'})
     assert.equal(selected.corrections.retrieval,'retrieved');assert.equal(selected.corrections.delivery,'not_delivered')
     const decision={kind:'compatibility' as const,target:'check.mjs',basis:'version_only' as const,requiredVersion:'1.85.0',observedVersion:'1.99.1'}
     assert.equal(checkCorrectionDecision(db,undefined,decision).reason,'not_requested')
@@ -44,7 +48,7 @@ test('retrieval failure, no match, missing delivery, source tampering and versio
     assert.equal(missing.delivery,'not_delivered');assert.equal(missing.inputDigest,undefined)
     const altered={...delivered,sources:delivered.sources.map(source=>({...source,sourceDigest:'0'.repeat(64)}))}
     assert.equal(currentCorrectionSources(db,altered),false);assert.equal(checkCorrectionDecision(db,altered,decision).state,'stale')
-    const broken=await readTaskCorrections({prepare(){throw new Error('synthetic observer unavailable')}} as any,{project,runId:'fixture',task:'Rust',profile,signal})
+    const broken=await readTaskCorrections({prepare(){throw new Error('synthetic observer unavailable')}} as any,{project,runId:'fixture',task:'Rust',profile,signal,backend,correctionMode:'auto'})
     assert.equal(broken.corrections.retrieval,'unavailable')
     const aborted=new AbortController();aborted.abort()
     await assert.rejects(readTaskCorrections(db,{project,runId:'fixture',task:'Rust',profile,signal:aborted.signal}))
@@ -72,7 +76,7 @@ test('public decision check rejects version-only incomplete claims only after ac
     const project=(await resolveProjectWorkspace(db,root))!
     recordEntry(db,{workspace:project.workspace,kind:'lesson',title:'Rust compatibility',body:'Do not reject compiler compatibility only because versions differ; verify compiler capabilities.',scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
     const prepared=await prepareAgentTask(db,{requestId:'completion',cwd:root,dshSessionId:'session',task:'Inspect Rust compatibility.\n完了条件:\n- 対象テストが成功する',profileHints:{taskType:'research',target:'check.test.mjs',expected:'Verify capability',constraints:null},completionMode:'enforce',capabilities:[],skillDiscoveryMode:'off'})
-    const selected=await readTaskCorrections(db,{project,runId:prepared.run.runId,task:'Rust compiler compatibility',profile:prepared.intake.profile,signal:new AbortController().signal})
+    const selected=await readTaskCorrections(db,{project,runId:prepared.run.runId,task:'Rust compiler compatibility',profile:prepared.intake.profile,signal:new AbortController().signal,backend,correctionMode:'auto'})
     const allowed=currentContextMemory(db,project.workspace,selected.context!.items,undefined,selected.context!)
     let receipt=observeCorrectionInput(selected.corrections,allowed,[...allowed].map(([name,text])=>({role:'user',content:[{type:'text',text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,sections:[{name,text}]}})))
     const agent={id:'agent'},runtime={withDatabase:async(fn:any)=>fn(db)} as any,tools:any[]=[],listeners=new Map<string,Function[]>()
@@ -118,7 +122,7 @@ test('native confirmation binds one operation and optional observer failures do 
     const project=(await resolveProjectWorkspace(db,root))!
     const entry=recordEntry(db,{workspace:project.workspace,kind:'lesson',title:'Rust compatibility',body:'Do not reject compiler compatibility only because versions differ; verify compiler capabilities.',scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
     const prepared=await prepareAgentTask(db,{requestId:'confirmation',cwd:root,dshSessionId:'session',task:'Inspect Rust compatibility',profileHints:{taskType:'research',target:'check.mjs',expected:'Verify capability',constraints:null},capabilities:[],skillDiscoveryMode:'off'})
-    const selected=await readTaskCorrections(db,{project,runId:prepared.run.runId,task:'Rust compiler compatibility',profile:prepared.intake.profile,signal:new AbortController().signal})
+    const selected=await readTaskCorrections(db,{project,runId:prepared.run.runId,task:'Rust compiler compatibility',profile:prepared.intake.profile,signal:new AbortController().signal,backend,correctionMode:'auto'})
     const allowed=currentContextMemory(db,project.workspace,selected.context!.items,undefined,selected.context!)
     const receipt=observeCorrectionInput(selected.corrections,allowed,[...allowed].map(([name,text])=>({role:'user',content:[{type:'text',text}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,sections:[{name,text}]}})))
     const agent={id:'agent'},identity={runId:prepared.run.runId,workspace:project.workspace,sessionId:'session',repositoryRoot:root,corrections:receipt}

@@ -1,0 +1,43 @@
+✔ ordinary execution intake retrieves a stored correction without saving memory or asking another intake question (3595.100208ms)
+✔ first use persists only host-owned metadata; body survives a lossy summary and unchanged reuse survives restart (477.942209ms)
+✔ legacy/caller metadata cannot activate a rule; shadow, unknown and reference never trigger the compatibility gate (246.901458ms)
+✔ title, body, summary, revision and provider configuration invalidate cached meaning without rewriting old entries (307.440125ms)
+✔ concurrent updates cannot receive a classification from an earlier revision, and concurrent identical lookups share inference (183.599834ms)
+✔ outage remains explicit, is cached and cannot become reference (149.436292ms)
+✔ malformed remains explicit, is cached and cannot become reference (141.796125ms)
+✔ abstain remains explicit, is cached and cannot become reference (153.135833ms)
+✔ timeout remains explicit, is cached and cannot become reference (144.18075ms)
+✔ parent cancellation never persists an asynchronous result (137.726875ms)
+✔ cached meaning cannot survive entry deletion or a foreign workspace identity (133.785584ms)
+✔ corrupt persisted classification fails closed without repeating inference or repairing memory content (139.587ms)
+✔ the semantic request carries the full body, explicit abstention and no execution effects (0.207959ms)
+✔ the additive cache migration upgrades a real prior schema without changing legacy memory (140.538958ms)
+✔ retrieval failure, no match, missing delivery, source tampering and version-only decisions remain distinct (3431.499625ms)
+✔ literal write detector leaves CI pins, lower bounds, test fixtures, prose and reads alone (0.991666ms)
+✔ public decision check rejects version-only incomplete claims only after actual source-bound verification (301.434334ms)
+✔ native confirmation binds one operation and optional observer failures do not hold other work (196.079666ms)
+✔ evaluation denominators include positive abstentions/outages as misses and all gold non-special cases (2.214375ms)
+✔ empty denominators are unavailable and cannot pass release gates (0.239958ms)
+✔ held-out corpus is disjoint, balanced and aligned across the five declared languages (2.186125ms)
+✔ legacy Choice normalizes without changing its serialized shape (4.989042ms)
+✔ Noul and Score retain measured values and reject type, rubric and probability corruption (123.092292ms)
+✔ only memory reuse Noul accepts 300 questions and answers (127.301875ms)
+✔ correction meaning uses the same Choice contract through typesafe (96.055291ms)
+✔ correction meaning uses the same Choice contract through nimble (10.997166ms)
+✔ correction meaning uses the same Choice contract through laya-strict (38.531917ms)
+✔ correction meaning uses the same Choice contract through laya-v1 (4.819584ms)
+✔ strict truncation admission fails before correction inference; decision-off performs no inference (5.200792ms)
+✔ Laya config remains optional, old normalized JSON/digest stable, socket resolves once before binding (52.686167ms)
+✔ Laya serializes complete canonical state and ordered numeric IDs, verifies worker before evidence, uses strict prediction (29.4645ms)
+✔ Laya acceptance uses probabilities, margin and conservative rounding; entropy/action are irrelevant (17.674583ms)
+✔ Laya rejects corrupt identity, question/choice sets, probabilities and usage (63.061208ms)
+✔ compaction forwards per-part preflight through wrapper before any batch inference, and overflow preserves readiness (26.107625ms)
+✔ declared module assets contain every authoritative migration exactly once (1.394417ms)
+ℹ tests 35
+ℹ suites 0
+ℹ pass 35
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5324.294333

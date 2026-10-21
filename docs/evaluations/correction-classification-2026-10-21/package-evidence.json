@@ -1,0 +1,51 @@
+[
+  {
+    "package": "kiokuko-dsh",
+    "status": "passed",
+    "runtimeSnapshotByteMatched": [
+      "scripts/module-compatibility-assets.json",
+      "scripts/pack-check.mjs",
+      "src/dsh/core/tasks.ts",
+      "src/dsh/correction-context.ts",
+      "src/dsh/decisions/config.ts",
+      "src/dsh/decisions/contracts.ts",
+      "src/dsh/decisions/diagnostics.ts",
+      "src/dsh/decisions/service.ts",
+      "src/dsh/host-adapter.ts",
+      "src/dsh/host-adapter/context.ts",
+      "src/memory/correction-contract.ts",
+      "migrations/045_correction_classification.sql",
+      "src/dsh/decisions/correction.ts",
+      "src/memory/correction-classification.ts"
+    ],
+    "requiredAssets": [
+      "dist/memory/correction-classification.js",
+      "dist/memory/correction-contract.js",
+      "migrations/045_correction_classification.sql",
+      "dist/dsh/decisions/correction.js"
+    ],
+    "tarball": "kiokuko-dsh-0.2.17.tgz",
+    "tarballSha256": "5c2c39352fae24ed76730de9f57ec94ada25e8f0813b1f4fe38c127fd38af489",
+    "scripts": "ignored; no install or publish"
+  },
+  {
+    "package": "kiokuko",
+    "status": "passed",
+    "runtimeSnapshotByteMatched": [
+      "src/mcp/chatgpt-contract.ts",
+      "src/mcp/chatgpt-server.ts",
+      "src/mcp/correction-review.ts",
+      "src/memory/correction-contract.ts",
+      "migrations/015_correction_classification.sql",
+      "src/memory/correction-classification.ts"
+    ],
+    "requiredAssets": [
+      "dist/memory/correction-classification.js",
+      "dist/memory/correction-contract.js",
+      "migrations/015_correction_classification.sql"
+    ],
+    "tarball": "kiokuko-1.0.45.tgz",
+    "tarballSha256": "70d4aaf24b9e9959146f9a5860113cd1b72c8469e114dfc601e7fae840d23fdc",
+    "scripts": "ignored; no install or publish"
+  }
+]

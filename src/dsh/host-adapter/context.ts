@@ -21,11 +21,13 @@ import {readTaskCorrections} from '../correction-context.js'
 import {canonicalContentHash} from '../../serialization/validate.js'
 import {timeConstraintForRequest,type MemoryRetrievalConfig} from '../../memory/retrieval-contracts.js'
 import {reportMemoryRetrievalObservation} from '../memory-retrieval-observer.js'
+import type {DecisionService} from '../decisions/service.js'
 
 interface ContextDependencies {
   readonly ctx: Context
   readonly runtime: DshCoreRuntime
   readonly memoryRetrievalConfig: MemoryRetrievalConfig
+  readonly decisions?: DecisionService
   readonly deepPlanning: DeepPlanningController
   readonly executionSupport: DshExecutionSupport
   readonly continuityMode: 'off' | 'shadow' | 'active'
@@ -39,7 +41,7 @@ interface ContextDependencies {
 }
 
 export function createContextMessages({
-  ctx, runtime, memoryRetrievalConfig, deepPlanning, executionSupport, continuityMode, getSkillPrompts,
+  ctx, runtime, memoryRetrievalConfig, decisions, deepPlanning, executionSupport, continuityMode, getSkillPrompts,
   systemSkillsFor, getSelection, currentForAgentEvent, advisoryEvidenceFor,
   executionBinding, sessionEventSource,
 }: ContextDependencies) {
@@ -58,7 +60,7 @@ export function createContextMessages({
       &&(item.prepared.corrections?.requestDigest!==canonicalContentHash(event.task)||correctionContextMissing)){
       const timeConstraint=memoryRetrievalConfig.mode==='off'?undefined:timeConstraintForRequest(event.task,memoryRetrievalConfig,Date.now())
       const selected=await runtime.withDatabase(db=>readTaskCorrections(db,{project:item.prepared.project,runId:item.runId,
-        task:event.task,profile:item.prepared.intake.profile,signal:event.signal,runtime:{memoryRetrieval:memoryRetrievalConfig,
+        task:event.task,profile:item.prepared.intake.profile,signal:event.signal,decisions,runtime:{memoryRetrieval:memoryRetrievalConfig,
           ...(timeConstraint?{timeConstraint}:{}),...(memoryRetrievalConfig.mode==='observe'?{onMemoryRetrievalObservation:reportMemoryRetrievalObservation}:{})}}))
       event.signal.throwIfAborted()
       item.prepared={...item.prepared,context:selected.context??item.prepared.context,corrections:selected.corrections,

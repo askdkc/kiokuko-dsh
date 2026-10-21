@@ -179,7 +179,7 @@ export class CoreTasks {
       const memoryOwner = input.agent ? createMemoryOwner(ownerKind, { agentId: input.agent.id, sessionId: input.sessionId,
         turn: input.turn, requestDigest: canonicalContentHash(input.task), runId: taskId }) : undefined
       const selected=admitted&&ownerKind==='execution'
-        ? await readTaskCorrections(db,{project,runId:taskId,task:input.task,profile:intake.profile,signal:input.signal,
+        ? await readTaskCorrections(db,{project,runId:taskId,task:input.task,profile:intake.profile,signal:input.signal,decisions:this.decisions,
           runtime:retrievalRuntimeForRequest(this.memoryRetrieval,input.task,Date.now(),input.timeConstraint)}) : {context:null}
       return Object.freeze({ requestId: owner?.start_id ?? input.requestId, sessionId: input.sessionId, runId: taskId, workspace: project.workspace,
         cwd: realpathSync(input.cwd), profile: intake.profile, admitted, memory:recallView(db,selected.context),context:selected.context,capabilities:input.capabilities,
@@ -266,7 +266,7 @@ export class CoreTasks {
         if (admitted) authority = captureTaskLease(db, taskIdentity)
         const selectedSkills = admitted ? await selectInstalledSkills(this.decisions, input.requestId, input.task, input.capabilities, capabilities, input.signal) : []
         const selected = admitted && ownerKind==='execution'
-          ? await readTaskCorrections(db,{project,runId:identity.runId,task:input.task,profile:state.session.profile,signal:input.signal,
+          ? await readTaskCorrections(db,{project,runId:identity.runId,task:input.task,profile:state.session.profile,signal:input.signal,decisions:this.decisions,
             runtime:retrievalRuntimeForRequest(this.memoryRetrieval,input.task,retrievalAnchorTimeMs,input.timeConstraint)})
           : {context:null}
         const memory=selected.context
@@ -302,7 +302,7 @@ export class CoreTasks {
       assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority)
       const project=await resolveProjectWorkspaceReadOnly(db,task.cwd,{allowDirectory:true})
       if(!project||!task.admitted||task.memoryOwner?.kind==='conversation')return {memory:null,context:null}
-      const selected=await readTaskCorrections(db,{project,runId:task.runId,task:query,profile:task.profile,signal,
+      const selected=await readTaskCorrections(db,{project,runId:task.runId,task:query,profile:task.profile,signal,decisions:this.decisions,
         runtime:retrievalRuntimeForRequest(this.memoryRetrieval,query,Date.now(),timeConstraint)})
       await validateCapabilities?.()
       assertCoreTaskIdentity(db,task,'refresh');if(task.authority)authorizeTaskLease(db,task.authority)

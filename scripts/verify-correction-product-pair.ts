@@ -15,6 +15,7 @@ import {codingPrelude,toolValue} from '../tests/dsh/helpers/coding-script.js'
 import {withIsolatedSkillHome} from '../tests/dsh/helpers/skill-home.js'
 import {openConnection} from '../src/db/connection.js'
 import {recordEntry} from '../src/memory/entries.js'
+import {correctionDecisionFixture} from '../tests/dsh/helpers/correction-decisions.js'
 
 assert.ok(process.argv[2]&&process.argv[3],'Pass the built Kiokuko package and an installed absolute rustc')
 const main=realpathSync(resolve(process.argv[2]!)),rustc=realpathSync(process.argv[3]!)
@@ -50,12 +51,14 @@ try{
   assert.equal(unbound.retrieval,'retrieved');assert.equal(unbound.binding,'missing');assert.deepEqual(unbound.sources,[])
   const reviewed=(await client.callTool({name:'memory_correction_check',arguments:{policy,recallId:remote.corrections.recallId,decision:badDecision}})).structuredContent
   assert.equal(reviewed.binding,'bound')
-  assert.equal(reviewed.state,'contradiction');assert.equal(reviewed.verification,'unverified');assert.equal(reviewed.modelInput,'unobserved')
+  assert.equal(remoteSource.rule,'uncertain','standalone MCP has no implicitly configured semantic provider')
+  assert.equal(reviewed.state,'unverified');assert.equal(reviewed.verification,'unverified');assert.equal(reviewed.modelInput,'unobserved')
   await withIsolatedSkillHome(async()=>{
     for(const explicit of [false,true])for(const drop of [false,true]){
       let questions=0
+      const semantic=await correctionDecisionFixture(content.body)
       const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules'),packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
-      const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,extra:{lisp:{enabled:false},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}},nativeAnswer:async request=>{
+      const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,extra:{lisp:{enabled:false},typedDecisions:semantic.configuration,answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}},nativeAnswer:async request=>{
         const q=request.questions[0];if(q.id.startsWith('correction-')){questions++;return {answers:[{id:q.id,selected:['見直す']}]}}
         return {answers:[{id:q.id,selected:['使わない']}]}
       }})
@@ -79,11 +82,14 @@ try{
         await f.turn('Verify Rust compiler capabilities and fix scripts/check.mjs. 通常実行で。')
         assert.equal(await readFile(join(f.dir,'scripts/check.mjs'),'utf8'),'export const capabilityAccepted = true\n');assert.equal(questions,1)
         const observations=db.prepare("SELECT payload_json FROM ledger_events WHERE event_type='correction.recorded'").all<{payload_json:string}>().map(r=>JSON.parse(r.payload_json))
-        const bound=observations.flatMap(e=>e.sources).find(s=>s.entryId===source.id);assert.deepEqual(bound,remoteSource,'both actual product entries bind the identical correction source')
+        const bound=observations.flatMap(e=>e.sources).find(s=>s.entryId===source.id)
+        const identity=({entryId,revision,workspace,origin,sourceDigest}:any)=>({entryId,revision,workspace,origin,sourceDigest})
+        assert.deepEqual(identity(bound),identity(remoteSource),'both actual product entries bind the identical correction evidence, independently of classifier availability')
+        assert.equal(bound.rule,'capability_compatibility');assert.equal(semantic.calls(),1)
         assert.ok(observations.some(e=>e.state===(drop?'handoff_missing':'contradiction')&&e.allowed===false))
         assert.equal(db.prepare('SELECT count(*) AS n FROM entries').get()?.n,1)
         records.push({entry:explicit?'adapter':'public',inputRemoved:drop,actualCapabilityPassed:true,versionOnlyWriteRejected:true,capabilityWriteAccepted:true,source:bound})
-      }finally{off();db.close();await f.close()}
+      }finally{off();db.close();await f.close();await semantic.close()}
     }
   })
   console.log(JSON.stringify({schema:'correction-product-pair-v1',status:'passed',compiler,model:'scripted',realModelEfficacy:'not_measured',mainModelInput:'unobserved',cases:records}))

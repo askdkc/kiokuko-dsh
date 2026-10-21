@@ -1,0 +1,9 @@
+
+> kiokuko-dsh@0.2.17 build
+> npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-model-transports.mjs && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs && node scripts/guardrail-artifacts.mjs --verify-bundled --quiet && node scripts/verify-micro-judge.mjs
+
+
+> kiokuko-dsh@0.2.17 clean:dist
+> node --input-type=module --eval "import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });"
+
+Skill prompts: 44 validated resources compiled

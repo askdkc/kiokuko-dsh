@@ -8,13 +8,16 @@ import {codingPrelude,toolValue} from '../helpers/coding-script.js'
 import {isolateSkillHome} from '../helpers/skill-home.js'
 import {openConnection} from '../../../src/db/connection.js'
 import {recordEntry} from '../../../src/memory/entries.js'
+import {correctionDecisionFixture} from '../helpers/correction-decisions.js'
 isolateSkillHome()
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
-const extra={lisp:{enabled:false},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}}
+const extra={lisp:{enabled:false},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}}
 for(const explicit of [false,true])for(const dropInput of [false,true])test(`native correction handoff and scoped version-gate rejection (${explicit?'adapter':'public'}, drop=${dropInput})`,{timeout:90000},async()=>{
   let confirmations=0
-  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra,nativeAnswer:async request=>{
+  const body='Do not reject Rust compiler compatibility only because a version differs. Verify actual compiler capabilities and native acceptance.'
+  const semantic=await correctionDecisionFixture(body)
+  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
     const q=request.questions[0]
     if(q.id.startsWith('correction-')){confirmations++;assert.match(q.detail,/scripts\/check.mjs/);return {answers:[{id:q.id,selected:['見直す']}]}}
     return {answers:[{id:q.id,selected:['使わない']}]}
@@ -27,7 +30,7 @@ for(const explicit of [false,true])for(const dropInput of [false,true])test(`nat
   try {
     await mkdir(join(f.dir,'scripts'))
     const workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
-    const memory=recordEntry(db,{workspace,kind:'lesson',title:'Rust compiler compatibility',body:'Do not reject Rust compiler compatibility only because a version differs. Verify actual compiler capabilities and native acceptance.',scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
+    const memory=recordEntry(db,{workspace,kind:'lesson',title:'Rust compiler compatibility',body,scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
     f.responses.push(f.mock.textResponse('Different compiler versions can be checked against the actual required capabilities.'))
     await f.turn('Explain Rust compiler compatibility. Do not change files.')
     assert.equal(confirmations,0,'ordinary explanation must not ask a correction question')
@@ -62,5 +65,30 @@ for(const explicit of [false,true])for(const dropInput of [false,true])test(`nat
     if(!dropInput)assert.ok(events.some(e=>e.inputDigest))
     assert.ok(events.some(e=>e.state===(dropInput?'handoff_missing':'contradiction')&&e.allowed===false))
     assert.equal(db.prepare('SELECT count(*) AS n FROM entries').get()?.n,1)
-  } finally {releaseDrop();db.close();await f.close()}
+    assert.equal(semantic.calls(),1,'unchanged correction is classified once across the conversation and execution turns')
+  } finally {releaseDrop();db.close();await f.close();await semantic.close()}
+})
+
+for(const explicit of [false,true])for(const state of ['shadow','reference','uncertain','unavailable'] as const)test(`native ${state} never invokes special correction handling (${explicit?'adapter':'public'})`,{timeout:90000},async()=>{
+  const body=state==='reference'?'Record compiler version 1.99 as an environment fact.':'A synthetic compiler compatibility correction.'
+  const semantic=await correctionDecisionFixture(body,{choice:state==='shadow'?'capability_compatibility':state,mode:state==='shadow'?'shadow':'auto'})
+  let confirmations=0
+  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
+    const q=request.questions[0];if(q.id.startsWith('correction-'))confirmations++
+    return {answers:[{id:q.id,selected:['使わない']}]}
+  }})
+  const db=openConnection(join(f.dir,explicit?'state.sqlite3':'kiokuko-dsh.sqlite3'))
+  try{
+    await mkdir(join(f.dir,'scripts'))
+    const workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
+    recordEntry(db,{workspace,kind:'lesson',title:'Rust compiler compatibility',body,scope:{visibility:'project'},provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
+    const content='assert.match(compiler.stdout, /^rustc 1\\.85\\.0 /)\n'
+    f.responses.push(...codingPrelude(f.mock,'non-special'),f.mock.toolCallResponse('write','kioku_write',{path:'scripts/check.mjs',content}),
+      (request:any)=>{assert.equal(nativeToolResults(request.messages).find((x:any)=>x.toolCallId==='write')?.isError,false);return f.mock.toolCallResponse('check','correction_check',{decision:{kind:'compatibility',target:'scripts/check.mjs',basis:'version_only',requiredVersion:'1.85.0',observedVersion:'1.99.1'}})},
+      (request:any)=>{const checked=toolValue(request,'check');assert.equal(checked.state,'unverified');assert.equal(checked.verification,'unverified');return f.mock.textResponse('No special correction rule was activated.')})
+    await f.turn('Fix Rust compiler compatibility in scripts/check.mjs. 通常実行で。')
+    assert.equal(confirmations,0);assert.equal(await readFile(join(f.dir,'scripts/check.mjs'),'utf8'),content);assert.equal(semantic.calls(),1)
+    const observed=JSON.parse(String(db.prepare('SELECT result_json FROM correction_classifications LIMIT 1').get()?.result_json))
+    assert.equal(observed.state,{shadow:'classified',reference:'classified',uncertain:'abstained',unavailable:'unavailable'}[state])
+  }finally{db.close();await f.close();await semantic.close()}
 })

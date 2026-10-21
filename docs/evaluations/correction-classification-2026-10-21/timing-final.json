@@ -1,0 +1,53 @@
+{
+  "schema": "correction-live-evaluation-v1",
+  "mode": "live-synthetic",
+  "split": "development",
+  "prototypeOnly": true,
+  "sourceSha": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+  "policy": "correction-meaning-v1",
+  "startedAt": "2026-10-21T01:23:19.231Z",
+  "nodeVersion": "v24.16.0",
+  "implementationSha256": {
+    "src/memory/correction-contract.ts": "3b815bc09b5fe1d3211a1332f8cd2a161f02528f1050716e1f5976434a9cb881",
+    "src/memory/correction-classification.ts": "fe1fb793025600249d630ec5b08c6fae67a291f433e41b8f6d68e4b74de41fb5",
+    "src/dsh/decisions/correction.ts": "cf0524467e9e6c084a4f208c6afc6c415665e1284792266b73ff4837391315cc",
+    "src/dsh/decisions/contracts.ts": "829121e8788ee4cea9f34335985ca368bca638924d04c170a444e41fd9f971b3",
+    "src/dsh/decisions/service.ts": "f7423d0a82b8fab07189f419507f539d53641ac941e99845b902ebc8c89b4f44",
+    "src/dsh/decisions/providers.ts": "ac81c87a2a1553bfcd14a173c7060b204ed2133d93889d845f5e45575c61802f"
+  },
+  "corpusSha256": "55350662ade98aaeb475829cfc5158828d629da2ac06ae72b93d959afb20c80d",
+  "batchContractSha256": "fc16c03dae9fac288f713acc0e1e64cdff2bc338600e8cf2b3b873441f63054e",
+  "baselineSourceSha": "01e27576d2efe5020c19e93bdba1a6528bfcaee1",
+  "provider": "typesafe",
+  "configuredModel": "jev-1.13.0",
+  "acceptance": {
+    "minConfidence": 0.8
+  },
+  "distinctSemanticFamilies": 0,
+  "limitations": "24 distinct held-out semantic families, each aligned across five languages; translations are not 120 independent semantic families. Synthetic authored labels; no claim of arbitrary-language validity.",
+  "rows": [],
+  "metrics": null,
+  "prototype": {
+    "capture": {
+      "writeMs": 4.670458999999994,
+      "totalMs": 233.71345900000006,
+      "inferenceMs": 229.04137500000007,
+      "inputTokens": 571
+    },
+    "firstUse": {
+      "captureMs": 2.964375000000018,
+      "coldLookupMs": 155.61066600000004,
+      "cachedLookupMeanMs": 0.9485958499999981,
+      "repeatedLookups": 20,
+      "repeatedProviderCalls": 0,
+      "inputTokens": 570
+    },
+    "changedEntry": {
+      "providerCalls": 1,
+      "elapsedMs": 160.63212499999997,
+      "oldObjectState": "stale"
+    },
+    "selection": "first-use with durable content/revision/policy/configuration cache",
+    "rationale": "Capture does not wait for inference; unused corrections cause no model calls. First use pays one inference; unchanged repeated use pays cache I/O. A changed entry is reclassified."
+  }
+}

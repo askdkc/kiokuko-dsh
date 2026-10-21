@@ -1,0 +1,11 @@
+✔ evaluation denominators include positive abstentions/outages as misses and all gold non-special cases (0.829875ms)
+✔ empty denominators are unavailable and cannot pass release gates (0.094375ms)
+✔ held-out corpus is disjoint, balanced and aligned across the five declared languages (0.725625ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 74.4725
