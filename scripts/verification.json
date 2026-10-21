@@ -139,6 +139,7 @@
       "result": "node",
       "requires": [
         "dsh-native",
+        "pnpm",
         "sbcl",
         "protected-python3"
       ],
@@ -163,6 +164,7 @@
       "result": "node",
       "requires": [
         "dsh-native",
+        "pnpm",
         "sbcl",
         "protected-python3"
       ],
@@ -402,7 +404,9 @@
         "ci-main"
       ],
       "result": "command",
-      "requires": [],
+      "requires": [
+        "pnpm"
+      ],
       "expected": "exit 0",
       "dependsOn": [
         "build"

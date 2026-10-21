@@ -142,6 +142,24 @@ test('the actual aggregate CLI rejects missing jobs/reports, stale selection and
 });
 
 // Selection risks are tested here with the existing coverage/aggregate contracts.
+test('pnpm prerequisites provision full main and representative core lanes',()=>{
+  for(const id of ['publint','native-integration','ci-native-integration'])
+    assert.ok(contract.checks.find(check=>check.id===id)?.requires.includes('pnpm'),id);
+  const request=path=>({available:true,changes:[{status:'M',path}]});
+  const representative=createCiPlan(contract,request('src/dsh/task-state.ts'),selectionIdentity);
+  const ui=createCiPlan(contract,request('src/client.ts'),selectionIdentity);
+  assert.equal(full.jobCount,27);assert.equal(representative.jobCount,5);assert.equal(ui.jobCount,6);
+  for(const [selection,id,required] of [
+    [full,'main-unit-evaluations',['publint']],
+    [full,'main-integration',['ci-native-integration-1','ci-native-integration-2']],
+    [representative,'core-linux-x64',['publint','ci-native-integration-1','ci-native-integration-2']],
+  ]){
+    const lane=selection.lanes.find(lane=>lane.id===id);
+    assert.equal(lane.pnpm,true,id);assert.equal(lane.pnpmVersion,'11.7.0',id);
+    const checks=lanePlan(contract,selection,id).checks;
+    for(const check of required)assert.ok(checks.find(entry=>entry.id===check)?.requires.includes('pnpm'),`${id}/${check}`);
+  }
+});
 test('selected coverage fails safe and retains the complete inventory in full mode',()=>{
   const request=(file,status='M')=>({available:true,changes:[{status,path:file}]});
   for(const [file,count,reports]of [['docs/guide.md',2,0],['src/dsh/task-state.ts',5,2],['src/client.ts',6,3],['src/dsh/lisp/sandbox.darwin.ts',7,3],['src/dsh/lisp/sandbox.ts',9,4]]){
