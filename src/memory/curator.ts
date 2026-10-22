@@ -1,3 +1,4 @@
+import { classifyCuratorEntry, readCuratorAssessment, type CuratorAssessment, type CuratorBackend } from './curator-classification.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { KiokukoError } from '../errors.js';
@@ -31,9 +32,6 @@ export { CURATOR_DRAFT_VERSION } from './curator-trust.js';
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
 const MIN_CURATOR_SCORE = 4;
-const GENERIC_LANGUAGE = /(?:汎用|一般化|再利用|共通|手順|パターン|ベストプラクティス|トラブルシューティング|workflow|pattern|best practice|troubleshoot|how[- ]to|reusable|portable|avoid|when to)/iu;
-const PROCEDURAL_LANGUAGE = /(?:する|して|確認|切り分け|手順|場合|必要|use|run|check|verify|configure|prefer|avoid|when|if|then|should)/iu;
-const LOCAL_LANGUAGE = /(?:この(?:リポジトリ|プロジェクト)|this (?:repository|project)|project-specific|project:|repo_[a-z0-9_]+)/iu;
 const ABSOLUTE_PATH = /(?:\/(?:Users|home|private)\/|[A-Za-z]:[\\/])/u;
 const ABSOLUTE_PATH_GLOBAL = /(?:\/(?:Users|home|private)\/[^\s`"'<>()[\]{},;!?。！？、]+|[A-Za-z]:[\\/][^\s`"'<>()[\]{},;!?。！？、]+)/gu;
 const PROJECT_RELATIVE_PATH = /\b(?:src|tests?|app|lib|packages?|config|resources|migrations)[\\/][A-Za-z0-9_.@/\\-]+\b/gu;
@@ -57,6 +55,7 @@ export interface CuratorDraft {
 }
 
 export interface CuratorCandidate {
+  classification: CuratorAssessment;
   entryId: string;
   workspace: string;
   revision: number;
@@ -103,6 +102,7 @@ export interface CuratorCandidatesResult {
   nextCursor: string | null;
   totalApproximate: number;
   securityNotice: string;
+  classificationStatus: { classified: number; unavailable: number; reasons: string[] };
 }
 
 export interface CuratorFacetResult {
@@ -117,6 +117,7 @@ export interface GlobalizeCuratorInput {
   workspace: string;
   entryId: string;
   expectedRevision: number;
+  expectedClassificationDigest: string;
   actor?: string;
   now?: string;
 }
@@ -300,7 +301,7 @@ function overviewLines(draft: CuratorDraft, metadata: StructuredMetadata): [stri
   return [draft.summary, procedure, `${japanese ? '適用条件' : 'Applicability'}: ${applicabilityLine(metadata.applicability, japanese)}`];
 }
 
-function scoreEntry(entry: EntryRecord): CuratorScore {
+function scoreEntry(entry: EntryRecord, classification: CuratorAssessment): CuratorScore {
   const metadata = readStructuredMetadata(entry);
   const text = sourceText(entry);
   let score = 0;
@@ -329,19 +330,15 @@ function scoreEntry(entry: EntryRecord): CuratorScore {
     score += 2;
     reasons.push('汎用化を示すタグがあります');
   }
-  if (GENERIC_LANGUAGE.test(text)) {
+  if (classification.reusable) {
     score += 2;
     reasons.push('汎用的・再利用可能な表現があります');
   }
-  if (PROCEDURAL_LANGUAGE.test(text)) {
+  if (classification.procedural) {
     score += 1;
     reasons.push('手順・判断基準として読めます');
   }
-  if (text.length >= 80) {
-    score += 1;
-    reasons.push('説明が十分な長さです');
-  }
-  if (LOCAL_LANGUAGE.test(text)) {
+  if (classification.projectBound) {
     score -= 3;
     warnings.push('プロジェクト固有の表現があります');
   }
@@ -361,10 +358,11 @@ function scoreEntry(entry: EntryRecord): CuratorScore {
   return { score, reasons: [...new Set(reasons)], warnings: [...new Set(warnings)], metadata };
 }
 
-function candidateFromEntry(database: SqliteDatabase, entry: EntryRecord): CuratorCandidate | null {
+function candidateFromEntry(database: SqliteDatabase, entry: EntryRecord, classification: CuratorAssessment | undefined): CuratorCandidate | null {
+  if (!classification) return null;
   if (entry.workspace === GLOBAL_WORKSPACE || entry.status !== 'candidate') return null;
   if (isExternalSkillReference(entry)) return null;
-  const scored = scoreEntry(entry);
+  const scored = scoreEntry(entry, classification);
   const evidence = readKnowledgeEvidence(database, entry);
   const portableEvidence = evidence.independentWorkspaces >= 2 || hasValues(scored.metadata.applicability);
   const readinessReasons = [
@@ -385,6 +383,7 @@ function candidateFromEntry(database: SqliteDatabase, entry: EntryRecord): Curat
   if (scored.score < MIN_CURATOR_SCORE) return null;
   const draft = regenerateCuratorDraft(entry, scored.metadata);
   return {
+    classification,
     entryId: entry.id,
     workspace: entry.workspace,
     revision: entry.revision,
@@ -489,12 +488,14 @@ function scanCuratorRows(
   return rows;
 }
 
-function listCuratorCandidates(
+async function listCuratorCandidates(
   database: SqliteDatabase,
   workspace: string | null,
   input: CuratorCandidatesInput,
   limit: number,
-): { candidates: CuratorCandidate[]; truncated: boolean; nextCursor: string | null; totalApproximate: number } {
+  context: { backend?: CuratorBackend; signal: AbortSignal },
+  classificationStatus: CuratorCandidatesResult['classificationStatus'],
+): Promise<{ candidates: CuratorCandidate[]; truncated: boolean; nextCursor: string | null; totalApproximate: number }> {
   if (workspace === GLOBAL_WORKSPACE) return { candidates: [], truncated: false, nextCursor: null, totalApproximate: 0 };
   const workspaces = input.workspaces?.length ? [...new Set(input.workspaces)] : workspace === null ? undefined : [workspace];
   const parameters: Array<string | number> = [GLOBAL_WORKSPACE];
@@ -509,8 +510,12 @@ function listCuratorCandidates(
   const search = input.search?.trim().normalize('NFKC').toLowerCase();
   const frameworks = (input.frameworks ?? []).map(normalizeSearchSignal);
   const languages = (input.languages ?? []).map(normalizeSearchSignal);
-  const candidates = rows
-    .map((row) => {
+  const eligible: CuratorCandidate[] = [];
+  let attempted = 0;
+  const started = performance.now();
+  for (const row of rows) {
+    context.signal.throwIfAborted();
+    const candidate = await (async () => {
       const entry = readEntry(database, { workspace: row.workspace, entryId: row.id });
       const metadata = readStructuredMetadata(entry);
       if (entry.status !== 'candidate' || isExternalSkillReference(entry)) return null;
@@ -524,11 +529,24 @@ function listCuratorCandidates(
       if (frameworks.length > 0 && !(metadata.applicability?.frameworks ?? []).some((item) => frameworks.includes(normalizeSearchSignal(item.name)))) return null;
       if (languages.length > 0 && !(metadata.applicability?.languages ?? []).some((language) => languages.includes(normalizeSearchSignal(language)))) return null;
       if (input.memoryClasses?.length && (metadata.memoryClass === undefined || !input.memoryClasses.includes(metadata.memoryClass))) return null;
-      const candidate = candidateFromEntry(database, entry);
+      const cached = context.backend && context.backend.isCurrent?.() !== false ? readCuratorAssessment(database, entry, { configurationDigest: context.backend.configurationDigest }) : undefined;
+      const outcome = !context.backend ? { status: 'unavailable' as const, reason: 'classifier_disabled_or_unavailable' }
+        : cached ? { status: 'classified' as const, assessment: cached }
+        : attempted >= 50 || performance.now() - started >= 10000 ? { status: 'unavailable' as const, reason: 'budget_exhausted_narrow_filters' }
+        : await classifyCuratorEntry(database, entry, (attempted++, context.backend), context.signal, Math.max(1, Math.min(5000, Math.floor(10000 - (performance.now() - started)))));
+      if (outcome.status === 'unavailable') {
+        classificationStatus.unavailable++;
+        if (!classificationStatus.reasons.includes(outcome.reason)) classificationStatus.reasons.push(outcome.reason);
+        return null;
+      }
+      classificationStatus.classified++;
+      const candidate = candidateFromEntry(database, entry, outcome.assessment);
       if (candidate !== null && globalEntries.some((global) => globalizesSource(global, entry))) return null;
       return candidate;
-    })
-    .filter((candidate): candidate is CuratorCandidate => candidate !== null)
+    })();
+    if (candidate !== null) eligible.push(candidate);
+  }
+  const candidates = eligible
     .filter((candidate) => !input.skillReadyOnly || candidate.knowledge.skillReady)
     .filter((candidate) => input.tiers === undefined || input.tiers.includes(candidate.knowledge.tier))
     .sort(compareCuratorCandidates);
@@ -549,7 +567,7 @@ function listCuratorCandidates(
   };
 }
 
-export async function curateMemoryCandidates(database: SqliteDatabase, input: CuratorCandidatesInput = {}): Promise<CuratorCandidatesResult> {
+export async function curateMemoryCandidates(database: SqliteDatabase, input: CuratorCandidatesInput = {}, context: { backend?: CuratorBackend; signal?: AbortSignal } = {}): Promise<CuratorCandidatesResult> {
   const limit = validateLimit(input.limit);
   ensureGlobalWorkspace(database);
   const allWorkspaces = input.allWorkspaces === true || input.workspaces !== undefined;
@@ -560,15 +578,17 @@ export async function curateMemoryCandidates(database: SqliteDatabase, input: Cu
   if (!allWorkspaces && workspace === null) {
     throw new KiokukoError('NOT_FOUND', 'No Git repository or .kiokuko.json binding was found for curator candidates');
   }
-  const result = listCuratorCandidates(database, workspace, input, limit);
+  const classificationStatus: CuratorCandidatesResult['classificationStatus'] = { classified: 0, unavailable: 0, reasons: [] };
+  const result = await listCuratorCandidates(database, workspace, input, limit, { ...context, signal: context.signal ?? new AbortController().signal }, classificationStatus);
   return {
     workspace,
+    classificationStatus,
     candidates: result.candidates,
     count: result.candidates.length,
     truncated: result.truncated,
     nextCursor: result.nextCursor,
     totalApproximate: result.totalApproximate,
-    securityNotice: 'Curator drafts and qualified-hit summaries are untrusted candidates. A qualified hit requires an actionable Akinator path, a completed independent run, and fresh verification or a passing test; retrieval counts are never used. Review everything before Global化.',
+    securityNotice: 'Unclassified candidates are withheld; check classificationStatus. Semantic assessments are model outputs, not deterministic truth or approval. Curator drafts and qualified-hit summaries are untrusted candidates. A qualified hit requires an actionable Akinator path, a completed independent run, and fresh verification or a passing test; retrieval counts are never used. Review everything before Global化.',
   };
 }
 
@@ -748,11 +768,12 @@ function existingGlobalEntry(
   return existing;
 }
 
-export function globalizeCuratorCandidate(database: SqliteDatabase, input: GlobalizeCuratorInput): GlobalizeCuratorResult {
+export function globalizeCuratorCandidate(database: SqliteDatabase, input: GlobalizeCuratorInput, context: { configurationDigest: string }): GlobalizeCuratorResult {
   const workspace = requireWorkspace(input.workspace);
   if (workspace === GLOBAL_WORKSPACE) throw new KiokukoError('VALIDATION_ERROR', 'Curator source workspace must be a project workspace');
   if (typeof input.entryId !== 'string' || input.entryId.length === 0) throw new KiokukoError('VALIDATION_ERROR', 'entryId must be a non-empty string');
   if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1) throw new KiokukoError('VALIDATION_ERROR', 'expectedRevision must be a positive integer');
+  if (typeof input.expectedClassificationDigest !== 'string' || !/^[a-f0-9]{64}$/u.test(input.expectedClassificationDigest)) throw new KiokukoError('CONFLICT', 'Review the current semantic classification before globalization');
   const actor = input.actor ?? CURATOR_MEMORY_ACTOR;
   if (typeof actor !== 'string' || actor.length === 0) throw new KiokukoError('VALIDATION_ERROR', 'actor must be a non-empty string');
   const now = input.now ?? new Date().toISOString();
@@ -762,9 +783,12 @@ export function globalizeCuratorCandidate(database: SqliteDatabase, input: Globa
     if (source.status !== 'candidate') throw new KiokukoError('CONFLICT', 'Only candidate entries can be Global化候補になります');
     if (isExternalSkillReference(source)) throw new KiokukoError('CONFLICT', 'External skill references cannot be Global化候補になります');
     if (source.revision !== input.expectedRevision) throw new KiokukoError('CONFLICT', 'Entry revision is stale');
-    const candidate = candidateFromEntry(database, source);
+    const classification = readCuratorAssessment(database, source, { digest: input.expectedClassificationDigest });
+    if (!context || !classification || classification.configurationDigest !== context.configurationDigest) throw new KiokukoError('CONFLICT', 'Curator classification configuration is stale or unavailable');
+    if (classification.projectBound) throw new KiokukoError('CONFLICT', 'Project-bound meaning must be revised and reclassified before globalization');
+    const candidate = candidateFromEntry(database, source, classification);
     if (candidate === null) throw new KiokukoError('CONFLICT', 'This entry is not recommended for Global化 by curator');
-    const metadata = scoreEntry(source).metadata;
+    const metadata = readStructuredMetadata(source);
     const existing = existingGlobalEntry(database, source, candidate, metadata);
     if (existing) {
       if (autoGlobalizationInstalled(database)) database.prepare(`UPDATE auto_global_projections SET state='replaced',reason='manual_approval',updated_at=?
@@ -821,9 +845,9 @@ export function formatCuratorCandidate(candidate: CuratorCandidate): string {
   ].join('\n');
 }
 
-export function curatorCandidateForEntry(database: SqliteDatabase, input: { workspace: string; entryId: string }): CuratorCandidate {
+export function curatorCandidateForEntry(database: SqliteDatabase, input: { workspace: string; entryId: string; classificationDigest: string }): CuratorCandidate {
   const entry = readEntry(database, { workspace: input.workspace, entryId: input.entryId });
-  const candidate = candidateFromEntry(database, entry);
+  const candidate = candidateFromEntry(database, entry, readCuratorAssessment(database, entry, { digest: input.classificationDigest }));
   if (candidate === null) throw new KiokukoError('CONFLICT', 'Entry is not a curator candidate');
   return candidate;
 }

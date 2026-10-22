@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { createRequire, findPackageJSON } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { gte } from 'semver'
@@ -152,4 +152,23 @@ test('the bundled ONNX CPU runtime still performs inference without optional dow
   } finally {
     await session.release()
   }
+})
+
+
+test('repository build approvals are explicit and match the tested CPU/prebuilt policy', () => {
+  assert.deepEqual(yaml('pnpm-workspace.yaml').allowBuilds, {
+    '@google/genai': false, esbuild: true, 'onnxruntime-node': false, protobufjs: false, sharp: false,
+  })
+  const sharpEntry = transformersRequire.resolve('sharp')
+  const sharpManifest = JSON.parse(readFileSync(join(dirname(sharpEntry), '../package.json'), 'utf8'))
+  for (const lifecycle of ['preinstall', 'install', 'postinstall']) assert.equal(sharpManifest.scripts[lifecycle], undefined)
+  const piManifest = findPackageJSON('@earendil-works/pi-ai', createRequire(import.meta.url).resolve('@deepseek-ai/dsh-llm-pi-ai'))!
+  const genaiRequire = createRequire(piManifest)
+  assert.equal(typeof genaiRequire('@google/genai').GoogleGenAI, 'function')
+  const esbuild = createRequire(import.meta.url)('esbuild')
+  assert.match(esbuild.transformSync('const value: number = 42', { loader: 'ts' }).code, /value = 42/)
+  const webRequire = createRequire(transformersRequire.resolve('onnxruntime-web'))
+  const protobuf = webRequire('protobufjs')
+  const type = protobuf.parse('syntax = "proto3"; message PolicyProbe { string value = 1; }').root.lookupType('PolicyProbe')
+  assert.equal(type.decode(type.encode({ value: 'round trip' }).finish()).value, 'round trip')
 })

@@ -147,14 +147,14 @@ test('the semantic request carries the full body, explicit abstention and no exe
 test('the additive cache migration upgrades a real prior schema without changing legacy memory',async()=>{
   const root=await mkdtemp(join(tmpdir(),'correction-upgrade-')),legacy=join(root,'prior-migrations');await mkdir(legacy)
   const directory=defaultMigrationsDirectory(),files=(await readdir(directory)).filter(x=>/^\d+_.+\.sql$/u.test(x)).sort()
-  assert.ok(files.at(-1)!.endsWith('_correction_classification.sql'))
-  for(const file of files.slice(0,-1))await copyFile(join(directory,file),join(legacy,file))
+  const target=files.findIndex(file=>file.endsWith('_correction_classification.sql'));assert.ok(target>=0)
+  for(const file of files.slice(0,target))await copyFile(join(directory,file),join(legacy,file))
   const db=openConnection(join(root,'legacy.sqlite3'));migrateDatabase(db,legacy)
   try{
     const entry=recordEntry(db,{workspace:'global',kind:'lesson',title:'Legacy correction',body:'Check the actual capabilities.',provenance:{type:'interaction_capture',reference:'user_correction'},createdBy:'fixture'})
     let calls=0;const provider=backend(async()=>{calls++;return {status:'completed',result:result(),attested:true}})
     assert.equal((await classifyCorrection(db,entry,provider,signal())).reason,'storage_unavailable');assert.equal(calls,0)
-    const migrated=migrateDatabase(db);assert.equal(migrated.applied.length,1);assert.deepEqual(readEntry(db,{workspace:'global',entryId:entry.id}),entry)
+    const migrated=migrateDatabase(db);assert.equal(migrated.applied.length,files.length-target);assert.deepEqual(readEntry(db,{workspace:'global',entryId:entry.id}),entry)
     assert.equal((await classifyCorrection(db,entry,provider,signal())).rule,'capability_compatibility');assert.equal(calls,1)
     assert.equal(db.prepare('SELECT count(*) AS n FROM entries').get()?.n,1)
   }finally{db.close();await rm(root,{recursive:true,force:true})}

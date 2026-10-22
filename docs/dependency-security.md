@@ -77,3 +77,29 @@ inference, and the installer skip path with a blocked-network negative control.
 When a symlink extraction fix is published, update both override definitions
 and lockfiles, rerun those checks and both audits, and re-evaluate the temporary
 CI mitigation.
+
+
+## Repository lifecycle approvals
+
+The repository pnpm policy explicitly allows esbuild and denies onnxruntime-node,
+protobufjs, sharp and @google/genai. This is a CPU/prebuilt development policy, not a GPU or
+source-build installation recipe, and does not change a user's DSH profile.
+
+- @google/genai 2.21.0 preinstall only echoes a no-op message; its published
+  runtime is already built. Deny that unnecessary lifecycle explicitly.
+- esbuild 0.28.2 is a direct development dependency. Its postinstall validates and
+  prepares the platform executable; fallback installation can use the network.
+- onnxruntime-node 1.24.3 bundles the CPU runtime. Denying its lifecycle prevents
+  optional CUDA downloads/extraction, consistent with the npm/CI skip mitigation
+  above. Keep ONNXRUNTIME_NODE_INSTALL=skip for npm, which does not read this map.
+- protobufjs 7.6.6 postinstall only emits a version-scheme compatibility warning;
+  it does not generate runtime files or invoke npm. Its separate prepublish
+  scripts contain the cli npm install command, not postinstall.
+- sharp 0.35.5 has no install lifecycle script. Its build script is an explicit
+  source-build command, not an automatic installer. Prebuilt optional packages
+  supply the native runtime, and must not be omitted during installation.
+
+The dependency tests check these explicit booleans, the absence of sharp install
+hooks, esbuild transformation, protobuf encoding/decoding, sharp image processing,
+and bundled ONNX CPU inference. Platform coverage is limited to the hosts where
+these tests actually run; upgrades that introduce new hooks need review.

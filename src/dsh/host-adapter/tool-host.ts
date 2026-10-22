@@ -1,3 +1,4 @@
+import { curatorClassifier } from '../decisions/curator.js'
 import { reviewPlanDecisions } from '../decisions/plan-review.js'
 import { executeCheckModel } from '../decisions/check-model.js'
 import { reviewEnnoPlan } from '../../enno-oduno/service.js'
@@ -242,7 +243,10 @@ export function createToolHost({
             // until the idle lifecycle flushes that ordered suffix.
             return submitOdunoMeditation(database, input, { deferLedgerTerminalization: true })
           }
-          if (operation === 'curator_check') return curateMemoryCandidates(database, input)
+          if (operation === 'curator_check') {
+            const backend = await curatorClassifier(decisions)
+            return curateMemoryCandidates(database, input, { ...(backend ? { backend } : {}), signal: operationSignal })
+          }
           return checkpointDshMemory(database, input as unknown as ScopedCheckpointInput, signal)
         }) as EnnoOperationResponse | unknown
       } catch (error) {

@@ -15,9 +15,24 @@ DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일
 
 선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 기본적으로 꺼져 있습니다(`modelAutoMode.mode: off`). `/kioku-model-auto on | observe | off | status`는 현재 세션만 바꿉니다. `observe`는 제안만 기록하고 실제 모델은 유지합니다. 일반 작업에서 준비된 Jev 또는 Laya, dsh-codex, DSH 모델 메타데이터와 token meter가 필요합니다. 판정에 실패하면 현재 모델을 유지하고 수동 선택을 우선합니다.
 
-자동 메모리 검토는 기본으로 활성화되며, 사람의 입력을 처리한 여덟 턴마다 대화 모델로 유용한 프로젝트 기억 후보를 저장하거나 갱신합니다. 대화를 닫을 필요가 없습니다. `/kioku-memory-review status`로 상태를 확인하거나 `/kioku-memory-review exclude session`으로 대화 전체를 제외할 수 있습니다. [설정, 비용과 복구](docs/auto-memory-review.md).
+메모리는 선택 기능입니다. 작업이 끝나면 Kiokuko가 기록된 경험을 정리할지 묻고 임시 미리보기를 보여 주며, 사용자가 승인한 정확한 수정본만 저장합니다. 자동 메모리 쓰기는 더 이상 사용하지 않습니다. [검토, 회상 및 잊기](docs/replay-memory-review.md).
+
+`/kioku-memory explain ENTRY_ID`로 출처와 정정 사항을 확인하고, `/kioku-memory forget ENTRY_ID --revision N`으로 특정 메모리를 명시적으로 잊을 수 있습니다. [증거, 설명 및 잊기](docs/memory-evidence.md).
 
 ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니다. 완전한 행의 발췌에 원문을 한 글자도 남길 수 없으면 pack하지 않고 전체 본문을 유지합니다. 기존 v1 pack과 handle은 계속 읽고 복원할 수 있습니다.
+
+## 기능
+
+- **Kiokuko Models** — 기본 Models 설정과 별도로 Web 설정 또는 `/kiokuko model`에서 연결하고 인증합니다. Infron Standard/Flex도 지원합니다. [설정 및 공유 자격 증명](docs/kiokuko-models.md)
+- **실행 모드** — 일반 실행 또는 역할 기반 계획과 검증을 제공하는 役小角(enno-oduno)를 선택합니다. [자세히](docs/model-selection.md)
+- **프로젝트 메모리** — 이후 작업에 유용한 프로젝트 지식을 검색합니다. [개념](docs/concepts.md)
+- **심층 계획** — 네 역할이 범위를 제한한 읽기 전용 조사를 수행합니다. [사용 방법](docs/deep-planning.md)
+- **DSH 하위 에이전트** — 표준 preset은 `subagent`와 `subagent_fork`를 제공하며, 기본 하위 에이전트는 Kiokuko 실행 모드를 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents)
+- **Continuity** — 기본적으로 꺼져 있습니다. `continuity.mode: active`를 설정하면 최근 실행 증거를 모델에 요약해 전달합니다. [설정](docs/continuity.md)
+- **AgenticReplay** — 모델과 도구의 활동을 기록하고 HTML로 내보냅니다. [설정 및 명령](docs/agenticreplay-recording.md)
+- **일본어 출력** — 지원되는 모델에 자연스러운 일본어 출력을 위한 번들 Skill을 제공합니다. [자세히](docs/japanese-output.md)
+
+도구 노출의 기본값은 `auto`입니다. 작업 유형과 현재 단계에 따라 모델에 표시할 Kiokuko 도구를 결정합니다. 기본 도구는 계속 사용할 수 있으며, `full`은 명시적으로 선택하는 호환성 재정의 옵션입니다. [도구 노출](docs/tool-exposure.md)을 참고하세요.
 
 ## 설치 및 사용
 
@@ -84,7 +99,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 이 설정은 전역으로 저장되며 이후 pnpm 설치와 업데이트에서도 공개 후 대기 기간 검사를
 끕니다. 업데이트가 성공하면 DSH를 다시 시작하세요.
 
-시작 시 일본어 출력 Skill을 포함한 번들 Skill 16개와 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
+시작 시 일본어 출력 Skill을 포함한 모든 번들 Skill과 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
 
 위 설명은 전체 패키지의 기본 동작입니다. [코어와 선택 모듈 빌드](docs/core-modules.md)는 선택한 리소스만 포함합니다. 코어는 Enno/Lisp 런타임 없이 대화·조사·글쓰기·프로젝트 메모리를 처리합니다.
 
@@ -99,6 +114,75 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 DSH 업데이트 후 Kiokuko를 불러오지 못하면 [시작 오류 복구 절차](docs/dsh-plugin.md#startup-failure-after-a-dsh-update)에서 해당 프로필의 업데이트 및 재설치 명령을 확인하세요. 세션 로그와 Kiokuko 데이터베이스는 삭제하지 마세요. API 호환성 문제는 재설치만으로 해결되지 않을 수 있습니다.
 
 [문서](docs/README.md) · [권한](PERMISSIONS.md) · [MIT 라이선스](LICENSE)
+
+## 타입 기반 판정（Jev / Laya / Nimble）
+
+선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 새 일반 작업에 사용할 검증된 `openai-codex` 모델과 추론 강도를 선택합니다. 기본값은 `modelAutoMode.mode: off`이며, `/kioku-model-auto on | observe | off | status`는 현재 세션만 변경합니다. `observe`는 제안을 평가하지만 모델은 변경하지 않습니다. 준비된 Jev 또는 Laya 백엔드, dsh-codex, 기본 모델 메타데이터와 token meter가 필요합니다. 분류에 실패하거나 사용할 수 없으면 현재 모델을 유지하며, 수동 모델 선택을 우선합니다.
+
+[답변 검토](docs/answer-review.md)는 전체 플러그인과 모듈형 코어에서 기본으로 활성화됩니다. 설정된 Jev, Laya 또는 Nimble provider로 이미 표시된 일반 답변을 평가하고, 같은 주 모델에 한 번 재검토를 요청할 수 있습니다. 기본 설정은 다음과 같습니다.
+
+```yaml
+answerReview:
+  mode: auto
+  budgetMs: 5000
+```
+
+끄려면 `answerReview.mode: off`를 설정하세요. `typedDecisions` 설정을 이어받으며, 평가 추론과 최대 한 턴의 주 모델 호출이 추가되지만 첫 답변을 지연시키지는 않습니다. 선택한 provider를 사용할 수 없으면 검토를 건너뛰고 원래 답변을 유지하며, 다른 provider로 대체하지 않습니다. Laya v1의 결과는 worker 내부의 잘림을 확인할 수 없어 검증되지 않은 제안으로 취급합니다. `/kioku-decisions status`는 진행 상황과 건너뛴 이유를 보여 줄 뿐, 정확성을 보증하지 않습니다.
+
+기본값은 Jev입니다. 설정 파일을 수정하거나 DSH를 다시 시작하지 않고 DSH 명령 입력란에서 전환할 수 있습니다.
+
+```text
+/kioku-decisions use jev
+/kioku-decisions use laya
+/kioku-decisions use nimble
+/kioku-decisions use default
+```
+
+Laya는 `start-laya`로 시작한 기존 worker에 직접 연결하므로 worker 교체나 fingerprint 설정이 필요하지 않습니다. Jev에는 TypeSafe 키가 필요하고, Nimble은 엔드포인트와 모델을 먼저 설정해야 합니다. 연결 검사가 성공하면 선택을 프로젝트별로 저장하고 새 요청에 적용합니다. 재시작 후에도 유지되며 진행 중인 요청의 provider 연결은 바뀌지 않습니다. `use default`는 플러그인 설정으로 되돌립니다.
+
+DSH의 `~/.dsh/.credentials.yaml`(`DSH_HOME`을 설정했다면 `$DSH_HOME/.credentials.yaml`)에 API 키를 설정하거나 `/kioku-typesafe-key YOUR_KEY`를 사용하세요. 기존 항목은 유지하세요.
+
+```yaml
+version: 1
+refs:
+  TYPESAFE_API_KEY: YOUR_KEY
+```
+
+YAML 파일을 직접 만들었다면 `chmod 600 ~/.dsh/.credentials.yaml`을 실행하세요(`DSH_HOME`을 설정했다면 해당 경로 사용).
+
+DSH 명령 UI에서 키를 확인하고 연결을 검사하세요.
+
+```text
+/kioku-typesafe-key status
+/kioku-decisions probe
+/kioku-decisions status
+```
+
+`probe`는 합성 API 테스트 요청을 보내지만 `status`는 보내지 않습니다. `/kioku-typesafe-key clear`는 저장된 키를 삭제합니다. `/kioku-typesafe-key YOUR_KEY`를 사용할 때 입력한 키가 화면에 표시됩니다. 자세한 내용은 [타입 기반 판정](docs/typed-decisions.md)과 [명시적 Lisp API](docs/typesafe.md)를 참고하세요.
+
+Jev가 기본값이며 Nimble과 로컬 [Laya-CoreML](docs/laya-coreml.md)을 대안으로 선택할 수 있습니다. Laya는 기존 v1 `health`/`predict` 프로토콜로 `~/Library/Caches/laya-coreml/worker.sock`에 직접 연결합니다. `/kioku-decisions install-laya`는 실행 중인 worker를 재사용하거나 설정 안내를 표시합니다.
+
+영어 및 다른 언어에는 `aac6fef/laya-multilingual-coreml`을 사용하세요. 1,024-token 입력 한도에는 질문, 선택지, 상태가 모두 포함되며, `-ane` 변형은 96 tokens만 허용합니다. [원본 모델 사양](https://github.com/mizorewww/laya-coreml#available-checkpoints)을 참고하세요. [초기 설정](docs/Laya-CoreML-ja.md)을 마친 뒤 아래 명령을 사용하세요. 실행 중인 Laya worker를 종료한 후 새 모델로 시작해야 합니다. `LAYA_MODEL`은 기존 worker 스크립트의 이전 기본값도 덮어씁니다.
+
+```bash
+mkdir -p ~/.local/share/laya-coreml/multilingual
+hf download \
+  aac6fef/laya-multilingual-coreml \
+  --local-dir ~/.local/share/laya-coreml/multilingual
+LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya
+```
+
+## 의미 기반 메모리 재사용
+
+[의미 기반 메모리 재사용](docs/memory-reuse.md)은 provider에 대한 합성 테스트 요청이 성공한 뒤 기존 검색 후보가 현재 요청에 맞는지 확인합니다. 임베딩은 선택 사항이며, `memoryReuse.mode: off`로 이 추가 선별 단계를 끌 수 있습니다.
+
+[메모리 적용 및 검증](docs/memory-application.md)은 채택·제외 등의 처리 결과와 호스트가 관찰한 회귀 검증 증거를 기록합니다. `/kioku-memory-application status` 또는 `/kioku-memory-application status --json`으로 현재 기본 세션의 상태를 확인하세요.
+
+### 의미 기반 압축
+
+ObservationPack(`observationPack: { mode: auto }`)은 성공한 대형 기본 도구 결과를 모델 호출 두 번 동안 유지한 후, 발췌문과 `observation_read` 핸들로 대체합니다. [의미 기반 압축](docs/semantic-compaction.md)은 TODO 완료 경계에서 평가하고 일반, Enno, Lisp 모드에서 기본 자동 압축에 앞서 오래된 도구 결과를 선택적으로 줄입니다. 기본값은 `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`이며, 준비된 타입 기반 판정 백엔드와 지원되는 기본 서비스가 필요합니다. `/kioku-decisions status`로 활성화 상태와 최근 결과를 확인하세요. 완전한 행의 발췌에 원문이 전혀 남지 않는 결과는 pack하지 않고 전체를 유지합니다. 기존 v1 pack과 핸들은 계속 읽고 복원할 수 있습니다.
+
+Laya 압축의 별도 기본값은 `typedDecisions.laya-coreml.compaction.mode: off`입니다. 명시적인 `shadow`는 기록을 변경하지 않고 평가하며, `auto`는 여전히 `experimental_not_qualified` 상태입니다. 이 설정은 ObservationPack과 기본 요약의 기존 동작을 유지합니다. Akinator는 검증된 debug/research/writing 범위만 사용하며, 선택적 Skill 선택은 설명이 완전한 후보를 최대 네 개 사용하고 모델이 추가로 고르는 Skill은 최대 한 개입니다. [Laya 설정 및 평가](docs/semantic-compaction.md#local-laya)를 참고하세요.
 
 ## 선택적 코드 분석
 

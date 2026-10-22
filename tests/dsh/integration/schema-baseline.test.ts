@@ -168,6 +168,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'context_delivery_omissions',
         'context_feedback',
         'correction_classifications',
+        'curator_classifications',
         'dsh_agenticreplay_session_choices',
         'dsh_agenticreplay_trace_run_links',
         'dsh_agenticreplay_traces',
@@ -305,6 +306,20 @@ test('baseline initialization creates the complete DSH schema with clean integri
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'entries_fts_%' AND name NOT LIKE 'entries_trigram_%' ORDER BY name",
       ).all<{ name: string }>().map(({ name }) => name)
       assert.deepEqual(tables, expectedTables)
+
+      // Migration 046 adds a content/configuration-bound cache, never a trust column.
+      const curatorColumns = database.prepare('PRAGMA table_info(curator_classifications)')
+        .all<{ name: string; pk: number; notnull: number }>()
+      assert.deepEqual(curatorColumns.map(({ name }) => name), [
+        'workspace', 'entry_id', 'entry_revision', 'input_digest', 'policy_version',
+        'configuration_digest', 'result_json', 'result_digest',
+      ])
+      assert.deepEqual(curatorColumns.map(({ pk }) => pk), [1, 2, 3, 4, 5, 6, 0, 0])
+      assert.ok(curatorColumns.every(column => column.notnull === 1))
+      const curatorForeignKeys = database.prepare('PRAGMA foreign_key_list(curator_classifications)')
+        .all<{ table: string; from: string; to: string; on_delete: string }>()
+      assert.deepEqual(curatorForeignKeys.map(row => [row.table, row.from, row.to, row.on_delete]),
+        [['entries', 'entry_id', 'id', 'CASCADE']])
 
       // Migration 037 persists child ownership without accepting invalid receipts.
       const workerColumns = database.prepare('PRAGMA table_info(dsh_native_worker_routes)')

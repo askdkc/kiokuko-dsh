@@ -50,7 +50,7 @@ test('native CI runs every suite with the canonical current fixture', async () =
       if (suite === 'integration') assert.ok(plan.args.includes('tests/dsh/integration/subagent-standard-preset-native.test.ts'))
       assert.equal(plan.cwd, process.cwd())
       assert.equal(plan.env.KIOKUKO_DSH_PACKAGE_ROOT, join(process.cwd(), 'tests/fixtures', fixture, 'node_modules'))
-      assert.equal(plan.env.KIOKUKO_EXPECTED_DSH_VERSION, version)
+      assert.equal(plan.env.KIOKUKO_EXPECTED_DSH_VERSION, version, 'fixture node_modules is stale. Run: npm ci --prefix tests/fixtures/dsh-runtime')
       assert.equal(plan.env.KIOKUKO_REQUIRE_DSH_NATIVE, '1')
       assert.equal(plan.env.KIOKUKO_DSH_SOURCE_ROOT, undefined)
       assert.equal(plan.env.SENTINEL, 'kept')
@@ -121,4 +121,66 @@ test('an explicitly selected newer host is tested without replacing it with the 
     await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'other', version: '1.0.0-next.7' }))
     assert.throws(() => nativeCiPlan('unit', env), /selected DSH package/)
   } finally { await rm(selected, { recursive: true, force: true }) }
+})
+
+
+test('fixture preflight diagnoses stale installs and inconsistent declarations without repair', async () => {
+  const { assertDshFixtureIdentity } = await import(pathToFileURL(join(process.cwd(), 'scripts/dsh-fixture-identity.mjs')).href)
+  const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const temporary = await mkdtemp(join(tmpdir(), 'dsh-identity-'))
+  const name = '@deepseek-ai/dsh', version = '1.0.0'
+  const installed = { name, version }
+  const declaration = { dependencies: { [name]: version } }
+  const lock = { packages: { '': declaration, [`node_modules/${name}`]: { version } } }
+  const write = (file: string, value: unknown) => writeFile(join(temporary, file), JSON.stringify(value))
+  try {
+    await write('package.json', declaration); await write('package-lock.json', lock)
+    assert.doesNotThrow(() => assertDshFixtureIdentity(temporary, installed))
+    for (const stale of [{ name, version: '0.9.0' }, undefined, { name: 'other', version }]) {
+      assert.throws(() => assertDshFixtureIdentity(temporary, stale), /node_modules is stale or missing:.*npm ci --prefix/)
+    }
+    for (const broken of [
+      { packages: { ...lock.packages, '': { dependencies: { [name]: 'old' } } } },
+      { packages: { ...lock.packages, [`node_modules/${name}`]: { version: 'old' } } },
+      { packages: {} }, null,
+    ]) {
+      await write('package-lock.json', broken)
+      assert.throws(() => assertDshFixtureIdentity(temporary, installed), /declaration\/lock mismatch:.*Reconcile/)
+    }
+    await write('package-lock.json', lock); await write('package.json', { dependencies: {} })
+    assert.throws(() => assertDshFixtureIdentity(temporary, installed), /declaration\/lock mismatch/)
+    await write('package.json', null)
+    assert.throws(() => assertDshFixtureIdentity(temporary, installed), /declaration\/lock mismatch/)
+    await writeFile(join(temporary, 'package.json'), '{')
+    assert.throws(() => assertDshFixtureIdentity(temporary, installed), /Cannot read DSH fixture declaration\/lock:.*Restore/)
+  } finally { await rm(temporary, { recursive: true, force: true }) }
+})
+
+test('a symlink alias of the canonical fixture still checks installed identity', async () => {
+  const { copyFile, mkdtemp, mkdir, writeFile, symlink, rm } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const temporary = await mkdtemp(join(tmpdir(), 'dsh-identity-alias-'))
+  try {
+    await mkdir(join(temporary, 'scripts'))
+    await writeFile(join(temporary, 'package.json'), JSON.stringify({ type: 'module' }))
+    for (const file of ['run-ci-native.mjs', 'dsh-fixture-identity.mjs', 'repeated-memory-scenarios.mjs']) {
+      await copyFile(join(process.cwd(), 'scripts', file), join(temporary, 'scripts', file))
+    }
+    await writeFile(join(temporary, 'scripts/verification.json'), JSON.stringify({ nativeScopeExclusions: [], testAliases: [] }))
+    const fixtureRoot = join(temporary, 'tests/fixtures/dsh-runtime')
+    const installed = join(fixtureRoot, 'node_modules')
+    await mkdir(join(installed, '@deepseek-ai/dsh'), { recursive: true })
+    const name = '@deepseek-ai/dsh', version = '1.0.0'
+    const manifest = { dependencies: { [name]: version } }
+    await writeFile(join(fixtureRoot, 'package.json'), JSON.stringify(manifest))
+    await writeFile(join(fixtureRoot, 'package-lock.json'), JSON.stringify({ packages: { '': manifest, [`node_modules/${name}`]: { version } } }))
+    await writeFile(join(installed, name, 'package.json'), JSON.stringify({ name, version: '0.9.0' }))
+    await mkdir(join(temporary, 'tests/dsh/unit'), { recursive: true })
+    await writeFile(join(temporary, 'tests/dsh/unit/probe.test.ts'), '// discovery only\n')
+    const alias = join(temporary, 'fixture-alias')
+    await symlink(installed, alias, 'dir')
+    const { nativeCiPlan: plan } = await import(pathToFileURL(join(temporary, 'scripts/run-ci-native.mjs')).href)
+    assert.throws(() => plan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: alias }), /node_modules is stale or missing:.*npm ci --prefix/)
+  } finally { await rm(temporary, { recursive: true, force: true }) }
 })

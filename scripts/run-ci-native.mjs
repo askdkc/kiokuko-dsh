@@ -1,8 +1,9 @@
 // Foreground native CI preflight; requires installed fixtures and never installs runtimes.
 import { spawn } from 'node:child_process'
-import { readFileSync, readdirSync } from 'node:fs'
+import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { assertDshFixtureIdentity } from './dsh-fixture-identity.mjs'
 import { repeatedMemoryScenarios } from './repeated-memory-scenarios.mjs'
 
 const root = resolve(import.meta.dirname, '..')
@@ -20,6 +21,11 @@ function testFiles(directory) {
     const file = `${directory}/${entry.name}`
     return entry.isDirectory() ? testFiles(file) : entry.isFile() && file.endsWith('.test.ts') ? [file] : []
   }).sort()
+}
+
+function sameDirectory(left, right) {
+  if (left === right) return true
+  try { return realpathSync(left) === realpathSync(right) } catch { return false }
 }
 
 export function nativeCiPlan(suite, environment = process.env) {
@@ -50,7 +56,15 @@ export function nativeCiPlan(suite, environment = process.env) {
   }
   const fixtureRoot = join(root, 'tests/fixtures', fixture)
   const packageRoot = resolve(environment.KIOKUKO_DSH_PACKAGE_ROOT ?? join(fixtureRoot, 'node_modules'))
-  const manifest = JSON.parse(readFileSync(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8'))
+  const canonicalFixture = sameDirectory(packageRoot, resolve(fixtureRoot, 'node_modules'))
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8'))
+  } catch (error) {
+    if (canonicalFixture) throw new Error(`Cannot read installed DSH fixture: ${error.message}. Run: npm ci --prefix tests/fixtures/dsh-runtime`)
+    throw error
+  }
+  if (canonicalFixture) assertDshFixtureIdentity(fixtureRoot, manifest)
   if (manifest.name !== '@deepseek-ai/dsh' || typeof manifest.version !== 'string' || !manifest.version.trim()) {
     throw new Error('Invalid selected DSH package metadata')
   }

@@ -20,7 +20,7 @@ export type DiagnosticBinding = z.infer<typeof DiagnosticBinding>
 export const DiagnosticAttempt = z.object({ origin: z.enum(['intake','provider']), requestRef: digest,
   sessionId: nativeId.optional(), turn: revision.optional(), inputDigest: digest, contextDigest: digest.optional(),
   binding: DiagnosticBinding.optional(), policyRef: digest, referenceDigests: z.array(digest).max(32).default([]),
-  purpose: z.enum(['akinator','request-intent','skills','enno-check','lisp','memory-reuse','compaction','model-handoff','answer-review','model-routing','intent-semantic-match','correction-classification']) }).strict()
+  purpose: z.enum(['akinator','request-intent','skills','enno-check','lisp','memory-reuse','compaction','model-handoff','answer-review','model-routing','intent-semantic-match','correction-classification', 'curator-classification']) }).strict()
 export type DiagnosticAttempt = z.input<typeof DiagnosticAttempt>
 export const DIAGNOSTIC_REASONS = ['observed','resolved','unresolved','native_unowned','clarification_required','target_unknown','scope_unknown',
   'transition_required','question_unavailable','context_changed','answer_queued','resume_observed','receipt_observed','continuation_observed',

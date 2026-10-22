@@ -215,6 +215,7 @@ export class DecisionService {
   }
   invalidateReadiness(): void { this.readiness.invalidate() }
   configurationDigest(): string { return canonicalContentHash({ config: this.config, semanticCompaction: this.semanticCompaction, policyVersion: POLICY_VERSION }) }
+  curatorClassificationEnabled(): boolean { return this.config.mode !== 'off' && this.config.curatorClassification?.mode === 'auto' }
   correctionClassificationMode(): 'off'|'shadow'|'auto' { return this.config.mode==='off'?'off':this.config.correctionClassification?.mode??'shadow' }
   async skillSelection(requestId: string, signal: AbortSignal): Promise<DecisionConfiguration['skillSelection']> { return (await this.bind(requestId, signal)).skillSelection }
   private async observe(batch: DecisionBatch, config: DecisionConfiguration, outcome: DecisionOutcome, cacheHit: boolean, elapsedMs: number,
@@ -416,7 +417,7 @@ export class DecisionService {
             inputs.push(part)
           }
           // Admit every complete input before starting optional Skill inference.
-          if ((batch.purpose === 'answer-review' || batch.purpose === 'correction-classification' || layaSkills) && provider.preflight) {
+          if ((batch.purpose === 'answer-review' || batch.purpose === 'correction-classification' || batch.purpose === 'curator-classification' || layaSkills) && provider.preflight) {
             for (const part of inputs) await abortable(provider.preflight(part, combined), combined)
           }
           for (const part of inputs) {

@@ -1,0 +1,22 @@
+[
+ {"language":"ja","case":"generic","body":"再利用可能な手順として、接続に失敗した場合はネットワークを確認する。","expected":[true,true,false]},
+ {"language":"en","case":"generic","body":"As a reusable procedure, check the network when a connection fails.","expected":[true,true,false]},
+ {"language":"zh","case":"generic","body":"作为可重复使用的流程，连接失败时检查网络。","expected":[true,true,false]},
+ {"language":"ko","case":"generic","body":"재사용 가능한 절차로 연결에 실패하면 네트워크를 확인한다.","expected":[true,true,false]},
+ {"language":"es","case":"generic","body":"Como procedimiento reutilizable, comprueba la red cuando falle una conexión.","expected":[true,true,false]},
+ {"language":"ja","case":"local","body":"このプロジェクトだけでは、起動前に独自の設定を確認する。ほかには適用しない。","expected":[false,true,true]},
+ {"language":"en","case":"local","body":"Only in this project, check its custom settings before startup. Do not apply elsewhere.","expected":[false,true,true]},
+ {"language":"zh","case":"local","body":"仅在此项目中，启动前检查其专用设置。不要应用于其他项目。","expected":[false,true,true]},
+ {"language":"ko","case":"local","body":"이 프로젝트에서만 시작 전에 전용 설정을 확인한다. 다른 프로젝트에는 적용하지 않는다.","expected":[false,true,true]},
+ {"language":"es","case":"local","body":"Solo en este proyecto, comprueba su configuración particular antes de iniciar. No lo apliques en otros.","expected":[false,true,true]},
+ {"language":"ja","case":"negation","body":"この記録は汎用的な手順ではない。対象プロジェクトだけの過去の設定値である。","expected":[false,false,true]},
+ {"language":"en","case":"negation","body":"This record is not a reusable procedure. It is a historical setting value for this project only.","expected":[false,false,true]},
+ {"language":"zh","case":"negation","body":"这条记录不是可重复使用的流程，只是此项目过去的设置值。","expected":[false,false,true]},
+ {"language":"ko","case":"negation","body":"이 기록은 재사용 가능한 절차가 아니다. 이 프로젝트에만 해당하는 과거 설정값이다.","expected":[false,false,true]},
+ {"language":"es","case":"negation","body":"Este registro no es un procedimiento reutilizable. Es un valor histórico de configuración exclusivo de este proyecto.","expected":[false,false,true]},
+ {"language":"ja","case":"quotation","body":"引用例：「再利用可能な手順として確認する」。著者はこの助言を支持していない。","expected":[false,false,false]},
+ {"language":"en","case":"quotation","body":"Quoted example: ‘Check it as a reusable procedure.’ The author does not endorse this advice.","expected":[false,false,false]},
+ {"language":"zh","case":"quotation","body":"引用示例：“将其作为可重复使用的流程进行检查。”作者并不赞同这条建议。","expected":[false,false,false]},
+ {"language":"ko","case":"quotation","body":"인용 예시: ‘재사용 가능한 절차로 확인한다.’ 저자는 이 조언을 지지하지 않는다.","expected":[false,false,false]},
+ {"language":"es","case":"quotation","body":"Ejemplo citado: «Compruébalo como procedimiento reutilizable». El autor no respalda este consejo.","expected":[false,false,false]}
+]

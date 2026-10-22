@@ -191,7 +191,7 @@ TypeSafe または Nimble の利用確認が成功すると、既存検索の候
 
 [記憶の適用と検証](docs/memory-application.md)では、採否とホストが観測した回帰検証を記録します。現在の会話の状態は `/kioku-memory-application status`、詳細は `/kioku-memory-application status --json` で確認できます。
 
-同じ候補を独立した3つの完了runで採用・検証すると、適用条件と移植可能性を確認したうえで `source_verified` のGlobal記憶を自動生成します。[条件・停止設定](docs/auto-globalization.md)。
+Global記憶の自動生成は停止しています。実行時の適用・検証記録だけで保存を許可せず、提示した保存内容への明示的な承認を必要とします。[保存の承認フロー](docs/replay-memory-review.md)。
 
 ### 過去のツール出力の短縮
 

@@ -24,6 +24,7 @@ const endpoint = z.string().max(4096).transform((value, ctx) => {
 })
 export const TypedDecisionsConfig = z.object({
   mode: z.enum(['auto', 'off']).default('auto'), provider: z.enum(['typesafe', 'nimble', 'laya-coreml']).default('typesafe'),
+  curatorClassification: z.object({mode:z.enum(['off','auto']).default('off')}).strict().optional(),
   correctionClassification: z.object({mode:z.enum(['off','shadow','auto']).default('shadow')}).strict().optional(),
   groundingReview: z.discriminatedUnion('mode', [
     z.object({ mode: z.literal('legacy') }).strict(),
