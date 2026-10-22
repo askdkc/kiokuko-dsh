@@ -3,6 +3,7 @@
  * node scripts/verify-cli-profile.mjs DSH_BIN CLI_TGZ KIOKUKO_TGZ NODE_PTY XTERM_ANCHOR [WORK_ROOT] [all|install|tui|source]
  */
 import assert from 'node:assert/strict'
+import { createInputBarrier, inputWasHandled, questionWasAnswered } from './cli-input-barrier.mjs'
 import { completeVerification } from './verification-completion.mjs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -146,7 +147,7 @@ async function tui(resumeSessionId) {
     name: 'xterm-256color', cols: 110, rows: 34, cwd: workspace, env,
   })
   const terminal = new Terminal({ cols: 110, rows: 34, scrollback: 2000, allowProposedApi: true })
-  let output = '', exit, outputOffset = 0, renderedFrame = 0, inputSequence = 0, lastEnterAt = 0
+  let output = '', exit, outputOffset = 0, renderedFrame = 0, inputSequence = 0
   terminal.onData(data => { if (!exit) child.write(data) })
   child.onData(data => { outputOffset += Buffer.byteLength(data); output = (output + data).slice(-2 * 1024 * 1024); terminal.write(data, () => { renderedFrame++ }) })
   child.onExit(value => { exit = value })
@@ -161,19 +162,36 @@ async function tui(resumeSessionId) {
     return rows.slice(input, end).map((row, index) => (index === 0 ? row.slice(row.indexOf('❯ ') + 2) : row)
       .replace(/\s*⛶\s*$/, '').trim()).join('')
   }
-  // The shipped CLI coalesces Enter presses less than 80ms apart. Pace real
-  // keyboard submissions with 20ms headroom; never retry a submitted command.
-  const enterReady = () => Date.now() - lastEnterAt >= 100
-  const enter = () => { lastEnterAt = Date.now(); child.write('\r') }
+  // Wait for a post-write UI acknowledgement before starting the debounce
+  // interval. A delayed PTY read must not consume the interval before handling.
+  const inputBarrier = createInputBarrier()
+  const enterReady = () => inputBarrier.ready()
+  const enter = handled => { inputBarrier.submitted(handled); child.write('\r') }
+  const answerQuestion = (request, selected, onAnswered = () => {}) => {
+    const eventOffset = fresh().length
+    enter(() => {
+      if (!questionWasAnswered({ events: fresh(), eventOffset, requestSequence: request.requestSequence,
+        questionId: request.questions[0].id, selected: [selected] })) return false
+      onAnswered()
+      return true
+    })
+  }
+  const sentDeclines = new Set()
   const declinedQuestions = new Set()
   const wait = (predicate, description, timeoutMs) => until(predicate, description, timeoutMs, () => {
-    const question = fresh().filter(value => value.type === 'native-question').at(-1)?.questions?.[0]
+    const ready = enterReady()
+    const request = fresh().filter(value => value.type === 'native-question').at(-1)
+    const question = request?.questions?.[0]
     if (question?.detail !== 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
-      || declinedQuestions.has(question.id) || !screen().includes('今回は保存しない') || !enterReady()) return
+      || sentDeclines.has(request.requestSequence) || !screen().includes('今回は保存しない') || !ready) return
     assert.deepEqual(question.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
-    declinedQuestions.add(question.id)
-    appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclined', questionId: question.id, time: Date.now() }) + '\n')
-    child.write('\x1b[B'); enter() // Decline this fixture's derived-memory proposal through the native UI.
+    sentDeclines.add(request.requestSequence)
+    appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclineSent', requestSequence: request.requestSequence, questionId: question.id, time: Date.now() }) + '\n')
+    child.write('\x1b[B')
+    answerQuestion(request, '今回は保存しない', () => {
+      declinedQuestions.add(request.requestSequence)
+      appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclined', requestSequence: request.requestSequence, questionId: question.id, time: Date.now() }) + '\n')
+    }) // Decline once through the native UI; confirmation requires its matching answer.
   })
   const discovery = join(home, '.dsh-cli/inject/servers.json')
   const endpoint = () => { try { return JSON.parse(readFileSync(discovery, 'utf8')).find(server => server.pid === child.pid && statSync(server.socketPath).isSocket()) } catch { return undefined } }
@@ -183,6 +201,7 @@ async function tui(resumeSessionId) {
     appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name, time, pid: child.pid, ...details }) + '\n')
   }
   async function typeInput(text) {
+    await wait(enterReady, 'previous Enter was not acknowledged and settled')
     await wait(() => composerText() === '', 'composer did not clear the previous input')
     const input = { id: `${child.pid}:${++inputSequence}`, text, eventOffset: fresh().length, outputOffset, frame: renderedFrame }
     observe('inputSent', { ...input })
@@ -195,14 +214,20 @@ async function tui(resumeSessionId) {
     await wait(enterReady, 'native Enter debounce window did not close')
     beforeSubmit()
     observe('inputSubmitted', { inputId: input.id, text: input.text, outputOffset, frame: renderedFrame })
-    enter()
+    const frame = renderedFrame, eventOffset = fresh().length
+    // A question panel can replace the composer before its empty frame is
+    // sampled. Its fresh native question plus rendered takeover also proves
+    // handling, without treating arbitrary output as an acknowledgement.
+    enter(() => inputWasHandled({ exited: exit, submittedFrame: frame, frame: renderedFrame, composer: composerText(),
+      freshQuestionVisible: fresh().slice(eventOffset).some(value => value.type === 'native-question'
+        && value.questions?.some(question => question.options?.some(option => screen().includes(option.label)))) }))
     return input
   }
   async function line(text) {
     await wait(() => {
-      const question = fresh().filter(value => value.type === 'native-question').at(-1)?.questions?.[0]
-      return !question?.detail?.startsWith('The task is complete. May I organize')
-        || declinedQuestions.has(question.id) && !(screen().includes('整理して確認する') && screen().includes('今回は保存しない'))
+      const request = fresh().filter(value => value.type === 'native-question').at(-1)
+      return !request?.questions?.[0]?.detail?.startsWith('The task is complete. May I organize')
+        || declinedQuestions.has(request.requestSequence)
     }, 'native memory-review prompt did not close')
     const input = await typeInput(text)
     return await submitInput(input)
@@ -332,9 +357,10 @@ async function tui(resumeSessionId) {
       let executionSelected = false
       await wait(() => {
         if (!executionSelected && enterReady() && screen().includes('この作業をどう実行しますか') && screen().includes('通常実行')) {
-          assert.ok(fresh().some(value => value.type === 'native-question' && value.questions[0]?.id === 'enno-execution-mode'))
+          const request = fresh().filter(value => value.type === 'native-question').at(-1)
+          assert.equal(request?.questions[0]?.id, 'enno-execution-mode')
           executionSelected = true
-          enter() // Native UI's first focused option is the ordinary execution requested by this fixture.
+          answerQuestion(request, '通常実行') // Native UI's first focused option is the ordinary execution requested by this fixture.
         }
         return fresh().some(value => value.type === 'fixture-lisp-consumed' && value.text === lispRequest && value.sessionId === created.sessionId)
       }, 'Lisp result was not consumed by the native model', 90000)
@@ -346,7 +372,7 @@ async function tui(resumeSessionId) {
       assert.equal(receipt.result.isError, false, JSON.stringify(receipt))
       assert.equal(receipt.result.value.ok, true, JSON.stringify(receipt))
       await wait(() => screen().includes('PROFILE_LISP_OK'), 'Lisp answer did not render')
-      await wait(() => declinedQuestions.size > 0 && !(screen().includes('整理して確認する') && screen().includes('今回は保存しない')),
+      await wait(() => declinedQuestions.size > 0 && enterReady(),
         'native completion memory review was not declined')
       const beforeCancel = native('command/done').length
       await line('/kioku-lisp cancel')

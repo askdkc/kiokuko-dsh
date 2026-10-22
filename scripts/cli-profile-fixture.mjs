@@ -1,6 +1,7 @@
 /** Offline provider and observation only; used by verify-cli-profile.mjs. */
 import { appendFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
+import { createQuestionObserver } from './cli-input-barrier.mjs'
 
 export const name = 'kiokuko-cli-profile-fixture'
 export const inject = ['llm', 'agents', 'sessions', 'tools', 'commands']
@@ -92,10 +93,7 @@ export function apply(ctx) {
   ctx.on('agent/error', payload => record({ type: 'native-error', error: String(payload.error?.stack ?? payload.error) }), { global: true })
   ctx.on('tools/result', (execution, result) => record({ type: 'native-tool-result', name: execution.name, callId: execution.callId, result }), { global: true })
   ctx.on('kiokuko/task-state', task => record({ type: 'task-state', task }), { global: true })
-  ctx.on('user-questions/request', (request, next) => {
-    record({ type: 'native-question', questions: request.questions })
-    return next()
-  }, { prepend: true, global: true })
+  ctx.on('user-questions/request', createQuestionObserver(record), { prepend: true, global: true })
   ctx.on('session/event', (session, event) => {
     if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'turn/end', 'command/run', 'command/done'].includes(event.type)) {
       record({ type: 'native-event', sessionId: session.id, event })

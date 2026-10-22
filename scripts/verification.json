@@ -27,7 +27,8 @@
         "node",
         "--test",
         "scripts/verification-contract.test.mjs",
-        "scripts/micro-judge-artifacts.test.mjs"
+        "scripts/micro-judge-artifacts.test.mjs",
+        "scripts/cli-input-barrier.test.mjs"
       ],
       "profiles": [
         "main",
