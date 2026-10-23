@@ -1,3 +1,4 @@
+import { requestInterpretationError } from '../request-interpretation-guidance.js'
 import { executionClarification } from '../intake-clarification.js'
 import { rebindRequestIntentDecision, type RequestIntentDecision, type RequestIntentContext, type RequestAction } from '../decisions/request-intent.js'
 import type { TaskType } from '../../akinator/types.js'
@@ -28,7 +29,7 @@ export function executionRequestAction(decision: RequestIntentDecision | undefin
   const intent = context && rebindRequestIntentDecision(decision, context)
   if (!intent || intent.relation === 'unknown' || intent.action === 'unknown'
     || intent.action === 'change' && intent.changeScope === 'unknown')
-    throw new Error('A current source-bound request interpretation is required before execution.')
+    throw requestInterpretationError('A current source-bound request interpretation is required before execution.',decision,context)
   // A process is an execution mechanism, not proof of an artifact change.
   // Research may use curl, Git, or a local probe; native permissions still
   // decide whether that exact command is permitted. Direct edits stay denied.

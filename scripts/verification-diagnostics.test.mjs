@@ -1,3 +1,4 @@
+import {consumerInstallEnvironment} from './pack-install-environment.mjs'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 const {commandDiagnostic,admissionDiagnostic,processDiagnostic,observeProcess,requireCommandSuccess,requireAdmissionRounds}=await import(process.env.DIAGNOSTICS_MODULE ?? new URL('./verification-diagnostics.mjs', import.meta.url).href)
@@ -113,11 +114,11 @@ test('safe diagnostic: real pack install and catch statements retain exit metada
  const statements=[...producer.body.statements];const i=statements.findIndex(node=>ts.isVariableStatement(node)&&node.declarationList.declarations.some(d=>d.name.getText(tree)==='installation'))
  assert.ok(i>=0,'consumer install must use the observed subprocess boundary')
  const code=emit(`let failureDiagnostic;const checkStarted=performance.now();try{${statements.slice(i,i+3).map(n=>n.getText(tree)).join('\n')}}catch(error){${main.catchClause.block.statements.map(n=>n.getText(tree)).join('\n')}};return process.exitCode`)
- const run=new Function('observeProcess','processDiagnostic','exec','process','performance','consumerRoot','cache','tarball','work',`return(async()=>{${code}})()`)
+ const run=new Function('consumerInstallEnvironment','observeProcess','processDiagnostic','exec','process','performance','consumerRoot','cache','tarball','work',`return(async()=>{${code}})()`)
  for(const fail of [false,true]){
   const output=[];const process={env:{PATH:'/fixture'},stderr:{write:text=>output.push(text)}}
   const exec=async(command,args,options)=>{assert.equal(command,'npm');assert.equal(args[0],'install');assert.ok(options.signal instanceof AbortSignal);if(fail)throw Object.assign(new Error(mixed),{code:23,stderr:'ENOTCACHED '+mixed,stdout:mixed});return{stdout:mixed,stderr:mixed}}
-  const status=await run(observeProcess,processDiagnostic,exec,process,{now:()=>1},'/fixture','/cache','fixture.tgz','/work')
+  const status=await run(consumerInstallEnvironment,observeProcess,processDiagnostic,exec,process,{now:()=>1},'/fixture','/cache','fixture.tgz','/work')
   assert.equal(status,fail?23:undefined);assert.equal(output.length,1);clean(output);const d=JSON.parse(output[0]);assert.equal(d.point,'pack-install');assert.equal(d.exitCode,fail?23:0);assert.equal(d.timedOut,false)
  }
 })

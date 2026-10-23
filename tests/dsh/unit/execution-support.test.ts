@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -403,4 +403,29 @@ test('post-preparation guard refreshes the preliminary observation identity for 
     assert.equal(evidence.length, 1)
     assert.equal(JSON.parse(evidence[0]!.json).turn, 2)
   } finally { await f.close() }
+})
+
+
+test('KDSH-RETRY-IDENTICAL-EDIT-001: repeat advice preserves the error and permits changed input or target-state recovery',async()=>{
+  const f=await fixture()
+  try{
+    const args={file_path:'src/facts.md',old_string:'missing',new_string:'replacement'}
+    const failed={isError:true,error:{message:'old_string not found',info:{name:'FsError',code:'FS_EDIT_NOT_FOUND'}},content:[{type:'text',text:'old_string not found'}]}
+    const original=structuredClone(failed)
+    const dispatch=(id:string,arguments_:object,result:object)=>{
+      const execution={name:'edit',arguments:arguments_,agent:f.agent,callId:id}
+      assert.equal(f.guard(execution),undefined,'advice does not bypass or preempt native edit validation')
+      f.callbacks.get('tools/result')!(execution,result)
+    }
+    for(const id of ['first','second','third'])dispatch(id,args,failed)
+    await f.assemble();assert.match(f.support.text('session'),/same structured tool failed three times/iu)
+    f.stream()
+    dispatch('changed-arguments',{...args,new_string:'another replacement'},failed)
+    await f.assemble();assert.equal(await f.support.pauseAtBoundary('session',async()=>assert.fail('changed input must not count as the same failure')),false)
+    await writeFile(join(f.root,'src/facts.md'),'missing')
+    dispatch('changed-target',args,{isError:false,value:{path:join(f.root,'src/facts.md'),before:'missing',after:'replacement'},content:[{type:'text',text:'edited'}]})
+    await f.assemble();assert.equal(await f.support.pauseAtBoundary('session',async()=>assert.fail('successful authorized recovery must remain available')),false)
+    assert.deepEqual(failed,original,'the original error remains unchanged')
+    assert.equal(f.db.prepare('SELECT status FROM ledger_runs WHERE run_id=?').get(f.binding.runId)?.status,'active','repeat advice cannot claim task completion')
+  }finally{await f.close()}
 })

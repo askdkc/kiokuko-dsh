@@ -1,5 +1,5 @@
 import { ManagedOperationJournal } from '../managed-operation-journal.js'
-import { runManagedOperation, observeManagedResult, managedAdmissionDenied, type ManagedScope } from '../managed-operation-runner.js'
+import { runManagedOperation, observeManagedResult, managedAdmissionDenied, isManagedAdmissionDenied, type ManagedScope } from '../managed-operation-runner.js'
 import { LispRecoverySession } from './recovery.js'
 import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -449,8 +449,8 @@ export class LispManager {
     try { this.options.notify?.(state.owner, `${state.error.message}\n${state.error.recovery}`) } catch { /* independent status/commands still expose the durable recovery state */ }
   }
   private retainOwned(state: AgentState, value: unknown): void {
-    const receipt=(value as {receipt?:{operationId?:string;state?:string;processStopped?:boolean}}|undefined)?.receipt
-    if(receipt && typeof receipt.operationId==='string' && !(receipt.processStopped===true && ['completed','cancelled'].includes(receipt.state??'')))
+    const receipt=(value as {receipt?:{operationId?:string;state?:string;processStopped?:boolean;processStarted?:boolean}}|undefined)?.receipt
+    if(receipt && typeof receipt.operationId==='string' && !(receipt.processStopped===true && ['completed','cancelled'].includes(receipt.state??'') || receipt.state==='denied' && receipt.processStarted===false))
       (state.ownedJobs??=new Set()).add(receipt.operationId)
   }
   private async ownedDispatch<T>(state: AgentState, action:(signal:AbortSignal)=>Promise<T>):Promise<T> {
@@ -489,7 +489,7 @@ export class LispManager {
     if (!await scope.database(db => new ManagedOperationJournal(db).claim(operation.operationId))) fail('JOURNAL_REPLAY', 'Process already dispatched.')
     let job: Job
     try { job = await launch() }
-    catch (error) { await scope.database(db => new ManagedOperationJournal(db).transition(operation.operationId,{state:'unknown'})); throw error }
+    catch (error) { await scope.database(db => new ManagedOperationJournal(db).transition(operation.operationId,{state:isManagedAdmissionDenied(error)?'denied':'unknown'})); throw error }
     await scope.database(db => new ManagedOperationJournal(db).transition(operation.operationId,{state:'running'}))
     const done = job.done
     job.done = done.then(async () => {

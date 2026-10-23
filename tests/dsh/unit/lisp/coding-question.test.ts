@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
-import {askLispCodingQuestion, normalizeLispCodingAnswer, LispCodingCancelled} from '../../../../src/dsh/lisp/coding-question.js'
+import {askLispCodingQuestion, normalizeLispCodingAnswer, LispCodingCancelled} from '../../../../src/dsh/coding-question.js'
 import {LispCodingPreparation} from '../../../../src/dsh/lisp/coding-preparation.js'
 const request={questions:[{id:'question',question:'Lisp?'}]} as const
 const response=(selected:string[], custom?:string)=>({answers:[{id:'question',selected,...custom===undefined?{}:{custom}}]})

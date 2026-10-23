@@ -1,3 +1,4 @@
+import { managedAdmissionDenied } from '../managed-operation-runner.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
@@ -170,12 +171,16 @@ export class LispWorker {
   }
   private async launchJob(input: z.infer<typeof Program>): Promise<Job> {
     const pending = this.#pending
-    if (!this.beforeJob) throw new LispError('TASK_REQUIRED', 'プロセス実行には現在の有効なタスクが必要です。')
-    await this.beforeJob()
-    const launch = await sandboxLaunch(this.layout, input.program, input.argv, this.generation, false, input.directory)
-    // Resolving the executable and preparing its sandbox can outlive the task.
-    await this.beforeJob()
-    if (this.#closed || this.#fatal || !pending || this.#pending !== pending || pending.abort.signal.aborted) throw new Error('Worker stopped before job launch')
+    const launch = await (async () => {
+      try {
+        if (!this.beforeJob) throw new LispError('TASK_REQUIRED', 'プロセス実行には現在の有効なタスクが必要です。')
+        await this.beforeJob()
+        const prepared = await sandboxLaunch(this.layout, input.program, input.argv, this.generation, false, input.directory)
+        await this.beforeJob()
+        if (this.#closed || this.#fatal || !pending || this.#pending !== pending || pending.abort.signal.aborted) throw new Error('Worker stopped before job launch')
+        return prepared
+      } catch (error) { return managedAdmissionDenied(error) }
+    })()
     const child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
     const job: Job = { child, done: Promise.resolve() }
     let bytes = 0, stdout = '', stderr = ''

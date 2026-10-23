@@ -1,4 +1,4 @@
-import type { DshUserQuestions } from '../intake-questions.js'
+import type { DshUserQuestions } from './intake-questions.js'
 
 /** A settled ask is never pending. Hiding a named DSH card leaves ask unresolved. */
 export type LispCodingQuestionResult =

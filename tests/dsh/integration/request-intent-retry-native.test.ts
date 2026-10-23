@@ -140,3 +140,31 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
     }
   })
 }
+
+test('KDSH-REVIEW-GATE-RECOVERY-001: actual PTC preparation carrier reports unresolved interpretation without evaluating code',{skip:!available},async()=>{
+  const [cordis,tools,prompt,sessions]=await Promise.all(['cordis','dsh-tools','dsh-system-prompt','dsh-session'].map(load))
+  const {unresolvedRequestIntent}=await import('../../../src/dsh/decisions/request-intent.js')
+  const root=realpathSync(await mkdtemp(join(tmpdir(),'review-guidance-ptc-'))),ctx=new cordis.Context(),fibers:any[]=[]
+  let intake:OnDemandIntake|undefined,ready=false,admissions=0
+  try{
+    fibers.push(await ctx.plugin(prompt.default,{}))
+    for(const name of ['dsh-session-projection','dsh-fs-local','dsh-working-directory','dsh-subprocess-local','dsh-sandbox-local','dsh-sandbox-policy','dsh-ptc-runtime-node']){
+      const plugin=await load(name),config=name==='dsh-fs-local'?{cwd:root}:name==='dsh-working-directory'?{defaultDirectory:root}:name==='dsh-sandbox-policy'?{mode:'read-only',workspaceRoot:root}:name==='dsh-ptc-runtime-node'?{timeoutMs:10000}:{}
+      fibers.push(await ctx.plugin(plugin.default,config))
+    }
+    ctx.get('ptcRuntime',false).run=()=>assert.fail('the preparation-only carrier must not evaluate a program')
+    fibers.push(await ctx.plugin(tools.default,{mode:'ptc'}))
+    const session=sessions.Session.create(sessions.SessionId('review-guidance-ptc'),[],{version:4,id:'review-guidance-ptc',createdAt:1,isSeeded:false,cwd:root})
+    const agent={id:'review-guidance-agent',session,ctx},messages=[{id:'current-review',role:'user',source:{kind:'user'},content:[{type:'text',text:'Review src/parser.ts without changing files.'}]}]
+    const task=messages[0]!.content[0]!.text,context=createRequestIntentContext({task,messageRefs:requestIntentMessageRefs(messages,task)})!
+    intake=new OnDemandIntake({validate:async()=>{},existing:async()=>false,classify:async()=>({deferInference:true}),interpret:async()=>({context,decision:unresolvedRequestIntent(context,'decision_service_disabled')}),prepare:async()=>{admissions++;ready=true;return true},ready:candidate=>candidate===agent&&ready})
+    intake.mount(ctx,ctx.tools);await intake.capture({agent,turn:1,step:0,messages,signal:signal()})
+    const receipt=await ctx.tools.execute({name:'run_code',callId:'carrier',arguments:{description:'Prepare requested work only',code:'return await tools.prepare_requested_work({"taskType":"review"})'},agent,signal:signal()})
+    assert.equal(receipt.isError,false,text(receipt))
+    assert.equal(receipt.value.result.programExecuted,false)
+    assert.equal(receipt.value.result.requestInterpretation.state,'required')
+    assert.equal(receipt.value.result.requestInterpretation.nextAction,'fresh_native_turn')
+    assert.deepEqual(receipt.value.result.requestInterpretation.currentReferences,requestIntentReferenceIds(context))
+    assert.equal(admissions,1)
+  }finally{await intake?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();await rm(root,{recursive:true,force:true})}
+})

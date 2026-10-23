@@ -1,7 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto'
 import {codingIntent, codingContinuation} from '../coding-workflow/intent.js'
 import type {LispCodingInput} from './coding-choice.js'
-import { LispCodingCancelled, type LispCodingQuestionResult } from './coding-question.js'
+import { LispCodingCancelled, type LispCodingQuestionResult } from '../coding-question.js'
 
 export const LISP_PROTOTYPE_GUIDANCE = 'Prefer Lisp for useful calculations and transformations. A preliminary prototype is optional in ordinary development; use permitted existing tools directly when appropriate. Native permissions still apply. Never bypass a denial or automatically fall back after cancellation, timeout, unknown outcomes or partial effects. An explicitly protected coding workflow retains its own prototype and verification gates.'
 const PROTECTED_PROTOTYPE_GUIDANCE = 'This protected workflow requires a small relevant lisp_eval prototype:true and complete saved-result inspection with lisp_inspect before implementation. Prototype success is not task completion. Two failures stop automatic prototype retries; repair the cause or explicitly disable Lisp. Ordinary read tools and conversation remain available; Bash still follows host permissions.'

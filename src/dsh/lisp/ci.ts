@@ -1,3 +1,4 @@
+import { managedAdmissionDenied } from '../managed-operation-runner.js'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { access, realpath } from 'node:fs/promises'
@@ -13,7 +14,7 @@ export type LispCiRequest =
   | { kind: 'failed-log'; runId: string }
   | { kind: 'verify'; target: keyof typeof VERIFIERS; script?: string | undefined; directory?: string | undefined; location?: 'workspace' | 'scratch' | undefined }
 
-interface CommandResult { code: number; stdout: string; stderr: string }
+interface CommandResult { code: number; stdout: string; stderr: string; receipt?: {operationId:string;route:'native';state:'completed';processStarted:true;processStopped:true} }
 type CommandRunner = (file: string, args: string[], options: { cwd: string; timeoutMs: number; signal: AbortSignal; excludedRoots?: readonly string[]; beforeEffect?: () => Promise<void> }) => Promise<CommandResult>
 
 const OUTPUT_LIMIT = 1024 * 1024
@@ -40,23 +41,31 @@ async function trustedExecutable(name: 'gh' | 'npm', excludedRoots: readonly str
 
 const runCommand: CommandRunner = async (file, args, options) => {
   if (file !== 'gh' && file !== 'npm') fail('HOST_COMMAND_REFUSED', '許可されていないホストコマンドです。')
-  const executable = await trustedExecutable(file, options.excludedRoots ?? [options.cwd])
+  const executable = await trustedExecutable(file, options.excludedRoots ?? [options.cwd]).catch(managedAdmissionDenied)
   const env = { ...process.env }
   // This is a standalone verifier, never a child of a Node test worker.
   delete env.NODE_TEST_CONTEXT
   if (file === 'npm') {
     if (!options.beforeEffect) fail('TASK_REQUIRED', '検証実行には現在の有効なタスクが必要です。')
-    await options.beforeEffect()
+    await options.beforeEffect().catch(managedAdmissionDenied)
   }
   options.signal.throwIfAborted()
   return new Promise((resolve, reject) => {
-    execFile(executable, args, { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: OUTPUT_LIMIT, signal: options.signal, env }, (error, stdout, stderr) => {
+    let started = false
+    const operationId = randomUUID()
+    const child = execFile(executable, args, { cwd: options.cwd, timeout: options.timeoutMs, maxBuffer: OUTPUT_LIMIT, signal: options.signal, env }, (error, stdout, stderr) => {
       if (options.signal.aborted) return reject(new LispError('CANCELLED', 'ホスト処理を取り消しました。'))
       if (error && (error as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new LispError('OUTPUT_LIMIT', 'ホスト処理の出力が上限を超えました。'))
+      if (error && !started) { try { managedAdmissionDenied(error) } catch (denied) { reject(denied) }; return }
       const code = error && typeof (error as { code?: unknown }).code === 'number' ? (error as { code: number }).code : error ? 1 : 0
-      resolve({ code, stdout: String(stdout).slice(-OUTPUT_LIMIT), stderr: String(stderr).slice(-OUTPUT_LIMIT) })
+      resolve({ code, stdout: String(stdout).slice(-OUTPUT_LIMIT), stderr: String(stderr).slice(-OUTPUT_LIMIT), receipt:{operationId,route:'native',state:'completed',processStarted:true,processStopped:true} })
     })
+    child.once('spawn', () => { started = true })
   })
+}
+
+function notApplied(value: Record<string, unknown>): unknown {
+  return {...value, receipt:{operationId:randomUUID(),route:'native',state:'denied',processStarted:false,processStopped:true}}
 }
 
 async function scriptsFor(owner: LispOwner): Promise<Record<string, string>> {
@@ -103,27 +112,27 @@ export function createLispCiAdapter(questions?: DshUserQuestions, runner: Comman
     const targetOwner = { ...owner, root: directory.path }
     const scripts = await scriptsFor(targetOwner)
     if (request.script !== undefined && (request.target !== 'test' || !/^test(?::[A-Za-z0-9._-]+)*$/u.test(request.script))) {
-      return { target: request.target, state: 'NOT_APPLIED', code: 'INVALID_TEST_SCRIPT', reason: 'invalid_input', message: 'script は test 対象の test または test:* のみ指定できます。' }
+      return notApplied({ target: request.target, state: 'NOT_APPLIED', code: 'INVALID_TEST_SCRIPT', reason: 'invalid_input', message: 'script は test 対象の test または test:* のみ指定できます。' })
     }
     const script = scriptFor(request.target, scripts, request.script)
-    if (!Object.hasOwn(scripts, script)) return { target: request.target, state: 'NOT_APPLIED', code: 'SCRIPT_MISSING', reason: 'script_missing', script,
-      message: `package.json に ${script} がありません。実行・確認はしていません。`, availableScripts: Object.keys(scripts) }
+    if (!Object.hasOwn(scripts, script)) return notApplied({ target: request.target, state: 'NOT_APPLIED', code: 'SCRIPT_MISSING', reason: 'script_missing', script,
+      message: `package.json に ${script} がありません。実行・確認はしていません。`, availableScripts: Object.keys(scripts) })
     const command = { ...VERIFIERS[request.target], args: script === 'test' ? ['test'] : ['run', script] }
     const approval = await confirm(questions, owner, {
       id: `lisp-ci-${randomUUID()}`, header: 'Lisp · 検証実行の確認', question: `${script} を実行しますか？`,
       detail: `実行: ${command.file} ${command.args.join(' ')}\nスクリプト: ${scripts[script]}\n作業ディレクトリ: ${directory.path}\nタイムアウト: ${command.timeoutMs} ms\nホスト上で npm とライフサイクルスクリプトを実行します。Lisp ワーカーの保護外で、テスト・ビルド成果物が作成される場合があります。`,
       options: [{ label: '実行しない' }, { label: 'この検証を実行' }], intent: { kind: 'plan-review', approve: 'この検証を実行' },
     }, signal)
-    if (!approval.approved) return { target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason, ...('message' in approval ? { message: approval.message } : {}) }
+    if (!approval.approved) return notApplied({ target: request.target, script, state: 'NOT_APPLIED', reason: approval.reason, ...('message' in approval ? { message: approval.message } : {}) })
     if (digest(directory) !== digest(await checkedDirectory(root, request.directory)) || digest(scripts) !== digest(await scriptsFor(targetOwner))) {
-      return { target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中に作業ディレクトリまたはnpmスクリプトが変わりました。実行していません。' }
+      return notApplied({ target: request.target, script, state: 'NOT_APPLIED', code: 'TARGET_CHANGED', reason: 'scripts_changed', message: '確認中に作業ディレクトリまたはnpmスクリプトが変わりました。実行していません。' })
     }
     const beforeEffect = async () => {
       if (!authorizeEffect) fail('TASK_REQUIRED', '検証実行には現在の有効なタスクが必要です。')
       await authorizeEffect(owner)
       signal.throwIfAborted()
     }
-    await beforeEffect()
+    await beforeEffect().catch(managedAdmissionDenied)
     const result = await runner(command.file, [...command.args], { cwd: directory.path, timeoutMs: command.timeoutMs, signal,
       excludedRoots: [owner.root, ...(scratchRoot ? [scratchRoot] : [])], beforeEffect })
     return { approval: approval.source ?? 'manual', target: request.target, script, ...(request.directory || request.location ? { cwd: directory.path } : {}), state: result.code === 0 ? 'SUCCEEDED' : 'FAILED', ...result }

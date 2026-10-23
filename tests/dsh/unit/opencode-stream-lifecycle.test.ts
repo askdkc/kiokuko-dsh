@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
@@ -13,9 +14,9 @@ let OpenCodeAdapter: typeof Adapter;
 let scratch: string;
 before(async () => {
   // Compile the actual adapter and codec, replacing only the SDK transport.
-  // Keeping the disposable bundle next to the test preserves normal package
-  // resolution without depending on a developer's HOME or existing temp files.
-  scratch = await mkdtemp(join(import.meta.dirname, '.opencode-lifecycle-'));
+  // Keep disposable output in /tmp and explicitly reuse the installed dependencies.
+  scratch = await mkdtemp(join(tmpdir(), 'opencode-lifecycle-'));
+  await symlink(fileURLToPath(new URL('../../../node_modules', import.meta.url)), join(scratch,'node_modules'), 'dir');
   const outfile = join(scratch, 'adapter.mjs');
   await build({ entryPoints: [fileURLToPath(new URL('../../../src/dsh/models/vendor/opencode-adapter.ts', import.meta.url))],
     outfile, bundle: true, platform: 'node', format: 'esm', packages: 'external', plugins: [{ name: 'synthetic-sdk-transport', setup(builder) {
@@ -123,3 +124,14 @@ for (const [name, streamed, complete, accepted] of [
     assert.equal(result.chunks.some(chunk => chunk.type === 'finish'), false);
   }
 });
+
+
+test('HTTP 200 stream failure is a protocol failure, retains safe correlation and never becomes a completed response', async () => {
+  const error=Object.assign(new Error('PRIVATE_PROVIDER_BODY'),{statusCode:200,responseHeaders:{'x-request-id':'fixture-request'}})
+  const result=await consume([{type:'reasoning-start',id:'partial'},{type:'reasoning-delta',id:'partial',delta:'partial'},{type:'error',error}])
+  assert.ok(result.error instanceof LlmError)
+  assert.equal(result.error.code,'PROTOCOL_ERROR')
+  assert.match(result.error.message,/stream.*HTTP 200/u)
+  assert.doesNotMatch(result.error.message,/PRIVATE_PROVIDER_BODY|request failed/u)
+  assert.equal(result.chunks.some(chunk=>chunk.type==='finish'),false)
+})

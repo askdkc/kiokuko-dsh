@@ -1,3 +1,5 @@
+import { requestInterpretationError, requestInterpretationRecovery } from './request-interpretation-guidance.js'
+import { collectClarificationContext, clarificationReply, reusableClarificationAnswer, type ClarificationContext } from './clarification-context.js'
 import { abortable } from './boundary-worker.js'
 import type { DshUserQuestions } from './intake-questions.js'
 import { isLispImplementation, isLispNativeCommand, withRootLispAdmission, rememberLispConversation } from './lisp-tool-identity.js'
@@ -147,6 +149,7 @@ export class OnDemandIntake {
     try { await this.host.diagnostic?.(state.input,{...observation,...(state.requestIntentContext?{context:state.requestIntentContext}:{}),...(state.requestIntent?{decision:state.requestIntent}:{})}) } catch { /* Diagnostic loss cannot authorize or veto work. */ }
   }
   readonly #turns = new Map<string, Turn>()
+  readonly #clarificationContexts = new WeakMap<object,Map<string,ClarificationContext>>()
   readonly #clarifications = new Map<string, { agent: DemandAgent; turn: number; key: string; status: 'waiting' | 'queued'; result?: unknown; operation?: Promise<unknown> | undefined }>()
   readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; evidenceReadDigest?: string; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
   readonly #disposers: (() => void)[] = []
@@ -445,9 +448,9 @@ export class OnDemandIntake {
     if (state.status === 'prepared' && state.confirmationResume && explicitIntent
       && (state.requestIntent?.relation === 'unknown' || state.requestIntent?.action === 'unknown')) state.status = 'answer'
     if (state.status === 'prepared') {
-      if (state.taskType !== taskType) throw new Error('Prepared intent cannot be replaced within a turn')
+      if (state.taskType !== taskType) throw requestInterpretationError('Prepared intent cannot be replaced within a turn',state.requestIntent,state.requestIntentContext,true)
       if (explicitIntent && state.preparedIntentDigest !== canonicalContentHash({ taskType, requestIntent: requestIntent ?? null })) {
-        throw new Error('Prepared interpretation cannot be replaced within a turn')
+        throw requestInterpretationError('Prepared interpretation cannot be replaced within a turn',state.requestIntent,state.requestIntentContext,true)
       }
       return
     }
@@ -517,6 +520,13 @@ export class OnDemandIntake {
       : scope ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
         : state.requestIntent?.action === 'unknown' ? 'その対象に、具体的に何をしてほしいですか？'
           : '今回の依頼は現在の作業の続きですか、それとも別の作業ですか？'
+    const replies=this.#clarificationContexts.get(state.input.agent) ?? new Map<string,ClarificationContext>()
+    const clarification=collectClarificationContext(humanMessages(state.input.messages).map(message=>({id:humanId(message),text:humanTask([message])})),replies)
+    const answerScope=canonicalContentHash({activeTask:context?.activeTask ?? null,activeGoal:context?.activeGoal ?? null,proposals:context?.proposals ?? []})
+    const answered=reusableClarificationAnswer(clarification,question,answerScope)
+    if(answered)return {prepared:false,status:'clarification_answer_available',question,questionId:answered.questionId,answer:answered.value,
+      originalTask:clarification.sources.map(source=>source.text).join('\n'),permissions:'unchanged_native_policy',
+      currentReferences:context?requestIntentRequiredReferenceIds(context):[],nextAction:'submit_current_request_intent'}
     const key = canonicalContentHash({ context: context ?? null, task: state.task, humanEvidence: [...state.humanContents], question })
     const previous = this.#clarifications.get(sessionId)
     if (previous?.agent === state.input.agent && previous.key === key) return previous.operation ?? previous.result
@@ -546,12 +556,14 @@ export class OnDemandIntake {
         const answer = response.answers[0]
         const value = answer?.custom?.trim() || answer?.selected[0]?.trim()
         if (answer?.id !== id || !value || value.length > 8192) return result
-        // Both texts originate from the human: preserve the original verbatim,
+        // Preserve actual native sources and answers once; never recursively quote an earlier generated envelope.
         // label the actual UI answer separately, and re-enter ordinary native
         // capture. The reply itself is never mapped to execution authority.
         const answerMessageId=randomUUID()
-        const content = `Original user request (unchanged):\n${state.task}\n\nLatest native user answer to clarification "${question}" (source revision ${id}:${answerMessageId}; same question and current scope):\n${value}\n\nInterpret this latest explicit answer as a revision only where it changes the earlier instruction within this question’s scope. Preserve unrelated constraints. Native permissions and task ownership still apply.`
+        const reply=clarificationReply(clarification,{id:answerMessageId,questionId:id,question,value,scope:answerScope})
+        const content=reply.content
         signal.throwIfAborted(); this.assertCurrent(state)
+        replies.set(answerMessageId,reply.context);this.#clarificationContexts.set(state.input.agent,replies)
         state.input.agent.followup!({ id: answerMessageId, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: content }] })
         await this.diagnose(state,{kind:'answer',questionRef:id,answerRef:answerMessageId})
         pending.status = 'queued'
@@ -779,7 +791,9 @@ export class OnDemandIntake {
           await this.prepare(state, taskType, execution.signal, currentIntent, value.requestIntent !== undefined)
         }
         return { prepared: true, taskType: state.taskType ?? value.taskType ?? requestIntentTaskType(state.requestIntent), originalTask: state.task,
-          ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner, permissions: 'unchanged_native_policy' }
+          ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}),
+          ...(state.requestIntent && requestIntentIsUnresolved(state.requestIntent) ? { requestInterpretation: requestInterpretationRecovery(state.requestIntent,state.requestIntentContext,true) } : {}),
+          memoryOwner: state.memoryOwner, permissions: 'unchanged_native_policy' }
         } catch (error) {
           if (!(error instanceof RequestClarification)) throw error
           return this.clarify(state, execution.signal, error)
@@ -940,8 +954,9 @@ export class OnDemandIntake {
         state.memoryOwner = memoryOwnerKind(requestIntent, taskType)
         await this.prepare(state, taskType, execution.signal, requestIntent, carrier.requestIntent !== undefined)
        const result = { prepared: true, taskType: state.taskType, originalTask: state.task,
-         ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}), memoryOwner: state.memoryOwner,
-         permissions: 'unchanged_native_policy', programExecuted: false }
+         ...(state.requestIntent ? { requestIntent: state.requestIntent } : {}),
+         ...(state.requestIntent && requestIntentIsUnresolved(state.requestIntent) ? { requestInterpretation: requestInterpretationRecovery(state.requestIntent,state.requestIntentContext,true) } : {}),
+         memoryOwner: state.memoryOwner, permissions: 'unchanged_native_policy', programExecuted: false }
        return { isError: false, value: { logs: ['Host intake prepared. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
         } catch (error) {
           if (!(error instanceof RequestClarification)) throw error

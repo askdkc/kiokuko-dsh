@@ -1,3 +1,5 @@
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -33,7 +35,8 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     ciRequests.push(request)
     if (request.kind === 'list-runs') return { source: 'fixture', runs: [{ databaseId: 42 }] }
     if (request.kind === 'failed-log') return { source: 'fixture', runId: request.runId, log: 'failed log' }
-    return { target: request.target, state: 'SUCCEEDED', code: 0, stdout: 'verified', stderr: '' }
+    const observed = await promisify(execFile)(process.execPath, ['-e', "process.stdout.write('verified')"], {cwd:root})
+    return { target: request.target, state: 'SUCCEEDED', code: 0, ...observed, receipt:{operationId:`fixture-ci-${ciRequests.length}`,route:'native',state:'completed',processStarted:true,processStopped:true} }
   } }
   let manager = new LispManager(options)
   const owner = { sessionId: 'session', agentId: 'agent', root }

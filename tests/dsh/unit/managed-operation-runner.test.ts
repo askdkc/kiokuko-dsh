@@ -101,3 +101,24 @@ test('confirmed prelaunch cancellation is not misreported as a stopped previousl
   await runManagedOperation(scope,{...input,route:'owned'},async()=>({receipt:{state:'completed',cancelled:true,processStarted:false,processStopped:true}}))
   assert.equal(journal.snapshot(scope.scopeId).operations[0]!.state,'cancelled-before-dispatch')
 })
+
+
+test('host-observed pre-dispatch refusal stays denied instead of success or unknown', async t => {
+  const {journal,scope} = fixture(t)
+  await runManagedOperation(scope,input,async () => ({state:'NOT_APPLIED',receipt:{operationId:'host-refusal',route:'native',state:'denied',processStarted:false,processStopped:true}}))
+  journal.seal(scope.scopeId)
+  const snapshot=journal.snapshot(scope.scopeId)
+  assert.equal(snapshot.operations[0]!.state,'denied')
+  assert.equal(snapshot.operations[0]!.outcome,undefined)
+  assert.equal(snapshot.complete,true)
+})
+
+
+for(const processStarted of [true,undefined]) test(`denial without observed no-dispatch (${String(processStarted)}) remains unknown`,async t=>{
+  const {journal,scope}=fixture(t)
+  await runManagedOperation(scope,input,async()=>({code:0,receipt:{operationId:'ambiguous-refusal',route:'native',state:'denied',...(processStarted===undefined?{}:{processStarted}),processStopped:true}}))
+  journal.seal(scope.scopeId)
+  const snapshot=journal.snapshot(scope.scopeId)
+  assert.equal(snapshot.operations[0]!.state,'unknown')
+  assert.equal(snapshot.complete,false)
+})

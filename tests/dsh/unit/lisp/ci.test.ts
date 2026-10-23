@@ -35,7 +35,9 @@ test('Lisp CI verifier fails closed without approval and runs only a fixed targe
     return { code: 0, stdout: 'ok', stderr: '' }
   }
   const denied = createLispCiAdapter(questions(false), runner)
-  assert.deepEqual(await denied(bound, { kind: 'verify', target: 'typecheck' }, signal), { target: 'typecheck', script: 'typecheck', state: 'NOT_APPLIED', reason: 'declined' })
+  const {receipt: refusalReceipt, ...refusal} = await denied(bound, { kind: 'verify', target: 'typecheck' }, signal) as any
+  assert.deepEqual(refusal, { target: 'typecheck', script: 'typecheck', state: 'NOT_APPLIED', reason: 'declined' })
+  assert.equal(refusalReceipt.state,'denied'); assert.equal(refusalReceipt.processStarted,false); assert.equal(refusalReceipt.processStopped,true)
   assert.equal(calls, 0)
   const allowed = createLispCiAdapter(questions(true), runner)
   assert.deepEqual(await allowed(bound, { kind: 'verify', target: 'typecheck' }, signal), { approval: 'manual', target: 'typecheck', script: 'typecheck', state: 'SUCCEEDED', code: 0, stdout: 'ok', stderr: '' })
@@ -96,4 +98,26 @@ test('Lisp verifier refuses escaping/link directories and directory replacement 
   assert.equal(approvals, 0); assert.equal(calls, 0)
   const replaced = await adapter({ ...owner, root }, { kind: 'verify', target: 'test', directory: 'project' }, signal) as any
   assert.equal(replaced.code, 'TARGET_CHANGED'); assert.equal(calls, 0)
+})
+
+
+test('real CI child completion has a stopped-process receipt and explicit refusal preserves no-dispatch evidence', async () => {
+  const root=await realpath(await mkdtemp(join(tmpdir(),'ci-observation-')))
+  try {
+    await writeFile(join(root,'package.json'),JSON.stringify({private:true,scripts:{test:'node -e "process.exit(0)"','test:failure':'node -e "process.exit(7)"'}}))
+    const subject={...owner,root}
+    const execute=createLispCiAdapter(questions(true))
+    for(const script of ['test','test:failure']) {
+      const result=await execute(subject,{kind:'verify',target:'test',script},signal) as any
+      assert.equal(result.state,script==='test'?'SUCCEEDED':'FAILED')
+      assert.equal(result.receipt.state,'completed')
+      assert.equal(result.receipt.processStarted,true)
+      assert.equal(result.receipt.processStopped,true)
+      assert.ok(result.receipt.operationId)
+    }
+    const refused=await createLispCiAdapter(questions(false),async()=>{throw new Error('must not dispatch')})(subject,{kind:'verify',target:'test'},signal) as any
+    assert.equal(refused.state,'NOT_APPLIED')
+    assert.equal(refused.receipt.state,'denied')
+    assert.equal(refused.receipt.processStarted,false)
+  } finally {await rm(root,{recursive:true,force:true})}
 })

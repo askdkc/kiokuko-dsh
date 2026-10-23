@@ -55,6 +55,19 @@ test('native file workflow preserves sequential edits and reconciles metadata dr
     assert.equal((await read()).isError, false)
     assert.equal((await edit('external change', 'reconciled change')).isError, false)
     assert.equal(await readFile(path, 'utf8'), '# Plan\nreconciled change\nfinal second\n')
+    // KDSH-RETRY-IDENTICAL-EDIT-001: error equality is not target-version evidence.
+    const failures=[]
+    for(let index=0;index<3;index++)failures.push(await edit('missing-marker','changed-marker'))
+    for(const failure of failures){
+      assert.equal(failure.isError,true);assert.equal(failure.error.info?.code,'FS_EDIT_NOT_FOUND')
+      assert.equal(failure.value,undefined,'a failure must not become successful edit evidence')
+    }
+    assert.deepEqual(failures[0].error,failures[2].error)
+    assert.equal((failures[0].error as any).version,undefined,'native failure exposes no comparison snapshot')
+    await writeFile(path,'# Plan\nmissing-marker\n')
+    assert.equal((await read()).isError,false,'native observation reauthorizes the changed target')
+    assert.equal((await edit('missing-marker','changed-marker')).isError,false,'same arguments can succeed after an authorized target-state refresh')
+    assert.equal(await readFile(path,'utf8'),'# Plan\nchanged-marker\n')
   } finally {
     await handle?.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()

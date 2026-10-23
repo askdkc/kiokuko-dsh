@@ -1,3 +1,4 @@
+import { executionRequestAction } from '../../../src/dsh/coding-workflow/intent.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
@@ -1060,4 +1061,76 @@ test('late cancellation from superseded preparation cannot abort the replacement
  await f.capture([human('new','Explain the current source')])
  release.resolve();await rejected
  assert.deepEqual(calls,[]);assert.equal(f.intake.snapshot(f.session.id)?.status,'answer')
+})
+
+
+test('an observed same-scope clarification answer is returned with fresh evidence instead of repeatedly asking or granting execution',async t=>{
+  const task='Only explain src/parser.ts; preserve the public API.',message=human('bounded-original',task)
+  let messages:any[]=[message],intent=activeIntent(messages,task,'same_scope_continuation','change','implementation')
+  let asks=0;const followups:any[]=[]
+  const f=await fixture(t,{interpret:async()=>intent,assess:async()=>({semantic:'contradicted',semanticInputDigest:'b'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome:'clarify'}),questions:{async ask(r){asks++;return {answers:[{id:r.questions[0].id,selected:[],custom:'I explicitly request implementation in src/parser.ts while preserving the public API.'}]}}}})
+  ;(f.agent as any).followup=(m:any)=>followups.push(m)
+  const args=()=>({requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}})
+  await f.capture(messages,1)
+  const first=await f.execute(TASK_PREPARE_TOOL,args());assert.equal(first.value.status,'clarification_answer_queued')
+  messages=[message,followups[0]]
+  intent=activeIntent(messages,task+'\n'+followups[0].content[0].text,'same_scope_continuation','change','implementation')
+  f.intake.finish(f.session,1);f.events.push(event('turn/end',1),event('turn/start',2))
+  await f.capture(messages,2)
+  const repeated=await f.execute(TASK_PREPARE_TOOL,args())
+  assert.equal(repeated.value.status,'clarification_answer_available')
+  assert.equal(repeated.value.prepared,false);assert.equal(f.admissions.length,0)
+  assert.equal(asks,1);assert.equal(followups.length,1)
+  assert.ok(repeated.value.currentReferences.length>0)
+  const nextText='Also preserve the CLI output format.',next=human('new-human-scope',nextText)
+  messages=[...messages,next]
+  intent=activeIntent(messages,task+'\n'+followups[0].content[0].text+'\n'+nextText,'same_scope_continuation','change','implementation')
+  f.intake.finish(f.session,2);f.events.push(event('turn/end',2),event('turn/start',3))
+  await f.capture(messages,3)
+  const changed=await f.execute(TASK_PREPARE_TOOL,args());assert.equal(changed.value.status,'clarification_answer_queued')
+  assert.equal(asks,2);assert.equal(f.admissions.length,0)
+  assert.equal(followups[1].content[0].text.split(task).length-1,1)
+  assert.match(followups[1].content[0].text,/Also preserve the CLI output format/)
+})
+
+
+test('KDSH-REVIEW-GATE-RECOVERY-001: advisory review exposes missing interpretation and a fresh bound request recovers without bypass',async t=>{
+  let context:RequestIntentContext|undefined,bodies=0,writes=0
+  const f=await fixture(t,{classify:async()=>({taskType:'review',deferInference:false}),interpret:async(input,task)=>{
+    context=createRequestIntentContext({task,messageRefs:requestIntentMessageRefs(input.messages,task)})!
+    return {context,decision:unresolvedRequestIntent(context,'decision_service_disabled')}
+  }})
+  t.after(f.ctx.tools.register({name:'bash',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{bodies++;return 'checked'}}))
+  t.after(f.ctx.tools.register({name:'write',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{writes++;return 'written'}}))
+  t.after(f.ctx.tools.guard((execution:any)=>{
+    if(!['bash','write'].includes(execution.name))return undefined
+    const prepared=f.prepareRequests.at(-1)
+    try{executionRequestAction(prepared?.requestIntent,prepared?.context,execution.name);return undefined}catch(error){return (error as Error).message}
+  }))
+  await f.capture([human('review-original','Review src/parser.ts without changing files.')])
+  const prepared=await f.execute(TASK_PREPARE_TOOL,{taskType:'review'})
+  assert.equal(prepared.isError,false)
+  const failures=[]
+  for(let index=0;index<9;index++)failures.push(await f.execute('bash',{command:`inspect-${index}`}))
+  assert.equal(bodies,0)
+  for(const failure of failures){assert.equal(failure.isError,true);assert.match(JSON.stringify(failure.content),/current source-bound request interpretation/u)}
+  const message=failures[0].content.map((part:any)=>part.text??'').join('')
+  assert.match(message,/REQUEST_INTERPRETATION_REQUIRED/u)
+  const recovery=JSON.parse(message.slice(message.indexOf('\nRecovery: ')+11))
+  assert.equal(recovery.permissions,'unchanged_native_policy')
+  assert.equal(recovery.executed,false)
+  assert.deepEqual(recovery.currentReferences,requestIntentReferenceIds(context!))
+  assert.ok(recovery.evidenceTools.includes('read'))
+  assert.equal(prepared.value.requestInterpretation.state,'required')
+  const sameTurn=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(context!)}})
+  assert.equal(sameTurn.isError,true,'prepared interpretation remains immutable')
+  assert.match(JSON.stringify(sameTurn.content),/fresh_native_turn/u)
+  f.intake.finish(f.session,1);f.events.push(event('turn/end',1),event('turn/start',2))
+  await f.capture([human('review-resubmitted','Review src/parser.ts without changing files.')],2)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(context!)}})).isError,false)
+  assert.equal((await f.execute('bash',{command:'inspect-approved-target'})).isError,false)
+  assert.equal((await f.execute('write',{file_path:'src/parser.ts',content:'not allowed'})).isError,true)
+  const deny=f.ctx.tools.guard(()=> 'Native policy denied')
+  assert.equal((await f.execute('bash',{command:'inspect-approved-target'})).isError,true);deny()
+  assert.equal(bodies,1);assert.equal(writes,0)
 })

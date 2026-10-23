@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {LispCodingPreparation} from '../../../../src/dsh/lisp/coding-preparation.js'
-import {LispCodingCancelled} from '../../../../src/dsh/lisp/coding-question.js'
+import {LispCodingCancelled} from '../../../../src/dsh/coding-question.js'
 import {codingIntent} from '../../../../src/dsh/coding-workflow/intent.js'
 function observe(f:ReturnType<typeof fixture>,name:string,args:any,result:any){f.p.observed(f.agent,name,args,result,f.p.binding(f.agent))}
 function fixture(){let root='/one',enabled=false,choices=0,activations=0;const agent={id:'agent',session:{id:'session'}};const input={agent,turn:1,task:'Implement src/parser.ts',taskType:'build' as const,signal:new AbortController().signal};const p=new LispCodingPreparation({identity:a=>({sessionId:(a as typeof agent).session.id,root}),enabled:()=>enabled,choose:async()=>{choices++;return{status:'answered',choice:'yes',answerRef:'human:choice'}},activate:async()=>{activations++;enabled=true}});return{p,agent,input,enabled:(v:boolean)=>{enabled=v},root:(v:string)=>{root=v},counts:()=>({choices,activations})}}

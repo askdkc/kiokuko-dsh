@@ -10,14 +10,15 @@ const active = new AsyncLocalStorage<ActiveOperation>()
 const deniedBeforeDispatch = new WeakSet<object>()
 export function managedAdmissionDenied(error: unknown): never { if (error && typeof error === 'object') deniedBeforeDispatch.add(error); throw error }
 export const currentManagedOperation = () => active.getStore()
+export const isManagedAdmissionDenied = (error: unknown): boolean => error instanceof ManagedDispatchDenied || !!error && typeof error === 'object' && deniedBeforeDispatch.has(error)
 
 /** Receipts are supplied by the host adapter, never by Lisp return values. */
 export async function observeManagedResult(operation: ActiveOperation, value: unknown): Promise<void> {
   const result = value as any, receipt = result?.receipt
   if (!receipt) return // A projected job ID is not a new process observation.
   const stopped = receipt?.processStopped === true
-  const completed = receipt?.state === 'completed' || receipt?.state === 'cancelled' || (receipt?.route === 'native' && stopped)
-  const state = completed && (operation.kind === 'file' || stopped)
+  const completed = receipt?.state !== 'denied' && (receipt?.state === 'completed' || receipt?.state === 'cancelled' || (receipt?.route === 'native' && stopped))
+  const state = receipt?.state === 'denied' && receipt?.processStarted === false ? 'denied' : completed && (operation.kind === 'file' || stopped)
     ? receipt?.cancelled || receipt?.state === 'cancelled' ? receipt?.processStarted === false ? 'cancelled-before-dispatch' : 'cancelled-confirmed' : 'completed'
     : receipt?.state === 'started' && receipt?.processStarted === true ? 'running' : 'unknown'
   const code = result?.exitCode ?? result?.code ?? receipt?.exitCode
@@ -25,7 +26,7 @@ export async function observeManagedResult(operation: ActiveOperation, value: un
     const journal = new ManagedOperationJournal(db), previous = journal.readOperation(operation.operationId)
     if (['completed','cancelled-confirmed','denied','cancelled-before-dispatch'].includes(previous.state)) return
     const next = {
-    state: state as 'completed' | 'cancelled-confirmed' | 'cancelled-before-dispatch' | 'running' | 'unknown',
+    state: state as 'denied' | 'completed' | 'cancelled-confirmed' | 'cancelled-before-dispatch' | 'running' | 'unknown',
     ...(state === 'completed' ? { outcome: operation.kind === 'file' || code === 0 ? 'succeeded' as const : 'failed' as const } : {}),
     ...(typeof receipt?.operationId === 'string' ? { receiptRef: canonicalContentHash(receipt) } : {}),
   }
@@ -72,7 +73,7 @@ export async function runManagedOperation<T>(scope: ManagedScope, input: { route
     try { value = await dispatch() }
     catch (error) {
       // Only a host-tagged pre-dispatch denial proves absence of effects.
-      const denied = error instanceof ManagedDispatchDenied || !!error && typeof error === 'object' && deniedBeforeDispatch.has(error)
+      const denied = isManagedAdmissionDenied(error)
       await scope.database(db => {
         const journal = new ManagedOperationJournal(db)
         if (!['completed','denied','cancelled-before-dispatch','cancelled-confirmed'].includes(journal.readOperation(operation.operationId).state)) journal.transition(operation.operationId, { state: denied ? 'denied' : 'unknown' })

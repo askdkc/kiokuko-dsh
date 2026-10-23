@@ -1,3 +1,4 @@
+import { assertionForCriterion, COMPLETION_BINDING_GUIDE } from './task-completion-guidance.js'
 import { ProtocolRecipeSchema, PROTOCOL_CAPABILITIES } from './guardrail/contracts.js'
 import { enrollProtocol, invalidateProtocolBinding, protocolCompletionReady, unresolvedManaged } from './guardrail/service.js'
 import { realpathSync, existsSync, readFileSync } from 'node:fs'
@@ -28,9 +29,12 @@ export const CompletionMethodSchema = z.discriminatedUnion('kind', [
     protocol: ProtocolRecipeSchema.optional(),
     expectedOutput: text.optional(), artifactPath: relativePath.optional(), artifactSha256: z.string().regex(/^[a-f0-9]{64}$/u).optional(),
   }).strict().superRefine((value,ctx)=>{
-    if(value.protocol&&value.assertion!=='selected_tests_pass')ctx.addIssue({code:'custom',message:'Protocol recipes require selected tests'})
-    if(value.assertion==='output_matches'&&!value.expectedOutput)ctx.addIssue({code:'custom',message:'Output assertion requires expectedOutput'})
-    if(value.assertion==='artifact_matches'&&(!value.artifactPath||!value.artifactSha256))ctx.addIssue({code:'custom',message:'Artifact assertion requires path and SHA-256'})
+    if(value.protocol&&value.assertion!=='selected_tests_pass')ctx.addIssue({code:'custom',path:['assertion'],message:'Protocol recipes require selected tests'})
+    if(value.assertion==='output_matches'&&!value.expectedOutput)ctx.addIssue({code:'custom',path:['expectedOutput'],message:'Output assertion requires expectedOutput'})
+    if(value.assertion==='artifact_matches'){
+      if(!value.artifactPath)ctx.addIssue({code:'custom',path:['artifactPath'],message:'Artifact assertion requires path'})
+      if(!value.artifactSha256)ctx.addIssue({code:'custom',path:['artifactSha256'],message:'Artifact assertion requires SHA-256'})
+    }
   }),
   z.object({ kind: z.literal('enno_verifier'), verifierId: text, workUnitId: text.optional(),
     assertion: z.enum(['exit_zero', 'selected_tests_pass']) }).strict(),
@@ -90,6 +94,15 @@ function criteriaForRun(database: SqliteDatabase, runId: string): { criteria: Co
         approval: item.approval as 'explicit' | 'approved' })) }
 }
 
+/** Advice reads the same immutable criterion contract as binding; it cannot supply execution proof. */
+export function taskCompletionBindingGuide(database:SqliteDatabase,runId:string) {
+  const source=criteriaForRun(database,runId),coding=readCodingWorkflow(database,runId)
+  return {...structuredClone(COMPLETION_BINDING_GUIDE),kind:source.enno?'enno_verifier':'native_command',criteria:source.criteria.map(criterion=>{
+    const definition=coding?.definition?.criteria.find(item=>criterion.id===`coding:${coding.workflowId}:${item.criterionId}`)
+    return {criterionId:criterion.id,requiredAssertion:definition?assertionForCriterion(definition.evidence):null}
+  })}
+}
+
 function binding(database: SqliteDatabase, runId: string, criterionId: string): BindingRow | undefined {
   return database.prepare('SELECT * FROM dsh_completion_bindings WHERE run_id = ? AND criterion_id = ?')
     .get<BindingRow>(runId, criterionId)
@@ -98,7 +111,7 @@ function binding(database: SqliteDatabase, runId: string, criterionId: string): 
 function validateMethod(database: SqliteDatabase, runId: string, method: CompletionMethod, repositoryRoot: string, enno: boolean): void {
   const coding=readCodingWorkflow(database,runId)
   if(coding&&method.assertion==='exit_zero')throw new KiokukoError('VALIDATION_ERROR','Coding criteria require selected tests or observable output/artifact assertions, not exit 0 alone')
-  if (enno !== (method.kind === 'enno_verifier')) throw new KiokukoError('VALIDATION_ERROR', 'Completion method does not match execution mode')
+  if (enno !== (method.kind === 'enno_verifier')) throw new KiokukoError('VALIDATION_ERROR', 'Completion method does not match execution mode',{field:'method.kind',expected:enno?'enno_verifier':'native_command'})
   if (method.kind === 'native_command') {
     const cwd = realpathSync(path.resolve(repositoryRoot, method.cwd))
     const relative = path.relative(realpathSync(repositoryRoot), cwd)
@@ -112,7 +125,7 @@ function validateMethod(database: SqliteDatabase, runId: string, method: Complet
       workPlan?: { units: { id:string; focusedVerifiers:{id:string;executable:string;args:string[]}[] }[] } } : undefined
     const verifiers = method.workUnitId ? contract?.workPlan?.units.find(unit=>unit.id===method.workUnitId)?.focusedVerifiers : contract?.finalVerifiers
     const verifier = verifiers?.find(item => item.id === method.verifierId)
-    if (!verifier) throw new KiokukoError('VALIDATION_ERROR', 'Completion verifier is absent from the approved Enno contract')
+    if (!verifier) throw new KiokukoError('VALIDATION_ERROR', 'Completion verifier is absent from the approved Enno contract',{field:'method.verifierId',expected:'approved_contract_verifier'})
     if (!coding && method.assertion === 'selected_tests_pass' && !selectedNodeTestCommand([verifier.executable, ...verifier.args].join(' '))) {
       throw new KiokukoError('VALIDATION_ERROR', 'Selected-test proof requires an explicit Node TAP verifier')
     }
@@ -135,10 +148,10 @@ export function bindTaskCriterion(database: SqliteDatabase, input: {
   if (!criterion) throw new KiokukoError('CONFLICT', 'Completion criterion is absent or its revision changed')
   const codingWorkflow = readCodingWorkflow(database,input.runId)
   const codingCriterion = codingWorkflow?.definition?.criteria.find(item=>input.criterionId===`coding:${codingWorkflow.workflowId}:${item.criterionId}`)
-  const requiredAssertion = codingCriterion?.evidence === 'artifact' ? 'artifact_matches' : codingCriterion?.evidence === 'output' ? 'output_matches' : 'selected_tests_pass'
-  if (codingCriterion && method.assertion !== requiredAssertion) throw new KiokukoError('VALIDATION_ERROR', 'Bound assertion does not match this criterion’s required evidence')
+  const requiredAssertion = assertionForCriterion(codingCriterion?.evidence ?? 'selected_tests')
+  if (codingCriterion && method.assertion !== requiredAssertion) throw new KiokukoError('VALIDATION_ERROR', 'Bound assertion does not match this criterion’s required evidence',{field:'method.assertion',expected:requiredAssertion})
   if (method.kind === 'native_command' && method.artifactPath && !method.sourcePaths.includes(method.artifactPath))
-    throw new KiokukoError('VALIDATION_ERROR', 'Include the asserted artifact in sourcePaths so changes invalidate its evidence')
+    throw new KiokukoError('VALIDATION_ERROR', 'Include the asserted artifact in sourcePaths so changes invalidate its evidence',{field:'method.sourcePaths',expected:'include_asserted_artifact'})
   validateMethod(database, input.runId, method, source.repositoryRoot, source.enno)
   const approved = input.approved || criterion.description.trim() === (method.kind === 'native_command'
     ? method.command : method.verifierId)

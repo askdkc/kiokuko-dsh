@@ -185,6 +185,7 @@ export class OpenCodeAdapter extends LlmAdapter {
       const retryHeader = responseHeaders?.['retry-after']; const seconds = Number(retryHeader)
       const retry = typeof retryHeader === 'string' ? Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryHeader) - Date.now() : undefined
       const requestId = responseHeaders?.['x-request-id'] ?? responseHeaders?.['request-id']
+      if (status !== undefined && status >= 200 && status < 300) throw new LlmError(`OpenCode response stream failed after HTTP ${status}`, 'PROTOCOL_ERROR', {status, ...(typeof requestId === 'string' && requestId.trim() ? {requestId: requestId as NonNullable<NonNullable<ConstructorParameters<typeof LlmError>[2]>['requestId']>} : {})})
       throw new LlmError(`OpenCode request failed${status ? `: HTTP ${status}` : ''}`, status === 401 || status === 403 ? 'AUTH' : status === 429 ? 'RATE_LIMIT' : status && status >= 500 ? 'SERVER' : status ? 'PROVIDER_ERROR' : 'TRANSPORT', { ...(status !== undefined ? {status} : {}), ...(retry !== undefined && retry > 0 ? { providerRetryAfterMs: retry } : {}), ...(typeof requestId === 'string' && requestId.trim() ? { requestId: requestId as NonNullable<NonNullable<ConstructorParameters<typeof LlmError>[2]>['requestId']> } : {}) })
     } finally { clearTimeout(timer); abort.abort(); if (reader) { void reader.cancel().catch(() => undefined); reader.releaseLock() } }
   }

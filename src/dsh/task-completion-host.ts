@@ -1,10 +1,11 @@
+import { completionInputError } from './task-completion-guidance.js'
 import { ProtocolRecipeSchema } from './guardrail/contracts.js'
 import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { KiokukoError } from '../errors.js'
 import { foregroundNativeCommand } from './memory-application.js'
 import { assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, CompletionMethodSchema,
-  finishTaskCompletionExecution, readTaskCriterionBindingReplay, saveTaskCompletionReceipt } from './task-completion.js'
+  finishTaskCompletionExecution, readTaskCriterionBindingReplay, saveTaskCompletionReceipt, taskCompletionBindingGuide } from './task-completion.js'
 import { authorizeTaskLease, type TaskLease, type TaskAuthorityExecution } from './task-state.js'
 import { captureExecutionTaskLease } from './task-authority-context.js'
 import { withImmediateTransaction } from '../db/transaction.js'
@@ -26,9 +27,9 @@ const input = z.discriminatedUnion('action', [
 ])
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
   method: z.object({ kind: z.enum(['native_command', 'enno_verifier']), command: z.string().optional(),
-    cwd: z.string().optional(), sourcePaths: z.array(z.string()).optional(), verifierId: z.string().optional(), workUnitId: z.string().optional(),
+    cwd: z.string().optional(), sourcePaths: z.array(z.string()).describe('Required for native_command: at least one current repository-relative implementation/test path; include an asserted artifact.').optional(), verifierId: z.string().optional(), workUnitId: z.string().optional(),
     protocol: ProtocolRecipeSchema.optional(),
-    assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
+    assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).describe('Match the criterion evidence. output_matches requires expectedOutput; artifact_matches requires artifactPath, artifactSha256, and artifact in sourcePaths. Coding never accepts exit_zero alone.').optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
 }).strict()
 
 /** A model proposes a check; the host owns identity, approval, observation and verdict. */
@@ -36,7 +37,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
   const pending = new WeakMap<object, { runId: string; callId: string; agent: object; sessionId: string; lease: TaskLease }>()
   const disposers: (() => void)[] = []
   disposers.push(ctx.tools.register({ name: 'task_completion', modelFacing: true,
-    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence.',
+    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. For native_command supply command, cwd, nonempty sourcePaths and assertion. For enno_verifier use the current approved verifierId and its assertion; the methods are not interchangeable. Read status for criterion-specific requirements.',
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
@@ -45,8 +46,11 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
         throw new KiokukoError('CONFLICT', 'Task completion requires an exact active native run')
       }
       execution.signal.throwIfAborted()
-      const parsed = input.parse(args)
-      if (parsed.action === 'status') return host.runtime.withDatabase(db => saveTaskCompletionReceipt(db, identity.runId))
+      const validation=input.safeParse(args)
+      if(!validation.success)throw completionInputError(validation.error.issues.map(issue=>({field:issue.path.map(String).join('.')||'input',
+        reason:issue.code==='custom'?issue.message:'Missing, invalid or unexpected field for this action/method'})))
+      const parsed=validation.data
+      if (parsed.action === 'status') return host.runtime.withDatabase(db => ({...saveTaskCompletionReceipt(db, identity.runId),bindingGuide:taskCompletionBindingGuide(db,identity.runId)}))
       const replay = await host.runtime.withDatabase(db => readTaskCriterionBindingReplay(db, identity.runId,
         execution.callId, parsed.criterionId, parsed.method))
       if (replay) return replay
@@ -57,7 +61,11 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new KiokukoError('CONFLICT', 'Native task changed during completion review')
       return host.runtime.withDatabase(db => bindTaskCriterion(db, { runId: identity.runId, callId: execution.callId,
-        criterionId: parsed.criterionId, method: parsed.method, approved }))
+        criterionId: parsed.criterionId, method: parsed.method, approved })).catch(error=>{
+          if(error instanceof KiokukoError&&error.code==='VALIDATION_ERROR')throw completionInputError([{field:typeof error.details.field==='string'?error.details.field:'method',
+            reason:error.message,...(typeof error.details.expected==='string'?{expected:error.details.expected}:{})}])
+          throw error
+        })
     },
   }))
   disposers.push(ctx.on('tools/pre-execute', async (execution: NativeExecution, next: () => Promise<unknown>) => {

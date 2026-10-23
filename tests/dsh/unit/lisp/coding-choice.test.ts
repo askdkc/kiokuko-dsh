@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createLispCodingChoice, type LispCodingInput } from '../../../../src/dsh/lisp/coding-choice.js'
-import { LispCodingCancelled } from '../../../../src/dsh/lisp/coding-question.js'
+import { LispCodingCancelled } from '../../../../src/dsh/coding-question.js'
 import { ExecutionSelectionPending } from '../../../../src/dsh/model-selection-ui.js'
 
 function fixture(answers: Array<{ selected: string[]; custom?: string }>) {

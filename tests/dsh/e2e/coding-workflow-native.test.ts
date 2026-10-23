@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { openConnection } from '../../../src/db/connection.js'
@@ -25,7 +25,12 @@ const extra = { lisp: { enabled: true, startupTimeoutMs: 60000 }, answerReview: 
 for (const choice of ['使わない', '使う'] as const) test(`native coding session ${choice}: real artifact, item evidence, fresh user-entry Goal`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, mode: 'full', extra, nativeAnswer: async request => {
-    const question = request.questions[0]; questions.push(question)
+    const question = request.questions[0]
+    questions.push(question)
+    if (question.id.startsWith('lisp-early-')) {
+      assert.equal(f.model.requests.length,0); assert.equal(existsSync(join(f.dir,'src/parser.mjs')),false)
+      return { answers: [{ id: question.id, selected: [choice] }] }
+    }
     if (question.id.startsWith('coding-lisp-')) {
       assert.match(question.detail, /Goal:.*public parser/u)
       assert.match(question.detail, /regression assertions/u)
@@ -64,7 +69,9 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     await f.turn('Implement src/parser.mjs so the public command adds one to its numeric input. 通常実行で。')
     assert.equal(execFileSync(process.execPath, ['src/parser.mjs', '41'], { cwd: f.dir, encoding: 'utf8' }).trim(), '42')
     assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), program)
-    assert.equal(questions.filter(question => question.id.startsWith('coding-lisp-')).length, 1)
+    assert.equal(questions.filter(question=>question.id.startsWith('lisp-early-')).length,1)
+    assert.equal(questions.filter(question=>question.id.startsWith('coding-lisp-')).length,0, 'the same Goal reuses its genuine early human answer')
+    assert.equal(questions.filter(question=>/^(?:lisp-early-|coding-lisp-)/u.test(question.id)).length,1, 'unrelated execution-mode questions do not reopen the Lisp choice')
     const db = openConnection(join(f.dir, 'state.sqlite3'))
     try {
       assert.equal(db.prepare('SELECT status FROM ledger_runs').get<any>().status, 'completed')
@@ -77,34 +84,30 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
   } finally { await f.close() }
 })
 
-for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) test(`native coding ${answer}: no effects, reads and explanation remain available`, { skip: !installed, timeout: 30000 }, async () => {
+for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) test(`native early coding ${answer}: no model or implementation dispatch`, { skip: !installed, timeout: 30000 }, async () => {
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, extra, nativeAnswer: async request => {
-    const question = request.questions[0]
-    if (!question.id.startsWith('coding-lisp-')) return { answers: [{ id: question.id, selected: ['通常実行'] }] }
-    if (answer === 'disconnected') throw new Error('Disconnected')
-    return { answers: answer === 'closed' ? [] : [{ id: question.id, selected: answer === 'cancel' ? ['取消・作業を保持'] : [] }] }
+    const question=request.questions[0]
+    assert.ok(question.id.startsWith('lisp-early-'))
+    if(answer==='disconnected')throw new Error('Disconnected')
+    return {answers:answer==='closed'?[]:[{id:question.id,selected:answer==='cancel'?['取消・作業を保持']:[]}]}
   } })
   try {
-    f.responses.push(...codingPrelude(f.mock, 'pending'), f.mock.toolCallResponse('premature', 'kioku_write', { path: 'must-not-exist', content: 'wrong' }),
-      f.mock.toolCallResponse('state', 'coding_workflow', { action: 'status' }), (request: any) => {
-        assert.ok(nativeToolResults(request.messages).find(value => value.toolCallId === 'premature')?.isError)
-        const state = toolValue(request, 'state'); assert.equal(state.choice.state, answer === 'cancel' ? 'cancelled' : 'pending')
-        return f.mock.textResponse('Implementation is waiting for this task’s Lisp choice. The prepared Goal is preserved.')
-      })
-    await f.turn('Implement src/parser.mjs. 通常実行で。')
-    assert.equal(existsSync(join(f.dir, 'must-not-exist')), false)
-    const db = openConnection(join(f.dir, 'state.sqlite3')); try {
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_sessions WHERE enabled=1').get<any>().n, 0)
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_owned_operations').get<any>().n, 0)
-    } finally { db.close() }
-  } finally { await f.close() }
+    f.responses.push(...codingPrelude(f.mock,'must-not-run'),f.mock.toolCallResponse('premature','kioku_write',{path:'must-not-exist',content:'wrong'}))
+    const turn=f.turn('Implement src/parser.mjs. 通常実行で。')
+    if(answer==='closed'||answer==='disconnected')await assert.rejects(turn)
+    else await turn
+    assert.equal(f.model.requests.length,0,'cancelled or unavailable choice cannot dispatch the implementation model')
+    assert.equal(existsSync(join(f.dir,'must-not-exist')),false)
+    const db=openConnection(join(f.dir,'state.sqlite3'))
+    try {assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_owned_operations').get<any>().n,0)} finally {db.close()}
+  } finally {await f.close()}
 })
 
 for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new task requires a new choice even with the previous Lisp runtime enabled`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: mode === 'full', mode, extra, nativeAnswer: async request => {
     const question = request.questions[0]
-    const coding = question.id.startsWith('coding-lisp-')
+    const coding = question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')
     if (coding) questions.push(question)
     return { answers: [{ id: question.id, selected: [coding ? questions.length === 1 ? '使う' : '使わない' : '通常実行'] }] }
   } })
@@ -128,33 +131,27 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
   } finally { await f.close() }
 })
 
-test('native core reload restores the exact pending task and question before allowing an ordinary write', { skip: !installed, timeout: 120000 }, async () => {
-  const questions: any[] = []
-  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: false, mode: 'compiled', extra, nativeAnswer: async request => {
-    const question = request.questions[0]
-    if (question.id.startsWith('coding-lisp-')) {
-      questions.push(question)
-      return { answers: [{ id: question.id, selected: questions.length === 1 ? [] : ['使わない'] }] }
-    }
-    return { answers: [{ id: question.id, selected: ['通常実行'] }] }
-  } })
-  try {
-    f.responses.push(...codingPrelude(f.mock, 'pending-reload'), f.mock.textResponse('The Goal is preserved while the task choice is pending.'))
-    await f.turn('Implement src/parser.mjs. 通常実行で。完了条件: public entry outputs 42')
-    assert.equal(existsSync(join(f.dir, 'src/parser.mjs')), false)
+test('native core reload after cancellation preserves work and admits a fresh explicit request', {skip:!installed,timeout:120000},async()=>{
+  const questions:any[]=[]
+  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:false,mode:'compiled',extra,nativeAnswer:async request=>{
+    const question=request.questions[0];questions.push(question)
+    return {answers:[{id:question.id,selected:[questions.length===1?'取消・作業を保持':'使わない']}]}
+  }})
+  try{
+    await writeFile(join(f.dir,'kept.txt'),'existing work')
+    f.responses.push(...codingPrelude(f.mock,'cancelled-must-not-run'))
+    await f.turn('Implement src/parser.mjs. 通常実行で。')
+    assert.equal(f.model.requests.length,0);assert.equal(existsSync(join(f.dir,'src/parser.mjs')),false)
     await f.reload('compiled')
-    f.responses.push(interpretedPreparation(f.mock, 'resume-prepare', 'same_scope_continuation', 'change'),
-      (request: any) => { toolValue(request, 'resume-prepare'); return f.mock.toolCallResponse('resume-task', 'coding_workflow', { action: 'next' }) },
-      f.mock.toolCallResponse('resumed-write', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' }),
-      f.mock.toolCallResponse('resumed-state', 'coding_workflow', { action: 'status' }),
-      (request: any) => {
-        const state = toolValue(request, 'resumed-state')
-        assert.equal(state.workflowId, toolValue(request, 'pending-reload-propose').workflowId)
-        assert.equal(state.choice.state, 'no'); assert.equal(state.assessment.verified, false)
-        return f.mock.textResponse('The same task resumed; its acceptance checks remain pending.')
-      })
-    await f.turn('Continue the current task.')
-    assert.equal(questions.length, 2); assert.equal(questions[0].id, questions[1].id)
-    assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), 'console.log(42)\n')
-  } finally { await f.close() }
+    f.responses.splice(0)
+    f.responses.push(...codingPrelude(f.mock,'fresh'),f.mock.toolCallResponse('fresh-write','kioku_write',{path:'src/parser.mjs',content:'console.log(42)\n'}),f.mock.toolCallResponse('fresh-state','coding_workflow',{action:'status'}),(request:any)=>{
+      assert.equal(toolValue(request,'fresh-state').choice.state,'no')
+      assert.equal(toolValue(request,'fresh-write').applied,true)
+      return f.mock.textResponse('The new explicit implementation is active; its verification remains pending.')
+    })
+    await f.turn('Implement src/parser.mjs now. 通常実行で。')
+    assert.equal(questions.length,2);assert.notEqual(questions[0].id,questions[1].id)
+    assert.equal(await readFile(join(f.dir,'kept.txt'),'utf8'),'existing work')
+    assert.equal(await readFile(join(f.dir,'src/parser.mjs'),'utf8'),'console.log(42)\n')
+  }finally{await f.close()}
 })

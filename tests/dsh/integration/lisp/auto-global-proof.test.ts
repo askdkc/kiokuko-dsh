@@ -57,7 +57,7 @@ test('historical protected Lisp CI retains exact proof without automatic globali
       if (mutateNextWorkspace && request.kind === 'verify' && request.location !== 'scratch') {
         mutateNextWorkspace = false
         await writeFile(join(root,'check.mjs'),'process.exit(0); // changed during verifier')
-        return {target:request.target,script:'test',state:'SUCCEEDED',code:0,stdout:'',stderr:''}
+        return adapter(subject,request,signal,scratch)
       }
       return adapter(subject,request,signal,scratch)
     },verifiedCall:evidence.afterEval})
