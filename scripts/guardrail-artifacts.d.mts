@@ -11,3 +11,6 @@ export interface ResolvedGuardrail {
 }
 /** Verify bundled file identities and format synchronously; no execution or network fallback. */
 export function resolveGuardrail(root: string, options?: GuardrailResolveOptions): ResolvedGuardrail
+
+/** Verify the frozen source and release provenance in a repository checkout. */
+export function verifyGuardrailSource(root: string): string

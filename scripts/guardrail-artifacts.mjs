@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from 'node:fs'
+import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, existsSync, realpathSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -93,6 +93,7 @@ function indexAt(root) {
   if (digest(bytes) !== metadata.guardrail.manifestSha256) fail('package manifest digest integrity mismatch')
   const index = json(bytes, 'guardrail manifest')
   if (index.schema !== 1 || index.package !== 'kiokuko-guardrail' || typeof index.version !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][a-zA-Z0-9.-]+)?$/u.test(index.version) || !record(index.targets) || !record(index.protocol) || index.protocol.path !== 'guardrail/protocols/coding-routine.lisp') fail('guardrail manifest identity/schema mismatch')
+  if (!hex(index.sourceSha256) || !record(index.buildRecords) || index.buildRecords.path !== 'guardrail/build-records.json' || !hex(index.buildRecords.sha256)) fail('missing release source/build record identity')
   if (Object.keys(index.targets).length === 0) fail('guardrail manifest declares no bundled targets')
   if (!Array.isArray(index.unavailableTargets) || Object.keys(index.targets).some(target => !Object.values(targets).includes(target)) || index.unavailableTargets.some(target => !Object.values(targets).includes(target) || target in index.targets)) fail('guardrail manifest target declaration mismatch')
   return { index, manifestDigest: digest(bytes) }
@@ -111,13 +112,43 @@ export function resolveGuardrail(root, options = {}) {
   const releaseBytes = regularBytes(root, entry.manifest, 1024 * 1024)
   if (digest(releaseBytes) !== entry.manifestSha256) fail('target manifest digest integrity mismatch')
   const release = json(releaseBytes, 'target manifest')
-  if (release.schema !== 1 || release.package !== index.package || release.target !== target || release.version !== index.version || release.build_inputs?.target !== target || !hex(release.source_sha256)) fail('release manifest identity mismatch')
+  if (release.schema !== 1 || release.package !== index.package || release.target !== target || release.version !== index.version || release.build_inputs?.target !== target || release.source_sha256 !== index.sourceSha256) fail('release manifest identity mismatch')
   const binary = regularBytes(root, entry.binary, 16 * 1024 * 1024, true)
   matches(binary, entry, 'engine'); matches(binary, release.artifacts?.['bin/kiokuko-guardrail'], 'release engine')
   executableHeader(binary, target)
+  const recordsBytes = regularBytes(root, index.buildRecords.path, 1024 * 1024)
+  matches(recordsBytes, index.buildRecords, 'build records')
+  const records = json(recordsBytes, 'build records'), build = records.targets?.[target]
+  if (records.schema !== 1 || records.sourceSha256 !== index.sourceSha256 || !record(build) || build.sourceSha256 !== index.sourceSha256 || build.target !== target || build.binarySha256 !== digest(binary) || build.packageSha256 !== entry.verification?.package_sha256 || build.independentBuildsEqual !== true || !Array.isArray(build.builds) || build.builds.length !== 2 || build.builds.some(run => !record(run) || run.exitCode !== 0 || run.binarySha256 !== digest(binary) || !hex(run.stdoutSha256) || !hex(run.stderrSha256)) || build.nativeSmoke !== entry.verification?.native_smoke || entry.verification?.source_sha256 !== index.sourceSha256 || !hex(build.builderSha256) || !hex(build.linkerSha256) || build.cargoSha256 !== release.build_inputs.cargo_sha256 || build.rustcSha256 !== release.build_inputs.rustc_sha256) fail('build record/source/output integrity mismatch')
   const protocol = regularBytes(root, index.protocol.path, 256 * 1024)
   matches(protocol, index.protocol, 'protocol'); matches(protocol, release.artifacts?.['protocols/coding-routine.lisp'], 'release protocol')
   return { binary: join(root, entry.binary), protocol: join(root, index.protocol.path), engineDigest: digest(binary), protocolFileDigest: digest(protocol), manifestDigest, version: index.version, target }
+}
+
+/** Repository-only source check. Packaged consumers deliberately do not carry Rust source. */
+export function verifyGuardrailSource(root) {
+  root = resolve(root)
+  const { index } = indexAt(root)
+  const crate = join(root, 'crates/guardrail')
+  if (!existsSync(crate)) fail('source verification requires the repository crate')
+  function walk(prefix = '') {
+    return readdirSync(join(crate, prefix), { withFileTypes: true }).flatMap(entry => {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name
+      if (entry.isSymbolicLink()) fail(`source symlink is forbidden: ${path}`)
+      return entry.isDirectory() ? walk(path) : [path]
+    }).sort()
+  }
+  const source = json(regularBytes(root, 'crates/guardrail-release/source-manifest.json', 1024 * 1024), 'source manifest')
+  const files = Object.fromEntries(walk().map(path => [path, digest(regularBytes(crate, path, 1024 * 1024))]))
+  if (JSON.stringify(files) !== JSON.stringify(source.files) || digest(JSON.stringify(files)) !== source.sourceSha256 || source.sourceSha256 !== index.sourceSha256) fail('current source identity mismatch')
+  const provenance = json(regularBytes(root, 'crates/guardrail-release/release-provenance.json', 1024 * 1024), 'release provenance')
+  if (provenance.source_sha256 !== source.sourceSha256 || provenance.build_records_sha256 !== index.buildRecords.sha256) fail('release provenance source/build record mismatch')
+  if (provenance.build_runner_sha256 !== digest(regularBytes(root, 'crates/guardrail-release/release.py', 1024 * 1024))) fail('build runner identity mismatch')
+  for (const [target, entry] of Object.entries(index.targets)) {
+    const releaseBytes = regularBytes(root, entry.manifest, 1024 * 1024), release = json(releaseBytes, 'target manifest')
+    if (JSON.stringify(release.sources) !== JSON.stringify(files) || release.source_sha256 !== source.sourceSha256 || provenance.package_manifests?.[target]?.sha256 !== digest(releaseBytes)) fail('target current source/provenance mismatch')
+  }
+  return source.sourceSha256
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -128,6 +159,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.me
     if (process.argv[2] === '--check-host') console.log(JSON.stringify(resolveGuardrail(root)))
     else {
       const { index } = indexAt(root)
+      if (existsSync(join(root, 'crates/guardrail'))) verifyGuardrailSource(root)
       for (const entry of Object.values(index.targets)) resolveGuardrail(root, { platform: entry.platform, arch: entry.arch })
       if (!quiet) console.log(JSON.stringify({ verifiedTargets: Object.keys(index.targets), unavailableTargets: index.unavailableTargets, nativeExecutionClaim: false, verification: Object.fromEntries(Object.entries(index.targets).map(([target, entry]) => [target, entry.verification])) }))
     }

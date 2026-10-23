@@ -1,3 +1,4 @@
+import { consumerInstallEnvironment } from './pack-install-environment.mjs'
 import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { observeProcess, processDiagnostic } from './verification-diagnostics.mjs'
@@ -333,7 +334,7 @@ async function createAndSmokeTestTarball() {
   })
   await writeFile(join(consumerRoot, 'package.json'), '{"private":true,"type":"module"}\n')
   const installation = await observeProcess(signal => exec('npm', ['install', '--ignore-scripts', '--omit=optional', '--no-audit', '--no-fund', tarball], {
-    cwd: consumerRoot, env: { PATH: process.env.PATH, HOME: work, npm_config_cache: cache },
+    cwd: consumerRoot, env: consumerInstallEnvironment(process.env, { home: work, cache }),
     signal, killSignal: 'SIGTERM', maxBuffer: 16 * 1024 * 1024,
   }), { point: 'pack-install', timeoutMs: 180_000 })
   process.stderr.write(`${JSON.stringify(installation.diagnostic)}\n`)

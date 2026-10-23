@@ -1,5 +1,5 @@
 import { ProtocolRecipeSchema, PROTOCOL_CAPABILITIES } from './guardrail/contracts.js'
-import { enrollProtocol, invalidateProtocolBinding, protocolCompletionReady } from './guardrail/service.js'
+import { enrollProtocol, invalidateProtocolBinding, protocolCompletionReady, unresolvedManaged } from './guardrail/service.js'
 import { realpathSync, existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
@@ -49,7 +49,8 @@ export type CompletionAssessment = {
   required: number
   criteria: CriterionAssessment[]
   workflowReady?: boolean
-  coding?: { workflowId: string; state: string; scopeVersion: number; protocol?: {kind:'bounded-tdd-v1';phase:string;generation:number;capabilities:typeof PROTOCOL_CAPABILITIES}; goalCriterionIds: string[]; itemCriterionIds: string[] }
+  managedOperationsReady?: boolean
+  coding?: { workflowId: string; state: string; scopeVersion: number; protocol?: {kind:'bounded-tdd-v1';phase:string;reason?:string;generation:number;capabilities:typeof PROTOCOL_CAPABILITIES}; goalCriterionIds: string[]; itemCriterionIds: string[] }
 }
 interface CompletionCriterion { id: string; description: string; revision: number; approval: 'explicit' | 'approved' }
 interface BindingRow extends SqliteRow { criterion_id: string; criterion_revision: number; method_json: string; method_digest: string; approved: number }
@@ -312,6 +313,7 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
         : execution.outcome === 'passed' && complete ? 'observed_command' : method.assertion === 'exit_zero' && hasShellPipeline(method.command) ? 'pipeline_stage_status_unknown_use_direct_verifier' : 'coverage_unknown',
       evidenceRef: execution.call_id }
   })
+  const managedOperationsReady=!unresolvedManaged(database,runId)
   const workflowReady=!coding||Boolean(protocolCompletionReady(database,runId)&&coding.definition&&['yes','no'].includes(coding.choice.state)&&!['cancelled','superseded','blocked'].includes(coding.state))
   if (coding?.definition) {
     const find = (id: string) => assessments.find(item => item.criterionId === `coding:${coding.workflowId}:${id}`)!
@@ -339,8 +341,8 @@ export function assessTaskCompletion(database: SqliteDatabase, runId: string): C
       }
     }
   }
-  return { mode: runMode(database, runId), verified: workflowReady&&assessments.length > 0 && assessments.every(item => item.state === 'satisfied'),
-    required: assessments.length, criteria: assessments, ...(coding?{workflowReady,coding:{workflowId:coding.workflowId,state:coding.state,scopeVersion:coding.scopeVersion,...(coding.protocol?{protocol:{kind:coding.protocol.recipe.kind,phase:coding.protocol.phase,generation:coding.protocol.generation,capabilities:PROTOCOL_CAPABILITIES}}:{}),
+  return { mode: runMode(database, runId), managedOperationsReady, verified: managedOperationsReady&&workflowReady&&assessments.length > 0 && assessments.every(item => item.state === 'satisfied'),
+    required: assessments.length, criteria: assessments, ...(coding?{workflowReady,coding:{workflowId:coding.workflowId,state:coding.state,scopeVersion:coding.scopeVersion,...(coding.protocol?{protocol:{kind:coding.protocol.recipe.kind,phase:coding.protocol.schema===2?coding.protocol.phase:'rebind-required',...(coding.protocol.schema!==2?{reason:'Legacy schema 1 evidence is retained read-only; explicitly rebind this unit'}:coding.protocol.reason?{reason:coding.protocol.reason}:{}),generation:coding.protocol.generation,capabilities:PROTOCOL_CAPABILITIES}}:{}),
       goalCriterionIds:(coding.definition?.goal.criterionIds??[]).map(id=>`coding:${coding.workflowId}:${id}`),itemCriterionIds:(coding.definition?.items??[]).flatMap(item=>item.criterionIds.map(id=>`coding:${coding.workflowId}:${id}`))}}:{}) }
 }
 
@@ -354,7 +356,7 @@ export function saveTaskCompletionReceipt(database: SqliteDatabase, runId: strin
 }
 
 export function taskCompletionBlocksClose(assessment: CompletionAssessment): boolean {
-  return assessment.mode === 'enforce' && (assessment.required > 0 || assessment.workflowReady!==undefined) && !assessment.verified
+  return assessment.managedOperationsReady===false || assessment.mode === 'enforce' && (assessment.required > 0 || assessment.workflowReady!==undefined) && !assessment.verified
 }
 
 /** Include the consumer configuration and runtime alongside selected source paths. */

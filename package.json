@@ -346,7 +346,7 @@
   },
   "guardrail": {
     "manifest": "guardrail/manifest.json",
-    "manifestSha256": "8da49d55f6bb7b8ccf2717f6680e439adda3d7347fb77de39f77566dd6a6d2b1",
+    "manifestSha256": "d001ddccda7a8c47abcb6ea2f5b67c1fd4452593e3750c3bd20ffa087a773297",
     "availability": "Bundled Linux x64/arm64 static musl and macOS Apple Silicon (ARM64). Intel Mac is unsupported. Only Linux x64 native smoke was recorded for the bundled release. Missing or invalid host artifact blocks protocol enrollment.",
     "verification": "npm run verify:guardrail validates bundled identities without executing cross-built binaries; npm run check:guardrail checks current host availability."
   }

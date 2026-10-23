@@ -17,6 +17,7 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
   const db = new NodeSqliteAdapter(path, new DatabaseSync(path))
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new Context(), definitions = new Map<string, any>(), commands = new Map<string, any>()
   const sections = new Map<string, string>()

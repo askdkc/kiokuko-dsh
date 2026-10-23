@@ -58,13 +58,19 @@ test('actual Rust RED opens one multi-file unit; frozen tests, GREEN and restart
     f.bind(); assert.equal(f.phase(), 'write-tests')
     await denied(() => f.execute('kioku_write', { path: 'src/a.mjs', content: 'export const a=1;\n' }, 'early'), /RED|phase|protocol/i)
     assert.equal(await readFile(join(f.root, 'src/a.mjs'), 'utf8'), 'export const a=0;\n')
-    const red = await f.red(); assert.equal(red.receipt.processStopped,true,'actual protocol child termination must be observed'); assert.equal(red.exitCode, 1); assert.equal(f.phase(), 'implement')
+    const red = await f.red(); assert.equal(red.receipt.processStopped,true,`actual protocol child termination must be observed: ${JSON.stringify(red.receipt)}`); assert.equal(red.exitCode, 1); assert.equal(f.phase(), 'implement')
     const before = await readFile(join(f.root, 'tests/unit.test.mjs'), 'utf8')
     await denied(() => f.execute('kioku_write', { path: 'tests/unit.test.mjs', content: '// bypass' }, 'change-tests'), /frozen|test|protocol/i)
     const a = await f.execute('kioku_write', { path: 'src/a.mjs', content: 'export const a=1;\n' }, 'edit-a'); assert.equal(a.applied, true)
     const b = await f.execute('kioku_write', { path: 'src/b.mjs', content: 'export const b=1;\n' }, 'edit-b'); assert.equal(b.applied, true)
     assert.equal(f.phase(), 'implement'); assert.equal(await readFile(join(f.root, 'tests/unit.test.mjs'), 'utf8'), before)
     const green = await f.execute('kioku_exec', { command: f.command }, 'green'); assert.equal(green.exitCode, 0); assert.equal(f.phase(), 'report')
+    const proof=readCodingWorkflow(f.db,f.identity.runId)!.protocol!
+    assert.equal(proof.schema,2);assert.equal(proof.red!.outcome,'assertion-failure');assert.equal(proof.green!.outcome,'passed')
+    const {ManagedOperationJournal}=await import('../../../src/dsh/managed-operation-journal.js')
+    const audit=new ManagedOperationJournal(f.db)
+    assert.equal(audit.readSnapshot(proof.red!.snapshot.snapshotId).operations[0]!.outcome,'failed','valid RED remains a failed execution in immutable audit')
+    assert.equal(audit.readSnapshot(proof.green!.snapshot.snapshotId).operations[0]!.outcome,'succeeded')
     await f.restart()
     const replay = await f.execute('kioku_write', { path: 'src/a.mjs', content: 'export const a=1;\n' }, 'edit-a')
     assert.equal(replay.replayed, true); assert.equal(f.phase(), 'report')
@@ -235,10 +241,10 @@ test('trusted RED receipts reject altered issuer, task, generation and input ide
   try {
     f.bind();await f.red()
     const original=readCodingWorkflow(f.db,f.identity.runId)!.protocol!.red!
-    const cases:Record<string,unknown>={issuer:'model:caller',id:'reused-other-receipt',generation:original.generation+1,sourceDigest:'0'.repeat(64),testDigest:'0'.repeat(64),commandDigest:'0'.repeat(64),runtimeDigest:'0'.repeat(64),task:{...original.task,revision:original.task.revision+1}}
+    const cases:Record<string,unknown>={schema:1,workerGeneration:'foreign-worker',snapshot:{...original.snapshot,digest:'0'.repeat(64)},issuer:'model:caller',id:'reused-other-receipt',generation:original.generation+1,sourceDigest:'0'.repeat(64),testDigest:'0'.repeat(64),commandDigest:'0'.repeat(64),runtimeDigest:'0'.repeat(64),task:{...original.task,revision:original.task.revision+1}}
     for(const [field,value]of Object.entries(cases)){
       f.db.prepare("UPDATE dsh_coding_workflows SET snapshot_json=json_set(snapshot_json,'$.protocol.red',json(?)) WHERE run_id=?").run(JSON.stringify({...original,[field]:value}),f.identity.runId)
-      await denied(()=>f.execute('kioku_write',{path:'src/a.mjs',content:'bypass'},`tampered-${field}`),/receipt|issuer|binding|protocol/i)
+      await denied(()=>f.execute('kioku_write',{path:'src/a.mjs',content:'bypass'},`tampered-${field}`),/receipt|issuer|binding|protocol|rebind-required/i)
       assert.equal(await readFile(join(f.root,'src/a.mjs'),'utf8'),'export const a=0;\n')
     }
     f.db.prepare("UPDATE dsh_coding_workflows SET snapshot_json=json_set(snapshot_json,'$.protocol.red',json(?)) WHERE run_id=?").run(JSON.stringify(original),f.identity.runId)
@@ -283,7 +289,7 @@ test('completion status separates protocol, owned effects and isolation capabili
   try {
     f.bind()
     const status=assessTaskCompletion(f.db,f.identity.runId) as any
-    assert.deepEqual(status.coding?.protocol?.capabilities,{validation:'bounded-cl-v1',ownedEffects:'lease-transactional-v1',nodeTests:'process-only',lispEffects:'protected-required',rollback:false,heapRestoration:false})
+    assert.deepEqual(status.coding?.protocol?.capabilities,{validation:'bounded-cl-v1',evidence:'schema-2',managedAudit:'journal-v1',ownedEffects:'lease-transactional-v1',nodeTests:'process-only',lispEffects:'protected-required',rollback:false,heapRestoration:false})
     assert.equal(status.coding.protocol.phase,'write-tests')
     assert.equal(status.coding.protocol.kind,'bounded-tdd-v1')
   } finally {await f.close()}
@@ -329,4 +335,70 @@ test('protocol cancellation retains observed process stop without granting RED',
     assert.equal(result.receipt.processStarted,true);assert.equal(result.receipt.processStopped,true)
     assert.equal(result.receipt.cancelled,true);assert.notEqual(f.phase(),'implement')
   }finally{childProcess.spawn=original;syncBuiltinESMExports();await f.close()}
+})
+
+test('legacy schema 1 is retained read-only and blocks only the enrolled unit pending rebind',async()=>{
+  const f=await fixture()
+  try {
+    f.bind()
+    f.db.prepare("UPDATE dsh_coding_workflows SET snapshot_json=json_set(snapshot_json,'$.protocol.schema',1) WHERE run_id=?").run(f.identity.runId)
+    const {readProtocol,protocolCompletionReady}=await import('../../../src/dsh/guardrail/service.js')
+    assert.match(readProtocol(f.db,f.identity.runId)!.reason!,/rebind-required/)
+    const status=codingStatus(f.db,f.identity)
+    assert.ok(status.applicable);if(status.applicable)assert.match(status.protocol!.reason!,/rebind-required/)
+    assert.equal(readCodingWorkflow(f.db,f.identity.runId)!.protocol!.schema,1,'the legacy original is not silently migrated')
+    assert.equal(protocolCompletionReady(f.db,f.identity.runId),false)
+    const read=await f.execute('kioku_read',{path:'src/a.mjs'},'legacy-read')
+    assert.equal(read.content,'export const a=0;\n')
+    await denied(()=>f.execute('kioku_write',{path:'tests/unit.test.mjs',content:failingTest},'legacy-write'),/rebind-required/)
+    assert.equal(await readFile(join(f.root,'tests/unit.test.mjs'),'utf8'),'// Tests will be written through the owned route.\n')
+  } finally {await f.close()}
+})
+
+test('an unknown sibling operation cannot be hidden by a new test ID, rebind or completion',async()=>{
+  const f=await fixture()
+  try {
+    f.bind();await f.red()
+    const {ManagedOperationJournal}=await import('../../../src/dsh/managed-operation-journal.js')
+    const journal=new ManagedOperationJournal(f.db)
+    const scope=journal.createScope({sessionId:f.identity.sessionId,parentId:'uncertain-sibling',runtimeIdentity:'fixture',binding:{taskId:f.identity.runId}})
+    const operation=journal.prepare(scope.scopeId,{route:'owned',kind:'process',request:{command:'fixture'}})
+    assert.equal(journal.claim(operation.operationId),true)
+    journal.transition(operation.operationId,{state:'unknown',cause:'timeout'})
+    journal.seal(scope.scopeId)
+    await denied(()=>f.execute('kioku_write',{path:'src/a.mjs',content:'bypass'},'after-unknown'),/unresolved|reconciliation/i)
+    assert.throws(()=>f.rebind({},'rebind-unknown'),/unresolved|reconciliation/i)
+    const {protocolCompletionReady}=await import('../../../src/dsh/guardrail/service.js')
+    assert.equal(protocolCompletionReady(f.db,f.identity.runId),false)
+    assert.equal(journal.readOperation(operation.operationId).state,'unknown')
+    assert.equal(await readFile(join(f.root,'src/a.mjs'),'utf8'),'export const a=0;\n')
+  } finally {await f.close()}
+})
+
+test('nested owned bridge uses sealed child proof without prematurely sealing its evaluation',async()=>{
+  const f=await fixture()
+  try {
+    f.bind()
+    const {ManagedOperationJournal}=await import('../../../src/dsh/managed-operation-journal.js')
+    const {runManagedOperation}=await import('../../../src/dsh/managed-operation-runner.js')
+    const {protocolCompletionReady}=await import('../../../src/dsh/guardrail/service.js')
+    const journal=new ManagedOperationJournal(f.db),database=async <T>(fn:(db:typeof f.db)=>T)=>fn(f.db)
+    const evaluation=journal.createScope({sessionId:f.identity.sessionId,parentId:'evaluation',runtimeIdentity:'fixture'})
+    const bridge=(name:string,args:any,id:string)=>runManagedOperation({database,scopeId:evaluation.scopeId},{route:'owned',kind:name==='kioku_exec'?'process':'file',request:{name,args}},()=>f.execute(name,args,id)) as Promise<any>
+    await bridge('kioku_write',{path:'tests/unit.test.mjs',content:failingTest},'nested-tests')
+    assert.equal((await bridge('kioku_exec',{command:f.command},'nested-red')).exitCode,1)
+    assert.equal(f.phase(),'implement')
+    await bridge('kioku_write',{path:'src/a.mjs',content:'export const a=1;\n'},'nested-a')
+    await bridge('kioku_write',{path:'src/b.mjs',content:'export const b=1;\n'},'nested-b')
+    assert.equal((await bridge('kioku_exec',{command:f.command},'nested-green')).exitCode,0)
+    assert.equal(f.phase(),'report')
+    assert.equal(journal.snapshot(evaluation.scopeId).sealed,false,'a child cannot seal its containing evaluation')
+    assert.equal(protocolCompletionReady(f.db,f.identity.runId),false,'an open task-bound collector is not complete')
+    const proof=readCodingWorkflow(f.db,f.identity.runId)!.protocol!.green!
+    const child=journal.readSnapshot(proof.snapshot.snapshotId)
+    assert.equal(child.sealed,true);assert.notEqual(child.scopeId,evaluation.scopeId)
+    assert.equal(journal.readOperation(child.scope.parentId).scopeId,evaluation.scopeId)
+    journal.seal(evaluation.scopeId)
+    assert.equal(protocolCompletionReady(f.db,f.identity.runId),true)
+  } finally {await f.close()}
 })

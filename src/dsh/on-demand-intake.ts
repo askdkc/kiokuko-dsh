@@ -36,7 +36,7 @@ function parsePreparationRequest(value: unknown): PreparationRequest | undefined
   return parsed.success && (parsed.data.taskType !== undefined || parsed.data.requestIntent !== undefined) ? parsed.data : undefined
 }
 
-export interface DemandAgent { readonly ctx?: unknown; readonly id: string; followup?(message: any): unknown; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
+export interface DemandAgent { readonly ctx?: unknown; readonly id: string; cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void; followup?(message: any): unknown; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
 export interface DemandInput { readonly agent: DemandAgent; readonly turn: number; readonly step: number; readonly messages: readonly unknown[]; readonly signal: AbortSignal }
 interface Execution { readonly agent?: DemandAgent; readonly callId: string; readonly name: string; readonly arguments: unknown; readonly signal: AbortSignal; readonly parent?: unknown }
 interface Definition { readonly name: string; readonly execute: (...args: any[]) => unknown }
@@ -376,7 +376,13 @@ export class OnDemandIntake {
     this.watch(promise)
     state.capture = promise
     try { return await promise } catch (error) {
-      if (this.#turns.get(sessionId) === state) { state.status = 'stale'; state.captureError = error }
+      if (this.#turns.get(sessionId) === state) {
+        const cancelled = (error as { code?: unknown })?.code === 'ASK_CANCELLED'
+        state.status = cancelled ? 'closed' : 'stale'; state.captureError = error
+        // DSH classifies cancellation from its own turn signal, not error.code.
+        // Abort only this current attempt and preserve unrelated queued input.
+        if (cancelled && !input.signal.aborted) input.agent.cancel?.({ kind: 'user' }, { keepInbox: true })
+      }
       throw error
     }
     finally { delete state.capture }

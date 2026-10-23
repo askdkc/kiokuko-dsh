@@ -3,6 +3,8 @@ import { TASK_TYPES, type TaskType } from '../../akinator/types.js'
 import { ExecutionSelectionPending } from '../execution-pending.js'
 import { createDshIntakeAnswerer, type DshUserQuestionAgent, type DshUserQuestions } from '../intake-questions.js'
 import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
+import { LispCodingCancelled, normalizeLispCodingAnswer } from './coding-question.js'
+export type { LispCodingQuestionResult } from './coding-question.js'
 import { codingIntent } from '../coding-workflow/intent.js'
 import type { RequestIntentDecision } from '../decisions/request-intent.js'
 
@@ -16,6 +18,7 @@ export interface LispCodingResult { taskType: TaskType; clarification?: string }
 export interface LispCodingService {
   prepare(input: LispCodingInput): Promise<LispCodingResult>
   prepareNative?(input: LispCodingInput): Promise<void>
+  cancelled?(agent: DshUserQuestionAgent, task: string): void
   answered?(agent: DshUserQuestionAgent, task: string, choice: 'yes'|'no', answerRef: string): void
   choiceFor?(agent: DshUserQuestionAgent, task: string): { choice: 'yes'|'no'; answerRef: string } | undefined
   /** Explicit session preference only; runtime availability or a previous task yes is insufficient. */
@@ -71,6 +74,8 @@ export function createLispCodingChoice(input: {
     }] })
     request.signal.throwIfAborted()
     const answer = response.answers[0]
+    const normalized = normalizeLispCodingAnswer(response, 'lisp-coding-mode')
+    if(normalized.status==='cancelled')throw new LispCodingCancelled()
     if (!answer) throw new ExecutionSelectionPending()
     if (answer.id !== 'lisp-coding-mode' || answer.selected.length > 1 || answer.selected[0] === cancel) throw new ExecutionSelectionPending()
     const custom = answer.custom?.trim()
@@ -99,7 +104,7 @@ export function createLispCodingChoice(input: {
         return previous.result
       }
       const result = prepare(request).catch(error => {
-        throw error instanceof ExecutionSelectionPending ? error : new ExecutionSelectionPending(error instanceof Error ? error.message : String(error))
+        throw error instanceof LispCodingCancelled || (error as any)?.code === 'ASK_CANCELLED' ? new LispCodingCancelled() : error instanceof ExecutionSelectionPending ? error : new ExecutionSelectionPending(error instanceof Error ? error.message : String(error))
       })
       turns.set(request.agent, { turn: request.turn, task: request.task, result })
       return result

@@ -78,7 +78,7 @@ test('enrolled protocol rejects development Lisp admission before starting SBCL'
   } finally { await manager.dispose(); await f.close() }
 })
 
-for (const scenario of ['bounded-cycle', 'stale-reply'] as const) test(`real protected Lisp, enrolled owned RPC: ${scenario}`, {
+for (const scenario of ['bounded-cycle', 'single-evaluation-cycle', 'stale-reply'] as const) test(`real protected Lisp, enrolled owned RPC: ${scenario}`, {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires real protected SBCL; skipped is not runtime evidence' : false,
   timeout: 180000,
 }, async () => {
@@ -125,6 +125,10 @@ for (const scenario of ['bounded-cycle', 'stale-reply'] as const) test(`real pro
     assert.equal(raw.ok, false, JSON.stringify(raw))
     const direct = await evaluate('direct-ci', '(kioku.ci:verify :test)')
     assert.equal(direct.ok, false, JSON.stringify(direct)); assert.match(JSON.stringify(direct), /Bounded protocol effects require the owned tool bridge/)
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n, 0,
+      'A direct CI request rejected before dispatch must not become an unknown effect')
+    assert.deepEqual(f.db.prepare('SELECT state FROM dsh_managed_operations').all<{state:string}>().map(row => row.state), ['denied'],
+      'Keep the rejected request in the audit without treating it as an uncertain effect')
     const proposed = await evaluate('direct-proposal', '(kioku.files:propose-write "src/value.mjs" "bypass")')
     assert.equal(proposed.ok, false); assert.equal(proposed.changes[0].code, 'PROTOCOL_ROUTE_REQUIRED')
     assert.equal(proposed.changes[0].state, 'NOT_APPLIED')
@@ -139,6 +143,15 @@ for (const scenario of ['bounded-cycle', 'stale-reply'] as const) test(`real pro
       assert.equal(await readFile(join(f.root, 'tests/unit.test.mjs'), 'utf8'), regression, 'The settled owned effect remains recorded')
       assert.equal(late.ok, false, JSON.stringify(late)); assert.match(JSON.stringify(late), /TASK_STATE_CONFLICT|stale or stopped/)
       assert.notEqual((await f.store.get(f.owner, 'late-owned-reply'))!.state, 'SUCCEEDED', 'A late RPC success cannot publish under a new lease')
+      return
+    }
+
+    if(scenario==='single-evaluation-cycle') {
+      const code=`(progn ${toolCode('kioku_write',{path:'tests/unit.test.mjs',content:regression})} ${toolCode('kioku_exec',{command})} ${toolCode('kioku_write',{path:'src/value.mjs',content:'export const value = 42;\n'})} ${toolCode('kioku_exec',{command})})`
+      const result=success(await evaluate('one-evaluation-cycle',code)).value.json
+      assert.equal(result.exitCode,0);assert.equal(f.phase(),'report');assert.equal(bridgeCalls,4)
+      const {protocolCompletionReady}=await import('../../../../src/dsh/guardrail/service.js')
+      assert.equal(protocolCompletionReady(f.db,f.task.taskId),true,'parent evaluation has fully settled before completion')
       return
     }
 

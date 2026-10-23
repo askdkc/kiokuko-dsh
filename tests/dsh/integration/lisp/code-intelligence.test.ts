@@ -15,7 +15,7 @@ test('public code API returns unavailable without installing a parser or LSP pro
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-code-'))), root = join(base, 'workspace')
   await mkdir(root)
   const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
-  for (const migration of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql'])
+  for (const migration of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql', '047_managed_operation_journal.sql'])
     db.exec(await readFile(new URL(`../../../../migrations/${migration}`, import.meta.url), 'utf8'))
   const owner = { sessionId: 'session', agentId: 'agent', root }
   const manager = new LispManager({ store: new LispStore(async fn => fn(db)),

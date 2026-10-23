@@ -43,7 +43,13 @@ for (const executionMode of ['development', 'protected'] as const) test(`real SB
   }))
   const manager = new LispManager({ store: new LispStore(async fn => fn(db)), dataRoot: join(base, 'data'),
     config: LispConfig.parse({ enabled: true, executionMode, startupTimeoutMs: 60000 }),
-    toolCall: async (_owner, name) => { assert.equal(name, 'kioku_write'); hostEffects++; await writeFile(join(root, 'continuation-marker'), 'observed'); return { applied: true } },
+    toolCall: async (_owner, name) => {
+      assert.equal(name, 'kioku_write'); hostEffects++
+      await writeFile(join(root, 'continuation-marker'), 'observed')
+      // This host fixture awaited the actual file write. Unlike a bare Lisp
+      // value, its adapter receipt positively observes the completed effect.
+      return { applied: true, receipt:{operationId:`fixture-write-${hostEffects}`,state:'completed'} }
+    },
     decisionCall: async (_owner, _method, batch: any, context) => {
       calls++; providerSignal = context.signal; pendingBatch = batch
       assert.equal(batch.state.context.local, 41)
@@ -91,6 +97,7 @@ for (const executionMode of ['development', 'protected'] as const) test(`real SB
     const effectful = await run('effectful-control', expression(1000, true))
     assert.equal(effectful.ok, true, JSON.stringify(effectful)); assert.equal(hostEffects, 1)
     assert.equal(await readFile(join(root, 'continuation-marker'), 'utf8'), 'observed')
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0)
     await unlink(join(root, 'continuation-marker')); hostEffects = 0
     await run('typed-cleanup', '(setf *effects* 0)')
     const eight = Array.from({ length: 8 }, (_, i) => `r${i}`)

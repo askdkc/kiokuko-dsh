@@ -45,7 +45,8 @@
     "migrations/043_relation_delivery.sql",
     "migrations/044_decision_diagnostics.sql",
     "migrations/045_correction_classification.sql",
-    "migrations/046_curator_classification.sql"
+    "migrations/046_curator_classification.sql",
+    "migrations/047_managed_operation_journal.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

@@ -42,7 +42,7 @@ test('a configured request-intent decision arms the early Lisp offer for convers
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('lisp-early-')){asked++;assert.equal(f.model.requests.length,0);return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}throw new Error('unexpected question')}})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
 })
-test('manual ON requires a real prototype and its saved result before native implementation; OFF preserves ordinary tools',{timeout:120000},async()=>{
+test('manual ON permits ordinary native implementation without a mandatory prototype; optional prototype inspection and OFF work',{timeout:120000},async()=>{
  let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]
  const command=async(action:string)=>{const r=(await f.ctx.commands.execute(f.agent,`/kioku-lisp ${action}`,[],new AbortController().signal)).result;assert.equal(r.kind,'success',r.text);return r}
  const js='require("fs").writeFileSync("implemented.txt","42")',shell=`${process.execPath} -e '${js}'`
@@ -50,7 +50,7 @@ test('manual ON requires a real prototype and its saved result before native imp
  for(const name of ['dsh-subprocess-local','dsh-bash-local','dsh-shell-env','dsh-tool-bash']){const p=await import(pathToFileURL(join(packages,'@deepseek-ai',name,'lib/index.js')).href);fibers.push(await f.ctx.plugin(p.default??p,name==='dsh-bash-local'?{cwd:f.dir}:name==='dsh-shell-env'?{dshHome:f.dir}:{}))}
  await command('enable')
  let saved:string=''
- f.responses.push(f.mock.toolCallResponse('premature','bash',{command:shell,description:'Implement requested fixture'}),(q:any)=>{assert.match(JSON.stringify(result(q,'premature')),/LISP_PROTOTYPE_REQUIRED/u);return f.mock.toolCallResponse('prototype','lisp_eval',{operationId:'prototype-case',prototype:true,code:'(progn (assert (= (+ 40 2) 42)) (assert (/= (+ 40 1) 42)) (+ 40 2))'})},(q:any)=>{const r=result(q,'prototype');assert.equal(r.isError,false,JSON.stringify(r));const body=r.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('');saved=JSON.parse(body).operationId;assert.ok(saved);return f.mock.toolCallResponse('still-premature','bash',{command:shell,description:'Must inspect first'})},(q:any)=>{assert.match(JSON.stringify(result(q,'still-premature')),/LISP_PROTOTYPE_REQUIRED/u);return f.mock.toolCallResponse('inspect-prototype','lisp_inspect',{operationId:'read-prototype',resultOperationId:saved,section:'result'})},(q:any)=>{assert.equal(result(q,'inspect-prototype').isError,false);return f.mock.toolCallResponse('implementation','bash',{command:shell,description:'Implement after observed prototype'})},(q:any)=>{assert.equal(result(q,'implementation').isError,false,JSON.stringify(result(q,'implementation')));return f.mock.textResponse('Prototype inspected and implementation ran; final tests remain separate.')})
+ f.responses.push(f.mock.toolCallResponse('premature','bash',{command:shell,description:'Implement requested fixture'}),(q:any)=>{assert.equal(result(q,'premature').isError,false,JSON.stringify(result(q,'premature')));return f.mock.toolCallResponse('prototype','lisp_eval',{operationId:'prototype-case',prototype:true,code:'(progn (assert (= (+ 40 2) 42)) (assert (/= (+ 40 1) 42)) (+ 40 2))'})},(q:any)=>{const r=result(q,'prototype');assert.equal(r.isError,false,JSON.stringify(r));const body=r.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('');saved=JSON.parse(body).operationId;assert.ok(saved);return f.mock.toolCallResponse('still-premature','bash',{command:shell,description:'Must inspect first'})},(q:any)=>{assert.equal(result(q,'still-premature').isError,false,JSON.stringify(result(q,'still-premature')));return f.mock.toolCallResponse('inspect-prototype','lisp_inspect',{operationId:'read-prototype',resultOperationId:saved,section:'result'})},(q:any)=>{assert.equal(result(q,'inspect-prototype').isError,false);return f.mock.toolCallResponse('implementation','bash',{command:shell,description:'Implement after observed prototype'})},(q:any)=>{assert.equal(result(q,'implementation').isError,false,JSON.stringify(result(q,'implementation')));return f.mock.textResponse('Prototype inspected and implementation ran; final tests remain separate.')})
  await f.turn('implemented.txt を作成して、42 を保存して。');assert.equal(await readFile(join(f.dir,'implemented.txt'),'utf8'),'42');assert.equal(asked,0)
  const status=JSON.parse((await command('status --json')).text);assert.equal(status.codingPreparation.verified,true)
  await command('disable');f.responses.push((q:any)=>{assert.ok(!q.tools.some((t:any)=>t.name==='lisp_eval'));return f.mock.textResponse('Lisp disabled.')});await f.turn('設定状態を説明して。');assert.equal(asked,0)
@@ -58,13 +58,13 @@ test('manual ON requires a real prototype and its saved result before native imp
 })
 
 
-test('failed prototypes stay unverified, stop after two attempts, and explicit OFF restores native coding',{timeout:120000},async()=>{
+test('ordinary optional prototype failures stay unverified without installing a mandatory prototype gate',{timeout:120000},async()=>{
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async()=>{throw new Error('manual ON must not ask again')}})
  try{
  const enabled=(await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result;assert.equal(enabled.kind,'success',enabled.text)
- f.responses.push(f.mock.toolCallResponse('failed-one','lisp_eval',{operationId:'failed-one',prototype:true,code:'(error "PROTOTYPE_FAILURE_ONE")'}),(q:any)=>{assert.match(JSON.stringify(result(q,'failed-one')),/PROTOTYPE_FAILURE_ONE/u);return f.mock.toolCallResponse('failed-two','lisp_eval',{operationId:'failed-two',prototype:true,code:'(error "PROTOTYPE_FAILURE_TWO")'})},(q:any)=>{assert.match(JSON.stringify(result(q,'failed-two')),/PROTOTYPE_FAILURE_TWO/u);return f.mock.toolCallResponse('budget','lisp_eval',{operationId:'must-not-execute',prototype:true,code:'42'})},(q:any)=>{assert.match(JSON.stringify(result(q,'budget')),/two attempts failed/u);return f.mock.textResponse('The prototype failed; automatic retries stopped. No implementation or verification succeeded.')})
+ f.responses.push(f.mock.toolCallResponse('failed-one','lisp_eval',{operationId:'failed-one',prototype:true,code:'(error "PROTOTYPE_FAILURE_ONE")'}),(q:any)=>{assert.match(JSON.stringify(result(q,'failed-one')),/PROTOTYPE_FAILURE_ONE/u);return f.mock.toolCallResponse('failed-two','lisp_eval',{operationId:'failed-two',prototype:true,code:'(error "PROTOTYPE_FAILURE_TWO")'})},(q:any)=>{assert.match(JSON.stringify(result(q,'failed-two')),/PROTOTYPE_FAILURE_TWO/u);return f.mock.toolCallResponse('budget','lisp_eval',{operationId:'must-not-execute',prototype:true,code:'42'})},(q:any)=>{assert.equal(result(q,'budget').isError,false,JSON.stringify(result(q,'budget')));return f.mock.textResponse('The prototype failed; automatic retries stopped. No implementation or verification succeeded.')})
  await f.turn('src/parser.ts の関数を修正して。')
- const status=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text);assert.equal(status.codingPreparation.phase,'failed');assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.attempts,2)
+ const status=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text);assert.equal(status.codingPreparation.phase,'result_pending');assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.attempts,3)
  const off=(await f.ctx.commands.execute(f.agent,'/kioku-lisp disable',[],new AbortController().signal)).result;assert.equal(off.kind,'success',off.text)
  f.responses.push((q:any)=>{assert.ok(!q.tools.some((t:any)=>t.name==='lisp_eval'));return f.mock.textResponse('Explicit OFF is retained for this request.')});await f.turn('この作業を続行してください')
  }finally{await f.close()}
@@ -76,11 +76,11 @@ test('manual ON survives same-session reload and a new coding request starts unv
  try{
  const enabled=(await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result;assert.equal(enabled.kind,'success',enabled.text)
  await f.reload('compiled')
- f.responses.push((q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/prototype_required/u);return f.mock.textResponse('The prototype has not run; implementation remains pending.')})
+ f.responses.push((q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/selected/u);return f.mock.textResponse('The prototype has not run; implementation remains pending.')})
  await f.turn('src/new.ts に関数を実装して。')
  const status=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
- assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'prototype_required');assert.equal(status.codingPreparation.attempts,0)
- assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/試作待ち（未検証）/u)
+ assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'selected');assert.equal(status.codingPreparation.attempts,0)
+ assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/先行試作は任意/u)
  }finally{await f.close()}
 })
 
@@ -110,4 +110,56 @@ for (const reload of [false, true]) test(`manual ON supplies a formal Goal choic
    assert.equal(status.codingPreparation.phase,'prototype_required')
    assert.equal(status.codingPreparation.verified,false)
  } finally {await f.close()}
+})
+
+for(const mode of ['explicit','numeric','skip','ASK_CANCELLED'] as const)test(`native early ${mode} cancellation ends implementation and permits the next independent conversation`,{timeout:120000},async()=>{
+ let asked=0
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{
+  asked++;if(mode==='ASK_CANCELLED')throw Object.assign(new Error('User cancelled question'),{code:'ASK_CANCELLED'})
+  return {answers:[{id:q.questions[0].id,selected:mode==='skip'?[]:[mode==='numeric'?'3':'取消・作業を保持']}]}
+ }})
+ const errors:unknown[]=[]
+ const offError=f.ctx.on('agent/error',(event:any)=>errors.push(event.error))
+ const send=async(text:string)=>{f.agent.followup(f.llm.createUserMessage({content:[{type:'text',text}],source:{kind:'user'}}));await f.agent.whenIdle()}
+ try{
+  await send('Implement parser.ts without publishing.')
+  assert.deepEqual(errors,[],'user cancellation must not emit a generic agent/error')
+  const ending=f.agent.session.snapshotEvents().filter((event:any)=>event.type==='turn/end').at(-1)
+  assert.equal(ending?.data.reason?.kind,'aborted','native host must record normal cancellation, not error/blocked/completed')
+  assert.equal(ending?.data.reason?.reason?.kind,'user')
+  assert.equal(asked,1);assert.equal(f.model.requests.length,0,'cancellation must not start the implementation model turn')
+  const result=(await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result
+  const status=JSON.parse(result.text);assert.equal(status.codingPreparation.phase,'cancelled');assert.equal(status.codingPreparation.attempts,0)
+  f.responses.push(f.mock.textResponse('The previous implementation attempt was cancelled.'))
+  await send('Explain what happened without changing code.')
+  assert.equal(asked,1);assert.equal(f.model.requests.length,1)
+  const after=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
+  assert.equal(after.codingPreparation.phase,'not_applicable')
+  assert.deepEqual(errors,[])
+ }finally{offError();await f.close()}
+})
+
+test('native Lisp cancellation preserves unrelated queued input without a generic error',{timeout:120000},async()=>{
+ let release!:(answer:any)=>void,questionId='',notify!:()=>void
+ const opened=new Promise<void>(resolve=>{notify=resolve})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{
+  questionId=q.questions[0].id;notify();return new Promise(resolve=>{release=resolve})
+ }})
+ const errors:unknown[]=[],off=f.ctx.on('agent/error',(event:any)=>errors.push(event.error))
+ const enqueue=(text:string)=>f.agent.followup(f.llm.createUserMessage({content:[{type:'text',text}],source:{kind:'user'}}))
+ try{
+  enqueue('Implement parser.ts without publishing.');await opened
+  enqueue('Explain the independent QUEUED_READ_ONLY_SENTINEL topic without changing any files.')
+  release({answers:[{id:questionId,selected:['取消・作業を保持']}]});await f.agent.whenIdle()
+  assert.deepEqual(errors,[]);assert.equal(f.model.requests.length,0)
+  // DSH retains queued turns after cancellation; the next user message wakes
+  // the driver, which processes both the preserved conversation and the wake.
+  f.responses.push(f.mock.textResponse('The queued explanation remains available.'),f.mock.textResponse('The retained explanation was answered.'))
+  enqueue('Please answer the queued explanation.');await f.agent.whenIdle()
+  assert.deepEqual(errors,[]);assert.equal(f.model.requests.length,2)
+  assert.ok(JSON.stringify(f.model.requests[0]!.messages).includes('QUEUED_READ_ONLY_SENTINEL'))
+  const endings=f.agent.session.snapshotEvents().filter((event:any)=>event.type==='turn/end')
+  assert.ok(endings.some((event:any)=>event.data.reason?.kind==='aborted' && event.data.reason?.reason?.kind==='user'))
+  assert.ok(!endings.some((event:any)=>event.data.reason?.kind==='error'))
+ }finally{off();await f.close()}
 })

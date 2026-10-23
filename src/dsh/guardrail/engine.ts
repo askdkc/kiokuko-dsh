@@ -32,15 +32,24 @@ function flat(output: string, tag: string): Record<string, string | number | boo
   }
   return value
 }
+/** Serialize only the host-validated receipt. Structural validity alone is not authority. */
+export function serializeProtocolEvidence(state: ProtocolState, receipt: ProtocolReceipt, phase: 'verify-red' | 'verify-green' | 'report'): string {
+  if(state.schema!==2||receipt.schema!==2)throw Error('rebind-required: unsupported protocol evidence schema')
+  const quote=(value:string)=>JSON.stringify(value), empty=canonicalContentHash({model:null}), snapshot=receipt.snapshot
+  const fields=`:source ${quote(receipt.sourceDigest)} :tests ${quote(receipt.testDigest)} :command ${quote(receipt.commandDigest)} :runtime ${quote(receipt.runtimeDigest)}`
+  const generations=`:worker-generation ${quote(receipt.workerGeneration)} :protocol-generation ${state.generation} :lease-generation ${state.lease.generation}`
+  const artifact=(name:string,id:string,digest:string,outcome:string,exit:number,assertions:number,status:string,provenance:string,supporting:string[])=>`(${name} :id ${quote(id)} :digest ${quote(digest)} ${generations} ${fields} :outcome :${outcome} :exit ${exit} :assertions ${assertions} :status :${status} :provenance :${provenance} :supporting (${supporting.map(quote).join(' ')}) :history () :state-digest ${quote(receipt.sourceDigest)})`
+  const support=snapshot.executions.find(operation=>operation.receipt===receipt.ownedReceiptDigest)
+  if(!support)throw Error('Protocol receipt has no journal supporting operation')
+  const artifacts=[artifact('test-spec',receipt.id,receipt.digest,receipt.outcome,receipt.exit,receipt.assertions,'observed','execution-backed',[support.id])]
+  if(phase!=='verify-red')artifacts.push(artifact('patch',`patch:${state.recipeId}:${state.generation}`,canonicalContentHash({edits:state.edits,source:state.source}),'produced',0,0,'applied','state-derived',[]))
+  const executions=snapshot.executions.map(operation=>`(execution :id ${quote(operation.id)} :scope ${quote(operation.scope)} :parent ${quote(operation.parent)} :sequence ${operation.sequence} :route :${operation.route} :kind :${operation.kind} :state :${operation.state} :outcome :${operation.outcome} :request ${quote(operation.request)} :runtime ${quote(operation.runtime)} :receipt ${quote(operation.receipt)} :worker-generation ${quote(operation.workerGeneration)} :protocol-generation ${operation.protocolGeneration} :lease-generation ${operation.leaseGeneration})`)
+  return `(evidence :schema 2 :authority "kiokuko-dsh" :issuer ${quote(PROTOCOL_ISSUER)} :task ${quote(state.lease.taskId)} :revision ${state.lease.revision} ${generations} :scope ${quote(snapshot.scope)} :collector (:version ${snapshot.version} :complete ${snapshot.complete?'t':'nil'} :count ${snapshot.count} :unresolved ${snapshot.unresolved} :digest ${quote(snapshot.digest)}) :executions (${executions.join(' ')}) ${fields} :model-provider "none" :model-name "none" :model-parameters ${quote(empty)} :transcript ${quote(empty)} :artifacts (${artifacts.join(' ')}))\n`
+}
 export async function checkProtocol(state: ProtocolState, receipt: ProtocolReceipt, phase: 'verify-red' | 'verify-green' | 'report', signal?: AbortSignal): Promise<boolean> {
   const runtime=protocolRuntime()
   if(runtime.runtimeDigest!==receipt.runtimeDigest||runtime.runtimeDigest!==state.runtimeDigest)throw Error('Protocol runtime changed; rebind the unit')
-  const quote=(value:string)=>JSON.stringify(value), empty=canonicalContentHash({model:null})
-  const fields=`:source ${quote(receipt.sourceDigest)} :tests ${quote(receipt.testDigest)} :command ${quote(receipt.commandDigest)} :runtime ${quote(receipt.runtimeDigest)}`
-  const artifact=(name:string,id:string,digest:string,outcome:string,exit:number,assertions:number,status:string)=>`(${name} :id ${quote(id)} :digest ${quote(digest)} :generation ${state.lease.generation} :expected-generation ${state.lease.generation} ${fields} :outcome :${outcome} :exit ${exit} :assertions ${assertions} :status :${status})`
-  const artifacts=[artifact('test-spec',receipt.id,receipt.digest,receipt.outcome,receipt.exit,receipt.assertions,'observed')]
-  if(phase!=='verify-red')artifacts.push(artifact('patch',`patch:${state.recipeId}:${state.generation}`,canonicalContentHash({edits:state.edits,source:state.source}), 'produced',0,0,'applied'))
-  const captured=`(evidence :schema 1 :authority "kiokuko-dsh" :issuer ${quote(PROTOCOL_ISSUER)} :task ${quote(state.lease.taskId)} :revision ${state.lease.revision} ${fields} :model-provider "none" :model-name "none" :model-parameters ${quote(empty)} :transcript ${quote(empty)} :artifacts (${artifacts.join(' ')}))\n`
+  const captured=serializeProtocolEvidence(state,receipt,phase)
   const directory=await mkdtemp(path.join(tmpdir(),'kiokuko-guardrail-'))
   try {
     const evidence=path.join(directory,'evidence.lisp');await writeFile(evidence,captured,{mode:0o600})

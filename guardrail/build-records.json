@@ -1,0 +1,198 @@
+{
+  "schema": 1,
+  "sourceSha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+  "scope": "Observed unsigned local build records; not an independent or signed attestation.",
+  "targets": {
+    "x86_64-unknown-linux-musl": {
+      "builderSha256": "08d11e39c450c0515fe68d9a23901ff18ab2f0421ae92c32cd4a9720b80c94a9",
+      "target": "x86_64-unknown-linux-musl",
+      "sourceSha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+      "binarySha256": "828126da26891c8afa4cab9a8446fb6ff4a1883fd45a4556626942f0535b1f5d",
+      "packageSha256": "ec5f9b19deb93b4ce6530081efba7db209296965633feae6942482ab808dacc9",
+      "independentBuildsEqual": true,
+      "nativeSmoke": "passed",
+      "cargoSha256": "a670e02cfa39ac2e53f77a2d911ca1fc9e2c479b0603ec956625be1daf24e3af",
+      "rustcSha256": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853",
+      "linkerSha256": "a23ecab8ff08f09ad8c80602c2c5df7f49e09c25905cb8975902e101bf72635f",
+      "builds": [
+        {
+          "startedAt": "2026-10-23T00:35:51.485383+00:00",
+          "finishedAt": "2026-10-23T00:35:59.459126+00:00",
+          "exitCode": 0,
+          "binarySha256": "828126da26891c8afa4cab9a8446fb6ff4a1883fd45a4556626942f0535b1f5d",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "7045c86392225cf581d03a890ef12657603e871c0b79605027dc63ca52100a21",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "x86_64-unknown-linux-musl"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build"
+          ]
+        },
+        {
+          "startedAt": "2026-10-23T00:35:59.462570+00:00",
+          "finishedAt": "2026-10-23T00:36:06.773213+00:00",
+          "exitCode": 0,
+          "binarySha256": "828126da26891c8afa4cab9a8446fb6ff4a1883fd45a4556626942f0535b1f5d",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "7aa8fe01514f9c3db6d2916eb61cf730b6f6d120db9d6bffa73e5b1717bad9b7",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "x86_64-unknown-linux-musl"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build"
+          ]
+        }
+      ],
+      "scope": "Observed local build process and output hashes; unsigned, not an independent attestation. Cross-built outputs are not native-tested."
+    },
+    "aarch64-unknown-linux-musl": {
+      "builderSha256": "08d11e39c450c0515fe68d9a23901ff18ab2f0421ae92c32cd4a9720b80c94a9",
+      "target": "aarch64-unknown-linux-musl",
+      "sourceSha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+      "binarySha256": "9b2fa78a3f13fbb4efd2dd5cf3f80892bf70ad30ee26c9b995ab2d2ebb203cf3",
+      "packageSha256": "bba8060d03dc3759acbdff31f480b031a63c0596a66df6c435b9211eaebda9bf",
+      "independentBuildsEqual": true,
+      "nativeSmoke": "not run",
+      "cargoSha256": "a670e02cfa39ac2e53f77a2d911ca1fc9e2c479b0603ec956625be1daf24e3af",
+      "rustcSha256": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853",
+      "linkerSha256": "9b6f51f983a8184f5d47d224e336cdb35171ad5b138981bc62a22e6d65e7b214",
+      "builds": [
+        {
+          "startedAt": "2026-10-23T00:35:51.510883+00:00",
+          "finishedAt": "2026-10-23T00:35:58.903705+00:00",
+          "exitCode": 0,
+          "binarySha256": "9b2fa78a3f13fbb4efd2dd5cf3f80892bf70ad30ee26c9b995ab2d2ebb203cf3",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "6a13e5ec1693ea9a1d3b4765bae1aaed1d9d8b74eeef1ed70b45a9d54347eb3b",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "aarch64-unknown-linux-musl"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build",
+            "-C",
+            "linker-flavor=ld.lld",
+            "-C",
+            "link-self-contained=yes"
+          ]
+        },
+        {
+          "startedAt": "2026-10-23T00:35:58.910429+00:00",
+          "finishedAt": "2026-10-23T00:36:06.485552+00:00",
+          "exitCode": 0,
+          "binarySha256": "9b2fa78a3f13fbb4efd2dd5cf3f80892bf70ad30ee26c9b995ab2d2ebb203cf3",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "8585afc7adbaa104b28541d2aa8954fd42b6e074d49a06405aa33866ca399e47",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "aarch64-unknown-linux-musl"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build",
+            "-C",
+            "linker-flavor=ld.lld",
+            "-C",
+            "link-self-contained=yes"
+          ]
+        }
+      ],
+      "scope": "Observed local build process and output hashes; unsigned, not an independent attestation. Cross-built outputs are not native-tested."
+    },
+    "aarch64-apple-darwin": {
+      "builderSha256": "08d11e39c450c0515fe68d9a23901ff18ab2f0421ae92c32cd4a9720b80c94a9",
+      "target": "aarch64-apple-darwin",
+      "sourceSha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+      "binarySha256": "5e08acf36e6648c34f1fe317ff9806a76cbddd37434b41db5395e95dee0571fc",
+      "packageSha256": "267f330c690afc47b023fcd0fdbd68618e4c4fd77b8fdfccf68b13348888f551",
+      "independentBuildsEqual": true,
+      "nativeSmoke": "not run",
+      "cargoSha256": "a670e02cfa39ac2e53f77a2d911ca1fc9e2c479b0603ec956625be1daf24e3af",
+      "rustcSha256": "b53b780f77f952062f8ca8a3b70aef2390b1e45ad91939be94afdc9543026853",
+      "linkerSha256": "7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272",
+      "builds": [
+        {
+          "startedAt": "2026-10-23T00:35:51.682721+00:00",
+          "finishedAt": "2026-10-23T00:36:03.586468+00:00",
+          "exitCode": 0,
+          "binarySha256": "5e08acf36e6648c34f1fe317ff9806a76cbddd37434b41db5395e95dee0571fc",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "564dc867aee91f90930d27c9a0678a511f7d69dd7ffbe855037378f5e7287741",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "aarch64-apple-darwin"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build"
+          ]
+        },
+        {
+          "startedAt": "2026-10-23T00:36:03.607150+00:00",
+          "finishedAt": "2026-10-23T00:36:14.341218+00:00",
+          "exitCode": 0,
+          "binarySha256": "5e08acf36e6648c34f1fe317ff9806a76cbddd37434b41db5395e95dee0571fc",
+          "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderrSha256": "2e5c362a940ae334d3655e64dbf56d99da75266159942111261e2e4620eadcba",
+          "command": [
+            "CARGO",
+            "build",
+            "--manifest-path",
+            "SOURCE/Cargo.toml",
+            "--locked",
+            "--offline",
+            "--release",
+            "--target",
+            "aarch64-apple-darwin"
+          ],
+          "compilerArguments": [
+            "--remap-path-prefix=SOURCE=kiokuko-guardrail",
+            "--remap-path-prefix=TEMP=build"
+          ]
+        }
+      ],
+      "scope": "Observed local build process and output hashes; unsigned, not an independent attestation. Cross-built outputs are not native-tested."
+    }
+  }
+}

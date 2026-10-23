@@ -1,4 +1,4 @@
-import { invalidateProtocol } from '../guardrail/service.js'
+import { invalidateProtocol, readProtocol } from '../guardrail/service.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { KiokukoError } from '../../errors.js'
@@ -46,7 +46,7 @@ export function codingStatus(db: SqliteDatabase, identity: CodingIdentity) {
     })
   }
   const assessment = assessTaskCompletion(db, value.runId)
-  return { applicable: true as const, ...value, expectedRevision: value.revision,
+  return { applicable: true as const, ...value, ...(value.protocol?{protocol:readProtocol(db,identity.runId)!}:{}), expectedRevision: value.revision,
     minimumValidInput: value.definition
       ? { tool: 'coding_workflow', arguments: { action: 'next' } }
       : { tool: 'coding_workflow_apply', arguments: { action: 'propose', expectedRevision: value.revision,
@@ -231,7 +231,8 @@ export function assertCodingDispatch(db: SqliteDatabase, identity: CodingIdentit
   if (!value) return undefined // Explicit legacy boundary: old tasks retain their contract.
   assertCodingIdentity(value, identity)
   if (value.pendingScopeChange) throw new KiokukoError('CONFLICT', 'Revise the Goal for the current request before implementation or verification')
-  if (terminal(value) || !value.definition || value.choice.state === 'pending') throw new KiokukoError('CONFLICT', 'Define Goal, items and checks, then answer this task’s Lisp choice before implementation')
+  if (terminal(value)) throw new KiokukoError('CONFLICT', `Coding workflow is ${value.state}; its question has ended. Work is retained; no automatic execution or fallback is authorized.`)
+  if (!value.definition || value.choice.state === 'pending') throw new KiokukoError('CONFLICT', 'Define Goal, items and checks, then answer this task’s Lisp choice before implementation')
   if (name.startsWith('lisp_') && value.choice.state !== 'yes') throw new KiokukoError('CONFLICT', 'Lisp is not selected for this coding task')
   if (value.blocker?.kind === 'retry_budget' && ['kioku_write', 'kioku_edit', 'lisp_eval'].includes(name)) return value
   const next = nextCodingWork(db, identity)

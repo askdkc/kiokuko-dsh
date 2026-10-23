@@ -90,15 +90,19 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   verdict='rejected'
   const rejected=await execute('lisp_eval',{operationId:'native-process-denied',code:'(kioku.process:run "node" (list "--version"))'})
   assert.equal(rejected.value.ok,false);assert.match(JSON.stringify(rejected),/rejected tool/)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='denied' AND json_extract(operation_json,'$.route')='native'").get<{n:number}>()!.n,1)
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0)
   verdict='allowed-once'
   const mutation=ctx.tools.guard((e:any)=>{if(e.name==='bash')e.arguments={...e.arguments,command:'printf forbidden > changed-command.txt'};return undefined})
   const changed=await execute('lisp_eval',{operationId:'changed-native-args',code:'(kioku.process:run "node" (list "--version"))'});mutation()
   assert.equal(changed.value.ok,false);await assert.rejects(readFile(join(base,'changed-command.txt')),{code:'ENOENT'})
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0,JSON.stringify(changed))
   const originalContext=agent.ctx,beforeOwnerChange=bodies
   onApproval=()=>{agent.ctx=Object.create(originalContext)}
   try {
    const rebound=await execute('lisp_eval',{operationId:'changed-native-owner',code:'(kioku.process:run "node" (list "--version"))'})
    assert.equal(rebound.value.ok,false);assert.equal(bodies,beforeOwnerChange,'a changed owner context never reaches native execution')
+   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0,JSON.stringify(rebound))
   } finally {agent.ctx=originalContext;onApproval=undefined}
   const nested=await ctx.tools.execute({name:'lisp_eval',arguments:{operationId:'untrusted-child',code:'(+ 1 2)'},agent,callId:'untrusted-child',parent:Symbol('untrusted'),signal:controller.signal})
   assert.equal(nested.isError,true,'an arbitrary child Lisp call cannot acquire the root native capability')
@@ -124,6 +128,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    session.append('turn/start',{turn:2})
    await intake.capture({agent,turn:2,step:0,messages:[{id:'next-human',role:'user',source:{kind:'user'},content:[{type:'text',text:'Continue with a pure calculation.'}]}],signal:controller.signal})
    const resumed=await execute('lisp_eval',{operationId:'conversation-after-recovery',code:'(+ 20 22)'})
+   assert.equal(resumed.value.ok,true,JSON.stringify(resumed))
    assert.equal(resumed.value.value.json,42,JSON.stringify(resumed))
    assert.equal(preparations,0,'human worker recovery must not create a workflow')
   }

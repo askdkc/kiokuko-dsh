@@ -6,17 +6,19 @@ import { KiokukoError } from '../../errors.js'
 import { bindTaskRepository, captureTaskLease, authorizeTaskLease, type TaskLease } from '../task-state.js'
 import { readCodingWorkflow, mutateCodingWorkflow } from '../coding-workflow/store.js'
 import type { CodingIdentity } from '../coding-workflow/contracts.js'
+import { ManagedOperationJournal } from '../managed-operation-journal.js'
 import type { ExecutionReceipt } from '../owned-execution.js'
 import { shellArguments, executionCommand } from '../execution-command.js'
 import { ProtocolRecipeSchema, type ProtocolState, type ProtocolRecipe } from './contracts.js'
 import { manifest, equalManifest, issueProtocolReceipt, validateProtocolReceipt, protocolReceiptUncertain } from './evidence.js'
 import { protocolRuntime, checkProtocol } from './engine.js'
 function conflict(message:string):never {throw new KiokukoError('CONFLICT',`Protocol: ${message}`)}
-export function readProtocol(db:SqliteDatabase,runId:string):ProtocolState|undefined {return readCodingWorkflow(db,runId)?.protocol}
+export function readProtocol(db:SqliteDatabase,runId:string):ProtocolState|undefined {const state=readCodingWorkflow(db,runId)?.protocol;return state&&state.schema!==2?{...state,phase:'blocked',reason:'rebind-required: legacy schema 1 evidence is retained read-only'}:state}
 function current(db:SqliteDatabase,lease:TaskLease,reportRead=false):ProtocolState {
   authorizeTaskLease(db,lease)
   const workflow=readCodingWorkflow(db,lease.taskId),state=workflow?.protocol
   if(!workflow||!state||workflow.pendingScopeChange||workflow.scopeVersion!==state.scopeVersion||(['cancelled','superseded'].includes(workflow.state)||workflow.state==='completed'&&!reportRead)||canonicalContentHash(state.lease as any)!==canonicalContentHash(lease as any))conflict('task, scope or authority changed; explicitly amend/rebind the unit')
+  if(state!.schema!==2)conflict('rebind-required: legacy schema 1 evidence cannot authorize this unit; old records are retained')
   const binding=db.prepare('SELECT criterion_revision,method_json,method_digest,approved FROM dsh_completion_bindings WHERE run_id=? AND criterion_id=?').get<{criterion_revision:number;method_json:string;method_digest:string;approved:number}>(lease.taskId,state!.criterionId)
   const criterion=workflow.definition?.criteria.find(item=>state!.criterionId===`coding:${workflow.workflowId}:${item.criterionId}`)
   if(!binding||binding.approved!==1||binding.method_digest!==state!.methodDigest||criterion?.revision!==binding.criterion_revision)conflict('current completion binding was removed or replaced; explicitly rebind the unit')
@@ -25,6 +27,31 @@ function current(db:SqliteDatabase,lease:TaskLease,reportRead=false):ProtocolSta
   if(state!.runtimeDigest!==protocolRuntime().runtimeDigest)conflict('runtime changed; explicitly amend/rebind the unit')
   return state!
 }
+/** Unresolved audit is not erased by a fresh call ID or protocol binding. */
+export function unresolvedManaged(db:SqliteDatabase,taskId:string,exceptOriginal?:string):boolean {
+  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_managed_operations'").get())return false
+  const scopes=db.prepare("SELECT DISTINCT s.sealed,s.collector_complete FROM dsh_managed_scopes s LEFT JOIN dsh_managed_operations o ON o.scope_id=s.scope_id WHERE json_extract(o.operation_json,'$.binding.taskId')=? OR json_extract(s.scope_json,'$.binding.taskId')=?").all<{sealed:number;collector_complete:number}>(taskId,taskId)
+  if(scopes.some(scope=>!scope.collector_complete||exceptOriginal===undefined&&!scope.sealed))return true
+  const exempt=new Set<string>()
+  if(exceptOriginal){
+    const journal=new ManagedOperationJournal(db)
+    let operation=journal.lookupOriginalOperation(exceptOriginal)
+    for(let depth=0;operation&&depth<64;depth++){
+      if(operation.state==='unknown')break
+      if(exempt.has(operation.operationId))conflict('managed operation ancestry cycle')
+      exempt.add(operation.operationId)
+      const parent=journal.readScope(operation.scopeId).parentId
+      const row=db.prepare('SELECT operation_json FROM dsh_managed_operations WHERE operation_id=?').get<{operation_json:string}>(parent)
+      operation=row?JSON.parse(row.operation_json):undefined
+      if(operation?.binding?.taskId!==taskId)break
+    }
+  }
+  return db.prepare("SELECT operation_json FROM dsh_managed_operations WHERE state IN ('prepared','dispatching','running','unknown')").all<{operation_json:string}>().some(row=>{
+    const operation=JSON.parse(row.operation_json)
+    return operation.binding?.taskId===taskId&&!exempt.has(operation.operationId)
+  })
+}
+
 function fresh(state:ProtocolState):void {
   if(!equalManifest(state.source,manifest(state.lease.repositoryRoot,state.sourcePaths))||!equalManifest(state.tests,manifest(state.lease.repositoryRoot,state.recipe.testPaths)))conflict('source/tests changed outside the bound phase; explicitly amend/rebind the unit')
 }
@@ -43,6 +70,7 @@ export function enrollProtocol(db:SqliteDatabase,identity:CodingIdentity,input:{
   if(db.prepare('SELECT 1 FROM dsh_lisp_sessions WHERE session_id=? AND enabled=1').get(identity.sessionId))conflict('disable the existing Lisp session before enrolling the protocol')
   const running=db.prepare("SELECT receipt_json FROM dsh_owned_operations WHERE run_id=?").all<{receipt_json:string}>(identity.runId)
   if(running.some(row=>{const r=JSON.parse(row.receipt_json);return r.state==='started'||r.kind==='kioku_exec'&&r.processStarted&&r.exitCode===undefined&&r.signal===undefined}))conflict('stop and confirm existing owned processes before binding')
+  if(unresolvedManaged(db,identity.runId))conflict('unresolved managed operations require reconciliation before rebind; rebind cannot erase an uncertain execution')
   const runtimeDigest=protocolRuntime().runtimeDigest // Missing/unverified platform binary cannot enable the protocol.
   bindTaskRepository(db,{taskId:identity.runId,sessionId:identity.sessionId,repositoryRoot:identity.repositoryRoot})
   const lease=captureTaskLease(db,{taskId:identity.runId,sessionId:identity.sessionId,repositoryRoot:identity.repositoryRoot})
@@ -51,7 +79,7 @@ export function enrollProtocol(db:SqliteDatabase,identity:CodingIdentity,input:{
   if(previous?.pending&&previous.lease.generation===lease.generation)conflict('an interrupted/pending effect requires stop confirmation, explicit resume and a fresh binding; inspect actual files first')
   const sourcePaths=input.sourcePaths.filter(file=>!recipe.testPaths.includes(file)),source=manifest(identity.repositoryRoot,sourcePaths),tests=manifest(identity.repositoryRoot,recipe.testPaths)
   const generation=(previous?.generation??0)+1,recipeId=canonicalContentHash({lease,scope:workflow.scopeVersion,generation,recipe,method:input.methodDigest})
-  const state:ProtocolState={schema:1,recipe,recipeId,scopeVersion:workflow.scopeVersion,generation,lease,criterionId:input.criterionId,methodDigest:input.methodDigest,runtimeDigest,command:executionCommand(input.command),cwd:identity.repositoryRoot,sourcePaths,phase:'write-tests',source,tests,baselineTests:{...tests},edits:[],consumed:[]}
+  const state:ProtocolState={schema:2,recipe,recipeId,scopeVersion:workflow.scopeVersion,generation,lease,criterionId:input.criterionId,methodDigest:input.methodDigest,runtimeDigest,command:executionCommand(input.command),cwd:identity.repositoryRoot,sourcePaths,phase:'write-tests',source,tests,baselineTests:{...tests},edits:[],consumed:[]}
   mutateCodingWorkflow(db,identity,`protocol-bind:${recipeId}`,workflow.revision,{recipeId},value=>{value.protocol=state})
 }
 export function invalidateProtocolBinding(db:SqliteDatabase,runId:string,criterionId:string,methodDigest:string):void {
@@ -61,6 +89,7 @@ export function invalidateProtocolBinding(db:SqliteDatabase,runId:string,criteri
 export function invalidateProtocol(state:ProtocolState|undefined,reason:string):void {if(state){state.phase='blocked';state.reason=reason;delete state.red;delete state.green}}
 export function assertProtocolRoute(db:SqliteDatabase,lease:TaskLease,name:string,owned=false):void {
   const state=readProtocol(db,lease.taskId);if(!state)return
+  if(state.schema!==2&&['kioku_read','kioku_result'].includes(name))return
   current(db,lease)
   if(!owned&&!['kioku_read','kioku_result'].includes(name))conflict('this enrolled unit accepts effects only through bound owned file/test tools')
 }
@@ -68,6 +97,7 @@ export function reserveProtocolFile(db:SqliteDatabase,lease:TaskLease,id:string,
   if(!readProtocol(db,lease.taskId))return false
   return withImmediateTransaction(db,()=>{
     const state=current(db,lease);fresh(state)
+    if(unresolvedManaged(db,lease.taskId,id))conflict('unresolved managed operations require reconciliation before another effect')
     if(state.pending)conflict('another effect is pending; inspect its result before continuing')
     if(state.consumed.length>=128||state.edits.length>=128)conflict('bounded unit budget reached; run GREEN or explicitly amend/rebind the unit')
     const relative=path.relative(lease.repositoryRoot,target).split(path.sep).join('/'),isTest=state.recipe.testPaths.includes(relative)
@@ -111,6 +141,7 @@ export function reserveProtocolTest(db:SqliteDatabase,lease:TaskLease,id:string,
   if(!readProtocol(db,lease.taskId))return undefined
   return withImmediateTransaction(db,()=>{
     const state=current(db,lease);fresh(state)
+    if(unresolvedManaged(db,lease.taskId,id))conflict('unresolved managed operations require reconciliation before another effect')
     if(executionCommand(command)!==state.command||cwd!==state.cwd)conflict('command is not the exact approved selected test command')
     if(state.pending)conflict('another effect is pending; inspect its result before continuing')
     if(state.consumed.length>=128)conflict('bounded verification budget reached; explicitly amend/rebind the unit')
@@ -150,5 +181,5 @@ export async function finishProtocolTest(database:<T>(action:(db:SqliteDatabase)
 
 export function protocolCompletionReady(db:SqliteDatabase,runId:string):boolean {
   const state=readProtocol(db,runId);if(!state)return true
-  try { const value=current(db,state.lease,true);fresh(value);if(value.phase!=='report'||value.pending||!value.green||value.green.outcome!=='passed'||!value.edits.length||!value.red||value.red.sourceDigest===canonicalContentHash(value.source)||!value.consumed.includes(value.green.id))return false;validateProtocolReceipt(db,value,value.green);return value.green.sourceDigest===canonicalContentHash(value.source)&&value.green.runtimeDigest===protocolRuntime().runtimeDigest }catch{return false}
+  try { const value=current(db,state.lease,true);fresh(value);if(unresolvedManaged(db,runId))return false;if(value.phase!=='report'||value.pending||!value.green||value.green.outcome!=='passed'||!value.edits.length||!value.red||value.red.sourceDigest===canonicalContentHash(value.source)||!value.consumed.includes(value.green.id))return false;validateProtocolReceipt(db,value,value.green);return value.green.sourceDigest===canonicalContentHash(value.source)&&value.green.runtimeDigest===protocolRuntime().runtimeDigest }catch{return false}
 }

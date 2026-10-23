@@ -7,22 +7,35 @@ export const ProtocolRecipeSchema = z.object({ kind: z.literal('bounded-tdd-v1')
 })
 export type ProtocolRecipe = z.infer<typeof ProtocolRecipeSchema>
 export type Manifest = Record<string, string | null>
-export const PROTOCOL_CAPABILITIES = Object.freeze({validation:'bounded-cl-v1',ownedEffects:'lease-transactional-v1',nodeTests:'process-only',lispEffects:'protected-required',rollback:false,heapRestoration:false} as const)
+export const PROTOCOL_CAPABILITIES = Object.freeze({validation:'bounded-cl-v1',evidence:'schema-2',managedAudit:'journal-v1',ownedEffects:'lease-transactional-v1',nodeTests:'process-only',lispEffects:'protected-required',rollback:false,heapRestoration:false} as const)
 export const PROTOCOL_ISSUER = 'kiokuko-dsh:owned-execution:v1' as const
 export interface ProtocolObservation {
   schema: 1; operationId: string; runtimeDigest: string; environmentDigest: string; complete: boolean; tests: number; passed: number; failed: number; assertionFailures: number; otherFailures: number; skipped: number; todo: number; cancelled: number; explicit: number
 }
 export interface ProtocolReceipt {
-  issuer: typeof PROTOCOL_ISSUER; id: string; task: TaskLease; recipeId: string; generation: number;
+  schema: 2; workerGeneration: string; snapshot: ProtocolEvidenceSnapshot; issuer: typeof PROTOCOL_ISSUER; id: string; task: TaskLease; recipeId: string; generation: number;
   sourceDigest: string; testDigest: string; commandDigest: string; runtimeDigest: string;
   environmentDigest: string; ownedReceiptDigest: string; observationDigest: string; outputDigest: string; outcome: 'assertion-failure' | 'passed' | 'setup-error'; assertions: number; exit: number; digest: string
 }
 export interface ProtocolState {
-  schema: 1; recipe: ProtocolRecipe; recipeId: string; scopeVersion: number; generation: number; lease: TaskLease;
+  schema: 1 | 2; recipe: ProtocolRecipe; recipeId: string; scopeVersion: number; generation: number; lease: TaskLease;
   criterionId: string; methodDigest: string; runtimeDigest: string; command: string; cwd: string; sourcePaths: string[];
   phase: 'write-tests' | 'verify-red' | 'implement' | 'verify-green' | 'report' | 'blocked';
   source: Manifest; tests: Manifest; baselineTests: Manifest; edits: string[];
   red?: ProtocolReceipt; green?: ProtocolReceipt; consumed: string[];
   pending?: { id: string; kind: 'file' | 'test'; requestDigest: string; path?: string; phase: ProtocolState['phase'] };
   reason?: string;
+}
+
+/** Host-owned journal projection. Audit records never become test proof by themselves. */
+export interface ProtocolExecution {
+  id: string; scope: string; parent: string; sequence: number;
+  route: 'native' | 'owned'; kind: 'process' | 'file';
+  state: 'prepared' | 'dispatching' | 'running' | 'completed' | 'denied' | 'cancelled-before-dispatch' | 'cancelled-confirmed' | 'unknown';
+  outcome: 'succeeded' | 'failed' | 'none'; request: string; runtime: string; receipt: string;
+  workerGeneration: string; protocolGeneration: number; leaseGeneration: number;
+}
+export interface ProtocolEvidenceSnapshot {
+  snapshotId: string; scope: string; version: 1; complete: boolean; count: number; unresolved: number; digest: string;
+  executions: ProtocolExecution[];
 }

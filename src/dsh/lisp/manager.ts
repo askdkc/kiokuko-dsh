@@ -1,3 +1,5 @@
+import { ManagedOperationJournal } from '../managed-operation-journal.js'
+import { runManagedOperation, observeManagedResult, managedAdmissionDenied, type ManagedScope } from '../managed-operation-runner.js'
 import { LispRecoverySession } from './recovery.js'
 import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -12,7 +14,7 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { EvalInput, LispError, digest, fail, failure, identifier, type LispConfiguration, type LispOwner, type LispState, type LispTool } from './contracts.js'
 import { LispStore } from './store.js'
 import { sessionCodingWorkflow } from '../coding-workflow/store.js'
-import { LispWorker, type LispRpcContext } from './worker.js'
+import { LispWorker, type LispRpcContext, type Job } from './worker.js'
 import { prepareLayout } from './sandbox.js'
 import { verifyLispVendor } from './integrity.js'
 import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
@@ -33,6 +35,7 @@ import type { TaskLease } from '../task-state.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   execution?: LispTaskExecution | undefined;
+  managedScope?: ManagedScope;
   recovery?: LispRecoverySession;
   taskSettlement?: Promise<void>;
   codeLease?: { evaluationId: string; adapter: CodeIntelligenceAdapterV1 };
@@ -139,6 +142,12 @@ export class LispManager {
       await this.#store.expireResults()
       for (const session of await this.#store.start()) this.enabled.set(session.session_id, session.root_path)
       await this.#hot.catalog.expire()
+      await this.#store.database(db => {
+        const journal = new ManagedOperationJournal(db)
+        for (const row of db.prepare(`SELECT scope_id FROM dsh_managed_scopes WHERE json_extract(scope_json,'$.runtimeIdentity') LIKE 'sbcl:%'`).all<{scope_id:string}>()) {
+          journal.recover(row.scope_id)
+        }
+      })
     } catch (error) { await unlink(lockPath); this.#lock = false; throw error }
   }
   private entry(owner: LispOwner): AgentState {
@@ -256,19 +265,19 @@ export class LispManager {
       if(this.#config.executionMode==='protected'){
       const canary = join(base, 'host-canary')
       await writeFile(canary, 'protected', { mode: 0o600 })
-      const probe = await worker.request('eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, combined)
+      const probe = await this.journalRequest(state, worker, 'eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, combined)
       if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
       }
       assertCurrent()
       state.state='EVALUATING'
       if (mode === 'compile') {
-        const checked = await worker.request('task-compile', { code }, this.#config.timeoutMs, combined)
+        const checked = await this.journalRequest(state, worker, 'task-compile', { code }, this.#config.timeoutMs, combined)
         assertCurrent()
         if (!checked.ok || checked.proposals.length) fail('TASK_COMPILE_FAILED', String(checked.value).slice(0, 1000))
         return { value: null, output: worker.output(), generation: worker.generation }
       }
       if (mode === 'eval') {
-        const evaluated = await worker.request('eval', { code, inputs: [] }, this.#config.timeoutMs, combined)
+        const evaluated = await this.journalRequest(state, worker, 'eval', { code, inputs: [] }, this.#config.timeoutMs, combined)
         assertCurrent()
         if (!evaluated.ok || evaluated.proposals.length) fail('TASK_EVAL_FAILED', String(evaluated.value).slice(0, 1000))
         const value = evaluated.value as { printed?: string; json?: unknown }
@@ -280,7 +289,7 @@ export class LispManager {
       await writeFile(inputPath, encoded, { flag: 'wx', mode: 0o400 })
       assertCurrent()
       state.state = 'EVALUATING'
-      const response = await worker.request('task', { code, input: inputPath }, this.#config.timeoutMs, combined)
+      const response = await this.journalRequest(state, worker, 'task', { code, input: inputPath }, this.#config.timeoutMs, combined)
       if (!response.ok || response.proposals.length) fail('TASK_EXECUTION_FAILED', String(response.value).slice(0, 1000))
       const result = await snapshot(layout.scratch, 'task-result.json', [])
       if (!result.exists) fail('TASK_RESULT_MISSING', 'Task result was not saved.')
@@ -323,7 +332,8 @@ export class LispManager {
         layout.workspace = state.owner.root
         layout.protected = this.#config.executionMode === 'protected'
         worker = new LispWorker(layout, this.#config, (method, args, context) => this.bridge(state, method, args, context), undefined,
-          () => this.taskAuthority.bound(state.execution, async () => { await this.taskAuthority.authorizeEffect(state.owner, this.#config.executionMode === 'protected' ? 'protected' : 'direct') }))
+          () => this.taskAuthority.bound(state.execution, async () => { await this.taskAuthority.authorizeEffect(state.owner, this.#config.executionMode === 'protected' ? 'protected' : 'direct') }),
+          (input, launch) => this.journalProtectedJob(state, input, launch))
         state.worker = worker
         if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
         await worker.start()
@@ -332,7 +342,7 @@ export class LispManager {
         const canary = join(base, 'host-canary')
         await writeFile(canary, 'protected', { mode: 0o600 })
         const quote = (value: string) => JSON.stringify(value)
-        const probe = await worker.request('eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${quote(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${quote(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) (kioku.files:write-text (merge-pathnames "probe" (kioku.files:scratch)) "ok") :protected)` }, this.#config.startupTimeoutMs)
+        const probe = await this.journalRequest(state, worker, 'eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${quote(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${quote(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) (kioku.files:write-text (merge-pathnames "probe" (kioku.files:scratch)) "ok") :protected)` }, this.#config.startupTimeoutMs)
         if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
         }
         if (this.#closed || state.state !== 'PREFLIGHT') { await worker.stop(); fail('CANCELLED', '起動を取り消しました。') }
@@ -465,8 +475,59 @@ export class LispManager {
     state.ownedStop=stopping.finally(()=>{delete state.ownedStop})
     return state.ownedStop
   }
+  private async journalProtectedJob(state: AgentState, input: unknown, launch: () => Promise<Job>): Promise<Job> {
+    const scope = state.managedScope
+    if (!scope) fail('JOURNAL_SCOPE_MISSING', 'Managed evaluation collection is unavailable.')
+    await scope.database(db => {
+      if (db.prepare(`SELECT 1 FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
+        WHERE json_extract(s.scope_json,'$.sessionId')=? AND json_extract(o.operation_json,'$.route')='native' AND o.state='unknown' LIMIT 1`).get(state.owner.sessionId)) {
+        new ManagedOperationJournal(db).markIncomplete(scope.scopeId)
+        fail('JOURNAL_RECONCILE_REQUIRED', 'A previous native operation is unresolved; inspect it before another effect.')
+      }
+    })
+    const operation = await scope.database(db => new ManagedOperationJournal(db).prepare(scope.scopeId, {route:'native',kind:'process',request:{input,environment:{...process.env},cwd:state.worker?.layout.scratch,runtime:process.version}}))
+    if (!await scope.database(db => new ManagedOperationJournal(db).claim(operation.operationId))) fail('JOURNAL_REPLAY', 'Process already dispatched.')
+    let job: Job
+    try { job = await launch() }
+    catch (error) { await scope.database(db => new ManagedOperationJournal(db).transition(operation.operationId,{state:'unknown'})); throw error }
+    await scope.database(db => new ManagedOperationJournal(db).transition(operation.operationId,{state:'running'}))
+    const done = job.done
+    job.done = done.then(async () => {
+      await observeManagedResult({...scope, operationId:operation.operationId,kind:'process'}, {
+        code:job.result?.code,receipt:{route:'native',processStopped:job.settled===true},
+      })
+      await scope.database(db => new ManagedOperationJournal(db).setDelivery(operation.operationId,'delivered'))
+    })
+    // Background completion persists independently of Lisp's final return value.
+    void job.done.catch(() => {})
+    return job
+  }
+  private async journalRequest(state: AgentState, worker: LispWorker, ...args: Parameters<LispWorker['request']>): ReturnType<LispWorker['request']> {
+    const lease = state.execution?.lease ?? this.taskAuthority.current()?.lease
+    const scope = await this.#store.database(db => new ManagedOperationJournal(db).createScope({
+      ...(lease ? {binding:{taskId:lease.taskId,workerGeneration:worker.generation,leaseAuthorityGeneration:lease.generation,leaseRevision:lease.revision}} : {}),
+      sessionId: state.owner.sessionId, parentId: randomUUID(), runtimeIdentity: `sbcl:${worker.generation}`,
+    }))
+    const managedScope = { database: this.#store.database, scopeId: scope.scopeId }
+    state.managedScope = managedScope
+    try { return await worker.request(...args) }
+    finally {
+      if (state.managedScope === managedScope) delete state.managedScope
+      await this.#store.database(db => new ManagedOperationJournal(db).seal(scope.scopeId))
+    }
+  }
   private bridge(state: AgentState, method: string, args: unknown, context: LispRpcContext): Promise<unknown> {
-    const pending=this.taskAuthority.bound(state.execution, () => this.bridgeBound(state, method, args, context))
+    const pending=this.taskAuthority.bound(state.execution, () => {
+      const parsed = args as { name?: string }
+      const processEffect = ['run', 'start-job', 'ci-verify'].includes(method) || method === 'tool-call' && parsed?.name === 'kioku_exec'
+      const file = method === 'tool-call' && ['kioku_write', 'kioku_edit', 'kioku_remove'].includes(parsed?.name ?? '')
+      if (!processEffect && !file) return this.bridgeBound(state, method, args, context)
+      if (!state.managedScope) fail('JOURNAL_SCOPE_MISSING', 'Managed evaluation collection is unavailable; no operation was dispatched.')
+      const route = method === 'run' && this.taskAuthority.current()?.nativeCommands && this.#config.executionMode === 'development' ? 'native' : 'owned'
+      return runManagedOperation(state.managedScope, { route, kind: file ? 'file' : 'process',
+        request: { method, args, cwd: state.owner.root, workerGeneration: context.generation, evaluationId: context.evaluationId, rpcId: context.rpcId,environment:{...process.env},runtime:process.version } },
+        () => this.bridgeBound(state, method, args, context))
+    })
     if(['run','start-job','tool-call','ci-verify'].includes(method)){
       (state.ownedCalls??=new Set()).add(pending)
       const settled=()=>{state.ownedCalls?.delete(pending)}
@@ -580,7 +641,8 @@ export class LispManager {
             directory: z.string().min(1).max(4096).optional(), location: z.enum(['workspace', 'scratch']).optional() }).strict().parse(args) }
       const active = [...state.active]
       if (active.length !== 1) fail('HOST_STATE', 'CI 呼び出しの実行主体を一意に確認できません。')
-      if (request.kind === 'verify') await this.taskAuthority.authorizeEffect(state.owner)
+      // This authority check precedes the CI adapter; a refusal proves no dispatch.
+      if (request.kind === 'verify') await this.taskAuthority.authorizeEffect(state.owner).catch(managedAdmissionDenied)
       context.signal.throwIfAborted()
       const result = await this.options.ciCall(state.owner, request, active[0]!.signal, state.worker.layout.scratch)
       if(request.kind==='verify')this.retainOwned(state,result)
@@ -627,18 +689,37 @@ export class LispManager {
     }
     return true
   }
+  private managedUnresolved(owner: LispOwner): Promise<{operations:Array<{id:string;scopeId:string;route:string;kind:string;state:string;originalRef?:string}>;total:number;unknownCount:number;truncated:boolean}> {
+    return this.#store.database(db => {
+      // Safety decisions use the full set, never the bounded diagnostic page.
+      const counts = db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN o.state='unknown' THEN 1 ELSE 0 END),0) AS unknown_count
+        FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
+        WHERE json_extract(s.scope_json,'$.sessionId')=? AND o.state IN ('unknown','dispatching','running','prepared')`)
+        .get<{total:number;unknown_count:number}>(owner.sessionId)!
+      const operations = db.prepare(`SELECT o.operation_json FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
+        WHERE json_extract(s.scope_json,'$.sessionId')=? AND o.state IN ('unknown','dispatching','running','prepared') ORDER BY o.rowid DESC LIMIT 100`)
+        .all<{operation_json:string}>(owner.sessionId).map(row => {
+          const value=JSON.parse(row.operation_json)
+          return {id:value.operationId,scopeId:value.scopeId,route:value.route,kind:value.kind,state:value.state,...(value.originalRef?{originalRef:value.originalRef}:{})}
+        })
+      return {operations,total:counts.total,unknownCount:counts.unknown_count,truncated:counts.total>operations.length}
+    })
+  }
   async status(owner: LispOwner, offset?: number): Promise<unknown> {
     const policy = (this.options.questions as ApprovalQuestions | undefined)?.approvalPolicy
     const approval = { mode: policy?.mode() ?? this.#config.approvalMode, scope: 'profile', writable: policy?.writable() ?? false }
     if (!this.enabled.has(owner.sessionId)) return { approval, enabled: false, state: 'DISABLED', recovery: '/kioku-lisp enable' }
     const state = this.entry(owner)
     const taskMode = await this.isTaskMode(owner)
+    const managed = await this.managedUnresolved(owner)
+    const managedOperations = managed.operations
+    const managedReconciliation = managed.unknownCount > 0
     const unconfirmed = [...this.#agents.values()].find(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED')
     if (state.state === 'READY' && !state.worker?.healthy) this.halted(state, new LispError('WORKER_EXITED', 'Lisp が終了しています。新しい Lisp の起動前に状態を確認してください。'))
     const summary = await this.#store.operationSummaries(owner.sessionId, offset)
     const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
-    return { approval, enabled: true, state: unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
+    return { approval, enabled: true, managedOperations, managedOperationCount:managed.total, managedOperationsTruncated:managed.truncated, managedReconciliationRequired:managedReconciliation, state: managedReconciliation ? 'RECONCILIATION_REQUIRED' : unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
       generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
       jobs: [...(state.worker?.jobStatus() ?? []),...[...state.ownedJobs??[]].map(operationId=>({operationId,owner:'kiokuko-execution'}))],
       executionMode:this.#config.executionMode,
@@ -649,13 +730,18 @@ export class LispManager {
       ...(taskSummary ? { task: taskSummary } : {}),
       hot: await this.#hot.status(owner),
       ...(offset === undefined ? {} : { operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates, offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
-      recovery: unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
+      recovery: managedReconciliation ? 'Managed operations remain unresolved. Inspect the listed operation IDs and original receipts; restarting or abandoning Lisp does not reconcile external effects.' : unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {
     this.entry(owner)
     if (id) {
       const operation = await this.#store.get(owner, identifier.parse(id))
-      if (!operation) fail('UNKNOWN_OPERATION', 'この主体の操作記録がありません。')
+      if (!operation) {
+        const managed = await this.#store.database(db => db.prepare(`SELECT o.operation_json FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
+          WHERE o.operation_id=? AND json_extract(s.scope_json,'$.sessionId')=?`).get<{operation_json:string}>(id,owner.sessionId))
+        if (managed) { const value=JSON.parse(managed.operation_json);return {operationId:value.operationId,scopeId:value.scopeId,parentId:value.parentId,route:value.route,kind:value.kind,state:value.state,originalRef:value.originalRef??null,cause:value.cause??null,delivery:value.delivery} }
+        fail('UNKNOWN_OPERATION', 'この主体の操作記録がありません。')
+      }
       return { ...operation, payload: JSON.parse(operation.payload), result: operation.result ? JSON.parse(operation.result) : null }
     }
     const operations = await this.#store.operations(owner.sessionId)
@@ -1002,7 +1088,7 @@ export class LispManager {
         } else args = tool === 'lisp_describe' ? { symbol: typeof input.symbol === 'string' ? input.symbol : '' } : { ref: identifier.parse(input.ref) }
         await this.#store.reserve(owner, id, tool, hash, worker.generation, payload); reserved = true
         if (tool === 'lisp_eval') state.currentVerification = { operationId: id, generation: worker.generation, results: [] }
-        const response = await worker.request(tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined)
+        const response = await this.journalRequest(state, worker, tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined)
         const result = { ok: response.ok, operationId: id, value: response.value, output: worker.output(), generation: worker.generation, proposals: response.proposals }
         evidence = { ...result, state: response.ok ? 'RUNNING' : 'FAILED' }
         await this.#store.transition(owner, id, ['RUNNING'], response.ok ? 'RUNNING' : 'FAILED', evidence)
@@ -1095,6 +1181,10 @@ export class LispManager {
     })
   }
   private async recoverBound(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    const managed = await this.managedUnresolved(owner)
+    if (managed.unknownCount > 0) return {ok:false,code:'RECONCILIATION_REQUIRED',
+      message:'External operation results remain unknown. Inspect the listed originals. Native results without a verifiable host receipt cannot be cleared by restarting Lisp; no command was retried.',managedOperations:managed.operations,managedOperationCount:managed.total,managedOperationsTruncated:managed.truncated}
+
     if (await this.isTaskMode(owner)) {
       await this.stopTaskWorkers(owner.sessionId)
       await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))

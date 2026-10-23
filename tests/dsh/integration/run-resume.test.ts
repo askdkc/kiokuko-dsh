@@ -37,6 +37,9 @@ test('continuation bindings require exact session, run, workspace, and route epo
 test('runtime resumes the exact dsh route and rejects stale credentials before adapter mutation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-resume-'))
   await mkdir(join(root, 'src'))
+  // A workspace-local TMPDIR may itself sit inside a checkout. Keep this
+  // repository-discovery fixture independent of the runner's parent repo.
+  await mkdir(join(root, '.git'))
   const databasePath = join(root, 'data.sqlite3')
   await initializeDatabase({ databasePath })
   const database = openConnection(databasePath)

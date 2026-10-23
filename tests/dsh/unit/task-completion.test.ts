@@ -101,3 +101,40 @@ test('pre-bound subdirectory checks accept complete Node TAP coverage and retain
     assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied')
   } finally { await f.cleanup() }
 })
+
+test('unresolved managed work blocks only its explicitly bound task completion',async()=>{
+  const f=await fixture('enforce')
+  try {
+    for(const [index,criterion]of f.criteria.entries())bindTaskCriterion(f.database,{runId:f.runId,callId:`bind-managed-${index}`,criterionId:criterion.criterionId,method:f.method,approved:true})
+    beginTaskCompletionExecution(f.database,{runId:f.runId,callId:'managed-proof',command,repositoryRoot:f.root})
+    finishTaskCompletionExecution(f.database,{runId:f.runId,callId:'managed-proof',result:{value:{exitCode:0},content:[{type:'text',text:tap(1)}]}})
+    assert.equal(assessTaskCompletion(f.database,f.runId).verified,true)
+    const {ManagedOperationJournal}=await import('../../../src/dsh/managed-operation-journal.js')
+    const journal=new ManagedOperationJournal(f.database)
+    const scope=journal.createScope({sessionId:'same-session',parentId:'unknown',runtimeIdentity:'fixture',binding:{taskId:'unrelated-task'}})
+    const op=journal.prepare(scope.scopeId,{route:'owned',kind:'process',request:{command:'fixture'}})
+    journal.claim(op.operationId);journal.transition(op.operationId,{state:'unknown'});journal.seal(scope.scopeId)
+    assert.equal(assessTaskCompletion(f.database,f.runId).verified,true,'session coincidence cannot bind independent work')
+    const ownScope=journal.createScope({sessionId:'same-session',parentId:'bound-unknown',runtimeIdentity:'fixture',binding:{taskId:f.runId}})
+    const own=journal.prepare(ownScope.scopeId,{route:'owned',kind:'process',request:{command:'fixture'}})
+    journal.claim(own.operationId);journal.transition(own.operationId,{state:'unknown'});journal.seal(ownScope.scopeId)
+    const result=assessTaskCompletion(f.database,f.runId)
+    assert.equal(result.managedOperationsReady,false);assert.equal(result.verified,false)
+    assert.equal(taskCompletionBlocksClose(result),true)
+  } finally {await f.cleanup()}
+})
+
+test('task-bound open or incomplete zero-operation collectors cannot count as completed evidence',async()=>{
+  const f=await fixture('enforce')
+  try {
+    const {ManagedOperationJournal}=await import('../../../src/dsh/managed-operation-journal.js')
+    const journal=new ManagedOperationJournal(f.database)
+    const scope=journal.createScope({sessionId:'session',parentId:'collector',runtimeIdentity:'fixture',binding:{taskId:f.runId}})
+    assert.equal(assessTaskCompletion(f.database,f.runId).managedOperationsReady,false)
+    journal.seal(scope.scopeId)
+    assert.equal(assessTaskCompletion(f.database,f.runId).managedOperationsReady,true)
+    const broken=journal.createScope({sessionId:'session',parentId:'broken',runtimeIdentity:'fixture',binding:{taskId:f.runId}})
+    journal.markIncomplete(broken.scopeId);journal.seal(broken.scopeId)
+    assert.equal(assessTaskCompletion(f.database,f.runId).managedOperationsReady,false)
+  } finally {await f.cleanup()}
+})

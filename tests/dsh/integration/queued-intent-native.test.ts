@@ -67,7 +67,7 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       const questions = ctx.plugin({ name: 'queued-intake-questions', apply(context: any) { return context.provide('userQuestions', { async ask(request: any) {
         const id = request.questions[0].id; asked.push(id)
         assert.notEqual(id, 'taskType', 'clear queued requests must not ask their purpose')
-        return { answers: [{ id, selected: [id === 'lisp-coding-mode' ? 'Lispモードを使わない' : '通常実行'] }] }
+        return { answers: [{ id, selected: [id === 'lisp-coding-mode' || id.startsWith('lisp-early-') || id.startsWith('coding-lisp-') ? 'Lispモードを使わない' : '通常実行'] }] }
       } }) } }); fibers.push(questions); await questions
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
       ctx.tools.register({ name: 'fixture_probe', [CODING_READ_ONLY]: true, description: 'Harmless read-only fixture probe.', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { probes++; return 'probe result' } })

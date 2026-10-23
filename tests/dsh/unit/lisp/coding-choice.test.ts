@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createLispCodingChoice, type LispCodingInput } from '../../../../src/dsh/lisp/coding-choice.js'
+import { LispCodingCancelled } from '../../../../src/dsh/lisp/coding-question.js'
 import { ExecutionSelectionPending } from '../../../../src/dsh/model-selection-ui.js'
 
 function fixture(answers: Array<{ selected: string[]; custom?: string }>) {
@@ -77,7 +78,7 @@ test('conversation and reviews do not prompt; free text returns to conversation 
 
 test('cancellation, unavailable UI and activation failure never admit coding or choose a default', async () => {
   const f = fixture([{ selected: ['取消・作業を保持'] }])
-  await assert.rejects(f.service.prepare(f.input), ExecutionSelectionPending)
+  await assert.rejects(f.service.prepare(f.input), LispCodingCancelled)
   assert.deepEqual(f.effects, [])
   const unavailable = createLispCodingChoice({ enabled: () => false, decided: async () => false,
     enable: async () => { throw new Error('must not enable') }, decline: async () => { throw new Error('must not decline') },
@@ -103,7 +104,7 @@ test('choosing conversation once survives unclear follow-ups, but a new coding r
 for (const [number, effect] of [['1', 'enable'], ['2', 'decline'], ['3', 'cancel']] as const) {
   test(`Lisp choice preserves numeric shortcut ${number}`, async () => {
     const f = fixture([{ selected: [], custom: number }])
-    if (effect === 'cancel') await assert.rejects(f.service.prepare(f.input), ExecutionSelectionPending)
+    if (effect === 'cancel') await assert.rejects(f.service.prepare(f.input), LispCodingCancelled)
     else await f.service.prepare(f.input)
     assert.deepEqual(f.effects, effect === 'cancel' ? [] : [effect])
   })

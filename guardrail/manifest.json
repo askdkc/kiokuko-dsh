@@ -2,6 +2,7 @@
   "schema": 1,
   "package": "kiokuko-guardrail",
   "version": "0.1.0",
+  "sourceSha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
   "protocol": {
     "path": "guardrail/protocols/coding-routine.lisp",
     "bytes": 948,
@@ -13,14 +14,15 @@
       "arch": "x64",
       "binary": "guardrail/x86_64-unknown-linux-musl/kiokuko-guardrail",
       "manifest": "guardrail/x86_64-unknown-linux-musl/manifest.json",
-      "manifestSha256": "00e2c0ebf29867ff87e5c6e47c25e4c65d8884f70a8ace85f63717932356197c",
-      "bytes": 516792,
-      "sha256": "d262a712893945a1525dc9c8f19c806a44a832747879c1af8f6e33634b15636b",
+      "manifestSha256": "8e44a29510df7c251f2649fbc356ec52c2a32a83e024082111af67a9784086f9",
+      "bytes": 549560,
+      "sha256": "828126da26891c8afa4cab9a8446fb6ff4a1883fd45a4556626942f0535b1f5d",
       "verification": {
         "independent_builds_equal": true,
         "native_smoke": "passed",
-        "package_sha256": "27273d1914e0c406425722973dec110da019c37ca6dd43afdff8f8c86013b868",
-        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
+        "source_sha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+        "package_sha256": "ec5f9b19deb93b4ce6530081efba7db209296965633feae6942482ab808dacc9",
+        "status": "host smoke executed",
         "static_no_pt_interp": true
       }
     },
@@ -29,16 +31,16 @@
       "arch": "arm64",
       "binary": "guardrail/aarch64-unknown-linux-musl/kiokuko-guardrail",
       "manifest": "guardrail/aarch64-unknown-linux-musl/manifest.json",
-      "manifestSha256": "2f1560bb9aa7b12ecba9000f0ae540598e433a06869138c861a68ecc26fd2787",
-      "bytes": 445888,
-      "sha256": "62b8f751d99e24c71d4223037221207ecd7877ddbf0ac3784e31df26c8af0beb",
+      "manifestSha256": "ae288c94f96eec22bdaa28ece87a97d7ca86209072fc825d510394b9b0e1b7f8",
+      "bytes": 468824,
+      "sha256": "9b2fa78a3f13fbb4efd2dd5cf3f80892bf70ad30ee26c9b995ab2d2ebb203cf3",
       "verification": {
         "independent_builds_equal": true,
         "native_smoke": "not run",
-        "package_sha256": "9db094881a6fb18c3457f46e1c285dffe223414c982b2b4f5071babe182c5c02",
-        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-        "static_no_pt_interp": true,
-        "status": "cross-built; not executed on ARM64 Linux"
+        "source_sha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+        "package_sha256": "bba8060d03dc3759acbdff31f480b031a63c0596a66df6c435b9211eaebda9bf",
+        "status": "cross-built; native execution not run",
+        "static_no_pt_interp": true
       }
     },
     "aarch64-apple-darwin": {
@@ -46,137 +48,23 @@
       "arch": "arm64",
       "binary": "guardrail/aarch64-apple-darwin/kiokuko-guardrail",
       "manifest": "guardrail/aarch64-apple-darwin/manifest.json",
-      "manifestSha256": "4e5e9e56dbfc3de7d70a703da3ec69c2ec4600cc9b5ae728606fe1ea47e85440",
-      "bytes": 384672,
-      "sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4",
+      "manifestSha256": "a810c8372c875efb7435931122aa3aa8a6afd556df61d9bf29d3b43656e44f29",
+      "bytes": 417712,
+      "sha256": "5e08acf36e6648c34f1fe317ff9806a76cbddd37434b41db5395e95dee0571fc",
       "verification": {
-        "imports": [
-          "/usr/lib/libSystem.B.dylib"
-        ],
         "independent_builds_equal": true,
-        "interpreter": "/usr/lib/dyld",
-        "linker_ad_hoc_signature": true,
-        "minimum_os": "13.0.0",
         "native_smoke": "not run",
-        "package_sha256": "9ba9b967e8eae733972ce01d5841ddb432f1c863dd5f86792527266ddeb73530",
-        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-        "status": "cross-built; not executed on macOS"
+        "source_sha256": "969f1ba962a89ae5131c3a0dcf51311785536b13add3b4bec26b13b03b4008d6",
+        "package_sha256": "267f330c690afc47b023fcd0fdbd68618e4c4fd77b8fdfccf68b13348888f551",
+        "status": "cross-built; native execution not run"
       }
     }
   },
   "unavailableTargets": [],
-  "scope": "Bundled artifact identity and declared build provenance only. Cross-built targets are not native execution evidence. No OS sandbox, signatures, deterministic inference, or restored Common Lisp heap is claimed.",
-  "toolchainProvenance": {
-    "toolchain-inputs": {
-      "cc_binary_sha256": "a23ecab8ff08f09ad8c80602c2c5df7f49e09c25905cb8975902e101bf72635f",
-      "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
-      "components": [
-        {
-          "sha256": "77171ba2a0345fdf2abc4fedda55d6de078dae7a68527c28be8c77dcc9604bd5",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rustc-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
-        },
-        {
-          "sha256": "3e58dff2d0b72196b5ea4e90536e174d400de88564a52694686b81e091169933",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
-        },
-        {
-          "sha256": "d7674918d28093097614cd9728b6ca60db9ea3038f640f0bd1e9a4188c7568ce",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/cargo-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
-        },
-        {
-          "sha256": "b22c09ab9e258ec5571da170d88bd1624a4ea602e6d70d95720c5b47494cadce",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rustfmt-1.99.0-x86_64-unknown-linux-gnu.tar.xz"
-        },
-        {
-          "sha256": "b106b0aa4565cc3525fd3161c69203a9e39044e6e6b4d618f261c3eeda14ad50",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-unknown-linux-musl.tar.xz"
-        }
-      ],
-      "ld_binary_sha256": "d2766988b6a1b1d1518cdc09242e726d1f24e151e16410ada3092b11ffd9081b",
-      "ld_version": "GNU ld (GNU Binutils for Debian) 2.44",
-      "official_manifest_sha256": "ce6dddc886364f8d786514771212cebe9b731ba82d6b859951c6b0ccc516b6a2",
-      "scope": "Recorded cloud toolchain inputs. This is not a fully isolated Guix derivation or a cross-platform deterministic inference claim."
-    },
-    "macos-cross-verification": {
-      "components": [
-        {
-          "sha256": "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026",
-          "url": "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
-        },
-        {
-          "sha256": "a7c6de8aa21e7c31163a7656295b321bb85f5dce55ed8ea95ac9ac561202bb5b",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-aarch64-apple-darwin.tar.xz"
-        },
-        {
-          "sha256": "18ee81961a73c3ae966ecb1e8f6096438c90aeefece8856201a6ecc17f5bc850",
-          "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-x86_64-apple-darwin.tar.xz"
-        }
-      ],
-      "macos": [
-        {
-          "binary_bytes": 384672,
-          "binary_sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4",
-          "imports": [
-            "/usr/lib/libSystem.B.dylib"
-          ],
-          "independent_builds_equal": true,
-          "interpreter": "/usr/lib/dyld",
-          "linker_ad_hoc_signature": true,
-          "minimum_os": "13.0.0",
-          "native_smoke": "not run",
-          "package_sha256": "9ba9b967e8eae733972ce01d5841ddb432f1c863dd5f86792527266ddeb73530",
-          "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-          "status": "cross-built; not executed on macOS",
-          "target": "aarch64-apple-darwin"
-        },
-        {
-          "binary_bytes": 414856,
-          "binary_sha256": "673e9b26eda59ba18e217034c6502daa65a2ab10f22403685c4aaf42181631f0",
-          "imports": [
-            "/usr/lib/libSystem.B.dylib"
-          ],
-          "independent_builds_equal": true,
-          "interpreter": "/usr/lib/dyld",
-          "linker_ad_hoc_signature": false,
-          "minimum_os": "13.0.0",
-          "native_smoke": "not run",
-          "package_sha256": "fb3a2c767f2a077dbe86af44814b93ae9ef81722359423882c029db0f5afdcb3",
-          "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-          "status": "cross-built; not executed on macOS",
-          "target": "x86_64-apple-darwin"
-        }
-      ],
-      "scope": "Cloud cross-build and Mach-O structural/import/reproducibility checks only. No native macOS execution, notarization, or external-effect determinism claim.",
-      "zig_binary_sha256": "7c61539af19fa4082c94848f1c2b57b89e76dc6cfd5bd4c57764c3caf8f82272",
-      "zig_version": "0.17.0"
-    },
-    "arm-cross-verification": {
-      "component": {
-        "sha256": "ea8fd309578a09c9e12401621a470e6d6b1047f25933207fb8a39d66647d4561",
-        "url": "https://static.rust-lang.org/dist/2026-10-01/rust-std-1.99.0-aarch64-unknown-linux-musl.tar.xz"
-      },
-      "linker_binary_sha256": "4739514e3484915747c34b35007cd990235cc6b490b2d0525a61ac402ca16af9",
-      "linker_version": "LLD 23.1.1 (/checkout/src/llvm-project/llvm 1b9c0d5ff9bbe7634aead059efe6b11a7eeba145) (compatible with GNU linkers)",
-      "linux_arm64": {
-        "binary_bytes": 445888,
-        "binary_sha256": "62b8f751d99e24c71d4223037221207ecd7877ddbf0ac3784e31df26c8af0beb",
-        "independent_builds_equal": true,
-        "native_smoke": "not run",
-        "package_sha256": "9db094881a6fb18c3457f46e1c285dffe223414c982b2b4f5071babe182c5c02",
-        "source_sha256": "c835782d88444f03f9bce01106b75b9c071fa18543d51e7fcb754f403ba6deab",
-        "static_no_pt_interp": true,
-        "status": "cross-built; not executed on ARM64 Linux",
-        "target": "aarch64-unknown-linux-musl"
-      },
-      "macos_ad_hoc_signature_checks": [
-        {
-          "native_execution": "not run",
-          "sha256": "c60cb16daa7a536d876017da01815fce3719bae16fc6cd42ea74df04f3e53af4",
-          "sha256_code_pages_verified": true,
-          "target": "aarch64-apple-darwin"
-        }
-      ],
-      "scope": "Cross-build and ELF/Mach-O structural/hash verification only; ARM64 Linux and macOS native execution not run."
-    }
+  "scope": "Current-source distribution integrity and observed unsigned build processes. Cross-built ARM64 targets have no native execution claim.",
+  "buildRecords": {
+    "path": "guardrail/build-records.json",
+    "sha256": "eed06a954d2ec6e26bfc3bf5ce1135715916b5a7301ed5b511a7590370bce61d",
+    "bytes": 8574
   }
 }

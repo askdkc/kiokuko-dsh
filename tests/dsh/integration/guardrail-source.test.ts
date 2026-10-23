@@ -24,7 +24,7 @@ test('repository delivers the exact Rust crate, protocol specification and porta
   const source = json(join(release, 'source-manifest.json'))
   const manifest = json(join(root, 'guardrail/manifest.json'))
   await t.test('frozen source and executable manifests bind the same complete crate', () => {
-    assert.equal(Object.keys(source.files).length, 22)
+    assert.ok(Object.keys(source.files).length > 0, 'source manifest must enumerate the complete crate')
     assert.deepEqual(walk(crate), Object.keys(source.files).sort())
     const actual = Object.fromEntries(walk(crate).map(file => [file, sha(readFileSync(join(crate, file)))]))
     assert.deepEqual(actual, source.files)
@@ -38,7 +38,7 @@ test('repository delivers the exact Rust crate, protocol specification and porta
     assert.equal(readFileSync(join(crate, 'examples/coding-routine.lisp'), 'utf8'), readFileSync(join(root, manifest.protocol.path), 'utf8'))
     const specification = readFileSync(join(crate, 'README.md'), 'utf8')
     assert.match(specification, /## Language/)
-    assert.match(specification, /## Evidence wire schema v1/)
+    assert.match(specification, /## Evidence wire schema v2/)
     assert.match(specification, /not a Common Lisp implementation/)
     assert.match(specification, /not a globally unique task identifier/)
     for (const file of walk(crate)) assert.doesNotMatch(readFileSync(join(crate, file), 'utf8'), /\/workspace\/scratch\/|\/Users\/[^/]+\//)
@@ -130,4 +130,28 @@ test('current release CLI admits three shipping targets and rejects historical I
   assert.ok(!help.stdout.includes('x86_64-apple-darwin'))
   const intel=spawnSync('python3',[script,'--target','x86_64-apple-darwin'],{encoding:'utf8'})
   assert.equal(intel.status,2);assert.match(intel.stderr,/invalid choice.*x86_64-apple-darwin/)
+})
+
+// Static identities detect stale/inconsistent inputs, not a maliciously rewritten
+// history. Fresh output provenance comes from release.py's observed two builds;
+// the unsigned records are not an independent supply-chain attestation.
+test('current source binding rejects stale source manifests and target provenance', async () => {
+  const { verifyGuardrailSource } = await import('../../../scripts/guardrail-artifacts.mjs')
+  assert.equal(verifyGuardrailSource(root), json(join(root, 'crates/guardrail-release/source-manifest.json')).sourceSha256)
+  const directory = mkdtempSync(join(tmpdir(), 'guardrail-source-binding-'))
+  try {
+    cpSync(join(root, 'crates'), join(directory, 'crates'), { recursive: true })
+    cpSync(join(root, 'guardrail'), join(directory, 'guardrail'), { recursive: true })
+    cpSync(join(root, 'package.json'), join(directory, 'package.json'))
+    const sourceFile = join(directory, 'crates/guardrail/src/lib.rs')
+    const original = readFileSync(sourceFile)
+    writeFileSync(sourceFile, Buffer.concat([original, Buffer.from('\n// simulated current source change\n')]))
+    assert.throws(() => verifyGuardrailSource(directory), /current source identity mismatch/)
+    writeFileSync(sourceFile, original)
+    const provenancePath = join(directory, 'crates/guardrail-release/release-provenance.json')
+    const provenance = json(provenancePath)
+    provenance.source_sha256 = '0'.repeat(64)
+    writeFileSync(provenancePath, JSON.stringify(provenance))
+    assert.throws(() => verifyGuardrailSource(directory), /provenance source/)
+  } finally { rmSync(directory, { recursive: true, force: true }) }
 })

@@ -41,8 +41,16 @@ fn text(o: &Output) -> String {
 const PROTOCOL:&str="(defprotocol coding (:phase tests :produces test-spec :next red) (:phase red :requires test-spec :guard (and (fails-p test-spec) (not (syntax-error-p test-spec)) (not (timeout-p test-spec))) :next implement :on-violation tests) (:phase implement :requires test-spec :produces patch :next green) (:phase green :requires test-spec patch :guard (and (passes-p test-spec patch) (eq (status patch) :applied)) :next :done :on-violation implement))";
 fn evidence(outcome: &str, exit: i32, assertions: usize) -> String {
     let h = sha256(b"fixture");
-    format!("(evidence :schema 1 :authority \"kiokuko-dsh\" :issuer \"kiokuko-dsh:owned-execution:v1\" :task \"task-1\" :revision 7 :source \"{h}\" :tests \"{h}\" :command \"{h}\" :runtime \"{h}\" :model-provider \"none\" :model-name \"none\" :model-parameters \"{h}\" :transcript \"{h}\" :artifacts ((test-spec :id \"receipt-1\" :digest \"{h}\" :generation 3 :expected-generation 3 :source \"{h}\" :tests \"{h}\" :command \"{h}\" :runtime \"{h}\" :outcome :{outcome} :exit {exit} :assertions {assertions} :status :observed) (patch :id \"patch-1\" :digest \"{h}\" :generation 5 :expected-generation 5 :source \"{h}\" :tests \"{h}\" :command \"{h}\" :runtime \"{h}\" :outcome :produced :exit 0 :assertions 0 :status :applied)))")
+    let operation_outcome = if matches!(outcome, "passed" | "produced" | "skipped" | "not-run") { "succeeded" } else { "failed" };
+    format!(r#"(evidence :schema 2 :authority "kiokuko-dsh" :issuer "kiokuko-dsh:owned-execution:v1" :task "task-1" :revision 7
+      :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19 :scope "scope-1"
+      :collector (:version 1 :complete t :count 1 :unresolved 0 :digest "{h}")
+      :executions ((execution :id "op-1" :scope "scope-1" :parent "eval-1" :sequence 1 :route :owned :kind :process :state :completed :outcome :{operation_outcome} :request "{h}" :runtime "{h}" :receipt "{h}" :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19))
+      :source "{h}" :tests "{h}" :command "{h}" :runtime "{h}" :model-provider "none" :model-name "none" :model-parameters "{h}" :transcript "{h}"
+      :artifacts ((test-spec :id "receipt-1" :digest "{h}" :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19 :source "{h}" :tests "{h}" :command "{h}" :runtime "{h}" :outcome :{outcome} :exit {exit} :assertions {assertions} :status :observed :provenance :execution-backed :supporting ("op-1") :history () :state-digest "{h}")
+      (patch :id "patch-1" :digest "{h}" :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19 :source "{h}" :tests "{h}" :command "{h}" :runtime "{h}" :outcome :produced :exit 0 :assertions 0 :status :applied :provenance :state-derived :supporting () :history () :state-digest "{h}")))"#)
 }
+
 #[test]
 fn cli_version_from_package_metadata() {
     let o = run(&["--version"]);
@@ -135,8 +143,8 @@ fn stale_generation_and_snapshot_bindings_fail_closed() {
     let p = d.file("protocol.lisp", PROTOCOL);
     let good = evidence("assertion-failure", 1, 3);
     for bad in [
-        good.replace(":expected-generation 3", ":expected-generation 4"),
-        good.replacen(":revision 7", ":revision 2", 1),
+        good.replacen(":protocol-generation 11", ":protocol-generation 12", 1),
+        good.replacen(":lease-generation 19", ":lease-generation 20", 1),
         good.replacen(
             &format!(":source \"{}\"", sha256(b"fixture")),
             &format!(":source \"{}\"", sha256(b"changed")),
@@ -154,12 +162,13 @@ fn evidence_schema_rejects_duplicates_unknowns_and_fake_status() {
     let p = d.file("protocol.lisp", PROTOCOL);
     let good = evidence("assertion-failure", 1, 3);
     for bad in [
-        good.replace(":schema 1", ":schema 1 :schema 1"),
-        good.replace(":schema 1", ":schema 1 :extra t"),
+        good.replace(":schema 2", ":schema 2 :schema 2"),
+        good.replace(":schema 2", ":schema 2 :extra t"),
+        good.replace(":schema 2", ":schema 1"),
         good.replace(":assertion-failure", ":model-said-failed"),
         good.replace(":exit 1", ":exit 0"),
         good.replace(":authority \"kiokuko-dsh\"", ":authority \"model\""),
-        good.replace(":generation 3", ":generation 0"),
+        good.replace(":protocol-generation 11", ":protocol-generation 0"),
     ] {
         let e = d.file("evidence.lisp", &bad);
         assert_eq!(run(&["check", &p, "red", &e]).status.code(), Some(2));
@@ -222,4 +231,28 @@ fn missing_or_untrusted_issuer_is_rejected() {
         let e = d.file("evidence.lisp", &bad);
         assert_eq!(run(&["check", &p, "red", &e]).status.code(), Some(2));
     }
+}
+
+#[test]
+fn legacy_schema1_evidence_requires_rebind() {
+    let d = Temp::new();
+    let p = d.file("protocol.lisp", PROTOCOL);
+    let h = sha256(b"fixture");
+    let legacy = format!(r#"(evidence :schema 1 :authority "kiokuko-dsh" :issuer "kiokuko-dsh:owned-execution:v1"
+      :task "task-1" :revision 2 :source "{h}" :tests "{h}" :command "{h}" :runtime "{h}"
+      :model-provider "none" :model-name "none" :model-parameters "{h}" :transcript "{h}"
+      :artifacts ((test-spec :id "receipt-1" :digest "{h}" :generation 1 :expected-generation 1
+      :source "{h}" :tests "{h}" :command "{h}" :runtime "{h}" :outcome :assertion-failure :exit 1 :assertions 3 :status :observed)))"#);
+    let e = d.file("legacy.lisp", &legacy);
+    assert_eq!(run(&["check", &p, "red", &e]).status.code(), Some(2));
+}
+
+#[test]
+fn shared_schema2_green_fixture_passes_real_cli() {
+    let d = Temp::new();
+    let p = d.file("protocol.lisp", PROTOCOL);
+    let e = d.file("evidence.lisp", include_str!("fixtures/schema2-green.lisp"));
+    let output = run(&["check", &p, "green", &e]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(text(&output).contains(":allow t"));
 }

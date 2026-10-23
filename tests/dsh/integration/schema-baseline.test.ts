@@ -218,6 +218,11 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_lisp_sessions',
         'dsh_loop_guard_claims',
         'dsh_loop_guard_states',
+        'dsh_managed_journal_keys',
+        'dsh_managed_operations',
+        'dsh_managed_scopes',
+        'dsh_managed_snapshots',
+        'dsh_managed_transitions',
         'dsh_memory_finalization_entries',
         'dsh_memory_finalizations',
         'dsh_memory_observations',
@@ -306,6 +311,37 @@ test('baseline initialization creates the complete DSH schema with clean integri
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'entries_fts_%' AND name NOT LIKE 'entries_trigram_%' ORDER BY name",
       ).all<{ name: string }>().map(({ name }) => name)
       assert.deepEqual(tables, expectedTables)
+
+      // Migration 047 separates managed audit from owned receipts. Freeze its exact
+      // columns and uniqueness constraints rather than accepting arbitrary extra tables.
+      const journalColumns: Record<string, string[]> = {
+        dsh_managed_journal_keys: ['id', 'secret'],
+        dsh_managed_scopes: ['scope_id', 'scope_json', 'sealed', 'collector_complete', 'created_at'],
+        dsh_managed_operations: ['operation_id', 'scope_id', 'sequence', 'state', 'operation_json'],
+        dsh_managed_transitions: ['operation_id', 'sequence', 'transition_json'],
+        dsh_managed_snapshots: ['snapshot_id', 'scope_id', 'snapshot_json', 'created_at', 'retained'],
+      }
+      for (const [table, columns] of Object.entries(journalColumns)) {
+        assert.deepEqual(database.prepare(`PRAGMA table_info(${table})`).all<{name:string}>().map(row=>row.name), columns)
+      }
+      const originalIndex = database.prepare("SELECT sql FROM sqlite_schema WHERE type='index' AND name='dsh_managed_operations_original'").get<{sql:string}>()?.sql ?? ''
+      assert.match(originalIndex, /CREATE UNIQUE INDEX/u)
+      assert.match(originalIndex, /json_extract\(operation_json,'\$\.originalRef'\)/u)
+      assert.match(originalIndex, /IS NOT NULL/u)
+      assert.deepEqual(database.prepare('PRAGMA foreign_key_list(dsh_managed_operations)').all<{table:string;from:string;to:string}>()
+        .map(row=>[row.table,row.from,row.to]), [['dsh_managed_scopes','scope_id','scope_id']])
+      assert.deepEqual(database.prepare('PRAGMA foreign_key_list(dsh_managed_transitions)').all<{table:string;from:string;to:string}>()
+        .map(row=>[row.table,row.from,row.to]), [['dsh_managed_operations','operation_id','operation_id']])
+      database.exec('SAVEPOINT journal_schema_contract')
+      try {
+        database.prepare('INSERT INTO dsh_managed_scopes(scope_id,scope_json,created_at) VALUES(?,?,?)').run('scope','{}',0)
+        const insert = database.prepare('INSERT INTO dsh_managed_operations VALUES(?,?,?,?,?)')
+        insert.run('one','scope',1,'prepared','{"originalRef":"owned-original"}')
+        assert.throws(()=>insert.run('two','scope',2,'prepared','{"originalRef":"owned-original"}'), /UNIQUE/u)
+        assert.throws(()=>insert.run('three','scope',1,'prepared','{}'), /UNIQUE/u)
+        assert.throws(()=>insert.run('one','scope',3,'prepared','{}'), /UNIQUE/u)
+        assert.throws(()=>insert.run('orphan','missing',1,'prepared','{}'), /FOREIGN KEY/u)
+      } finally { database.exec('ROLLBACK TO SAVEPOINT journal_schema_contract'); database.exec('RELEASE SAVEPOINT journal_schema_contract') }
 
       // Migration 046 adds a content/configuration-bound cache, never a trust column.
       const curatorColumns = database.prepare('PRAGMA table_info(curator_classifications)')

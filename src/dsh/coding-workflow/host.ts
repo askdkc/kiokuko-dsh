@@ -2,6 +2,7 @@ import * as z from 'zod/v4'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { DshUserQuestions } from '../intake-questions.js'
 import type { LispCodingService } from '../lisp/coding-choice.js'
+import { askLispCodingQuestion, parseLispCodingChoice } from '../lisp/coding-question.js'
 import { KiokukoError } from '../../errors.js'
 import { foregroundNativeCommand } from '../memory-application.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -70,16 +71,9 @@ export function codingChoiceDetail(value: CodingWorkflow): string {
   return [`Goal: ${definition.goal.ideal}`, `対象: ${definition.goal.target}`,
     ...definition.items.map(item => `- ${item.change}\n${item.criterionIds.map(id => `  ${criterion(id)}`).join('\n')}`),
     `最終確認: ${definition.goal.criterionIds.map(criterion).join('\n')}`,
-    '選択はこのタスクだけに適用します。未回答や閉じる操作では実装を開始しません。Lisp は通常の開発環境で動き、既存の権限と承認は引き続き適用されます。'].join('\n\n')
+    '選択はこのタスクだけに適用します。未回答では実装を開始しません。取消・Skip は作業を保持してこの試行を中止します。カードの非表示だけでは質問は終了しません。Lisp は通常の開発環境で動き、既存の権限と承認は引き続き適用されます。'].join('\n\n')
 }
-export function parseCodingChoice(answer: { selected?: readonly string[]; custom?: string }): 'yes' | 'no' | 'cancelled' | undefined {
-  if ((answer.selected?.length ?? 0) > 1) return undefined
-  const text = (answer.custom?.trim() || answer.selected?.[0] || '').trim()
-  if (/^(?:1|使う|yes|use lisp|Lispモードを使う（通常実行）)$/iu.test(text)) return 'yes'
-  if (/^(?:2|使わない|no|do not use lisp|Lispモードを使わない)$/iu.test(text)) return 'no'
-  if (/^(?:3|取消|キャンセル|cancel|取消・作業を保持)$/iu.test(text)) return 'cancelled'
-  return undefined
-}
+export const parseCodingChoice = parseLispCodingChoice
 
 /** The same host seam is mounted by the suite and by the independent core. */
 export function mountCodingWorkflow(ctx: {
@@ -130,23 +124,22 @@ export function mountCodingWorkflow(ctx: {
     const existing = questions.get(key)
     if (existing) return existing
     const operation = (async () => {
-      let response: Awaited<ReturnType<DshUserQuestions['ask']>>
-      try { response = early ? { answers: [{ id: value.choice.questionId, selected: [early.choice === 'yes' ? '使う' : '使わない'] }] } : await host.questions!.ask({ agent: identity.agent, signal: execution.signal, questions: [{
+      const result = early ? { status: 'answered' as const, ...early } : await askLispCodingQuestion(host.questions, { agent: identity.agent, signal: execution.signal, questions: [{
         id: value.choice.questionId, header: 'Goal と実装項目', question: 'このタスクで Lisp モードを使いますか？',
         detail: codingChoiceDetail(value), options: ['使う', '使わない', '取消・作業を保持'].map(label => ({ label })),
-      }] }) } catch (error) { execution.signal.throwIfAborted(); return }
+      }] })
       execution.signal.throwIfAborted(); current(identity, execution)
-      const answer = response.answers?.[0]
-      if (!answer || answer.id !== value.choice.questionId) return
-      const choice = parseCodingChoice(answer)
-      if (!choice) return
+      if (result.status === 'pending') return
+      if (result.status === 'unavailable') throw new KiokukoError('CONFLICT', `Lisp question unavailable: ${result.reason}`)
+      const choice = result.status === 'cancelled' ? 'cancelled' : result.choice
+      const answer = { questionId: value.choice.questionId, choice }
       const saved = await host.runtime.withDatabase(db => answerCodingChoice(db, identity, {
         callId: `human:${value.choice.questionId}:${canonicalContentHash(answer)}`, expectedRevision: value.revision,
         workflowId: value.workflowId, scopeVersion: value.scopeVersion, questionId: value.choice.questionId,
         questionRevision: value.choice.revision, answerRef: early?.answerRef ?? `userQuestions:${value.choice.questionId}:${canonicalContentHash(answer)}`, choice,
       }))
       current(identity, execution)
-      if (choice === 'cancelled') { controllers.get(identity.runId)?.controller.abort(new Error('Coding task cancelled')); return }
+      if (choice === 'cancelled') { host.lisp()?.cancelled?.(identity.agent, value.request); controllers.get(identity.runId)?.controller.abort(new Error('Coding task cancelled')); return }
       host.lisp()?.answered?.(identity.agent, value.request, choice, saved.choice.answerRef!)
       if (choice === 'no') { await host.lisp()?.exclude?.(identity.agent); return }
       try {

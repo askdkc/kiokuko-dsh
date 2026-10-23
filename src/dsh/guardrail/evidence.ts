@@ -5,8 +5,9 @@ import type { SqliteDatabase } from '../../db/adapter.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isHostExecutionResult, type HostProcessResult } from '../execution-result.js'
 import { authorizeTaskLease, recordTaskEvidence } from '../task-state.js'
+import { ManagedOperationJournal, type ManagedJournalSnapshot } from '../managed-operation-journal.js'
 import type { ExecutionReceipt } from '../owned-execution.js'
-import { PROTOCOL_ISSUER, type Manifest, type ProtocolObservation, type ProtocolReceipt, type ProtocolState } from './contracts.js'
+import { PROTOCOL_ISSUER, type Manifest, type ProtocolObservation, type ProtocolReceipt, type ProtocolState, type ProtocolEvidenceSnapshot } from './contracts.js'
 export const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex')
 export function manifest(root: string, paths: readonly string[]): Manifest {
   if (realpathSync(root) !== root || paths.length > 64) throw Error('Protocol source root/manifest is invalid')
@@ -43,8 +44,22 @@ const processResults = new WeakMap<object, HostProcessResult>()
 /** Only the host runner calls this. There is no tool or JSON registration path. */
 export function registerStructuredObservation(result: HostProcessResult, observation: ProtocolObservation): void { if (!isHostExecutionResult(result)) throw Error('Missing host result identity'); structured.set(result, Object.freeze({...observation})) }
 export function retainProtocolResult(receipt: ExecutionReceipt, result: HostProcessResult): void { if (isHostExecutionResult(result)) processResults.set(receipt, result) }
+/** Project a persisted, sealed host scope, never caller-supplied operation claims. */
+function projectProtocolSnapshot(state: ProtocolState, receipt: ExecutionReceipt, original: ManagedJournalSnapshot): ProtocolEvidenceSnapshot {
+  const binding={taskId:state.lease.taskId,unitId:state.recipe.unitId,workerGeneration:receipt.generation,protocolBindGeneration:state.generation,leaseAuthorityGeneration:state.lease.generation,leaseRevision:state.lease.revision}
+  if(!original.sealed||!original.collectorComplete||!original.complete||original.unresolved!==0||original.scope.sessionId!==receipt.sessionId||original.scope.runtimeIdentity!==state.runtimeDigest||canonicalContentHash(original.scope.binding as any)!==canonicalContentHash(binding))throw Error('Protocol journal scope is incomplete or bound to a different authority')
+  const ownedDigest=canonicalContentHash(receipt as any)
+  const supporting=original.operations.filter(operation=>operation.originalRef===receipt.operationId)
+  if(supporting.length!==1||supporting[0]!.route!=='owned'||supporting[0]!.kind!=='process'||supporting[0]!.state!=='completed'||supporting[0]!.receiptRef!==ownedDigest||supporting[0]!.outcome!==(receipt.exitCode===0?'succeeded':'failed'))throw Error('Protocol journal does not contain the exact completed owned result')
+  const executions=original.operations.map(operation=>{
+    if(operation.scopeId!==original.scopeId||operation.parentId!==original.scope.parentId||operation.runtimeIdentity!==state.runtimeDigest||canonicalContentHash(operation.binding as any)!==canonicalContentHash(binding))throw Error('Protocol journal operation binding mismatch')
+    return {id:operation.operationId,scope:operation.scopeId,parent:operation.parentId,sequence:operation.sequence,route:operation.route,kind:operation.kind,state:operation.state,outcome:operation.outcome??'none' as const,request:operation.requestDigest,runtime:operation.runtimeIdentity,receipt:operation.receiptRef??canonicalContentHash(null),workerGeneration:receipt.generation,protocolGeneration:state.generation,leaseGeneration:state.lease.generation}
+  })
+  return {snapshotId:original.snapshotId,scope:original.scopeId,version:1,complete:true,count:executions.length,unresolved:0,digest:canonicalContentHash(original as any),executions}
+}
 export function issueProtocolReceipt(db: SqliteDatabase, state: ProtocolState, receipt: ExecutionReceipt, runtimeDigest: string): ProtocolReceipt {
   authorizeTaskLease(db, state.lease)
+  if(state.schema!==2)throw Error('rebind-required: schema 1 evidence is read-only')
   const result = processResults.get(receipt), observation = result && structured.get(result)
   const stored = db.prepare("SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=? AND run_id=? AND state='completed'").get<{receipt_json:string}>(receipt.operationId, state.lease.taskId)
   if (!stored || !result || !observation || canonicalContentHash(JSON.parse(stored.receipt_json)) !== canonicalContentHash(receipt as any) || receipt.authority !== 'current' || receipt.taskAuthority?.revision !== state.lease.revision || receipt.taskAuthority?.generation !== state.lease.generation) throw Error('Protocol receipt lacks current host-owned provenance')
@@ -53,7 +68,10 @@ export function issueProtocolReceipt(db: SqliteDatabase, state: ProtocolState, r
   const eligible = observation.explicit > 0 && observation.tests > 0 && observation.skipped === 0 && observation.todo === 0 && observation.cancelled === 0 && observation.otherFailures === 0
   const outcome = eligible && observation.failed > 0 && observation.assertionFailures === observation.failed && result.value.exitCode === 1 ? 'assertion-failure'
     : eligible && observation.failed === 0 && observation.passed === observation.tests && result.value.exitCode === 0 ? 'passed' : 'setup-error'
-  const value = { issuer: PROTOCOL_ISSUER, id: receipt.operationId, task: {...state.lease}, recipeId: state.recipeId, generation: state.generation,
+  const journal=new ManagedOperationJournal(db), original=journal.snapshotForOriginal(receipt.operationId)
+  const snapshot=projectProtocolSnapshot(state,receipt,original)
+  journal.retainSnapshot(original.snapshotId)
+  const value = { schema:2, workerGeneration:receipt.generation,snapshot, issuer: PROTOCOL_ISSUER, id: receipt.operationId, task: {...state.lease}, recipeId: state.recipeId, generation: state.generation,
     sourceDigest: manifestDigest(state.source), testDigest: manifestDigest(state.tests), commandDigest: sha(state.command), runtimeDigest,
     environmentDigest: observation.environmentDigest, ownedReceiptDigest: canonicalContentHash(receipt as any), observationDigest: canonicalContentHash(observation as any), outputDigest: sha(result.content.map(block=>block.text).join('\n')), outcome, assertions: outcome === 'assertion-failure' ? observation.assertionFailures : outcome === 'passed' ? observation.passed : 0, exit: result.value.exitCode ?? 70 } as const
   const proof: ProtocolReceipt = {...value,digest:canonicalContentHash(value as any)}
@@ -62,8 +80,12 @@ export function issueProtocolReceipt(db: SqliteDatabase, state: ProtocolState, r
 }
 export function validateProtocolReceipt(db: SqliteDatabase, state: ProtocolState, receipt: ProtocolReceipt): void {
   authorizeTaskLease(db, state.lease)
+  if(state.schema!==2||receipt.schema!==2)throw Error('rebind-required: schema 1 evidence is read-only')
   const {digest,...body}=receipt
   const witness=db.prepare("SELECT details_json FROM ledger_task_evidence WHERE run_id=? AND evidence_ref=? AND generation=? AND verified=0 AND kind='verification'").get<{details_json:string}>(state.lease.taskId,`protocol-observation:${receipt.id}`,state.lease.generation)
   const owned=db.prepare("SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=? AND run_id=? AND state='completed'").get<{receipt_json:string}>(receipt.id,state.lease.taskId)
   if(!owned||canonicalContentHash(JSON.parse(owned.receipt_json))!==receipt.ownedReceiptDigest||receipt.issuer!==PROTOCOL_ISSUER || receipt.runtimeDigest!==state.runtimeDigest || receipt.recipeId!==state.recipeId || receipt.generation!==state.generation || canonicalContentHash(receipt.task as any)!==canonicalContentHash(state.lease as any) || receipt.commandDigest!==sha(state.command) || receipt.testDigest!==manifestDigest(state.tests) || digest!==canonicalContentHash(body as any) || !witness || canonicalContentHash(JSON.parse(witness.details_json))!==canonicalContentHash(receipt as any)) throw Error('Protocol receipt issuer, task, revision, generation or binding is invalid')
+  const original=new ManagedOperationJournal(db).readSnapshot(receipt.snapshot.snapshotId)
+  const projection=projectProtocolSnapshot(state,JSON.parse(owned.receipt_json) as ExecutionReceipt,original)
+  if(receipt.workerGeneration!==projection.executions.find(op=>op.receipt===receipt.ownedReceiptDigest)?.workerGeneration||canonicalContentHash(projection as any)!==canonicalContentHash(receipt.snapshot as any))throw Error('Protocol journal snapshot changed or was fabricated')
 }

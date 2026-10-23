@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import datetime
 
 HERE = pathlib.Path(__file__).resolve().parent
 SOURCE = HERE.parent / 'guardrail'
@@ -92,7 +93,12 @@ def release(args):
         return
     if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'):
         raise ValueError('This recorded reproducibility recipe uses a Linux x64 toolchain; native source development remains available through Cargo')
+    # A failed rerun must not leave a prior receipt masquerading as this attempt.
+    prior_receipt = output / args.target / 'build-record.json'
+    if prior_receipt.exists():
+        prior_receipt.unlink()
     copies = []
+    observations = []
     for iteration in range(2):
         with tempfile.TemporaryDirectory(prefix='guardrail-rebuild-') as temporary:
             temp = pathlib.Path(temporary)
@@ -112,13 +118,21 @@ def release(args):
                 wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(str(linker)) + ' cc -s -target ' + zig_target + ' "$@"\n')
                 wrapper.chmod(0o755)
                 env.update({target_key: str(wrapper), 'MACOSX_DEPLOYMENT_TARGET': '13.0', 'ZIG_GLOBAL_CACHE_DIR': str(temp / 'zig-global'), 'ZIG_LOCAL_CACHE_DIR': str(temp / 'zig-local')})
+            started = datetime.datetime.now(datetime.timezone.utc).isoformat()
             result = run(command, env, SOURCE)
+            # Capture process results while executing, never accept caller-supplied success.
+            finished = datetime.datetime.now(datetime.timezone.utc).isoformat()
             print(result.stderr, end='')
             copies.append((temp / 'target' / args.target / 'release' / 'kiokuko-guardrail').read_bytes())
+            observed_logs = output / args.target / 'logs'
+            observed_logs.mkdir(parents=True, exist_ok=True)
+            (observed_logs / f'build-{iteration + 1}.stdout').write_text(result.stdout)
+            (observed_logs / f'build-{iteration + 1}.stderr').write_text(result.stderr)
+            observations.append({'startedAt': started, 'finishedAt': finished, 'exitCode': result.returncode, 'binarySha256': sha(copies[-1]), 'stdoutSha256': sha(result.stdout.encode()), 'stderrSha256': sha(result.stderr.encode()), 'command': [str(x).replace(str(SOURCE), 'SOURCE').replace(str(cargo), 'CARGO') for x in command], 'compilerArguments': [x.replace(str(temp), 'TEMP').replace(str(SOURCE), 'SOURCE') for x in recipe(temp)['compilerArguments']]})
     if copies[0] != copies[1]:
         raise ValueError('Independent builds differed; no release artifact was written')
-    recorded = next(record for record in provenance['availability']['linux'] + provenance['availability']['macos'] if record['target'] == args.target)
-    if sha(copies[0]) != recorded['binary_sha256']:
+    recorded = None if args.record_new else next(record for record in provenance['availability']['linux'] + provenance['availability']['macos'] if record['target'] == args.target)
+    if recorded is not None and sha(copies[0]) != recorded['binary_sha256']:
         raise ValueError('Build is internally repeatable but differs from the recorded binary; inspect toolchain/system inputs')
     binary = output / args.target / 'kiokuko-guardrail'
     binary.parent.mkdir(parents=True, exist_ok=True)
@@ -126,14 +140,20 @@ def release(args):
     environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
     packaged = run([sys.executable, SOURCE / 'scripts/package.py', '--binary', binary, '--target', args.target, '--output', output / 'packages', '--build-inputs', HERE / 'build-inputs' / f'{args.target}.json'], environment, SOURCE)
     result = json.loads(packaged.stdout)
-    if result['sha256'] != recorded['package_sha256']:
+    if recorded is not None and result['sha256'] != recorded['package_sha256']:
         raise ValueError('Repacked archive differs from its recorded identity')
     native = 'not run'
     if args.target == 'x86_64-unknown-linux-musl':
         for arguments in [['--version'], ['validate', str(SOURCE / 'examples/coding-routine.lisp')]]:
             run([binary, *arguments], {'PATH': '', 'LANG': 'C.UTF-8'}, output, 10)
         native = 'passed'
-    print(json.dumps({'target': args.target, 'sourceSha256': identity, 'binarySha256': sha(copies[0]), 'packageSha256': result['sha256'], 'independentBuildsEqual': True, 'nativeSmoke': native}, indent=2))
+    # Re-read the full input set after both builds; concurrent edits invalidate the result.
+    final_sources = {str(file.relative_to(SOURCE)): sha(file.read_bytes()) for file in sorted(SOURCE.rglob('*')) if file.is_file() and not any(part in {'target', '.git', 'dist', '__pycache__'} for part in file.relative_to(SOURCE).parts)}
+    if final_sources != actual:
+        raise ValueError('Source changed while building; no valid build receipt can be issued')
+    receipt = {'builderSha256': sha(pathlib.Path(__file__).read_bytes()), 'target': args.target, 'sourceSha256': identity, 'binarySha256': sha(copies[0]), 'packageSha256': result['sha256'], 'independentBuildsEqual': True, 'nativeSmoke': native, 'cargoSha256': sha(cargo.read_bytes()), 'rustcSha256': sha(rustc.read_bytes()), 'linkerSha256': sha(linker.read_bytes()), 'builds': observations, 'scope': 'Observed local build process and output hashes; unsigned, not an independent attestation. Cross-built outputs are not native-tested.'}
+    (output / args.target / 'build-record.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    print(json.dumps(receipt, indent=2))
 
 
 def main():
@@ -146,12 +166,14 @@ def main():
     parser.add_argument('--rust-lld')
     parser.add_argument('--zig')
     parser.add_argument('--output', required=True)
+    parser.add_argument('--record-new', action='store_true', help='Build a reviewed new frozen source and capture fresh process evidence instead of requiring historical output hashes')
     parser.add_argument('--plan', action='store_true', help='Check source/tool identities and show the recipe without building or writing output')
     args = parser.parse_args()
     try:
         release(args)
     except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
-        parser.exit(2, f'release error: {error}\n')
+        detail = (getattr(error, 'stdout', '') or '') + (getattr(error, 'stderr', '') or '')
+        parser.exit(2, f'release error: {error}\n{detail}')
 
 
 if __name__ == '__main__':

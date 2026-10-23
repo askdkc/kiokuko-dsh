@@ -7,7 +7,7 @@ small authorized target-runtime probes, choose controls/counterexamples before
 execution, retain observations and failures, and use that evidence in one plan.
 Existing permissions, read-only inputs, scratch, host approvals, generation and
 result ownership, recovery and verification contracts remain authoritative.
-Non-coding tasks do not acquire a coding-experiment requirement. Native coding preparation now enforces actual prototype execution and complete saved-result inspection before implementation, with a two-failure retry budget. Planning relevance remains model guidance; a successful probe does not prove task completion. The evaluation records below describe their original source snapshots.
+Non-coding tasks do not acquire a coding-experiment requirement. Ordinary native coding preparation recommends useful Lisp prototypes but does not enforce their execution order. Explicitly protected coding workflows retain actual prototype execution and complete saved-result inspection before implementation, with a two-failure retry budget. Existing permissions and recovery rules still apply; cancellation or uncertain side effects never trigger automatic fallback. Planning relevance remains model guidance; a successful probe does not prove task completion. The evaluation records below describe their original source snapshots.
 
 The full representation remains the default. Runtime compilation preserves the
 new block and the previous contract. The unchanged fixed size baseline still

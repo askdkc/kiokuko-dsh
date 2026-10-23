@@ -214,3 +214,23 @@ test('a passing test that changes registered configuration records both versions
     assert.ok(changed);assert.notEqual(changed.before,changed.after)
   }finally{await f.cleanup()}
 })
+
+test('restart reconciles a durable final owned receipt after managed result persistence failed without reexecution',async()=>{
+  const f=await fixture()
+  try{
+    f.db.exec("CREATE TRIGGER managed_result_failure BEFORE UPDATE ON dsh_managed_operations WHEN NEW.state='completed' BEGIN SELECT RAISE(ABORT,'injected managed result persistence failure'); END")
+    await assert.rejects(f.execute('kioku_exec',{command:"node -e \"require('fs').appendFileSync('journal-counter','x')\""},'crash-window'),/injected managed/)
+    const row=f.db.prepare("SELECT receipt_json FROM dsh_owned_operations WHERE state='completed'").get<{receipt_json:string}>()!
+    const receipt=JSON.parse(row.receipt_json)
+    assert.equal(receipt.processStopped,true)
+    f.db.exec('DROP TRIGGER managed_result_failure')
+    await f.restart()
+    const result=await f.execute('kioku_result',{operationId:receipt.operationId},'recover-managed-result')
+    assert.equal(result.receipt.processStopped,true)
+    assert.equal(await readFile(join(f.root,'journal-counter'),'utf8'),'x')
+    const operation=f.db.prepare("SELECT state FROM dsh_managed_operations WHERE json_extract(operation_json,'$.originalRef')=?").get<{state:string}>(receipt.operationId)!
+    assert.equal(operation.state,'completed')
+    await f.execute('kioku_exec',{command:"node -e \"require('fs').appendFileSync('journal-counter','x')\""},'crash-window')
+    assert.equal(await readFile(join(f.root,'journal-counter'),'utf8'),'x')
+  }finally{await f.cleanup()}
+})

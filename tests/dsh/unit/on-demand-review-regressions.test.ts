@@ -1026,3 +1026,38 @@ test('unavailable assessment reports infrastructure failure without asking the h
   await f.capture([message]);const r=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}})
   assert.equal(r.value.status,'assessment_unavailable');assert.equal(r.value.detector,'artifact_unavailable');assert.equal(f.admissions.length,0)
 })
+
+for (const cancelled of [true,false]) test(`native choice ${cancelled?'cancellation closes':'provider failure retains'} its capture without starting effects`,async t=>{
+ let calls=0
+ const f=await fixture(t,{nativeOwnership:async()=>'unowned',prepareNativeCoding:async()=>{if(calls++===0)throw Object.assign(new Error(cancelled?'cancelled':'provider failed'),cancelled?{code:'ASK_CANCELLED'}:{})}})
+ await assert.rejects(f.capture([human('implementation','Implement parser.ts')]),cancelled?/cancelled/u:/provider failed/u)
+ assert.equal(f.intake.snapshot(f.session.id)?.status,cancelled?'closed':'stale')
+ assert.equal(f.bodies(),0)
+ if(cancelled){
+  f.events.push(event('turn/end',1),event('turn/start',2))
+  await f.capture([human('conversation','Explain the parser')],2)
+  assert.equal(f.intake.snapshot(f.session.id)?.status,'answer');assert.equal(f.bodies(),0)
+ }else await assert.rejects(f.capture([human('conversation','Explain the parser')],2),/Previous on-demand turn has not ended/u)
+})
+
+test('only a current cancelled Lisp capture invokes native user cancellation, preserving its inbox',async t=>{
+ const calls:unknown[]=[]
+ const f=await fixture(t,{nativeOwnership:async()=>'unowned',prepareNativeCoding:async()=>{throw Object.assign(new Error('cancelled'),{code:'ASK_CANCELLED'})}})
+ Object.assign(f.agent,{cancel:(cause:unknown,options:unknown)=>calls.push({cause,options})})
+ await assert.rejects(f.capture([human('cancel','Implement parser.ts')]),/cancelled/u)
+ assert.deepEqual(calls,[{cause:{kind:'user'},options:{keepInbox:true}}])
+ assert.equal(f.intake.snapshot(f.session.id)?.status,'closed')
+})
+test('late cancellation from superseded preparation cannot abort the replacement native turn',async t=>{
+ const started=deferred(),release=deferred(),calls:unknown[]=[]
+ let attempts=0
+ const f=await fixture(t,{nativeOwnership:async()=>'unowned',prepareNativeCoding:async()=>{
+  if(attempts++===0){started.resolve();await release.promise;throw Object.assign(new Error('old cancelled'),{code:'ASK_CANCELLED'})}
+ }})
+ Object.assign(f.agent,{cancel:(cause:unknown)=>calls.push(cause)})
+ const old=f.capture([human('old','Implement old.ts')]),rejected=assert.rejects(old,/old cancelled/u)
+ await started.promise
+ await f.capture([human('new','Explain the current source')])
+ release.resolve();await rejected
+ assert.deepEqual(calls,[]);assert.equal(f.intake.snapshot(f.session.id)?.status,'answer')
+})

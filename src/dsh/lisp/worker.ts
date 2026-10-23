@@ -9,7 +9,7 @@ import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
 
 const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum([...CODE_METHODS, 'run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages']), arguments: z.unknown() }).strict()
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
-interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
+export interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
 interface Pending { id: string; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
@@ -34,7 +34,8 @@ export class LispWorker {
   constructor(readonly layout: SandboxLayout, readonly config: LispConfiguration,
     readonly hostCall?: (method: string, args: unknown, context: LispRpcContext) => Promise<unknown>,
     readonly rpcAllowed: (method: string) => boolean = () => true,
-    readonly beforeJob?: () => Promise<void>) {}
+    readonly beforeJob?: () => Promise<void>,
+    readonly auditJob?: (input: z.infer<typeof Program>, launch: () => Promise<Job>) => Promise<Job>) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
@@ -145,7 +146,10 @@ export class LispWorker {
         const id = randomUUID()
         this.#jobLaunches++
         let job: Job
-        try { job = await this.launchJob(input); this.jobs.set(id, job) }
+        try {
+          const launch = async () => { const started = await this.launchJob(input); this.jobs.set(id, started); return started }
+          job = await (this.auditJob ? this.auditJob(input, launch) : launch())
+        }
         finally { this.#jobLaunches-- }
         if (rpc.method === 'run') { await job.done; if (job.error) throw new Error(job.error); value = job.result }
         else value = id

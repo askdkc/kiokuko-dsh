@@ -12,7 +12,7 @@ const contract = { name: 'increment', description: 'Increment', inputSchema: { t
 
 async function fixture() {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
-  for (const migration of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql'])
+  for (const migration of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql', '047_managed_operation_journal.sql'])
     db.exec(readFileSync(new URL(`../../../../migrations/${migration}`, import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)); await store.enable(owner)
   const controls = { before: async (_source: string, _mode?: string) => {}, calls: 0 }

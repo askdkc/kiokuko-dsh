@@ -1,3 +1,5 @@
+import { ManagedOperationJournal } from './managed-operation-journal.js'
+import { runManagedOperation, currentManagedOperation, observeManagedResult, mirrorManagedParent, managedAdmissionDenied, ManagedDispatchDenied } from './managed-operation-runner.js'
 import { renameSync, openSync, closeSync, writeFileSync, fsyncSync, fchmodSync, rmSync, statSync } from 'node:fs'
 import { readProtocol, assertProtocolRoute, reserveProtocolFile, applyProtocolFile, withProtocolEffect, reserveProtocolTest, authorizeProtocolTest, finishProtocolTest } from './guardrail/service.js'
 import { runProtocolTests } from './guardrail/engine.js'
@@ -90,6 +92,7 @@ export async function stopTaskOwnedExecutions(runtime: DshCoreRuntime, identity:
 export class OwnedExecutionService {
   readonly #operations = new Map<string, { digest:string; receipt:ExecutionReceipt; value?:unknown; controller:AbortController; done?:Promise<unknown> }>()
   readonly #legacyRuns = new Set<string>()
+  readonly #managedCalls = new Map<string, {digest: string; result: Promise<unknown>}>()
   constructor(private readonly host: OwnedHost) {
     const services = runtimeServices.get(host.runtime) ?? new Set()
     services.add(this); runtimeServices.set(host.runtime, services)
@@ -218,7 +221,7 @@ export class OwnedExecutionService {
     return result
   }
   private async approve(identity: ExecutionIdentity, detail: string, signal: AbortSignal): Promise<void> {
-    if (!await this.host.confirm?.(identity,detail,signal)) throw new Error('Destructive operation was not approved')
+    if (!await this.host.confirm?.(identity,detail,signal)) throw new ManagedDispatchDenied('Destructive operation was not approved')
     signal.throwIfAborted()
   }
   private async reply(receipt:ExecutionReceipt,value:unknown={},replayed=false):Promise<unknown> {
@@ -227,6 +230,36 @@ export class OwnedExecutionService {
     return {...value as object,receipt,...(replayed?{replayed:true}:{}),status:{work:receipt.state,verification:receipt.verification??'unknown',receiptPersistence:receipt.persistence,memoryStorage}}
   }
   async execute(name: string, raw: unknown, execution: NativeExecution): Promise<unknown> {
+    if (!['kioku_exec', 'kioku_write', 'kioku_edit', 'kioku_remove'].includes(name))
+      return this.executeManaged(name, raw, execution)
+    const parentOperation = currentManagedOperation()
+    const identity = this.current(execution)
+    const database = <T>(fn: (db: SqliteDatabase) => T) => this.host.runtime.withDatabase(fn)
+    const originalRef = canonicalContentHash({session:identity.sessionId,call:execution.callId})
+    const request = {name, raw, cwd:identity.repositoryRoot, runId:identity.runId, generation:identity.generation, environment:{...process.env},runtime:process.version}
+    const digest = canonicalContentHash(request as any)
+    const pending = this.#managedCalls.get(originalRef)
+    if (pending) { if (pending.digest !== digest) throw new Error('Operation ID reused with changed input'); return pending.result }
+    const result = (async () => {
+      const previous = await database(db => new ManagedOperationJournal(db).lookupOriginalOperation(originalRef))
+      if (previous) {
+        await database(db => new ManagedOperationJournal(db).claim(previous.operationId, request))
+        const saved = await database(db => db.prepare('SELECT operation_id FROM dsh_owned_operations WHERE operation_id=?').get(originalRef))
+        if (saved) return {...await this.result(identity,{operationId:originalRef,cancel:false}) as object,replayed:true}
+        return {state:previous.state, operationId:previous.operationId, replayed:true, executed:false}
+      }
+      const scope = await database(db => new ManagedOperationJournal(db).createScope({ sessionId: identity.sessionId,
+        requestId: execution.callId, parentId: parentOperation?.operationId ?? execution.callId, runtimeIdentity: `owned:${identity.generation}` }))
+      try {
+        return await runManagedOperation({database, scopeId: scope.scopeId, direct:true, nested:true, ...(parentOperation ? {parentOperation} : {})}, {route: 'owned', kind: name === 'kioku_exec' ? 'process' : 'file', request, originalRef},
+          () => this.executeManaged(name, raw, execution))
+      } finally { await database(db => new ManagedOperationJournal(db).seal(scope.scopeId)) }
+    })()
+    this.#managedCalls.set(originalRef,{digest,result})
+    try { return await result } finally { this.#managedCalls.delete(originalRef) }
+  }
+
+  private async executeManaged(name: string, raw: unknown, execution: NativeExecution): Promise<unknown> {
     const identity = (name === 'kioku_read' || name === 'kioku_result') && this.host.resolveRead
       ? await this.host.resolveRead(execution).then(value => {
         execution.signal.throwIfAborted()
@@ -243,7 +276,19 @@ export class OwnedExecutionService {
     }
     if (name === 'kioku_result') return this.result(identity,resultInput.parse(raw))
     const input = name === 'kioku_exec' ? commandInput.parse(raw) : fileInput.parse(raw)
-    const lease = name === 'kioku_read' ? await this.captureAuthority(execution, identity).catch(()=>undefined) : await this.captureAuthority(execution, identity)
+    const lease = name === 'kioku_read' ? await this.captureAuthority(execution, identity).catch(()=>undefined) : await this.captureAuthority(execution, identity).catch(managedAdmissionDenied)
+    const journalOperation = currentManagedOperation()
+    if (lease && journalOperation) await journalOperation.database(db => new ManagedOperationJournal(db).bindOperation(journalOperation.operationId, {
+      binding:{taskId:lease.taskId,workerGeneration:identity.generation,leaseAuthorityGeneration:lease.generation,leaseRevision:lease.revision},
+      runtimeIdentity:`owned:${identity.generation}`,
+    }))
+    if (lease && journalOperation?.parentOperation) await journalOperation.parentOperation.database(db => {
+      const journal = new ManagedOperationJournal(db), parent = journal.readOperation(journalOperation.parentOperation!.operationId)
+      journal.bindOperation(parent.operationId, {
+        binding:{taskId:lease.taskId,workerGeneration:parent.binding?.workerGeneration ?? identity.generation,leaseAuthorityGeneration:lease.generation,leaseRevision:lease.revision},
+        runtimeIdentity:parent.runtimeIdentity,
+      })
+    })
     if(name!=='kioku_read') {
       try {
         await this.host.runtime.withDatabase(db=>{
@@ -256,9 +301,9 @@ export class OwnedExecutionService {
           else this.#legacyRuns.delete(identity.runId)
           if (name === 'kioku_exec') assertCodingCommandRetry(db, workflowIdentity, (input as z.infer<typeof commandInput>).command)
         })
-      } catch (error) { if (error instanceof KiokukoError || !this.#legacyRuns.has(identity.runId)) throw error }
+      } catch (error) { if (error instanceof KiokukoError || !this.#legacyRuns.has(identity.runId)) managedAdmissionDenied(error) }
     }
-    if (name !== 'kioku_read' && this.host.planActive?.(identity.agent)) throw new Error('Plan is active. An explicit human implementation instruction or plan approval must exit it first.')
+    if (name !== 'kioku_read' && this.host.planActive?.(identity.agent)) managedAdmissionDenied(new Error('Plan is active. An explicit human implementation instruction or plan approval must exit it first.'))
     // Native call identity survives a generation change. Rebinding a replay to
     // a new run/generation must conflict rather than repeat its side effects.
     const operationId = canonicalContentHash({session:identity.sessionId,call:execution.callId})
@@ -287,6 +332,8 @@ export class OwnedExecutionService {
     // A second concurrent call may have completed the database lookup too.
     const concurrent=this.#operations.get(operationId)
     if(concurrent){if(concurrent.digest!==digest)throw new Error('Operation ID reused with changed input');return concurrent.done??{receipt:concurrent.receipt}}
+    const managed = currentManagedOperation()
+    if (managed) await managed.database(db => new ManagedOperationJournal(db).attachOriginalRef(managed.operationId, operationId))
     this.#operations.set(operationId,operation)
     const signal = AbortSignal.any([execution.signal,controller.signal])
     const journal=this.journal(identity.repositoryRoot)
@@ -312,20 +359,35 @@ export class OwnedExecutionService {
         operation.value = name === 'kioku_exec' ? await this.command(identity,receipt,input as z.infer<typeof commandInput>,signal,lease!)
           : await this.file(identity,receipt,name,input as z.infer<typeof fileInput>,signal,lease)
         receipt.state = 'completed'
-      } catch (error) { receipt.state = 'unknown'; receipt.error = safeText(error instanceof Error ? error.message : String(error)); operation.value = {error:receipt.error}; receipt.verification = 'unknown' }
+      } catch (error) { if (error instanceof ManagedDispatchDenied && managed) {
+          await managed.database(db => { const journal=new ManagedOperationJournal(db), prior=journal.readOperation(managed.operationId)
+            if(prior.state==='unknown') journal.reconcile(managed.operationId,{state:'denied',receiptRef:canonicalContentHash(receipt as any),cause:'permission-denied'})
+            else journal.transition(managed.operationId,{state:'denied',cause:'permission-denied'})
+          })
+          await mirrorManagedParent(managed)
+        }; receipt.state = 'unknown'; receipt.error = safeText(error instanceof Error ? error.message : String(error)); operation.value = {error:receipt.error}; receipt.verification = 'unknown' }
       await this.persist(receipt,digest)
+      if (managed) {
+        await observeManagedResult(managed,{...operation.value as object,receipt})
+        if (managed.direct) await managed.database(db => new ManagedOperationJournal(db).seal(managed.scopeId))
+      }
       if (name === 'kioku_exec') {
         try { await finishProtocolTest(action => this.host.runtime.withDatabase(action), receipt); await this.host.runtime.withDatabase(db => saveTaskCompletionReceipt(db, identity.runId)) }
         catch (error) { receipt.verification='unknown';receipt.error=safeText(error instanceof Error?error.message:String(error));await this.persist(receipt,digest) }
       }
       await this.host.runtime.withDatabase(db=>withImmediateTransaction(db,()=>recordOwnedCompletionObservation(db,receipt))).catch(()=>{})
-      return this.reply(receipt,operation.value)
+      const result = await this.reply(receipt,operation.value)
+      if (managed && name === 'kioku_exec' && (input as z.infer<typeof commandInput>).background)
+        await observeManagedResult(managed, result)
+      return result
     })()
     operation.done = done
-    if (name === 'kioku_exec' && (input as z.infer<typeof commandInput>).background) return this.reply(receipt)
+    if (name === 'kioku_exec' && (input as z.infer<typeof commandInput>).background) { const value = await this.reply(receipt); if (managed) await observeManagedResult(managed, value); return value }
     return done
   }
   private async file(identity: ExecutionIdentity, receipt:ExecutionReceipt, name:string, input:z.infer<typeof fileInput>, signal:AbortSignal,lease:TaskLease|undefined):Promise<unknown> {
+    let effectAttempted = false
+    try {
     const target = path.resolve(identity.repositoryRoot,input.path)
     // Resolve the parent as well as existing target to identify symlink exits.
     let actual: string
@@ -352,7 +414,7 @@ export class OwnedExecutionService {
     signal.throwIfAborted()
     if (await this.snapshot(actual) !== before) throw new Error('File changed during operation approval')
     const protocol = await this.host.runtime.withDatabase(db => reserveProtocolFile(db,lease!,receipt.operationId,name,actual,this.#operations.get(receipt.operationId)!.digest))
-    if (name === 'kioku_remove') { await this.checkAuthority(identity,lease!); await rm(actual,{recursive:false,force:false}) }
+    if (name === 'kioku_remove') { await this.checkAuthority(identity,lease!); effectAttempted = true; await rm(actual,{recursive:false,force:false}) }
     else {
       const existing = before === null ? '' : await readFile(actual,'utf8')
       let content = input.content
@@ -366,6 +428,7 @@ export class OwnedExecutionService {
         // Existing parents were bound at enrollment. Stage and commit inside the same final
         // synchronous authority boundary; cancellation committed before it prevents all writes.
         await this.host.runtime.withDatabase(db=>applyProtocolFile(db,lease!,receipt.operationId,signal,()=>{
+          effectAttempted = true
           const mode=before===null?0o644:statSync(actual).mode&0o7777
           const temporary=path.join(path.dirname(actual),`.kioku-${randomUUID()}.tmp`)
           try {
@@ -376,6 +439,7 @@ export class OwnedExecutionService {
         }))
       } else {
       await this.checkAuthority(identity,lease!)
+      effectAttempted = true
       await mkdir(path.dirname(actual),{recursive:true})
       const mode = before === null ? 0o644 : (await stat(actual)).mode
       const temporary = path.join(path.dirname(actual),`.kioku-${randomUUID()}.tmp`)
@@ -392,6 +456,10 @@ export class OwnedExecutionService {
     await this.checkAuthority(identity,lease!)
     receipt.verification = 'passed'; receipt.authority = 'current'
     return {applied:true}
+    } catch (error) {
+      if (!effectAttempted) throw new ManagedDispatchDenied(error instanceof Error ? error.message : 'File admission denied')
+      throw error
+    }
   }
   private async disposable(identity:ExecutionIdentity,target:string):Promise<boolean> {
     if(within(identity.repositoryRoot,target))return /^(?:dist|build|target|node_modules)(?:[/\\]|$)/u.test(path.relative(identity.repositoryRoot,target))
@@ -419,6 +487,15 @@ export class OwnedExecutionService {
     if (input.destructiveTargets?.length || durableSql || removals?.length&&!disposableRemoval || !disposableRemoval && /(?:^|[;&|]\s*)(?:rm\s|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f)|(?:drop\s+(?:table|database)|truncate\s+table)\b)/iu.test(input.command))
       await this.approve(identity,`Command: ${safeText(input.command)}\nCwd: ${receipt.cwd}\nTargets: ${input.destructiveTargets?.join(', ') ?? 'see command'}`,signal)
     const protocol = await this.host.runtime.withDatabase(db => reserveProtocolTest(db,lease,receipt.operationId,input.command,receipt.cwd))
+    const managed = currentManagedOperation()
+    if (protocol && managed) {
+      if (!managed.direct) throw new Error('Protocol proof requires its direct owned operation scope')
+      await managed.database(db => new ManagedOperationJournal(db).bindOperation(managed.operationId, {
+        binding:{taskId:lease.taskId,unitId:protocol.recipe.unitId,workerGeneration:identity.generation,
+          protocolBindGeneration:protocol.generation,leaseAuthorityGeneration:lease.generation,leaseRevision:lease.revision},
+        runtimeIdentity:protocol.runtimeDigest,bindScope:true,
+      }))
+    }
     return await this.evidence(identity,receipt,input.command,lease,async () => {
       signal.throwIfAborted()
       await this.checkAuthority(identity,lease)
@@ -442,11 +519,30 @@ export class OwnedExecutionService {
     } catch (error) {
       // Before the only launch boundary, cancellation proves that no child ran.
       // Once launch was attempted, preserve unknown outcomes and reconcile them.
-      if (!signal.aborted || launchAttempted) throw error
+      if (launchAttempted) throw error
+      if (!signal.aborted) throw new ManagedDispatchDenied(error instanceof Error ? error.message : 'Process admission denied')
       receipt.processStarted=false; receipt.processStopped=true; receipt.cancelled=true
       receipt.exitCode=null; receipt.signal=null; receipt.outputComplete=false; receipt.verification='failed'
       return {exitCode:null,output:''}
     }
+  }
+  private async reconcileManagedReceipt(receipt: ExecutionReceipt): Promise<void> {
+    if (receipt.state !== 'completed' || receipt.kind === 'kioku_exec' && receipt.processStopped !== true) return
+    const database = <T>(fn: (db: SqliteDatabase) => T) => this.host.runtime.withDatabase(fn)
+    const context = await database(db => {
+      const journal = new ManagedOperationJournal(db), operation = journal.lookupOriginalOperation(receipt.operationId)
+      if (!operation) return undefined // Legacy owned originals remain readable.
+      const saved = db.prepare('SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=? AND run_id=? AND session_id=?')
+        .get<{receipt_json:string}>(receipt.operationId,receipt.runId,receipt.sessionId)
+      if (!saved || canonicalContentHash(JSON.parse(saved.receipt_json)) !== canonicalContentHash(receipt as any)) throw new Error('Owned original is not durably verified')
+      const scope = journal.readScope(operation.scopeId)
+      if (scope.sessionId !== receipt.sessionId || operation.binding?.taskId !== receipt.runId) throw new Error('Managed original owner mismatch')
+      const parentRow = db.prepare('SELECT operation_json FROM dsh_managed_operations WHERE operation_id=?').get<{operation_json:string}>(scope.parentId)
+      const parent = parentRow ? JSON.parse(parentRow.operation_json) : undefined
+      return {database,scopeId:operation.scopeId,operationId:operation.operationId,kind:operation.kind,
+        ...(parent ? {parentOperation:{database,scopeId:parent.scopeId,operationId:parent.operationId,kind:parent.kind}} : {})}
+    })
+    if (context) await observeManagedResult(context,{receipt,exitCode:receipt.exitCode})
   }
   async result(identity:ExecutionIdentity,input:z.infer<typeof resultInput>):Promise<unknown> {
     const operation = this.#operations.get(input.operationId)
@@ -455,6 +551,7 @@ export class OwnedExecutionService {
       if (input.cancel) operation.controller.abort()
       if (operation.receipt.state === 'started') return this.reply(operation.receipt)
       await this.persist(operation.receipt,operation.digest)
+      await this.reconcileManagedReceipt(operation.receipt)
       return this.reply(operation.receipt,operation.value)
     }
     const saved = await this.host.runtime.withDatabase(db => db.prepare('SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=? AND run_id=? AND session_id=?')
@@ -463,6 +560,7 @@ export class OwnedExecutionService {
     const receipt = journal?.receipt ?? (saved?JSON.parse(saved.receipt_json) as ExecutionReceipt:undefined)
     if (!receipt || receipt.runId!==identity.runId || receipt.sessionId!==identity.sessionId) throw new Error('No result for this run/session')
     if(journal)await this.persist(receipt,journal.digest)
+    await this.reconcileManagedReceipt(receipt)
     return this.reply(receipt.state === 'started' ? {...receipt,state:'unknown',error:'Host restarted before final process result was saved; effects will not be replayed.'} : receipt)
   }
   async stopTask(identity: { taskId: string; repositoryRoot: string }, signal?: AbortSignal): Promise<void> {

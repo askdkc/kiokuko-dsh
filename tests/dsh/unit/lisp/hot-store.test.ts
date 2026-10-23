@@ -22,6 +22,7 @@ async function fixture() {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(readFileSync(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)); await store.enable(owner)
   const epoch = (await store.session(owner.sessionId))!.epoch
   return { db, store, hot: new HotToolStore(store), epoch }

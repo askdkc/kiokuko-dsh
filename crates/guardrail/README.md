@@ -36,28 +36,50 @@ See `examples/coding-routine.lisp`. Exactly one `defprotocol` contains 1–128 n
 
 `check` emits one stable S-expression with allow/deny, next phase, task, issuer and authority revision, canonical protocol SHA-256, exact evidence-file SHA-256, package version, and the current executable SHA-256. Captured identical inputs and the same engine binary produce the same output across process restarts. Exit 0 = allowed/success; 3 = valid evidence but guard false; 2 = malformed input, invalid bindings, unsupported form, or other error; 4 = resource limit. A process/setup error never counts as assertion RED.
 
-## Evidence wire schema v1
+## Evidence wire schema v2
 
-This is a strict data format: fields are required, duplicate/unknown fields rejected, values are never evaluated. Example digests below must be replaced by actual lowercase 64-character SHA-256 values:
+This strict data format rejects schema 1, missing/duplicate/unknown fields, duplicate IDs, invalid digests and unknown enums. Values are never evaluated. Replace every `SHA256` below with the actual lowercase 64-character SHA-256 digest from the host original:
 
 ```lisp
-(evidence :schema 1 :authority "kiokuko-dsh"
+(evidence :schema 2 :authority "kiokuko-dsh"
  :issuer "kiokuko-dsh:owned-execution:v1" :task "task-id" :revision 7
+ :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19
+ :scope "scope-id"
+ :collector (:version 1 :complete t :count 1 :unresolved 0 :digest "SHA256")
+ :executions
+ ((execution :id "operation-id" :scope "scope-id" :parent "evaluation-id"
+   :sequence 1 :route :owned :kind :process :state :completed :outcome :failed
+   :request "SHA256" :runtime "SHA256" :receipt "SHA256"
+   :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19))
  :source "SHA256" :tests "SHA256" :command "SHA256" :runtime "SHA256"
  :model-provider "none" :model-name "none"
  :model-parameters "SHA256" :transcript "SHA256"
  :artifacts
  ((test-spec :id "executor-receipt-id" :digest "SHA256"
-   :generation 3 :expected-generation 3
+   :worker-generation "worker-3" :protocol-generation 11 :lease-generation 19
    :source "SHA256" :tests "SHA256" :command "SHA256" :runtime "SHA256"
-   :outcome :assertion-failure :exit 1 :assertions 3 :status :observed)))
+   :outcome :assertion-failure :exit 1 :assertions 3 :status :observed
+   :provenance :execution-backed :supporting ("operation-id")
+   :history () :state-digest "SHA256")))
 ```
 
-The required issuer is `kiokuko-dsh:owned-execution:v1`; this string is only a typed provenance label. The product adapter must verify the actual host-only observation witness and receipt identity in the existing authority before creating a snapshot. The engine does not authenticate a caller merely because it writes that string. All artifact bindings must match top-level captured inputs. Generation is positive, matches the authority-provided expected generation, and does not exceed the snapshot revision. Artifact names and opaque IDs are unique. Supported outcomes: `assertion-failure`, `passed`, `syntax-error`, `timeout`, `setup-error`, `signaled`, `skipped`, `not-run`, `produced`. Status: `observed`, `applied`, `pending`, `completed`. Exit/outcome contradictions fail. Assertion failure requires a normal nonzero exit (1–125 excluding timeout convention 124); `fails-p` additionally requires at least one actual failed assertion. `passes-p` requires a passed receipt with assertions; its optional second argument must be a produced, applied artifact. Syntax errors, timeouts, signals, missing executables, skips, and non-runs cannot unlock RED.
+The issuer remains a typed provenance label, not authentication. The Node adapter verifies host-owned structured observations and persisted original receipts before issuing this snapshot. Rust checks structure and bindings, not the external database or whether a caller telling it these facts is trusted. In particular, a native exit 0 or stdout digest is not Node assertion evidence.
 
-Built-in snapshot queries: `fails-p`, `passes-p` (1–2 arguments), `syntax-error-p`, `timeout-p`, `skipped-p`, `exit-code`, `status`, `assertions` (the others take one opaque handle). Snapshot fields express what the trusted adapter captured; their presence does not prove execution or establish caller authorization.
+The collector must be complete, with its count matching a contiguous, unique sequence of executions and zero unresolved operations. An empty execution list alone is not proof of pure evaluation. Execution routes are `native` or `owned`; kinds are `process` or `file`. States include `prepared`, `dispatching`, `running`, `completed`, `denied`, `cancelled-before-dispatch`, `cancelled-confirmed`, and `unknown`. Unresolved operations stay in the host journal but cannot issue a successful protocol snapshot. Operation outcome is separately `succeeded`, `failed`, or `none`, with state/outcome consistency required. The host verifies collector digest against saved originals; Rust only checks its digest syntax.
 
-Model provider/name, model parameters digest, and captured transcript digest are explicit inputs. For no model call, use `none` and a digest of an explicitly defined empty record. Protocol/evidence evaluation is deterministic; live model inference, networks, tools, external state, and model providers are not claimed deterministic. Identical recipes across operating systems do not imply bit-identical platform executables or identical external effects.
+Worker generation is opaque text. Protocol-binding and lease-authority generations are separate positive integers. Supporting executions and artifacts must match each corresponding snapshot generation; those numbers are not compared with one another or with revision. All artifact source/test/command/runtime bindings match the captured top-level input digests. Names and opaque artifact IDs are unique.
+
+Artifact provenance is one of:
+
+- `execution-backed`: one or more existing completed, currently bound supporting operations. Test evidence requires an owned process with a compatible result. Multiple support references are allowed.
+- `state-derived`: a produced artifact whose state digest matches current source. It has no invented supporting operation. A patch may have this provenance.
+- `pure-evaluation`: a produced artifact with no support references and a host-complete zero-execution collector.
+
+`history` references retain earlier operations without promoting them to success support. Failed history does not invalidate a later valid GREEN. A failed owned test with real assertion observations can support RED; unknown, denied or cancelled operations cannot support GREEN. There is no automatic `consumed`/`discarded` claim for arbitrary Lisp return values.
+
+Artifact outcomes remain `assertion-failure`, `passed`, `syntax-error`, `timeout`, `setup-error`, `signaled`, `skipped`, `not-run`, `produced`; statuses remain `observed`, `applied`, `pending`, `completed`. Exit/outcome contradictions fail. Assertion failure requires exit 1–125 excluding 124, and `fails-p` requires actual failed assertions. `passes-p` requires a passed test with assertions, optionally paired with a produced/applied artifact. Syntax errors, timeout, signals, skips and non-runs do not unlock RED.
+
+Queries remain `fails-p`, `passes-p` (one or two arguments), `syntax-error-p`, `timeout-p`, `skipped-p`, `exit-code`, `status`, and `assertions`. Model provider/name, parameters and transcript digests remain explicit. For no model call use `none` and the digest of the host-defined empty record. This engine is still a bounded protocol evaluator, not general SBCL: it adds no `defun` or `lambda` support, and cannot prove deterministic model inference or external effects.
 
 ## Build and package
 

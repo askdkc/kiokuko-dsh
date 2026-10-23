@@ -73,11 +73,12 @@ test('README text edits preserve the document path without admitting quoted or f
   assert.equal(documentContinuation('続けてください。'), true)
   for (const task of ['Continue and delete another file.', '続けて、APIも修正して。', 'Do not continue.']) assert.equal(documentContinuation(task), false)
 })
-test('only clear human choices are accepted; closure, empty or discussion remain pending', () => {
+test('only clear human choices are accepted; submitted Skip cancels, invalid discussion is unavailable', () => {
   for (const text of ['使う','yes','1']) assert.equal(parseCodingChoice({custom:text}), 'yes')
   for (const text of ['使わない','no','2']) assert.equal(parseCodingChoice({custom:text}), 'no')
   assert.equal(parseCodingChoice({selected:['取消・作業を保持']}), 'cancelled')
-  for (const answer of [{selected:[]},{custom:'What is Lisp?'},{selected:['使う','使わない']}]) assert.equal(parseCodingChoice(answer), undefined)
+  assert.equal(parseCodingChoice({selected:[]}), 'cancelled')
+  for (const answer of [{custom:'What is Lisp?'},{selected:['使う','使わない']}]) assert.equal(parseCodingChoice(answer), undefined)
 })
 test('continuation cannot silently reuse a Lisp answer for an appended scope-changing request', () => {
   for (const text of ['Continue the current task.', 'Resume the same task without changing its scope.', 'このタスクを再開してください。']) assert.equal(codingContinuation(text), true)
@@ -146,7 +147,7 @@ test('dependencies select only satisfied predecessors and cancellation refuses l
     f.bind('parser-check');await f.execute('kioku_exec',{command:f.command},'parser')
     const next = nextCodingWork(f.db,f.identity); assert.ok(next.applicable); assert.ok('item' in next); assert.equal(next.item?.itemId,'consumer')
     stopCodingWorkflow(f.db,f.identity.runId,'cancelled')
-    await assert.rejects(f.execute('kioku_write',{path:'late',content:'bad'},'late'),/Goal/)
+    await assert.rejects(f.execute('kioku_write',{path:'late',content:'bad'},'late'),/cancelled/)
     assert.equal(codingStatus(f.db,f.identity).applicable,true)
   }finally{await f.close()}
 })
@@ -500,4 +501,41 @@ test('textual command changes cannot evade failure throttling without granting e
     const changed=f.command.replace('node', "'node'")
     assert.equal(beginTaskCompletionExecution(f.db,{runId:f.identity.runId,callId:'changed',command:changed,repositoryRoot:f.root}),false,'throttling similarity never creates proof equivalence')
   }finally{await f.close()}
+})
+
+for(const mode of ['cancel','numeric','skip','ASK_CANCELLED'] as const)test(`formal workflow ${mode} ends its own question without activation or fallback`,async()=>{
+ const f=await fixture();f.propose();let asked=0,activated=0,excluded=0,cancelled=0
+ const host=mounted(f,{questions:{ask:async(request:any)=>{
+  asked++;if(mode==='ASK_CANCELLED')throw Object.assign(new Error('closed'),{code:'ASK_CANCELLED'})
+  return {answers:[{id:request.questions[0].id,selected:mode==='skip'?[]:[mode==='numeric'?'3':'取消・作業を保持']}]}
+ }},lisp:()=>({activate:async()=>{activated++},exclude:async()=>{excluded++},cancelled:()=>{cancelled++}})})
+ try{
+  const next=()=>host.tools.get('coding_workflow').execute({action:'next'},{name:'coding_workflow',callId:'next',agent:host.agent,signal:new AbortController().signal})
+  await next();await next()
+  assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.state,'cancelled')
+  assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.choice.state,'cancelled')
+  assert.deepEqual({asked,activated,excluded,cancelled},{asked:1,activated:0,excluded:0,cancelled:1})
+  assert.throws(()=>assertCodingDispatch(f.db,f.identity,'kioku_write'),/cancelled/u)
+ }finally{host.unmount();await f.close()}
+})
+test('formal provider failure retains pending workflow with a truthful unavailable error, not a fabricated no/cancel',async()=>{
+ const f=await fixture();f.propose();const host=mounted(f,{questions:{ask:async()=>{throw new Error('provider offline')}}})
+ try{
+  await assert.rejects(host.tools.get('coding_workflow').execute({action:'next'},{name:'coding_workflow',callId:'next',agent:host.agent,signal:new AbortController().signal}),/Lisp question unavailable: provider offline/u)
+  assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.choice.state,'pending')
+ }finally{host.unmount();await f.close()}
+})
+test('a hidden formal question stays pending; a late yes after cancellation cannot activate Lisp',async()=>{
+ const f=await fixture();f.propose();let answer!:(value:any)=>void,questionId='',activated=0
+ let notifyOpened!:()=>void
+ const opened=new Promise<void>(resolve=>{notifyOpened=resolve})
+ const host=mounted(f,{questions:{ask:async(request:any)=>{questionId=request.questions[0].id;notifyOpened();return new Promise(resolve=>{answer=resolve})}},lisp:()=>({activate:async()=>{activated++}})})
+ try{
+  const pending=host.tools.get('coding_workflow').execute({action:'next'},{name:'coding_workflow',callId:'next',agent:host.agent,signal:new AbortController().signal})
+  const rejected=assert.rejects(pending,/revision|cancel|choice|changed/iu)
+  await opened;assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.choice.state,'pending')
+  stopCodingWorkflow(f.db,f.identity.runId,'cancelled')
+  answer({answers:[{id:questionId,selected:['使う']}]});await rejected
+  assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.state,'cancelled');assert.equal(activated,0)
+ }finally{host.unmount();await f.close()}
 })

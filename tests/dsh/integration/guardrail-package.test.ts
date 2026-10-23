@@ -94,6 +94,32 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
       assert.throws(() => resolveGuardrail(directory, host), /digest|size|integrity/i)
     })
   })
+  await t.test('source labels and observed build records cannot be changed in isolation', () => {
+    fixture(directory => {
+      const path = join(directory, 'guardrail/build-records.json')
+      writeFileSync(path, readFileSync(path, 'utf8') + '\n')
+      assert.throws(() => resolveGuardrail(directory, host), /integrity/)
+    })
+    fixture(directory => {
+      const path = join(directory, 'guardrail/build-records.json'), records = readJson(path)
+      records.targets[target].binarySha256 = '0'.repeat(64)
+      writeFileSync(path, JSON.stringify(records))
+      const indexPath = join(directory, 'guardrail/manifest.json'), index = readJson(indexPath)
+      index.buildRecords.sha256 = sha(readFileSync(path)); index.buildRecords.bytes = readFileSync(path).length
+      writeFileSync(indexPath, JSON.stringify(index))
+      const pkg = readJson(join(directory, 'package.json')); pkg.guardrail.manifestSha256 = sha(readFileSync(indexPath)); writeFileSync(join(directory, 'package.json'), JSON.stringify(pkg))
+      assert.throws(() => resolveGuardrail(directory, host), /build record\/source\/output integrity/)
+    })
+    fixture(directory => {
+      const releasePath = join(directory, 'guardrail', target, 'manifest.json')
+      const release = readJson(releasePath); release.source_sha256 = '0'.repeat(64)
+      writeFileSync(releasePath, JSON.stringify(release))
+      const indexPath = join(directory, 'guardrail/manifest.json'), index = readJson(indexPath)
+      index.targets[target].manifestSha256 = sha(readFileSync(releasePath)); writeFileSync(indexPath, JSON.stringify(index))
+      const pkg = readJson(join(directory, 'package.json')); pkg.guardrail.manifestSha256 = sha(readFileSync(indexPath)); writeFileSync(join(directory, 'package.json'), JSON.stringify(pkg))
+      assert.throws(() => resolveGuardrail(directory, host), /release manifest identity/)
+    })
+  })
   await t.test('non-executable binary cannot enroll', () => fixture(directory => {
     chmodSync(join(directory, 'guardrail', target, 'kiokuko-guardrail'), 0o644)
     assert.throws(() => resolveGuardrail(directory, host), /executable/i)
@@ -176,6 +202,30 @@ test('guardrail shipping contract verifies bundled bytes and fails closed before
         assert.equal(validated.status, 0, validated.stderr)
       }
       assert.equal(existsSync(join(directory, 'target')), false)
+    })
+  })
+  await t.test('isolated package engine accepts schema2 GREEN and rejects invalid evidence', () => {
+    if (process.platform !== 'linux' || process.arch !== 'x64') { t.diagnostic('Current host cannot execute the Linux x64 artifact.'); return }
+    fixture(directory => {
+      const resolved = resolveGuardrail(directory, host)
+      const original = readFileSync(join(root, 'crates/guardrail/tests/fixtures/schema2-green.lisp'), 'utf8')
+      const evidence = join(directory, 'evidence.lisp')
+      const check = (text: string) => {
+        writeFileSync(evidence, text)
+        return spawnSync(resolved.binary, ['check', resolved.protocol, 'verify-green', evidence], { encoding: 'utf8', env: { PATH: '', HOME: directory }, timeout: 5_000 })
+      }
+      const accepted = check(original)
+      assert.equal(accepted.status, 0, accepted.stderr)
+      for (const invalid of [
+        original.replace(':schema 2', ':schema 1'),
+        original.replace(':schema 2', ':schema 2 :schema 2'),
+        original.replace(':complete t', ':complete nil'),
+        original.replace(':route :owned', ':route :native'),
+        original.replace(':state :completed :outcome :succeeded', ':state :unknown :outcome :none'),
+      ]) {
+        const rejected = check(invalid)
+        assert.equal(rejected.status, 2, rejected.stdout + rejected.stderr)
+      }
     })
   })
   await t.test('package and core staging explicitly retain guardrail assets with bounded permission metadata', () => {
