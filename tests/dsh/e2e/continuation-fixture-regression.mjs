@@ -5,7 +5,8 @@ import { delimiter, dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 const root = realpathSync(process.argv[2] ?? process.cwd())
 const fixture = join(root, 'tests/fixtures/dsh-runtime')
-const metadata = JSON.parse(readFileSync(join(fixture, 'package.json'), 'utf8'))
+const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(fixture, 'node_modules')
+const metadata = JSON.parse(readFileSync(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8'))
 const preload = join(root, 'tests/dsh/helpers/offline-skill-catalog.mjs')
 const cases = [
   { path: 'tests/dsh/e2e/execution-support-loop.test.ts', count: 2,
@@ -14,10 +15,9 @@ const cases = [
     pattern: '^(native eager compatibility: input recovery tolerates late-request(?:-and-update)? failure without interrupting or replaying executed work|native modular core applies model-auto to its first prepared prompt and request|native code normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice)$' },
 ]
 const env = { ...process.env, PATH: [dirname(process.execPath), process.env.PATH].filter(Boolean).join(delimiter),
-  KIOKUKO_DSH_PACKAGE_ROOT: join(fixture, 'node_modules'), KIOKUKO_REQUIRE_DSH_NATIVE: '1',
-  KIOKUKO_EXPECTED_DSH_VERSION: metadata.dependencies['@deepseek-ai/dsh'],
+  KIOKUKO_DSH_PACKAGE_ROOT: packageRoot, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
+  KIOKUKO_EXPECTED_DSH_VERSION: metadata.version,
   NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' }
-delete env.KIOKUKO_DSH_SOURCE_ROOT
 delete env.KIOKUKO_SKILL_PACKAGE_ROOT
 const failures = []
 for (const selected of cases) {

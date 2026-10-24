@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -10,10 +11,11 @@ import { stageModules } from './stage-modules.mjs'
 import { composeModules } from './compose-modules.mjs'
 
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
-const nativeRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, 'tests/fixtures/dsh-runtime/node_modules')
+const selected = selectedDshRuntime(root)
+const nativeRoot = selected.packageRoot
 await access(join(nativeRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-module-pack-'))
-const env = { ...process.env, npm_config_cache: join(work, 'cache') }
+const env = { ...selected.environment, npm_config_cache: join(work, 'cache') }
 delete env.NODE_TEST_CONTEXT
 async function verifyDefault(consumer, combination) {
   const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination, 'default'], consumer)

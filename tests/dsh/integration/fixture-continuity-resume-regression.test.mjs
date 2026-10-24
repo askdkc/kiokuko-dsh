@@ -151,8 +151,8 @@ test("Continuity reload prepares the same research task with current host-bound 
       env[key] = join(base, key); await mkdir(env[key])
     }
     env.NODE_OPTIONS = '--test-reporter=tap'
-    env.KIOKUKO_DSH_PACKAGE_ROOT = join(root, 'tests/fixtures/dsh-runtime/node_modules')
-    env.KIOKUKO_EXPECTED_DSH_VERSION = JSON.parse(await readFile(join(root, 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
+    env.KIOKUKO_DSH_PACKAGE_ROOT = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, 'tests/fixtures/dsh-runtime/node_modules')
+    env.KIOKUKO_EXPECTED_DSH_VERSION = JSON.parse(await readFile(join(env.KIOKUKO_DSH_PACKAGE_ROOT, '@deepseek-ai/dsh/package.json'), 'utf8')).version
     env.KIOKUKO_REQUIRE_DSH_NATIVE = '1'
     const argv = ['scripts/run-tests.mjs', "tests/dsh/integration/continuity/native-loop.test.ts"]
     const result = await execute(argv, env)

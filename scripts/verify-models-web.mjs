@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { declineOptionalMemoryOffers, openSettings } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
@@ -12,10 +13,11 @@ import { pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { chromium } from "playwright";
 const exec = promisify(execFile),
-  root = resolve(import.meta.dirname, ".."),
-  base = await mkdtemp(join(tmpdir(), "kiokuko-models-web-"));
+  root = resolve(import.meta.dirname, "..");
+const selected = selectedDshRuntime(root)
+const base = await mkdtemp(join(tmpdir(), "kiokuko-models-web-"));
 const env = {
-  ...process.env,
+  ...selected.environment,
   HOME: join(base, "home"),
   DSH_HOME: join(base, "dsh"),
   KIOKUKO_DATA_DIR: join(base, "data"),
@@ -23,8 +25,7 @@ const env = {
 };
 const project = join(base, "project"),
   dsh =
-    process.env.DSH_BIN ??
-    join(root, "tests/fixtures/dsh-runtime/node_modules/.bin/dsh"),
+    selected.environment.DSH_BIN,
   bodies = [];
 // Keep request ordering independent of how long the Settings save takes.
 const rateLimitResponse = Promise.withResolvers();

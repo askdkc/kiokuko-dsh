@@ -61,9 +61,12 @@ test('native DSH commands and credential provider: precedence, replacement, clea
     cleanup.push(await inherited.plugin(credentials.default, { path: readonlyPath, watch: false }))
     remove = mountTypeSafeCommand(inherited.commands, typeSafeCredentials(inherited))
     agent.session.append = (type: string, data: unknown) => readonlyEvents.push({ type, data })
-    // alpha.3 intentionally gives the managed store precedence over process fallback.
-    const nativeVersion = JSON.parse(await readFile(join(packages!, '@deepseek-ai/dsh-credentials-local/package.json'), 'utf8')).version
-    const managedOverride = nativeVersion !== '0.2.1-alpha.2'
+    // Writability is the provider's declared capability, not a release label.
+    const capability = await inherited.credentials.describe('TYPESAFE_API_KEY')
+    assert.equal(capability.configured, true)
+    assert.equal(capability.source, 'env')
+    assert.equal(typeof capability.writable, 'boolean')
+    const managedOverride = capability.writable
     for (const input of ['other-key', 'clear']) {
       const result = await inherited.commands.execute(agent, `/kioku-typesafe-key ${input}`, [], new AbortController().signal)
       if (managedOverride) {

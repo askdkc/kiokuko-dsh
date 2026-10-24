@@ -1,7 +1,8 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { createHash, randomUUID } from 'node:crypto'
 import { spawn, execFileSync } from 'node:child_process'
-import { readFile, mkdir, writeFile, stat, rm } from 'node:fs/promises'
+import { readFile, mkdir, writeFile, rm } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { parseNodeTapSummary } from '../src/dsh/node-tap-summary.js'
@@ -16,16 +17,16 @@ if (JSON.stringify(manifest.expected) !== JSON.stringify({tests:1,passed:1,faile
 const root = process.cwd()
 const reportPath = resolve(process.env.KIOKUKO_HARNESS_REPORT ?? '.artifacts/harness-report.json')
 await rm(reportPath, { force: true })
-const fixtureRoot = resolve('tests/fixtures/dsh-runtime/node_modules')
-const existingRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? fixtureRoot
-const fixtureAvailable = await stat(existingRoot).then(value => value.isDirectory(), () => false)
+const selected = selectedDshRuntime(root)
+const existingRoot = selected.packageRoot
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
 const workingTreeClean = execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim() === ''
 const fixtureDigest = createHash('sha256')
 fixtureDigest.update(manifestBytes)
-const packageJson = JSON.parse(await readFile('tests/fixtures/dsh-runtime/package.json', 'utf8'))
+const packageJson = selected.manifest
+const upstream = selected.upstream
 const report = { schemaVersion: 1, invocationId: randomUUID(), commit, workingTreeClean,
-  nodeVersion: process.version, dshVersion: packageJson.dependencies?.['@deepseek-ai/dsh'] ?? 'unknown',
+  nodeVersion: process.version, dshVersion: packageJson.version, ...(upstream ? { dshRevision: upstream.sha } : {}),
   fixtureDigest: fixtureDigest.digest('hex'), mode: 'offline-native', scenarios: [],
   summary: { expected: scenarios.length, passed: 0, failed: 0, skipped: 0 }, realModelQuality: 'unmeasured' }
 
@@ -34,8 +35,8 @@ async function run(file, name) {
   const child = spawn(process.execPath, ['--import', resolve(root, 'tests/dsh/helpers/offline-skill-catalog.mjs'), '--import', 'tsx', '--test', '--test-reporter=tap',
     `--test-name-pattern=^${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`, file], {
     cwd: root, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(resolve(root, 'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
-      ...(fixtureAvailable ? { KIOKUKO_DSH_PACKAGE_ROOT: existingRoot } : {}) },
+    env: { ...selected.environment, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(resolve(root, 'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
+      KIOKUKO_DSH_PACKAGE_ROOT: existingRoot },
   })
   let output = '', timedOut = false
   for (const lane of [child.stdout, child.stderr]) lane.on('data', chunk => { output = (output + chunk.toString()).slice(-16_000) })

@@ -1,3 +1,4 @@
+import { selectedCodeHost, assertCodeConsumerHost } from './code-intelligence-host.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtemp,mkdir,readFile,rm,writeFile } from 'node:fs/promises'
@@ -5,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { resolve,join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 const root=resolve(import.meta.dirname,'..'),provider=join(root,'.artifacts/code-intelligence/dsh-lsp-server')
+const selected=selectedCodeHost(root)
+assertCodeConsumerHost(provider,selected)
 const mode=process.argv[2]
 if(!mode){
  const measurements={}
@@ -12,7 +15,7 @@ if(!mode){
   const child=spawn(process.execPath,[import.meta.filename,candidate],{cwd:root,stdio:['ignore','pipe','inherit']});let output=''
   child.stdout.on('data',chunk=>output+=chunk);child.once('error',reject);child.once('exit',code=>code===0?resolve(JSON.parse(output)):reject(new Error(`Benchmark ${candidate} failed (${code})`)))
  })
- const report={schemaVersion:1,scenario:'Five disk TS files, 200 declarations each: locate first declaration, retrieve selected source and hover; cold provider in a separate process for each route.',runtime:process.version,platform:process.platform,measurements,
+ const report={schemaVersion:1,scenario:'Five disk TS files, 200 declarations each: locate first declaration, retrieve selected source and hover; cold provider in a separate process for each route.',runtime:process.version,platform:process.platform,...(selected?{dshSha:selected.sha,dshVersion:selected.version}:{}),measurements,
   limitations:['Serialized fixture payload bytes are measured; no tokenizer or model request is involved.','Host peak RSS excludes separate language-server process RSS.','This fixture returns full source for the read baseline; ordinary read limits and compaction may change the comparison.','No general latency, memory or token reduction claim.']}
  await mkdir(join(root,'.artifacts/code-intelligence'),{recursive:true});await writeFile(join(root,'.artifacts/code-intelligence/benchmark.json'),JSON.stringify(report,null,2)+'\n');console.log(JSON.stringify(report,null,2))
 }else{

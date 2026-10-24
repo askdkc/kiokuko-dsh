@@ -290,7 +290,8 @@
     "@deepseek-ai/dsh-llm-pi-ai": "*",
     "@huggingface/hub": "^2.16.1",
     "@huggingface/transformers": "^4.2.0",
-    "sqlite-vec": "^0.1.9"
+    "sqlite-vec": "^0.1.9",
+    "@deepseek-ai/dsh-tools": "*"
   },
   "peerDependenciesMeta": {
     "@huggingface/hub": {
@@ -315,6 +316,9 @@
       "optional": true
     },
     "@ai-sdk/provider": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
       "optional": true
     }
   },

@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import path from 'node:path'
@@ -21,13 +22,13 @@ test('P0: real DSH registry guard denies direct, nested and late-registered tool
   const parent = { id: 'p0-parent', session: { id: 'p0-parent' } }
   const child = { id: 'p0-child', session: { id: 'p0-child' } }
   scope.bindScopeParent(child, parent)
-  const call = (name: string, agent: object = parent, nested = false) => ctx.tools.execute({
+  const call = (name: string, agent: object = parent, nested = false) => executeNativeTool(ctx, packages!, {
     callId: `p0-${name}`, name, arguments: {}, agent, signal: new AbortController().signal,
     ...(nested ? { parent: Symbol('p0-parent-execution'), rootCallId: 'p0-root' } : {}),
   })
   try {
     fibers.push(await ctx.plugin(prompt.default, {}))
-    fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    await mountNativeTools(ctx, tools, packages!, fibers)
     disposers.push(ctx.tools.register(definition('p0_write')))
     assert.equal((await call('p0_write')).isError, false, 'positive control must reach the real body')
     assert.equal(executions, 1)

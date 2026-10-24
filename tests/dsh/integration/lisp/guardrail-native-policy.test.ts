@@ -1,5 +1,7 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -31,7 +33,7 @@ async function fixture() {
   let closeDatabase = () => {}
   try {
     const root = join(base, 'workspace')
-    await mkdir(root); await mkdir(join(root, '.git')); await mkdir(join(root, 'src')); await mkdir(join(root, 'tests'))
+    await mkdir(root); execFileSync('git', ['init', '-q', root]); await mkdir(join(root, 'src')); await mkdir(join(root, 'tests'))
     await writeFile(join(root, 'src/value.mjs'), initial)
     await writeFile(join(root, 'tests/unit.test.mjs'), '// Write the regression through owned tools.\n')
     const databasePath = join(base, 'state.sqlite3')
@@ -77,7 +79,7 @@ test('enrolled protected surface dispatches the real owned adapter with its pinn
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, local: any, unmountOwned: (() => Promise<void>) | undefined
   let ordinaryEffects = 0, replacementEffects = 0, observedLease: unknown
   try {
-    fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'protocol-owned-policy-services', apply(c: any) {
       c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
       c.provide('sessions', { get: (id: string) => id === session.id ? session : undefined })
@@ -102,13 +104,13 @@ test('enrolled protected surface dispatches the real owned adapter with its pinn
     assert.equal(readCodingWorkflow(f.db, f.task.taskId)!.scopeVersion,
       readCodingWorkflow(f.db, f.task.taskId)!.protocol!.scopeVersion)
 
-    const ordinary = await ctx.tools.execute({ callId: randomUUID(), name: 'fixture_write', arguments: {}, agent, signal })
+    const ordinary = await executeNativeTool(ctx, packages!, { callId: randomUUID(), name: 'fixture_write', arguments: {}, agent, signal })
     assert.equal(ordinary.isError, true); assert.equal(ordinaryEffects, 0)
     assert.equal((await surface.manager.status(f.owner) as any).state, 'TASK_READY')
-    const nativeWrite = await ctx.tools.execute({ callId: 'not-a-lisp-bridge', name: 'kioku_write',
+    const nativeWrite = await executeNativeTool(ctx, packages!, { callId: 'not-a-lisp-bridge', name: 'kioku_write',
       arguments: { path: 'tests/unit.test.mjs', content: 'bypass' }, agent, signal })
     assert.equal(nativeWrite.isError, true, 'Registry visibility alone cannot grant an unrestricted native effect')
-    const leasedNative = await withTaskAuthority(f.lease, () => ctx.tools.execute({ callId: 'not-a-bridge-even-with-lease',
+    const leasedNative = await withTaskAuthority(f.lease, () => executeNativeTool(ctx, packages!, { callId: 'not-a-bridge-even-with-lease',
       name: 'kioku_write', arguments: { path: 'tests/unit.test.mjs', content: 'bypass' }, agent, signal, [TASK_AUTHORITY]: f.lease }))
     assert.equal(leasedNative.isError, true, 'Caller-supplied authority cannot mint the private bridge scope')
     const savedTests = await readFile(join(f.root, 'tests/unit.test.mjs'), 'utf8')

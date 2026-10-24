@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { intentDecisionWebFixture } from './lib/intent-decision-web-fixture.mjs'
 import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
@@ -13,11 +14,12 @@ import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 import { transform } from 'esbuild'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
+const runtime = process.env.KIOKUKO_LISP_APPROVAL_RUNTIME ?? 'dsh-runtime'
+const selected = selectedDshRuntime(root, { ...process.env, KIOKUKO_DSH_PACKAGE_ROOT: process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, `tests/fixtures/${runtime}/node_modules`) })
 const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-approval-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
-const runtime = process.env.KIOKUKO_LISP_APPROVAL_RUNTIME ?? 'dsh-runtime'
-const dsh = process.env.DSH_BIN ?? join(root, `tests/fixtures/${runtime}/node_modules/.bin/dsh`)
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
+const dsh = selected.environment.DSH_BIN
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
 let host, browser, page, decisionFixture, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout
@@ -36,7 +38,7 @@ try {
   const mockPath=join(base,'mock.mjs')
   await writeFile(mockPath,(await transform(await readFile(join(root,'tests/dsh/helpers/native-mock.ts'),'utf8'),{loader:'ts',format:'esm'})).code)
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises'; import {randomUUID} from 'node:crypto';
-import * as llm from ${JSON.stringify(pathToFileURL(join(root,`tests/fixtures/${runtime}/node_modules/@deepseek-ai/dsh-llm/lib/index.js`)).href)};
+import * as llm from ${JSON.stringify(pathToFileURL(join(selected.packageRoot,'@deepseek-ai/dsh-llm/lib/index.js')).href)};
 import {nativeMock,nativeToolResults} from ${JSON.stringify(pathToFileURL(mockPath).href)};
 export const name='lisp-approval-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','llm'];
 export async function apply(ctx){

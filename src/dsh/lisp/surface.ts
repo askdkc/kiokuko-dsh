@@ -1,3 +1,4 @@
+import { createLispHostDispatch } from './host-tool-dispatch.js'
 import { ManagedDispatchDenied } from '../managed-operation-runner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
@@ -48,7 +49,7 @@ import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfigura
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
-interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs(mode: 'native'): () => void; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
+interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
 interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean }
@@ -105,6 +106,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const sessions = root.get('sessions', false) as { get(id: string): Session | undefined } | undefined
   const commands = ctx.get('commands', false) as { register(definition: DshNativeCommandDefinition): () => void } | undefined
   if (!tools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
+  const dispatchHostTool = await createLispHostDispatch(ctx, tools)
   const questions = ctx.get('userQuestions', false) as DshUserQuestions | undefined
   const approvalPolicy = mountApprovalPolicy(ctx, config.approvalMode, (agentId, expected) => {
     const agent = agents.get(agentId)
@@ -131,7 +133,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const agent=agents.get(owner.agentId)
     if(!agent||agent.session.id!==owner.sessionId||sessions.get(owner.sessionId)!==agent.session||realpathSync(agent.session.header.cwd)!==owner.root)fail('SESSION_MISMATCH','Owned tool caller changed.')
     const binding=ownerForOwned(owner)
-    const execute = () => tools.execute({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
+    const execute = () => dispatchHostTool({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
       ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
     const result=await (taskLease ? withTaskAuthority(taskLease, execute) : execute()) as any
     if(result.isError)fail('OWNED_EXECUTION_FAILED',JSON.stringify(result.content))
@@ -229,7 +231,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         return protocolBridgeScope.run({ agent, name, callId: id, pinned },
           () => ownedCall(owner, name, args, signal, id, taskLease))
       }
-      const execute = () => tools.execute({callId:`lisp-host-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-host-read'),signal:signal??new AbortController().signal,
+      const execute = () => dispatchHostTool({callId:`lisp-host-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-host-read'),signal:signal??new AbortController().signal,
         ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
       return taskLease ? withTaskAuthority(taskLease, execute) : execute()
     },
@@ -259,6 +261,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const scope = scopeSession(agent, persistent)
       if (!scope) return hostFences || LISP_TOOLS.includes(execution.name) ? 'このセッションでは Lisp が無効または起動中です。' : undefined
       if (persistent.executionMode==='development' && !LISP_TOOLS.includes(execution.name)) return undefined
+      if (persistent.executionMode === 'protected' && execution.name === 'run_code') return 'Protected Lisp requires the native DSH tool executor. Select native execution in the DSH profile, or disable protected Lisp; the PTC program was not executed.'
       if (persistent.stopped || !persistent.controller) return persistent.executionMode==='development' ? 'Lisp は停止中です。通常ツールは利用できます。' : 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
@@ -351,8 +354,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const local: (() => void)[] = []
     agentDisposers.set(agent.id, local)
     const scopedTools = agent.ctx.get('tools') as Tools
-    // Do not depend on arbitrary third-party PTC runtimes enforcing our boundary.
-    if(scopedTools.modeFor?.(agent)!=='native')local.push(scopedTools.presentAs('native'))
+    // Current hosts own native/PTC selection for the Agent's lifetime. Preserve
+    // that selection. Protected scopes retain their monotonic registry guards;
+    // reserved PTC transport is denied before its program can execute.
+    if (typeof scopedTools.setExecutor !== 'function' && scopedTools.modeFor?.(agent) !== 'native') {
+      if (typeof scopedTools.presentAs !== 'function') fail('HOST_CAPABILITY_MISSING', 'The host cannot select scoped native execution.')
+      local.push(scopedTools.presentAs('native'))
+    }
     // Retain the host's existing read and memory-review capabilities, including agent-local preset
     // tools. Pin their implementations so a later same-name registration cannot
     // acquire permission. Dispatch still traverses every native DSH policy/guard.
@@ -383,7 +391,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     for (const name of LISP_TOOLS) {
       const definition = { name, get description() { return `${description(name)} Current Lisp approval mode: ${approvalPolicy.mode()} (profile).` }, modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
-        execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string }) => {
+        execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string; rootCallId?: string; token?: symbol; toolSet?: unknown }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
             const codingRequest = preparation.binding(binding.agent)
@@ -405,7 +413,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                 if (tools.get('bash', binding.agent) !== pinned.definition || tools.get('bash', binding.agent)?.execute !== pinned.execute)
                   fail('STALE_NATIVE_COMMAND', 'Native Bash implementation changed.')
                 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
-                const child = { name: 'bash', callId: `lisp-native-${randomUUID()}`, agent: binding.agent, parent: Symbol('lisp-native-command'),
+                const child = { name: 'bash', callId: `lisp-native-${randomUUID()}`, agent: binding.agent, parent: execution.token ?? Symbol('lisp-native-command'),
+                  ...(execution.rootCallId ?? execution.callId ? { rootCallId: execution.rootCallId ?? execution.callId } : {}),
+                  ...(execution.toolSet ? { toolSet: execution.toolSet } : {}),
                   arguments: { command: [input.program, ...input.argv].map(quote).join(' '), description: 'Run the requested Lisp command through native Bash',
                     workdir: input.directory ?? binding.owner.root, timeoutMs: input.timeoutMs }, signal: AbortSignal.any([binding.signal, signal]) }
                 const commandAdmission = { current: () => {
@@ -425,7 +435,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   return next()
                 }, {global:true, prepend:true})
                 let result: any
-                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => tools.execute(child)) }
+                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child)) }
                 finally { removeDispatchWitness() }
                 if (result.isError) {
                   if (!dispatchStarted) throw new ManagedDispatchDenied('Host rejected tool before dispatch.')
@@ -631,7 +641,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         { name: 'kiokuko:lisp', text: '{{kiokuko_lisp}}' })
       sections.push({ name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) })
       const projected = { ...assembly, sections, variables: { ...assembly.variables, kiokuko_lisp: guide },
-        tools: schemas.sort((a, b) => a.name.localeCompare(b.name)) }
+        // Current DSH owns executor schemas and step admission. Do not replace
+        // a selected PTC transport with native calls or widen its admitted set.
+        ...(typeof tools.setExecutor === 'function' ? {} : { tools: schemas.sort((a, b) => a.name.localeCompare(b.name)) }) }
       return projected
     },
   }

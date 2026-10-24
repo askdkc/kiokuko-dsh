@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
@@ -12,10 +13,11 @@ import { pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 import { build, transform } from 'esbuild'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
+const selected = selectedDshRuntime(root)
 const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-plan-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
-const dsh = process.env.DSH_BIN ?? join(root, 'tests/fixtures/dsh-runtime/node_modules/.bin/dsh')
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
+const dsh = selected.environment.DSH_BIN
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
 let host, browser, page, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout
@@ -33,7 +35,7 @@ try {
   const planPath = join(base, 'plan-script.mjs')
   await build({ entryPoints: [join(root, 'tests/dsh/helpers/plan-script.ts')], outfile: planPath, bundle: true, platform: 'node', format: 'esm' })
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises'; import {randomUUID} from 'node:crypto';
-import * as llm from ${JSON.stringify(pathToFileURL(join(root,'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-llm/lib/index.js')).href)};
+import * as llm from ${JSON.stringify(pathToFileURL(join(selected.packageRoot,'@deepseek-ai/dsh-llm/lib/index.js')).href)};
 import {nativeMock,nativeToolResults} from ${JSON.stringify(pathToFileURL(mockPath).href)};
 import {planPreparation} from ${JSON.stringify(pathToFileURL(planPath).href)};
 export const name='lisp-plan-fixture'; export const inject=['workspaceRegistry','commands','tools','agents','sessionProjections','llm'];

@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { execFile } from 'node:child_process'
 import { promisify, parseArgs } from 'node:util'
@@ -11,11 +12,11 @@ const phase=values.phase??'both'
 if(!['source','packed','both'].includes(phase))throw new Error('Unknown Skill delivery phase')
 
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
-const native = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, 'tests/fixtures/dsh-runtime/node_modules')
+const selected = selectedDshRuntime(root)
+const native = selected.packageRoot
 await access(join(native, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
-const env = {...process.env, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(join(root,'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_DSH_PACKAGE_ROOT:native, KIOKUKO_REQUIRE_DSH_NATIVE:'1', KIOKUKO_REQUIRE_LISP_RUNTIME:'1', KIOKUKO_TEST_COMPILED_SKILLS:'1'}
+const env = {...selected.environment, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(join(root,'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_DSH_PACKAGE_ROOT:native, KIOKUKO_REQUIRE_DSH_NATIVE:'1', KIOKUKO_REQUIRE_LISP_RUNTIME:'1', KIOKUKO_TEST_COMPILED_SKILLS:'1'}
 delete env.KIOKUKO_SKILL_PACKAGE_ROOT
-delete env.KIOKUKO_DSH_SOURCE_ROOT
 delete env.NODE_TEST_CONTEXT
 async function verify(packageRoot) {
   const phase=packageRoot?'packed':'source'

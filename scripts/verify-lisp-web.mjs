@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 // Disposable installed-package Web fixture. No provider credentials or user profile.
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises'
@@ -6,10 +7,11 @@ import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 const exec = promisify(execFile), repository = resolve(import.meta.dirname, '..')
+const selected = selectedDshRuntime(repository)
 const base = await realpath(await mkdtemp(join(tmpdir(), 'kioku-lisp-web-')))
-const project = join(base, 'project'), dsh = process.env.DSH_BIN ?? join(repository, 'tests/fixtures/dsh-runtime/node_modules/.bin/dsh')
+const project = join(base, 'project'), dsh = selected.environment.DSH_BIN
 for (const name of ['project', 'home', 'dsh', 'data']) await mkdir(join(base, name))
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data') }
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data') }
 await writeFile(join(project, 'fixture-delete.txt'), 'Recoverable verification fixture.\n')
 await exec('npm', ['run', 'build'], { cwd: repository, maxBuffer: 8 * 1024 ** 2 })
 const pack = await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', base, '--json'], { cwd: repository, maxBuffer: 8 * 1024 ** 2 })

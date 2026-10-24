@@ -8,14 +8,15 @@
 
 ## 再現手順
 
-Node.jsと固定版DSHを用意し、その実体を指定する。以下のパスは実際のインストール先へ置き換える。
+Node.js と公式 DSH の現在のソースを用意する。`node scripts/resolve-dsh-upstream.mjs` で一度解決した SHA を公式 checkout に適用し、その checkout の frozen install と `pnpm run build:artifacts` を完了させる。以下のパスはその実体へ置き換える。SHA は互換対象の固定値ではなく、この実行で検証するソースの識別子である。
 
 ```sh
-export DSH_BIN=/absolute/path/to/node_modules/.bin/dsh
-export KIOKUKO_DSH_PACKAGE_ROOT=/absolute/path/to/node_modules
+export KIOKUKO_EXPECTED_DSH_SHA=$(git -C /absolute/path/to/official-dsh rev-parse HEAD)
+node scripts/stage-dsh-upstream.mjs /absolute/path/to/official-dsh tests/fixtures/dsh-runtime "$KIOKUKO_EXPECTED_DSH_SHA" .
+export DSH_BIN="$PWD/tests/fixtures/dsh-runtime/node_modules/.bin/dsh"
+export KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules"
 export KIOKUKO_REQUIRE_DSH_NATIVE=1
 export KIOKUKO_REQUIRE_DSH_CLI=1
-export KIOKUKO_EXPECTED_DSH_VERSION=0.2.1-alpha.2
 export KIOKUKO_REPEATED_REPORT_DIR=/tmp/kiokuko-lifecycle-results
 export KIOKUKO_DSH_EVIDENCE_PATH=/tmp/kiokuko-package-lifecycle.json
 

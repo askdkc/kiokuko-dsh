@@ -47,7 +47,7 @@ test('native file shards are nonempty, disjoint and exactly cover the same sourc
     mkdirSync(path.join(directory,'@deepseek-ai/dsh'),{recursive:true});
     writeFileSync(path.join(directory,'@deepseek-ai/dsh/package.json'),JSON.stringify({name:'@deepseek-ai/dsh',version:'fixture'}));
     for(const suite of ['ci-integration','ci-e2e','lisp']){
-      const full=nativeCiPlan(suite,{KIOKUKO_DSH_PACKAGE_ROOT:directory}),shards=['1/2','2/2'].map(shard=>shardNativePlan(full,shard));
+      const full=nativeCiPlan(suite,{KIOKUKO_DSH_PACKAGE_ROOT:directory,KIOKUKO_DSH_RUNTIME_MODE:'historical'}),shards=['1/2','2/2'].map(shard=>shardNativePlan(full,shard));
       const files=shards.flatMap(shard=>shard.args.slice(1));
       const repeated='tests/dsh/e2e/repeated-memory-lifecycle.test.ts';
       assert.equal(files.length-new Set(files).size,suite==='ci-e2e'?1:0);

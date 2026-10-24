@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { readFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
@@ -12,14 +13,13 @@ export interface EvaluationFixture { id: string; family: string; language: 'en' 
 
 /** Actual native services; scripted generation captures requests and is never graded as quality. */
 export async function captureCompactionArm(fixture: EvaluationFixture, arm: 'original' | 'deterministic' | 'laya', service: DecisionService, signal: AbortSignal) {
-  // The evaluation contract pins its own fixture, independently of a CI matrix's runtime override.
-  const packages = join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
+  // Compare arms on the same explicitly selected native runtime.
+  const selected = selectedDshRuntime(process.cwd())
+  const packages = selected.packageRoot
   const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)
   const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction] = await Promise.all(
     ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic'].map(load))
   const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
-  const expected = JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
-  if (version !== expected) throw new Error(`Native evaluation runtime mismatch: expected ${expected}, got ${version}`)
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   class Capture extends mock.MockAdapter {
     override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 16000 } } }
@@ -76,7 +76,7 @@ export async function captureCompactionArm(fixture: EvaluationFixture, arm: 'ori
     const events = session.snapshotEvents()
     const requests = provider.requests.map(request => structuredClone(request))
     if (events.some((event: any) => event.type === 'compaction/summary')) throw new Error('Native summary contaminated primary comparison')
-    return { arm, nativeRuntime: version, nativeEstimated: { before, after: ctx.tokenMeter.measure(session).totalTokens },
+    return { arm, nativeRuntime: version, ...(selected.upstream ? { nativeSha: selected.upstream.sha } : {}), nativeEstimated: { before, after: ctx.tokenMeter.measure(session).totalTokens },
       requestBytes: requests.map(request => Buffer.byteLength(JSON.stringify(request))), requestNativeEstimated, requests,
       originalHistoryIntact: JSON.stringify(events.slice(0, originalHistory.length)) === JSON.stringify(originalHistory),
       originalHistory, finalSurface: session.surface.nodes.map((seq: number) => session.eventAt(seq)),

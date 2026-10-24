@@ -1,14 +1,29 @@
 name: Optional code intelligence
 on:
   pull_request:
-    paths: ['src/dsh/lisp/**', 'lisp/**', 'patches/code-intelligence/**', 'scripts/*code*.mjs', 'tests/dsh/**/lisp/code-intelligence*.ts', '.github/workflows/code-intelligence.yml']
+    paths: ['src/dsh/lisp/**', 'lisp/**', 'patches/code-intelligence/**', 'scripts/*code*.mjs', 'scripts/*dsh*upstream*.mjs', 'scripts/code-intelligence-host.mjs', 'scripts/dsh-fixture-identity.mjs', 'tests/dsh/**/lisp/code-intelligence*.ts', '.github/workflows/code-intelligence.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  select:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      dsh_sha: ${{ steps.dsh.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with: {node-version: '24.16.0'}
+      - id: dsh
+        name: Resolve current official DSH master once
+        run: node scripts/resolve-dsh-upstream.mjs
   macos:
+    needs: select
+    env:
+      KIOKUKO_EXPECTED_DSH_SHA: ${{ needs.select.outputs.dsh_sha }}
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -16,13 +31,44 @@ jobs:
       - run: brew install sbcl
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Check out selected official DSH
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.select.outputs.dsh_sha }}
+          path: .artifacts/official-dsh
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: .artifacts/official-dsh/package.json
+          run_install: false
+      - name: Build selected official DSH
+        working-directory: .artifacts/official-dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:artifacts
+      - name: Stage exact official source in fixture and development graphs
+        run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
       - run: node scripts/prepare-code-provider.mjs
       - run: npm run test:code-intelligence
       - run: npm run test:code-intelligence:packed
       - run: npm run test:code-intelligence:benchmark
       - uses: actions/upload-artifact@v7
-        with: {name: code-intelligence-macos, path: '.artifacts/code-intelligence/benchmark.json'}
+        if: always()
+        with:
+          name: code-intelligence-macos
+          include-hidden-files: true
+          path: |
+            .artifacts/code-intelligence/benchmark.json
+            tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/dsh-lsp-server/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/@askdkc/dsh-lsp-server/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/kiokuko-dsh/node_modules/.kiokuko-dsh-upstream.json
   linux:
+    needs: select
+    env:
+      KIOKUKO_EXPECTED_DSH_SHA: ${{ needs.select.outputs.dsh_sha }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,7 +79,7 @@ jobs:
             image: archlinux:base-devel
     runs-on: ubuntu-24.04
     container: ${{ matrix.image }}
-    timeout-minutes: 25
+    timeout-minutes: 55
     steps:
       - name: Install operating-system tools
         run: |
@@ -48,9 +94,37 @@ jobs:
         with: {node-version: '24.16.0'}
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Check out selected official DSH
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.select.outputs.dsh_sha }}
+          path: .artifacts/official-dsh
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: .artifacts/official-dsh/package.json
+          run_install: false
+      - name: Build selected official DSH
+        working-directory: .artifacts/official-dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:artifacts
+      - name: Stage exact official source in fixture and development graphs
+        run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
       - run: node scripts/prepare-code-provider.mjs
       - run: npm run test:code-intelligence -- --development-only
       - run: npm run test:code-intelligence:packed -- --development-only
       - run: npm run test:code-intelligence:benchmark
       - uses: actions/upload-artifact@v7
-        with: {name: 'code-intelligence-${{ matrix.name }}', path: '.artifacts/code-intelligence/benchmark.json'}
+        if: always()
+        with:
+          name: code-intelligence-${{ matrix.name }}
+          include-hidden-files: true
+          path: |
+            .artifacts/code-intelligence/benchmark.json
+            tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/dsh-lsp-server/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/@askdkc/dsh-lsp-server/node_modules/.kiokuko-dsh-upstream.json
+            .artifacts/code-intelligence/profile/node_modules/kiokuko-dsh/node_modules/.kiokuko-dsh-upstream.json

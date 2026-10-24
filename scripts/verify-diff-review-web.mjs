@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 // Disposable installed-package Web fixture. No user profile or provider credentials.
 import { execFile } from 'node:child_process'
@@ -10,12 +11,13 @@ import { join, resolve } from 'node:path'
 
 const exec = promisify(execFile)
 const repository = resolve(import.meta.dirname, '..')
+const selected = selectedDshRuntime(repository)
 const base = await realpath(await mkdtemp(join(tmpdir(), 'kiokuko-diff-web-')))
 process.once('exit', () => rmSync(base, { recursive: true, force: true }))
 const project = join(base, 'project')
-const dsh = process.env.DSH_BIN ?? join(repository, 'tests/fixtures/dsh-runtime/node_modules/.bin/dsh')
+const dsh = selected.environment.DSH_BIN
 for (const name of ['project', 'home', 'dsh', 'data', 'npm-cache']) await mkdir(join(base, name))
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'npm-cache') }
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'npm-cache') }
 await exec('git', ['init', '-q'], { cwd: project })
 await writeFile(join(project, 'sample.txt'), 'before\n')
 await exec('git', ['add', 'sample.txt'], { cwd: project })

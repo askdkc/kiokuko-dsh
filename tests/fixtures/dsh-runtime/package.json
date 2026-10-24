@@ -2,7 +2,7 @@
   "name": "kiokuko-dsh-ci-runtime",
   "version": "1.0.0",
   "private": true,
-  "description": "Canonical DSH runtime for native acceptance tests",
+  "description": "Locked historical DSH baseline and CLI support; CI stages current official master",
   "dependencies": {
     "@deepseek-ai/dsh": "0.2.1-alpha.3",
     "@askdkc/dsh-cli": "0.14.11",

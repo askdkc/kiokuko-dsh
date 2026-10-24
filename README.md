@@ -27,7 +27,7 @@ Tool exposure defaults to `auto`: task type and current phase determine the Kiok
 
 ## Install and use
 
-Runtime compatibility target: **DSH 0.2.1-alpha.2**, with the `web` and `dsh-cli` profiles. See the [verification scope](docs/dsh-plugin.md#compatibility).
+Current-upstream compatibility is checked against the resolved official DSH revision, not a fixed release number. Historical release records are separate evidence. See the [verification scope and protected-mode limitation](docs/dsh-plugin.md#compatibility).
 
 Supported platforms: Linux x64/ARM64 and macOS Apple Silicon; Intel Mac and Windows are unsupported.
 

@@ -11,7 +11,11 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-The declared DSH minimum is **0.2.1-alpha.2**, with no unproven future ceiling. Tested-release records describe evidence, not an exclusive runtime target; compatibility also requires the native APIs exercised by the disposable-profile tests. Cordis supports the same-major lifecycle API (`^4.0.5-alpha.1`), including compatible minor updates.
+Compatibility depends on the native APIs exercised by the disposable-profile tests, not a package-version prefix. CI resolves official DSH master once, builds that exact revision and records it with the test evidence. Historical release records and locked fixtures remain reproducibility data, not proof of current-upstream support.
+
+On hosts exposing the batch executor API, development Lisp preserves the Agent’s selected native or PTC executor. Host-owned nested calls use DSH’s exported invocation pipeline, retaining scoped policy, cancellation settlement and host-only task authority. They are not submitted as model batches.
+
+Protected Lisp on current DSH retains the selected executor and enforces its scoped native-tool restrictions and monotonic guards. Native execution supports protected Lisp; the reserved PTC `run_code` transport is explicitly denied before its program runs. To use protected Lisp, select native execution in the DSH profile. Disabling or unloading Lisp never installs, replaces or disposes the selected executor, so it cannot leave a stale executor tombstone; the protected fence still survives plugin unload. Existing hosts that provide reversible `presentAs` retain the prior presentation behavior.
 
 CI uses the canonical DSH fixture for native history, routing and packed Web lifecycle coverage. Historical source-repair CLI tests use the current catalog's historical codecs for v0/v3 fixtures. Local tests do not prove an npm `--latest` update or the user's running profile. The E2E runner defaults to the manifest's compatibility target; `KIOKUKO_EXPECTED_DSH_VERSION` selects an explicit fixture version. `KIOKUKO_DSH_CLI_ONLY=1` runs only the packed Web lifecycle and requires `KIOKUKO_REQUIRE_DSH_CLI=1`.
 
@@ -382,7 +386,7 @@ limit. The package is therefore not represented as a small, auto-approved
 plugin.
 
 The manifest declares MIT licensing, the canonical GitHub repository, Node.js
-`>=24.16.0`, DSH `>=0.2.1-alpha.2`, and the `web` and `dsh-cli` profiles.
+`>=24.16.0`, the DSH capabilities described above, and the `web` and `dsh-cli` profiles.
 An untested release is not rejected merely for its version label. A matching
 disposable-profile run supplies behavior evidence; `headless` remains unverified. The legacy `dsh-tui` profile declaration is retained for existing installations.
 

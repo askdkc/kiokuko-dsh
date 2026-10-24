@@ -176,7 +176,7 @@ test('shutdown cancels Nous refresh without publishing a replacement credential'
   } finally { await f.close(); }
 });
 
-test('Web current-model selection validates its native call configuration exactly once', async () => {
+for (const modelApi of ['legacy', 'current'] as const) test(`Web ${modelApi} model selection validates once and uses the owned selection API`, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'models-single-validation-'));
   const previous = process.env.DSH_AUTH_CREDENTIALS;
   process.env.DSH_AUTH_CREDENTIALS = join(dir, 'synthetic-credentials.json');
@@ -185,7 +185,9 @@ test('Web current-model selection validates its native call configuration exactl
   const config = new ModelsConfigStore(join(dir, 'kiokuko-models.json'));
   await config.write({version:1,revision:1,connections:[c]}, 0);
   await new CredentialFile(process.env.DSH_AUTH_CREDENTIALS).modify('infron', async () => ({type:'api_key',key:'synthetic-only'}));
-  const agent = {status:'idle',ctx:{on:()=>()=>{}},session:{append:()=>{}}};
+  let selected = 0, appended = 0, hooks = 0;
+  const agent = {status:'idle',ctx:{on:()=>{hooks++;return ()=>{}}},session:{append:()=>{appended++}},
+    ...(modelApi === 'current' ? {model:{select(binding:any){assert.equal(binding.model,model.id);selected++}}} : {})};
   const services: any = {
     profileContext:{name:'web',dir}, agents:{get:()=>agent},
     llm:{registerAdapter:()=>Object.assign(()=>{}, {replace:()=>{}}), resolveCallConfig:async (binding:unknown)=>{validations++;return binding;}},
@@ -198,6 +200,9 @@ test('Web current-model selection validates its native call configuration exactl
     const response = await fetchHandler!(new Request('http://localhost/api/kiokuko.models',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({op:'select',id:c.id,model:model.id,scope:'current',sessionId:'synthetic-session'})}));
     assert.equal(response.status,200,await response.text());
     assert.equal(validations,1);
+    assert.equal(selected,modelApi === 'current' ? 1 : 0);
+    assert.equal(appended,modelApi === 'current' ? 0 : 1);
+    if (modelApi === 'current') assert.equal(hooks,0,'native Agent owns selection listeners');
   } finally {
     await close?.();
     if(previous===undefined)delete process.env.DSH_AUTH_CREDENTIALS;else process.env.DSH_AUTH_CREDENTIALS=previous;

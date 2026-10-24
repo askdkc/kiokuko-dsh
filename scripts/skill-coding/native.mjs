@@ -1,8 +1,10 @@
+import { selectedDshRuntime } from '../dsh-fixture-identity.mjs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 export async function nativeSession({ model, prompt, tools, budget, adapterOverride, signal }) {
-    const root = resolve('tests/fixtures/dsh-runtime/node_modules/@deepseek-ai');
+    const selected = selectedDshRuntime(process.cwd());
+    const root = join(selected.packageRoot, '@deepseek-ai');
     const load = name => import(pathToFileURL(join(root, name, 'lib/index.js')).href);
     const [cordis, llm, session, projection, system, registry, toolPlugin, loop, provider] = await Promise.all(['cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-agent', 'dsh-tools', 'dsh-agent-loop', 'dsh-llm-pi-ai'].map(load));
     const ctx = new cordis.Context();

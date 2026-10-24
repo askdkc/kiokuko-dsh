@@ -142,6 +142,12 @@ export async function mountKiokukoModels(
         throw new Error(
           "Connection selection must wait until this chat is idle",
         );
+      // Current DSH owns the selection projection and switch listener on Agent.
+      // Installing the older ref-based listener would leave that state unused.
+      if (typeof agent.model?.select === "function") {
+        agent.model.select(binding);
+        return;
+      }
       let selection = selections.get(agent);
       if (!selection) {
         const ref = {
@@ -150,7 +156,7 @@ export async function mountKiokukoModels(
             { provider: string; model: string } | undefined,
         };
         selection = { ...ref, dispose: () => {} };
-        selection.dispose = installModelSelection(agent.ctx, selection);
+        selection.dispose = Reflect.apply(installModelSelection, undefined, [agent.ctx, selection]);
         selections.set(agent, selection);
       }
       agent.session.append("model/selection", binding);

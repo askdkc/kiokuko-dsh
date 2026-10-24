@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -30,7 +31,7 @@ test('native DSH surface exposes hot tools only after task admission and preserv
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   try {
     fibers.push(await ctx.plugin(prompt.default, {}))
-    fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin(questions.default, {}))
     fibers.push(await ctx.plugin({ name: 'hot-native-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined, roots: () => [agent] })
@@ -54,7 +55,7 @@ test('native DSH surface exposes hot tools only after task admission and preserv
     const contractSchema: any = ctx.tools.get('lisp_hot_contract', agent)
     assert.equal(contractSchema.parameters?.properties?.operationId?.type, 'string')
     assert.equal(contractSchema.parameters?.properties?.properties?.maxItems, 32)
-    const call = (name: string, args: Record<string, unknown>) => ctx.tools.execute({ callId: randomUUID(), name, arguments: args, agent, signal: new AbortController().signal })
+    const call = (name: string, args: Record<string, unknown>) => executeNativeTool(ctx, packages!, { callId: randomUUID(), name, arguments: args, agent, signal: new AbortController().signal })
     const contract = await call('lisp_hot_contract', { operationId: 'native-contract', name: 'native-add-one', description: 'Native add one', inputSchema: { type: 'integer' }, outputSchema: { type: 'integer' }, properties: [{ input: 1, expected: 2 }] })
     assert.equal(contract.isError, false, JSON.stringify(contract))
     const text = contract.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join('')
@@ -63,7 +64,7 @@ test('native DSH surface exposes hot tools only after task admission and preserv
     const installed = await call('lisp_hot_install', { operationId: 'native-install', name: 'native-add-one', contractRef: parsed.contractRef, expectedRevision: 0, source: '(lambda (input) (+ input 1))' })
     assert.equal(installed.isError, false, JSON.stringify(installed))
     const installText = installed.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join('')
-    assert.equal(JSON.parse(installText).revision, 1)
+    assert.equal(JSON.parse(installText).revision, 1, installText)
     const status = await call('lisp_hot_status', {})
     assert.equal(status.isError, false, JSON.stringify(status))
     assert.match(status.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join(''), /native-add-one/u)

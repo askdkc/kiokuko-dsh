@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import assert from 'node:assert/strict'
 import { access, mkdtemp, mkdir, readFile, writeFile, readdir, readlink, lstat, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -173,7 +174,9 @@ async function runCase({ scenario, variant, sources, artifact, packages, config,
 }
 
 /** Source-only evaluation. All workspaces, Skills and Lisp state are disposable. */
-export async function runPrototypeEvaluation({ config, output, packages = join(root, 'tests/fixtures/dsh-runtime/node_modules'), request = fetch }) {
+export async function runPrototypeEvaluation({ config, output, packages, request = fetch }) {
+  const selected = selectedDshRuntime(root, { ...process.env, ...(packages ? { KIOKUKO_DSH_PACKAGE_ROOT: packages } : {}) })
+  packages = selected.packageRoot
   if (config) config = parseEvaluationConfig(config)
   await access(join(packages, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
   if (config && !process.env[config.apiKeyEnv]) throw new Error('evaluation_credential_unavailable')
@@ -188,7 +191,7 @@ export async function runPrototypeEvaluation({ config, output, packages = join(r
   const budget = createEvaluationBudget(budgetConfig), controller = new AbortController(), timer = setTimeout(() => controller.abort(), budgetConfig.maxDurationMs)
   const wire = [], originalFetch = globalThis.fetch
   const report = { format: 'kiokuko.lisp-prototype-planning.v1', mode: config ? 'live' : 'offline', status: 'running', model: config?.model ?? null, revision: config?.revision ?? null,
-    baselineDigest: digest(baselineText), fixtureDigest: digest(JSON.stringify(scenarios)), environment: { node: process.version, platform: process.platform, arch: process.arch },
+    baselineDigest: digest(baselineText), fixtureDigest: digest(JSON.stringify(scenarios)), environment: { node: process.version, platform: process.platform, arch: process.arch, dshVersion: selected.manifest.version, ...(selected.upstream ? { dshSha: selected.upstream.sha } : {}) },
     plannedTasks: scenarios.length * variants.length, modelQuality: 'unmeasured', records: [], wire }
   try {
     globalThis.fetch = config ? evaluationFetch(config, budget, controller.signal, wire, request) : async () => { throw new Error('offline_network_forbidden') }

@@ -1,8 +1,12 @@
+import { selectedCodeHost, assertCodeHost, assertCodeConsumerHost } from './code-intelligence-host.mjs'
 import assert from 'node:assert/strict'
 import {readFile} from 'node:fs/promises'
 import {resolve,join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 const root=resolve(import.meta.dirname,'..'),profile=join(root,'.artifacts/code-intelligence/profile'),packages=join(profile,'node_modules')
+const selected=selectedCodeHost(root)
+assertCodeHost(profile,selected)
+for(const name of ['kiokuko-dsh','@askdkc/dsh-lsp-server'])assertCodeConsumerHost(join(packages,name),selected)
 const [boot,cordis]=await Promise.all(['dsh-app-boot','cordis'].map(name=>import(pathToFileURL(join(packages,'@deepseek-ai',name,'lib/index.js')).href)))
 const config=boot.loadProfileDirectory('dsh',profile,join(profile,'package.json'),{userLayer:false})
 assert.equal(config.skippedBundles.length,0)

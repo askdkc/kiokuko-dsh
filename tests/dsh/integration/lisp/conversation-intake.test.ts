@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import test from 'node:test'
@@ -20,7 +22,7 @@ const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/f
 const load=(name:string)=>import(pathToFileURL(join(packages,'@deepseek-ai',name,'lib/index.js')).href)
 for(const mode of ['unknown','research','optional-workflow','controlled','explicit-deferred'] as const)test(`ordinary root Lisp pure evaluation without task intake (${mode})`,{timeout:120000},async()=>{
  const classified=mode==='research',deferredOnly=mode==='explicit-deferred',controlled=mode==='controlled',metadata=mode==='optional-workflow'||controlled
- const base=await realpath(await mkdtemp(join(tmpdir(),'lisp-conversation-'))),db=openConnection(join(base,'state.sqlite3'));migrateDatabase(db)
+ const base=await realpath(await mkdtemp(join(tmpdir(),'lisp-conversation-'))),db=openConnection(join(base,'state.sqlite3'));migrateDatabase(db);execFileSync('git',['init','-q',base])
  const [cordis,prompt,tools,scope,sessions]=await Promise.all(['cordis','dsh-system-prompt','dsh-tools','dsh-scope','dsh-session'].map(load))
  const ctx=new cordis.Context(),fibers:any[]=[],commands=new Map<string,any>()
  const session=sessions.Session.create('conversation',[],{version:4,id:'conversation',createdAt:Date.now(),isSeeded:false,cwd:base})
@@ -36,7 +38,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
  let onApproval:(()=>void)|undefined,bodies=0
  const controller=new AbortController(),runtime:any={executionJournalDirectory:join(base,'journal'),withDatabase:async(fn:any)=>fn(db)}
  try{
-  fibers.push(await ctx.plugin(prompt.default,{}),await ctx.plugin(tools.default,{mode:'native'}))
+  fibers.push(await ctx.plugin(prompt.default,{}));await mountNativeTools(ctx,tools,packages,fibers)
   for(const name of ['dsh-session-projection','dsh-fs-local','dsh-working-directory','dsh-subprocess-local','dsh-bash-local','dsh-shell-env','dsh-tool-bash','dsh-user-approval']) {
    const module=await load(name),config=name==='dsh-fs-local'||name==='dsh-bash-local'?{cwd:base}:name==='dsh-working-directory'?{defaultDirectory:base}:name==='dsh-shell-env'?{dshHome:base}:name==='dsh-user-approval'?{policy:'ask'}:{}
    fibers.push(await ctx.plugin(module.default??module,config))
@@ -50,7 +52,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   local=scope.createScope(ctx,agent);agent.ctx=local.ctx
   intake=new OnDemandIntake({validate:async()=>{},nativeOwnership:async()=>'owned',existing:async()=>controlled,...(controlled?{replay:async()=>true}:{}),classify:async()=>classified?{taskType:'research',deferInference:false}:{deferInference:true},prepare:async()=>{preparations++;throw new Error('Optional intake must not gate ordinary Lisp computation')},ready:()=>controlled},{onlyWhenDeferred:deferredOnly})
   intake.mount(ctx,ctx.tools)
-  surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,startupTimeoutMs:60000}))
+  surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
   const enabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal:controller.signal});assert.equal(enabled.kind,'success',enabled.text)
   if(mode==='optional-workflow'){
    const workflow=sessionCodingWorkflow(db,session.id)
@@ -66,7 +68,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    const projected=await (ctx.get('kiokukoLispAssembly') as any).project(agent,{sections:[],variables:{},tools:ctx.tools.schemas(agent)})
    assert.ok(projected.tools.some((t:any)=>t.name==='lisp_eval'),'optional Goal metadata cannot remove the native model-facing Lisp surface')
   }
-  let call=0;const execute=(name:string,args:object)=>ctx.tools.execute({name,arguments:args,agent,callId:`conversation-${++call}`,signal:controller.signal})
+  let call=0;const execute=(name:string,args:object)=>executeNativeTool(ctx,packages,{name,arguments:args,agent,callId:`conversation-${++call}`,signal:controller.signal})
   const result=await execute('lisp_eval',{operationId:'pure',code:'(+ 20 22)'})
   if(deferredOnly){assert.equal(result.isError,true,JSON.stringify(result));assert.match(JSON.stringify(result),/prepare_requested_work/);assert.equal(preparations,0);return}
   if(controlled){assert.equal(result.value.ok,false);assert.match(JSON.stringify(result),/CODING_CHOICE_PENDING|Goal/);return}
@@ -104,7 +106,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    assert.equal(rebound.value.ok,false);assert.equal(bodies,beforeOwnerChange,'a changed owner context never reaches native execution')
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0,JSON.stringify(rebound))
   } finally {agent.ctx=originalContext;onApproval=undefined}
-  const nested=await ctx.tools.execute({name:'lisp_eval',arguments:{operationId:'untrusted-child',code:'(+ 1 2)'},agent,callId:'untrusted-child',parent:Symbol('untrusted'),signal:controller.signal})
+  const nested=await executeNativeTool(ctx,packages,{name:'lisp_eval',arguments:{operationId:'untrusted-child',code:'(+ 1 2)'},agent,callId:'untrusted-child',parent:Symbol('untrusted'),signal:controller.signal})
   assert.equal(nested.isError,true,'an arbitrary child Lisp call cannot acquire the root native capability')
   plan=true
   assert.equal((await execute('lisp_eval',{operationId:'plan',code:'(+ 1 2)'})).value.ok,true,'pure native computation does not replace host Plan/sandbox policy')

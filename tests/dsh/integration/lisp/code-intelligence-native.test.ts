@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
@@ -30,22 +31,22 @@ for (const mode of modes as ('development'|'protected')[]) test(`code intelligen
   const base = await realpath(await mkdtemp(join(tmpdir(),'code-native-'))), root=join(base,'workspace')
   await mkdir(root); await writeFile(join(root,'index.ts'),'export function hello() { return 1 }\nhello();\n');await writeFile(join(root,'other.ts'),'function first(){}\nfunction second(){}\n')
   const db = new NodeSqliteAdapter(join(base,'state.sqlite3'),new DatabaseSync(join(base,'state.sqlite3'))); migrateDatabase(db)
-  const runtime:any={withDatabase:async(fn:any)=>fn(db)},ctx=new cordis.Context(),fibers:any[]=[]
+  const runtime:any={withDatabase:async(fn:any)=>fn(db)},ctx=new cordis.Context(),fibers:any[]=[],handles:any[]=[]
   let surface:Awaited<ReturnType<typeof mountLispSurface>>|undefined
   try {
-    for(const [plugin,config] of [[llm.default],[session.default],[projection.default],[prompt.default,{persona:''}],[tools.default,{mode:'native'}],[agents.default],[commands.default],[loop.default,{agents:[]}],[fs.default,{cwd:root}],[subprocess.default],[lsp.default]] as any[]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber}
+    for(const [plugin,config] of [[llm.default],[session.default],[projection.default],[prompt.default,{persona:''}],[tools.default],[agents.default],[commands.default],[loop.default,{agents:[]}],[fs.default,{cwd:root}],[subprocess.default],[lsp.default]] as any[]){if(plugin===tools.default){await mountNativeTools(ctx,tools,packages!,fibers);continue}const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber}
     if(cli){const fiber=ctx.plugin(cli);fibers.push(fiber);await fiber;assert.ok(ctx.get('executionFences',false),'actual CLI execution fence must be mounted')}
     const provider=await import(pathToFileURL(providerEntry!).href),fiber=ctx.plugin(provider,{servers:{phpantom:{enabled:false}},tailwind:{enabled:false}});fibers.push(fiber);await fiber
     const mock=nativeMock(llm);ctx.llm.registerAdapter(['mock'],new mock.MockAdapter([]))
-    const agent=await ctx.agentLoop.create(session.SessionId('code-parent'),{provider:'mock',model:'qwen3-coder'},{cwd:root})
-    const child=await ctx.agentLoop.create(session.SessionId('code-child'),{provider:'mock',model:'qwen3-coder'},{cwd:root,parentSession:agent.session.id})
+    const parentHandle=await ctx.agents.create({sessionId:session.SessionId('code-parent'),agentOptions:{provider:'mock',model:'qwen3-coder'},meta:{cwd:root}});handles.push(parentHandle);const agent=parentHandle.agent
+    const childHandle=await ctx.agents.create({sessionId:session.SessionId('code-child'),agentOptions:{provider:'mock',model:'qwen3-coder'},meta:{cwd:root,parentSession:agent.session.id}});handles.push(childHandle);const child=childHandle.agent
     let effects=0
     for(const name of ['lsp','lsp_extra'])ctx.tools.register({name,description:'fence sentinel',parameters:{},output:{schema:{},render:()=>[]},execute:()=>++effects})
-    const lispFiber=ctx.plugin({name:'code-lisp-acceptance',async apply(caller:any){surface=await mountLispSurface(caller,runtime,LispConfig.parse({executionMode:mode,enabled:true,startupTimeoutMs:60000}))}});fibers.push(lispFiber);await lispFiber
+    const lispFiber=ctx.plugin({name:'code-lisp-acceptance',async apply(caller:any){surface=await mountLispSurface(caller,runtime,LispConfig.parse({executionMode:mode,enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))}});fibers.push(lispFiber);await lispFiber
     assert.ok(surface,'the caller realm must mount the public Lisp surface')
     const enabled=(await ctx.commands.execute(agent,'/kioku-lisp enable',[],new AbortController().signal)).result
     assert.equal(enabled.kind,'success',enabled.text)
-    const call=async(name:string,args:any={},caller=agent)=>ctx.tools.execute({name,arguments:args,callId:randomUUID(),agent:caller,signal:new AbortController().signal})
+    const call=async(name:string,args:any={},caller=agent)=>executeNativeTool(ctx,packages!,{name,arguments:args,callId:randomUUID(),agent:caller,signal:new AbortController().signal})
     const evaluation=await call('lisp_eval',{operationId:'code-read',code:`(kioku.code:with-snapshot (s "index.ts")
       (let* ((outline (kioku.code:outline s)) (node (aref (gethash "items" (gethash "data" outline)) 0)))
         (kioku.internal:object "outline" outline "span" (kioku.code:span (gethash "handle" node))
@@ -74,5 +75,5 @@ for (const mode of modes as ('development'|'protected')[]) test(`code intelligen
     assert.equal(removed.value.value.json.status,'unavailable');assert.equal(removed.value.value.json.reason,'provider_missing')
     const before=effects;surface.stop();await surface.dispose()
     if(mode==='protected'){for(const caller of [agent,child])for(const name of ['lsp','lsp_extra'])assert.equal((await call(name,{},caller)).isError,true);assert.equal(effects,before)}
-  }finally{surface?.stop();await surface?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
+  }finally{surface?.stop();await surface?.dispose();for(const handle of handles.reverse())await handle.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

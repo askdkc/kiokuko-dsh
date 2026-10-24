@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import type { DshSkillPrompts } from '../../../src/dsh/skill-prompts.js'
 import type { DecisionService } from '../../../src/dsh/decisions/service.js'
 import { nativeMock } from './native-mock.js'
+import { mountNativeTools } from './native-tools.js'
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
 export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService }) {
@@ -64,7 +65,10 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     })})})}}))
   }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
-  for(const m of initial) if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
+  for(const m of initial) {
+    if (m === tools) await mountNativeTools(ctx, tools, packages, fibers)
+    else if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
+  }
   if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
@@ -84,7 +88,10 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     ? await subject.mountDshComposition(ctx, adapter!.host, subject.Config.parse({ ...extra }).lisp, prompts)
     : await mountPlugin(mode)
   if(explicit==='prompt-only'){
-    for(const m of [session,projection,tools,agents,commands,skillTool])if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m))
+    for(const m of [session,projection,tools,agents,commands,skillTool]) {
+      if (m === tools) await mountNativeTools(ctx, tools, packages, fibers)
+      else if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m))
+    }
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
   }
   if (skillToolPlacement === 'late') fibers.push(await ctx.plugin(skillTool.default ?? skillTool))

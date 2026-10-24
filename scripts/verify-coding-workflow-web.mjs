@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import {completeVerification} from './verification-completion.mjs';
 // Packed plugin + published DSH Web + Chromium. Only model generation is scripted.
 import assert from 'node:assert/strict'
@@ -11,11 +12,12 @@ import { chromium } from 'playwright'
 import { transform } from 'esbuild'
 
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
+const selected = selectedDshRuntime(root)
 const base = await realpath(await mkdtemp(join(tmpdir(), 'coding-web-')))
 const project = join(base, 'project'), receipts = join(base, 'receipts.jsonl')
-const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(root, 'tests/fixtures/dsh-runtime/node_modules')
+const packages = selected.packageRoot
 const dsh = join(packages, '.bin/dsh')
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'cache') }
 let host, browser, page, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout

@@ -5,7 +5,7 @@
 
 ## Install
 
-DeepSeek Harness `0.2.1-alpha.2` and Node.js 24.16.0 or newer are required.
+Use current official DeepSeek Harness and Node.js 24.16.0 or newer. Compatibility is checked against actual host APIs and the resolved upstream source revision, not a fixed DSH release label. See [verified scope](current-upstream-compatibility-report.md).
 
 From a DeepSeek Harness checkout:
 

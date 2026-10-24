@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -30,8 +31,8 @@ test('uploaded binary reaches protected Lisp through the native attachment servi
   const agent: any = { id: 'attachment-agent', session }
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, local: any
   try {
-    fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(tools.default, { mode: 'native' }),
-      await ctx.plugin(attachment.default, { dshHome: join(base, 'dsh') }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
+    fibers.push(await ctx.plugin(attachment.default, { dshHome: join(base, 'dsh') }))
     fibers.push(await ctx.plugin({ name: 'attachment-session-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
       c.provide('sessions', { get: (id: string) => id === session.id ? session : undefined })
@@ -46,7 +47,7 @@ test('uploaded binary reaches protected Lisp through the native attachment servi
     const enabled = await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
     assert.equal(enabled.kind, 'success', enabled.text)
     const evaluate = async (code: string, inputs: string[]) => {
-      const result: any = await ctx.tools.execute({ callId: randomUUID(), name: 'lisp_eval', arguments: { operationId: randomUUID(), code, inputs }, agent, signal: new AbortController().signal })
+      const result: any = await executeNativeTool(ctx, packages!, { callId: randomUUID(), name: 'lisp_eval', arguments: { operationId: randomUUID(), code, inputs }, agent, signal: new AbortController().signal })
       assert.equal(result.isError, false, JSON.stringify(result))
       return JSON.stringify(result)
     }

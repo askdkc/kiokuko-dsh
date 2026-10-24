@@ -55,19 +55,15 @@ function catalogCandidates(configured) {
     )
     return [...new Set(candidates)]
   }
-  const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
-  if (packageRoot !== undefined) {
-    candidates.push(join(resolve(packageRoot), '@deepseek-ai/dsh-session-format-catalog/lib/index.js'))
-  }
-  const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-  candidates.push(resolve(repositoryRoot, 'tests/fixtures/dsh-runtime/node_modules/@deepseek-ai/dsh-session-format-catalog/lib/index.js'))
-  return [...new Set(candidates)]
+  return []
 }
 
-async function loadCatalog(configured) {
-  const errors = []
+export async function loadCatalog(configured) {
   // An explicit catalog must not be silently replaced by another installation.
   const explicit = configured ?? process.env.KIOKUKO_SESSION_FORMAT_CATALOG
+    ?? (process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined
+      ? join(resolve(process.env.KIOKUKO_DSH_PACKAGE_ROOT), '@deepseek-ai/dsh-session-format-catalog/lib/index.js')
+      : undefined)
   if (explicit !== undefined) {
     const candidate = catalogCandidates(explicit).find(path => existsSync(path))
     if (!candidate) throw new Error('configured session-format catalog does not exist')
@@ -75,25 +71,15 @@ async function loadCatalog(configured) {
     if (!module.sessionFormatCatalog) throw new Error('catalog module has no sessionFormatCatalog export')
     return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
   }
+  // Production repair resolves the installed host package only. A test fixture
+  // is never an implicit substitute for a missing or broken host installation.
   try {
     const module = await import('@deepseek-ai/dsh-session-format-catalog')
-    if (module.sessionFormatCatalog) return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
-  } catch (error) { errors.push(error) }
-  for (const candidate of catalogCandidates()) {
-    if (!existsSync(candidate)) continue
-    try {
-      const module = await import(pathToFileURL(candidate).href)
-      if (module.sessionFormatCatalog !== undefined) return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
-      errors.push(new Error(`catalog module has no sessionFormatCatalog export: ${candidate}`))
-    } catch (error) {
-      errors.push(error)
-    }
+    if (!module.sessionFormatCatalog) throw new Error('catalog module has no sessionFormatCatalog export')
+    return { catalog: module.sessionFormatCatalog, createCatalogWithChildren: module.createSessionFormatCatalogWithChildren }
+  } catch (cause) {
+    throw new Error('Unable to load installed @deepseek-ai/dsh-session-format-catalog; set KIOKUKO_SESSION_FORMAT_CATALOG or --catalog to the intended built catalog module', { cause })
   }
-  const reason = errors.at(-1)
-  throw new Error(
-    'Unable to load @deepseek-ai/dsh-session-format-catalog; set KIOKUKO_SESSION_FORMAT_CATALOG or --catalog to a built catalog module',
-    { cause: reason },
-  )
 }
 
 function requireRegularFile(path, label) {

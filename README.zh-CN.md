@@ -36,7 +36,7 @@ ObservationPack 默认保持 `observationPack: { mode: auto }`。若完整行摘
 
 ## 安装与使用
 
-运行时兼容目标为 **DSH 0.2.1-alpha.2** 的 `web` 和 `dsh-cli` profile。请参阅[验证范围](docs/dsh-plugin.md#compatibility)。
+兼容性通过官方 DSH 当前源码和实际主机 API 验证，不以固定版本名称作为兼容条件。请参阅[验证范围](docs/dsh-plugin.md#compatibility)。
 
 支持 Linux x64/ARM64 和 macOS Apple Silicon，不支持 Intel Mac 和 Windows。
 

@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 // Real packed DSH Web settings, isolated profile and local-only model catalogs.
 // No paid generation or real credentials: this acceptance verifies selection state only.
@@ -10,9 +11,10 @@ import { join, resolve } from 'node:path';
 import { createServer } from 'node:http';
 import { chromium } from 'playwright';
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..');
+const selected = selectedDshRuntime(root)
 const base = await mkdtemp(join(tmpdir(), 'kiokuko-pair-web-'));
-const env = { ...process.env, HOME: join(base,'home'), DSH_HOME:join(base,'dsh'), KIOKUKO_DATA_DIR:join(base,'data'), npm_config_cache:join(base,'cache'), npm_config_store_dir:join(base,'pnpm-store'), PNPM_HOME:join(base,'pnpm'), XDG_DATA_HOME:join(base,'xdg-data'), XDG_CACHE_HOME:join(base,'cache'), DSH_AUTH_CREDENTIALS:join(base,'credentials.json') };
-const project = join(base,'project'), dsh = process.env.DSH_BIN ?? join(root,'tests/fixtures/dsh-runtime/node_modules/.bin/dsh');
+const env = { ...selected.environment, HOME: join(base,'home'), DSH_HOME:join(base,'dsh'), KIOKUKO_DATA_DIR:join(base,'data'), npm_config_cache:join(base,'cache'), npm_config_store_dir:join(base,'pnpm-store'), PNPM_HOME:join(base,'pnpm'), XDG_DATA_HOME:join(base,'xdg-data'), XDG_CACHE_HOME:join(base,'cache'), DSH_AUTH_CREDENTIALS:join(base,'credentials.json') };
+const project = join(base,'project'), dsh = selected.environment.DSH_BIN;
 let host, browser, page, logs = '', generations = 0;
 const endpoint = createServer((req,res) => { if(req.method !== 'GET') generations++; res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify({data:[]})); });
 async function poll(fn, timeout=60000) { const end=Date.now()+timeout; while(Date.now()<end) { const value=await fn(); if(value)return value; await new Promise(r=>setTimeout(r,100)); } throw new Error('Head/worker Web acceptance timed out'); }

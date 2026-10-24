@@ -1,3 +1,4 @@
+import './repair-catalog-selection.test.mjs'
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync } from 'node:fs';
@@ -59,7 +60,14 @@ function fixture(checks, declaration = {}){
  writeFileSync(path.join(root,'scripts/verification.json'),JSON.stringify({package:'fixture',profiles:['full'],checks,testExclusions:[],...declaration}));
  execFileSync('git',['init','-q'],{cwd:root});return root;
 }
-function execute(root){const output=mkdtempSync(path.join(tmpdir(),'verify-contract-results-'));const child=spawnSync(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,encoding:'utf8'});return {child,report:JSON.parse(readFileSync(path.join(output,'result.json')))};}
+function execute(root){
+ const output=mkdtempSync(path.join(tmpdir(),'verify-contract-results-'));
+ // Each synthetic checkout owns its runtime identity, independently of the live CI host.
+ const env={...process.env};
+ for(const key of ['KIOKUKO_EXPECTED_DSH_SHA','KIOKUKO_DSH_RUNTIME_MODE','KIOKUKO_EXPECTED_DSH_VERSION','KIOKUKO_DSH_SOURCE_ROOT','KIOKUKO_DSH_PACKAGE_ROOT','DSH_BIN'])delete env[key];
+ const child=spawnSync(process.execPath,['scripts/verify.mjs','--output',output],{cwd:root,encoding:'utf8',env});
+ return {child,report:JSON.parse(readFileSync(path.join(output,'result.json')))};
+}
 test('the real entry reports missing required native capability as prerequisite-missing',()=>{
  const root=fixture([{...check,requires:['required-native-that-is-absent'],result:'command'}]);const {child,report}=execute(root);
  assert.equal(child.status,1);assert.equal(report.checks[0].status,'prerequisite-missing');assert.equal(report.completionReady,false);
@@ -69,9 +77,9 @@ function nativeFixture(checks) {
  const declarationPath=path.join(root,'scripts/verification.json');
  const declaration=JSON.parse(readFileSync(declarationPath));
  const packageRoot=path.join(root,'tests/fixtures/dsh-runtime/node_modules');
- declaration.environment={KIOKUKO_DSH_PACKAGE_ROOT:packageRoot,DSH_BIN:path.join(packageRoot,'.bin/dsh')};
+ declaration.environment={KIOKUKO_DSH_RUNTIME_MODE:'historical',KIOKUKO_DSH_PACKAGE_ROOT:packageRoot,DSH_BIN:path.join(packageRoot,'.bin/dsh')};
  writeFileSync(declarationPath,JSON.stringify(declaration));
- for(const file of ['run-ci-native.mjs','dsh-fixture-identity.mjs','repeated-memory-scenarios.mjs'])cpSync(new URL(file,import.meta.url),path.join(root,'scripts',file));
+ for(const file of ['run-ci-native.mjs','dsh-fixture-identity.mjs', 'stage-dsh-upstream.mjs','repeated-memory-scenarios.mjs'])cpSync(new URL(file,import.meta.url),path.join(root,'scripts',file));
  mkdirSync(path.join(root,'tests/dsh/unit'),{recursive:true});
  writeFileSync(path.join(root,'tests/dsh/unit/probe.test.ts'),'// suite discovery only\n');
  return root;
@@ -236,7 +244,7 @@ test('CI main source partition has exact coverage union and a single Linux owner
   const { nativeCiPlan } = await import('./run-ci-native.mjs');
   // Partition coverage is a source plan contract, not an installed-runtime check.
   const packageRoot = selectedNativeMetadata(mkdtempSync(path.join(tmpdir(),'verification-native-plan-')));
-  const environment = { KIOKUKO_DSH_PACKAGE_ROOT: packageRoot };
+  const environment = { KIOKUKO_DSH_PACKAGE_ROOT: packageRoot, KIOKUKO_DSH_RUNTIME_MODE: 'historical' };
   const actual = JSON.parse(readFileSync(new URL('./verification.json', import.meta.url)));
   const lisp = nativeCiPlan('lisp', environment).args.slice(1);
   const owned = actual.checks.find(check => check.id === 'owned-native').argv.slice(2);
@@ -318,8 +326,15 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   const prep=jobs.checks.steps.find(s=>s.run==='npm ci --prefix tests/fixtures/dsh-runtime');assert.ok(prep);assert.equal(prep.if,'matrix.fixture');
   assert.doesNotMatch(text,/--legacy-peer-deps|--force|--package-lock=false|npm install.*fixtures/);
   const fixture=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package.json',import.meta.url))),lock=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package-lock.json',import.meta.url)));
-  assert.deepEqual(fixture.dependencies,{'@deepseek-ai/dsh':'0.2.1-alpha.3','@askdkc/dsh-cli':'0.14.11','@xterm/headless':'6.0.0'});
-  assert.deepEqual(lock.packages[''].dependencies,fixture.dependencies);assert.equal(lock.packages['node_modules/@askdkc/dsh-cli'].version,'0.14.11');assert.equal(lock.packages['node_modules/@deepseek-ai/cordis-plugin-group'].version,'1.0.5-alpha.2');
+  assert.ok(fixture.dependencies['@deepseek-ai/dsh']);
+  assert.deepEqual(lock.packages[''].dependencies,fixture.dependencies);assert.equal(lock.packages['node_modules/@askdkc/dsh-cli'].version,'0.14.11');assert.ok(lock.packages['node_modules/@deepseek-ai/cordis-plugin-group'].version);
+  assert.equal(jobs.select.steps.find(s=>s.id==='dsh').run,'node scripts/resolve-dsh-upstream.mjs');
+  const checkout=jobs.checks.steps.find(s=>s.with?.repository==='deepseek-ai/deepseek-harness');
+  assert.equal(checkout.with.ref,'${{ needs.select.outputs.dsh_sha }}');
+  const upstreamBuild=jobs.checks.steps.find(s=>s.name==='Build current official DSH from its frozen dependency graph');
+  assert.match(upstreamBuild.run,/pnpm install --frozen-lockfile/);assert.match(upstreamBuild.run,/pnpm run build:artifacts/);
+  assert.ok(jobs.checks.steps.some(s=>s.run?.includes('scripts/stage-dsh-upstream.mjs')));
+  assert.equal(jobs.checks.steps.find(s=>s.run?.includes('scripts/verify.mjs --ci-plan')).env.KIOKUKO_EXPECTED_DSH_SHA,'${{ needs.select.outputs.dsh_sha }}');
   const cli=actual.checks.find(c=>c.id==='dsh-cli-profile');assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
   assert.deepEqual(cli.completionEvidence,{profile:'dsh-cli',interactive:true,cliVersion:'0.14.11',sourceEntry:true});
   assert.ok(actual.checks.find(c=>c.id==='verification-contract').profiles.includes('semantic'));
@@ -333,6 +348,7 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
 });
 
 await import('./ci-partitions.test.mjs');
+await import('./stage-dsh-upstream.test.mjs');
 
 test('request-intent evaluation covers exact change scopes and writes a check-bound completion receipt', async () => {
   const { validCompletion } = await import('./verification-completion.mjs');
@@ -454,3 +470,5 @@ test('prepare reproducibility installs its build dependencies even under NODE_EN
  assert.notEqual(calls[0].options.env.npm_config_cache,calls[2].options.env.npm_config_cache,'each reproducibility build owns its cache');
  assert.deepEqual(builds[0].digest,builds[1].digest);
 });
+
+import './code-intelligence-host.test.mjs';

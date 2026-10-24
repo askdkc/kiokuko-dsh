@@ -1,25 +1,27 @@
-# Native DSH CI runtime
+# Native DSH test runtime
 
-This is the single runtime fixture used by native tests and CI. Its manifest
-selects the supported DSH release; the lockfile fixes the full dependency graph
-and package integrity. Install it with `npm ci --prefix tests/fixtures/dsh-runtime`.
+CI resolves `deepseek-ai/deepseek-harness` `master` once per run. Every native lane
+checks out that exact SHA, installs its frozen pnpm graph with its declared package
+manager, builds official artifacts, and stages the built workspace packages here and into the root development graph.
+The source SHA and release label are retained in `dsh-upstream.json` with each
+verification artifact. The official checkout is never patched.
 
-Runtime runners and CI derive their expected DSH version from this manifest.
-There is no separate old-release test target. These are test dependencies,
-independent of Kiokuko's published package version.
+The tracked npm manifest/lock retain a reproducible historical baseline and the
+separately versioned CLI/terminal test support. They are not the current-upstream
+compatibility target. Staging replaces the entire `@deepseek-ai` scope so a removed
+upstream package cannot silently fall back to the old release.
 
-To update the baseline, verify the intended upstream release and its npm
-publication, then update the exact dependency and regenerate the lockfile:
+To reproduce a CI revision, check out the recorded SHA in an official DSH clone,
+run its frozen pnpm install and `pnpm run build:artifacts`, then run:
 
 ```sh
-npm install --prefix tests/fixtures/dsh-runtime --save-exact '@deepseek-ai/dsh@<verified-version>'
+npm ci --prefix tests/fixtures/dsh-runtime
+node scripts/stage-dsh-upstream.mjs /path/to/deepseek-harness tests/fixtures/dsh-runtime <recorded-full-sha> .
 npm run test:ci:unit
 npm run test:ci:integration
 ```
 
-Check the locked DSH package versions against the selected release. Align root
-DSH development dependencies and the package compatibility declaration. Regenerate
-the root npm lockfile, then run `pnpm import` to synchronize its pnpm lockfile. Then
-run the native lifecycle and packaged checks with the CI Node.js version.
-The npm `latest` tag may lag behind an upstream prerelease, so do not treat the
-tag name as proof of the newest release.
+An explicit `KIOKUKO_DSH_SOURCE_ROOT` is preserved, but its manifest identity must
+match the selected package view. `KIOKUKO_EXPECTED_DSH_SHA` additionally requires
+the exact staged upstream commit. Release versions and lockfiles remain identity
+and reproducibility data, not arbitrary compatibility gates.

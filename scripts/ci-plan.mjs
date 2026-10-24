@@ -107,6 +107,8 @@ export function createCiPlan(contract, request, identity) {
     lane.timeout = chosen.mode === 'representative' && (lane.id.startsWith('core-') || lane.id.startsWith('host-')) ? 40
       : lane.selectors.some(selector => selector.profile === 'lisp' && selector.partition === 'native') ? 25
       : lane.selectors.every(selector => selector.profile === 'semantic') ? 15 : 20;
+    // Current upstream installation and artifact compilation precede existing test budgets.
+    if (lane.fixture) lane.timeout += 30;
   }
   result.jobCount = 2 + result.nativeTargets.length + lanes.length;
   result.digest = digest(JSON.stringify(result));

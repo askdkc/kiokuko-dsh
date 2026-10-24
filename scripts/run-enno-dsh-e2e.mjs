@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
@@ -11,13 +12,11 @@ import { repeatedMemoryScenarios } from './repeated-memory-scenarios.mjs'
 
 const exec = promisify(execFile)
 const root = resolve(import.meta.dirname, '..')
-const dsh = process.env.DSH_BIN ?? 'dsh'
+const selected = selectedDshRuntime(root)
+const dsh = selected.environment.DSH_BIN
 const profile = 'web'
 const packageManifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const selectedPackageRoot = await localDshPackageRoot()
-const selectedHost = selectedPackageRoot ? JSON.parse(await readFile(join(selectedPackageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) : undefined
-if (selectedHost && (selectedHost.name !== '@deepseek-ai/dsh' || typeof selectedHost.version !== 'string' || !selectedHost.version.trim())) throw new Error('Invalid selected DSH package metadata')
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? selectedHost?.version
+const expectedDshVersion = selected.manifest.version
 const requireDshCli = process.env.KIOKUKO_REQUIRE_DSH_CLI === '1'
 const cliOnly = process.env.KIOKUKO_DSH_CLI_ONLY === '1'
 if (cliOnly && !requireDshCli) throw new Error('CLI-only lifecycle verification requires KIOKUKO_REQUIRE_DSH_CLI=1')
@@ -25,7 +24,7 @@ if (cliOnly && !requireDshCli) throw new Error('CLI-only lifecycle verification 
 async function run(command, args, env = {}, timeout = 180_000) {
   return exec(command, args, {
     cwd: root,
-    env: { ...process.env, ...env },
+    env: { ...selected.environment, ...env },
     maxBuffer: 8 * 1024 * 1024,
     timeout,
     killSignal: 'SIGTERM',
@@ -74,41 +73,8 @@ function assertRemovedDump(result) {
   }
 }
 
-async function localDshSourceRoot() {
-  const candidate = process.env.KIOKUKO_DSH_SOURCE_ROOT
-    ?? (isAbsolute(dsh) ? resolve(dirname(dsh), '../../..') : undefined)
-  if (candidate === undefined) return undefined
-  try {
-    await access(join(candidate, 'packages/core/agent-loop/lib/index.js'))
-    return candidate
-  } catch {
-    return undefined
-  }
-}
-
-async function localDshPackageRoot() {
-  const configured = process.env.KIOKUKO_DSH_PACKAGE_ROOT
-  if (configured !== undefined) {
-    const candidate = resolve(configured)
-    try {
-      await access(join(candidate, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
-      return candidate
-    } catch {
-      return undefined
-    }
-  }
-  try {
-    const binary = isAbsolute(dsh)
-      ? dsh
-      : (await run(process.platform === 'win32' ? 'where.exe' : 'which', [dsh])).stdout.trim().split(/\r?\n/u)[0]
-    if (!binary) return undefined
-    const candidate = resolve(dirname(await realpath(binary)), '../../..')
-    await access(join(candidate, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
-    return candidate
-  } catch {
-    return undefined
-  }
-}
+async function localDshSourceRoot() { return selected.environment.KIOKUKO_DSH_SOURCE_ROOT }
+async function localDshPackageRoot() { return selected.packageRoot }
 
 async function runCordisComposition() {
   const [sourceRoot, packageRoot] = await Promise.all([localDshSourceRoot(), localDshPackageRoot()])
@@ -160,7 +126,6 @@ async function runCordisComposition() {
   for (const name of ['cordis', 'dsh', 'dsh-agent', 'dsh-agent-loop', 'dsh-commands', 'dsh-llm', 'dsh-session', 'dsh-system-prompt', 'dsh-tools', 'dsh-subagent', 'dsh-subagent-spawn-in-process']) {
     const pkg = JSON.parse(await readFile(join(packageRoot, '@deepseek-ai', name, 'package.json'), 'utf8'))
     versions[pkg.name] = pkg.version
-    if (requireDshCli && expectedDshVersion && name !== 'cordis' && pkg.version !== expectedDshVersion) throw new Error(`Native dependency ${pkg.name} is ${pkg.version}; expected ${expectedDshVersion}`)
   }
   return versions
 }
@@ -333,7 +298,7 @@ async function runCliLifecycle(nativeDependencies) {
   const workspace = join(profileDirectory, 'workspace')
   const home = join(profileDirectory, 'home')
   const dataDirectory = join(profileDirectory, 'kiokuko-data')
-  const env = { PATH: process.env.PATH ?? '', HOME: home, USERPROFILE: home, DSH_HOME: profileDirectory,
+  const env = { KIOKUKO_DSH_RUNTIME_MODE: selected.mode, KIOKUKO_DSH_PACKAGE_ROOT: selected.packageRoot, KIOKUKO_EXPECTED_DSH_VERSION: selected.manifest.version, ...(selected.upstream ? { KIOKUKO_EXPECTED_DSH_SHA: selected.upstream.sha } : {}), DSH_BIN: dsh, PATH: process.env.PATH ?? '', HOME: home, USERPROFILE: home, DSH_HOME: profileDirectory,
     XDG_CONFIG_HOME: join(profileDirectory, 'xdg/config'), XDG_CACHE_HOME: join(profileDirectory, 'xdg/cache'),
     XDG_DATA_HOME: join(profileDirectory, 'xdg/data'), XDG_STATE_HOME: join(profileDirectory, 'xdg/state'),
     PNPM_HOME: join(profileDirectory, 'pnpm-home'), COREPACK_HOME: join(profileDirectory, 'corepack'),

@@ -6,6 +6,7 @@ import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
  */
 import { planPreparation } from '../helpers/plan-script.js'
 import { nativeMock } from '../helpers/native-mock.js'
+import { mountNativeTools, executeNativeTool } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -37,8 +38,8 @@ type Dependencies = ConstructorParameters<typeof OnDemandIntake>[0]
 async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skillPlacement: 'global' | 'late' | 'agent' = 'global') {
   const ctx = new cordis.Context()
   ctx.provide('systemPrompt', { tools: () => () => {}, section: () => () => {}, getSectionOrder: () => 0 })
-  const fiber = ctx.plugin(nativeTools.default)
-  await fiber
+  const fibers: any[] = []
+  await mountNativeTools(ctx, nativeTools, packages, fibers)
   const events = [event('turn/start', 1)]
   const session = { id: 'review-session', snapshotEvents: () => events }
   const agent = { id: 'review-agent', session }
@@ -73,7 +74,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
     execute: () => { bodies++; return 'review body' },
   })
-  t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await scope?.dispose(); await fiber.dispose() })
+  t.after(async () => { await intake.dispose(); releaseProbe(); releaseSkill(); await scope?.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose() })
   return {
     ctx, agent, session, events, intake, admissions, advice, prepareRequests,
     bodies: () => bodies,
@@ -85,7 +86,7 @@ async function fixture(t: TestContext, options: Partial<Dependencies> = {}, skil
       return intake.capture({ agent, turn, step: 0, messages, signal: signal() })
     },
     execute(name = 'review_probe', args: unknown = {}, overrides: Record<string, unknown> = {}) {
-      return ctx.tools.execute({ callId: `review-${++call}`, name, arguments: args, agent, signal: signal(), ...overrides })
+      return executeNativeTool(ctx, packages, { callId: `review-${++call}`, name, arguments: args, agent, signal: signal(), ...overrides })
     },
     prepare() { return this.execute(TASK_PREPARE_TOOL, { taskType: 'research' }) },
   }

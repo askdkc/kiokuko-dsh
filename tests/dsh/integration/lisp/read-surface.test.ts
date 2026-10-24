@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import { bindHistoricalMemory } from '../../helpers/historical-memory.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -30,7 +32,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-reads-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   migrateDatabase(db)
-  await mkdir(join(base, '.git'))
+  execFileSync('git', ['init', '-q', base])
   await writeFile(join(base, 'PLAN.md'), 'PLAN fixture')
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const project = (await resolveProjectWorkspace(db, base))!
@@ -52,17 +54,17 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
   const skill = { name: 'kiokuko-single-purpose-functions', provider: 'fixture', description: 'code contract', content: 'Fixture Skill body',
     invocation: { modelInvocable: true, userInvocable: true } }
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, disposeMemory: (() => void) | undefined, reads = 0, mutations = 0
-  const call = (name: string, args = {}, agent = parent, nested = false) => ctx.tools.execute({
+  const call = (name: string, args = {}, agent = parent, nested = false) => executeNativeTool(ctx, packages!, {
     callId: randomUUID(), name, arguments: args, agent, signal: new AbortController().signal,
     ...(nested ? { parent: Symbol('nested-read'), rootCallId: 'root' } : {}),
   })
   try {
-    fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'read-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => agents.get(id) })
       c.provide('sessions', { get: (id: string) => agents.get(id)?.session })
       c.provide('sessionProjections', {
-        register: () => () => undefined,
+        register: (definition: any) => ({ stateOf: (session: any) => definition.init(session.header), dispose: () => undefined }),
         stateOf: (session: any, key: string) => key === 'workingDirectory' ? session.header.cwd : undefined,
       })
       c.provide('commands', { register: (d: any) => { commands.set(d.name, d); return () => commands.delete(d.name) } })
@@ -115,7 +117,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     assert.equal(firstRead.isError, false, JSON.stringify(firstRead))
     const admittedReads = placement === 'restricted-preset' ? ['read', 'glob', 'skill', 'observation_read'] : ['read', 'glob', 'grep', 'skill', 'observation_read']
     for (const name of admittedReads) assert.ok(ctx.tools.schemas(parent).some((s: any) => s.name === name), name)
-    const projected = await ctx.get(LISP_ASSEMBLY_SERVICE).project(parent, { sections: [], variables: {}, tools: [] })
+    const projected = await ctx.get(LISP_ASSEMBLY_SERVICE).project(parent, { sections: [], variables: {}, tools: ctx.tools.schemas(parent) })
     const assembly = ctx.get(LISP_ASSEMBLY_SERVICE)
     assert.ok(assembly.inventory(parent).some((schema: any) => schema.name === 'write'), 'installed mutations remain in the bound catalog')
     assert.equal(ctx.tools.schemas(parent).some((schema: any) => schema.name === 'write'), placement === 'agent', 'inventory restores protected visibility')

@@ -20,6 +20,7 @@ jobs:
       has_native: ${{ steps.plan.outputs.has_native }}
       has_lanes: ${{ steps.plan.outputs.has_lanes }}
       full: ${{ steps.plan.outputs.full }}
+      dsh_sha: ${{ steps.dsh.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -27,6 +28,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 24.16.0
+      - id: dsh
+        name: Resolve current official DSH master once
+        shell: bash
+        run: node scripts/resolve-dsh-upstream.mjs
       - id: plan
         run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json"
       - uses: actions/upload-artifact@v7
@@ -108,13 +113,43 @@ jobs:
             brew install sbcl python
           fi
       - run: npm ci
-      - name: Install the single coherent locked DSH and CLI fixture
+      - name: Install locked CLI and terminal test support
         if: matrix.fixture
         run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Check out the selected current official DSH revision
+        if: matrix.fixture
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.select.outputs.dsh_sha }}
+          path: .artifacts/official-dsh
+          persist-credentials: false
+      - name: Install the package manager declared by official DSH
+        if: matrix.fixture
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: .artifacts/official-dsh/package.json
+          run_install: false
+      - name: Build current official DSH from its frozen dependency graph
+        if: matrix.fixture
+        working-directory: .artifacts/official-dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:artifacts
+      - name: Stage current official runtime and retain exact source identity
+        if: matrix.fixture
+        run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
+      - name: Restore the selected consumer-test package manager
+        if: matrix.pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ matrix.pnpmVersion }}
       - name: Install browser runtime only for UI coverage
         if: matrix.browser
         run: npx playwright install --with-deps chromium
-      - name: Execute the selected existing checks with shared setup and build
+      - name: Execute the selected checks against current official DSH
+        env:
+          KIOKUKO_EXPECTED_DSH_SHA: ${{ needs.select.outputs.dsh_sha }}
         run: node scripts/verify.mjs --ci-plan "${{ runner.temp }}/ci-plan/selected-ci.json" --lane "${{ matrix.id }}" --output "${{ runner.temp }}/verification"
       - name: Retain a complete tested release-review candidate only in full mode
         if: needs.select.outputs.full == 'true' && matrix.release
@@ -123,6 +158,12 @@ jobs:
           name: multi-platform-package-${{ github.sha }}
           path: ${{ runner.temp }}/verification/*.tgz
           if-no-files-found: error
+      - name: Retain exact official DSH identity with verification evidence
+        if: always() && matrix.fixture
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/verification"
+          cp tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json "${{ runner.temp }}/verification/dsh-upstream.json"
       - name: Retain selected verification evidence
         if: always()
         uses: actions/upload-artifact@v7

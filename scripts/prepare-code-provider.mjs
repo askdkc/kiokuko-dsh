@@ -1,3 +1,4 @@
+import { selectedCodeHost, stageCodeHost, assertCodeConsumerHost } from './code-intelligence-host.mjs'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -6,6 +7,7 @@ import { resolve, join } from 'node:path'
 import {providerDeclaration} from './code-provider-declaration.mjs'
 const exec = promisify(execFile), root=resolve(import.meta.dirname,'..')
 const directory=join(root,'.artifacts/code-intelligence/dsh-lsp-server')
+const selected=selectedCodeHost(root)
 const metadata=JSON.parse(await readFile(join(root,'patches/code-intelligence/upstream.json'),'utf8'))
 const run=(program,args,cwd=directory)=>exec(program,args,{cwd,timeout:120000,maxBuffer:8*1024*1024})
 await mkdir(join(root,'.artifacts/code-intelligence'),{recursive:true})
@@ -22,4 +24,6 @@ const contract=await readFile(join(directory,'src/code-intelligence-contracts.ts
 const expected=providerDeclaration(contract)
 assert.equal(await readFile(join(root,'src/dsh/lisp/code-intelligence-provider.d.ts'),'utf8'),expected,'Provider/consumer contract drift')
 await run('npm',['ci','--ignore-scripts','--legacy-peer-deps'])
+stageCodeHost(directory,selected)
+assertCodeConsumerHost(directory,selected)
 console.log('Prepared local V1 provider; no active DSH profile was changed.')

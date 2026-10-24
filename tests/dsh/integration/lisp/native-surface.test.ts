@@ -1,8 +1,9 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, realpath, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, realpath, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -28,7 +29,7 @@ test('recover on a disabled session leaves native tools available without requir
   const agent: any = { id: 'disabled-session', session: { id: 'disabled-session', header: { cwd: base } } }
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, agentScope: any, effects = 0
   try {
-    fibers.push(await ctx.plugin(prompt.default, {})); fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'disabled-lisp-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
       c.provide('sessions', { get: (id: string) => id === agent.session.id ? agent.session : undefined })
@@ -38,7 +39,7 @@ test('recover on a disabled session leaves native tools available without requir
     ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
       output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: '/does-not-exist' }))
-    const call = () => ctx.tools.execute({ callId: randomUUID(), name: 'ordinary_tool', arguments: {}, agent, signal: new AbortController().signal })
+    const call = () => executeNativeTool(ctx, packages!, { callId: randomUUID(), name: 'ordinary_tool', arguments: {}, agent, signal: new AbortController().signal })
     assert.equal((await call()).isError, false)
     for (let i = 0; i < 2; i++) {
       const recovered = await commands.get('kioku-lisp').handler({ rawInput: 'recover', agent, signal: new AbortController().signal })
@@ -50,7 +51,7 @@ test('recover on a disabled session leaves native tools available without requir
   } finally {
     surface?.stop(); await surface?.dispose(); await agentScope?.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
-    db.close()
+    db.close(); await rm(base, { recursive: true, force: true })
   }
 })
 
@@ -71,7 +72,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
   const agents: any[] = ['saved', 'new'].map(id => ({ id, session: { id, header: { cwd: base } } }))
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, effects = 0
   try {
-    fibers.push(await ctx.plugin(prompt.default, {})); fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'rejected-enable-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => agents.find(agent => agent.id === id) })
       c.provide('sessions', { get: (id: string) => agents.find(agent => agent.id === id)?.session })
@@ -81,7 +82,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
     ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
       output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: scenario !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
-    const call = (agent: any, name = 'ordinary_tool') => ctx.tools.execute({ callId: randomUUID(), name, arguments: {}, agent, signal: new AbortController().signal })
+    const call = (agent: any, name = 'ordinary_tool') => executeNativeTool(ctx, packages!, { callId: randomUUID(), name, arguments: {}, agent, signal: new AbortController().signal })
     const command = (agent: any) => commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
     assert.equal((await call(agents[0])).isError, true, 'saved session remains protected')
     assert.equal((await call(agents[1])).isError, false)
@@ -107,7 +108,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
     surface?.stop(); await surface?.dispose()
     for (const local of scopes.reverse()) await local.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
-    db.close()
+    db.close(); await rm(base, { recursive: true, force: true })
   }
 })
 
@@ -129,10 +130,10 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
   const agentMap = new Map([parent, child, outsider].map(agent => [agent.id, agent]))
   const config = LispConfig.parse({ executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
   const command = (rawInput: string) => commands.get('kioku-lisp').handler({ rawInput, agent: parent, signal: new AbortController().signal })
-  const call = (name: string, agent = parent, nested = false, args = {}) => ctx.tools.execute({ callId: `call-${randomUUID()}`, name, arguments: args, agent,
+  const call = (name: string, agent = parent, nested = false, args = {}) => executeNativeTool(ctx, packages!, { callId: `call-${randomUUID()}`, name, arguments: args, agent,
     signal: new AbortController().signal, ...(nested ? { parent: Symbol('parent'), rootCallId: 'root' } : {}) })
   try {
-    fibers.push(await ctx.plugin(prompt.default, {})); fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'lisp-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => agentMap.get(id), roots: () => [parent, outsider] })
       c.provide('sessions', { get: (id: string) => agentMap.get(id)?.session })
@@ -202,6 +203,6 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
     surface?.stop(); await surface?.dispose()
     for (const s of scopes.reverse()) await s.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
-    db.close()
+    db.close(); await rm(base, { recursive: true, force: true })
   }
 })

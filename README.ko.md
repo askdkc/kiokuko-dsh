@@ -36,7 +36,7 @@ ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니�
 
 ## 설치 및 사용
 
-런타임 호환 대상은 **DSH 0.2.1-alpha.2**의 `web` 및 `dsh-cli` 프로필입니다. [검증 범위](docs/dsh-plugin.md#compatibility)를 참고하세요.
+호환성은 공식 DSH의 현재 소스와 실제 호스트 API로 검증하며, 고정된 버전 이름을 호환 조건으로 사용하지 않습니다. [검증 범위](docs/dsh-plugin.md#compatibility)를 참고하세요.
 
 지원 환경은 Linux x64/ARM64 및 macOS Apple Silicon이며, Intel Mac과 Windows는 지원하지 않습니다.
 

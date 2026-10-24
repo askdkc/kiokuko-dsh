@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Real DSH Web + packed Kiokuko + scripted local seeding and questions, in a disposable profile.
@@ -12,11 +13,12 @@ import { chromium } from 'playwright'
 import { transform } from 'esbuild'
 const exec = promisify(execFile), repository = resolve(import.meta.dirname, '..')
 const fixtureName = process.env.KIOKUKO_SHORTCUT_RUNTIME ?? 'dsh-runtime'
+const selected = selectedDshRuntime(repository, { ...process.env, KIOKUKO_DSH_PACKAGE_ROOT: process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(repository, `tests/fixtures/${fixtureName}/node_modules`) })
 const reuse = process.env.KIOKUKO_SHORTCUT_REUSE
 const base = reuse ?? await realpath(await mkdtemp(join(tmpdir(), 'kiokuko-shortcuts-')))
 const project = join(base, 'project'), answers = join(base, 'answers.jsonl')
-const dsh = process.env.DSH_BIN ?? join(repository, `tests/fixtures/${fixtureName}/node_modules/.bin/dsh`)
-const env = { ...process.env, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'npm-cache') }
+const dsh = selected.environment.DSH_BIN
+const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(base, 'dsh'), KIOKUKO_DATA_DIR: join(base, 'data'), npm_config_cache: join(base, 'npm-cache') }
 let child, browser, page, logs = ''
 try {
   const patch = join(base, 'patch.yml')
@@ -39,7 +41,7 @@ try {
   const mockPath = join(base, 'mock.mjs')
   await writeFile(mockPath, (await transform(await readFile(join(repository, 'tests/dsh/helpers/native-mock.ts'), 'utf8'), { loader: 'ts', format: 'esm' })).code)
   await writeFile(fixture, `import {appendFile} from 'node:fs/promises';
-import * as llm from ${JSON.stringify(pathToFileURL(join(repository,`tests/fixtures/${fixtureName}/node_modules/@deepseek-ai/dsh-llm/lib/index.js`)).href)};
+import * as llm from ${JSON.stringify(pathToFileURL(join(selected.packageRoot,'@deepseek-ai/dsh-llm/lib/index.js')).href)};
 import {nativeMock} from ${JSON.stringify(pathToFileURL(mockPath).href)};
 export const name='shortcut-fixture'; export const inject=['workspaceRegistry','commands','userQuestions','sessionProjections','agents','llm','sessions'];
 export async function apply(ctx) {

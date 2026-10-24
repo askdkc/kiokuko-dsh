@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import { createRequire, findPackageJSON } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
@@ -163,7 +163,7 @@ test('repository build approvals are explicit and match the tested CPU/prebuilt 
   const sharpManifest = JSON.parse(readFileSync(join(dirname(sharpEntry), '../package.json'), 'utf8'))
   for (const lifecycle of ['preinstall', 'install', 'postinstall']) assert.equal(sharpManifest.scripts[lifecycle], undefined)
   const piManifest = findPackageJSON('@earendil-works/pi-ai', createRequire(import.meta.url).resolve('@deepseek-ai/dsh-llm-pi-ai'))!
-  const genaiRequire = createRequire(piManifest)
+  const genaiRequire = createRequire(realpathSync(piManifest))
   assert.equal(typeof genaiRequire('@google/genai').GoogleGenAI, 'function')
   const esbuild = createRequire(import.meta.url)('esbuild')
   assert.match(esbuild.transformSync('const value: number = 42', { loader: 'ts' }).code, /value = 42/)

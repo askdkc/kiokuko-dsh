@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { assertDshFixtureIdentity } from './dsh-fixture-identity.mjs'
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { repeatedMemoryScenarios } from './repeated-memory-scenarios.mjs'
 
 const root = resolve(import.meta.dirname, '..')
@@ -54,24 +54,17 @@ export function nativeCiPlan(suite, environment = process.env) {
     return { ...plan, args: [plan.args[0], ...files],
       env: { ...plan.env, KIOKUKO_TEST_CONCURRENCY: concurrency } }
   }
-  const fixtureRoot = join(root, 'tests/fixtures', fixture)
-  const packageRoot = resolve(environment.KIOKUKO_DSH_PACKAGE_ROOT ?? join(fixtureRoot, 'node_modules'))
-  const canonicalFixture = sameDirectory(packageRoot, resolve(fixtureRoot, 'node_modules'))
-  let manifest
-  try {
-    manifest = JSON.parse(readFileSync(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8'))
-  } catch (error) {
-    if (canonicalFixture) throw new Error(`Cannot read installed DSH fixture: ${error.message}. Run: npm ci --prefix tests/fixtures/dsh-runtime`)
-    throw error
+  const selected = selectedDshRuntime(root, environment)
+  const { packageRoot, manifest } = selected
+  const env = { ...selected.environment, KIOKUKO_REQUIRE_DSH_NATIVE: '1' }
+  if (environment.KIOKUKO_DSH_SOURCE_ROOT !== undefined) {
+    if (typeof environment.KIOKUKO_DSH_SOURCE_ROOT !== 'string' || !environment.KIOKUKO_DSH_SOURCE_ROOT.trim()) throw new Error('Selected DSH source root must be a nonempty path')
+    const sourceRoot = resolve(environment.KIOKUKO_DSH_SOURCE_ROOT)
+    const source = JSON.parse(readFileSync(join(sourceRoot, 'apps/cli/package.json'), 'utf8'))
+    if (source.name !== manifest.name || source.version !== manifest.version
+      || realpathSync(join(packageRoot, '@deepseek-ai/dsh')) !== realpathSync(join(sourceRoot, 'apps/cli'))) throw new Error('Selected DSH source and package identities differ; stage the same source checkout first')
+    env.KIOKUKO_DSH_SOURCE_ROOT = sourceRoot
   }
-  if (canonicalFixture) assertDshFixtureIdentity(fixtureRoot, manifest)
-  if (manifest.name !== '@deepseek-ai/dsh' || typeof manifest.version !== 'string' || !manifest.version.trim()) {
-    throw new Error('Invalid selected DSH package metadata')
-  }
-  const env = { ...environment, KIOKUKO_DSH_PACKAGE_ROOT: packageRoot,
-    KIOKUKO_EXPECTED_DSH_VERSION: manifest.version, KIOKUKO_REQUIRE_DSH_NATIVE: '1',
-    DSH_BIN: environment.DSH_BIN ?? join(packageRoot, '.bin/dsh') }
-  delete env.KIOKUKO_DSH_SOURCE_ROOT
   delete env.KIOKUKO_REPEATED_SCENARIO
   delete env.KIOKUKO_REPEATED_SCENARIOS
   if (suite === 'browser-approval' || suite === 'browser-shortcuts' || suite === 'browser-coding') {

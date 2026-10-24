@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import {createServer} from 'node:http'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,7 +27,7 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
 },async()=>{
   const [cordis,prompt,tools,scope,sessions]=await Promise.all(['cordis','dsh-system-prompt','dsh-tools','dsh-scope','dsh-session'].map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name,'lib/index.js')).href)))
   const base=await realpath(await mkdtemp(join(tmpdir(),'lisp-owned-development-'))),root=join(base,'project')
-  await mkdir(root);await mkdir(join(root,'.git'));await mkdir(join(root,'src'))
+  await mkdir(root);execFileSync('git',['init','-q',root]);await mkdir(join(root,'src'))
   await writeFile(join(root,'src/check.test.mjs'),"import test from 'node:test';test('actual test',()=>{});\n")
   const db=openConnection(join(base,'state.sqlite3'));migrateDatabase(db)
   const prepared=await prepareAgentTask(db,{requestId:'native-owned',cwd:root,dshSessionId:'owned-development',task:'Implement parser\n完了条件:\n- テストが成功する',completionMode:'enforce',profileHints:{taskType:'research',target:'src',expected:'verify',constraints:null},capabilities:[],skillDiscoveryMode:'off'})
@@ -38,7 +40,7 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
   let surface:any,local:any,unmountOwned:(()=>Promise<void>)|undefined,approvals=0
   const signal=new AbortController().signal
   try{
-    fibers.push(await ctx.plugin(prompt.default,{}),await ctx.plugin(tools.default,{mode:'native'}))
+    fibers.push(await ctx.plugin(prompt.default,{})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({name:'owned-development-services',apply(c:any){
       c.provide('planMode',{get:()=>({active:plan})})
       c.provide('agents',{get:(id:string)=>id===agent.id?agent:undefined})
@@ -52,15 +54,15 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     await intake.capture({agent,turn:1,step:0,messages:[{id:'human-existing-task',role:'user',source:{kind:'user'},content:[{type:'text',text:'Continue the admitted task and verify the local fixture.'}]}],signal})
     unmountOwned=mountOwnedExecution(ctx,{runtime,resolve:execution=>execution.agent===agent?{runId:prepared.run.runId,sessionId:session.id,repositoryRoot:root,workspace:prepared.project.workspace,generation:'native-generation-1',agent}:undefined})
     ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true})})
-    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({enabled:true,startupTimeoutMs:60000}))
+    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
     const enabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal})
     assert.equal(enabled.kind,'success',enabled.text)
     const evaluate=async(code:string)=>{
-      const result=await ctx.tools.execute({callId:randomUUID(),name:'lisp_eval',arguments:{operationId:randomUUID(),code},agent,signal})
+      const result=await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'lisp_eval',arguments:{operationId:randomUUID(),code},agent,signal})
       assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.ok,true,JSON.stringify(result))
       return result.value.value.json
     }
-    const native=await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})
+    const native=await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})
     assert.equal(native.isError,false,JSON.stringify(native));assert.equal(native.value.available,true)
     await evaluate('(kioku.files:propose-write "new/deep/source.txt" "source result")')
     assert.equal(await readFile(join(root,'new/deep/source.txt'),'utf8'),'source result')
@@ -87,22 +89,22 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     const cancelJob=await evaluate('(kioku.process:start-job "node" (list "-e" "setInterval(()=>{},1000)"))')
     const generation=(await surface.manager.status({sessionId:session.id,agentId:agent.id,root}) as any).generation
     plan=true
-    const cancelled=await ctx.tools.execute({callId:randomUUID(),name:'lisp_cancel',arguments:{operationId:randomUUID(),generation},agent,signal})
+    const cancelled=await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'lisp_cancel',arguments:{operationId:randomUUID(),generation},agent,signal})
     assert.equal(cancelled.value.ok,true,JSON.stringify(cancelled))
     plan=false
     let terminal:any
     for(let n=0;n<100;n++){
-      terminal=(await ctx.tools.execute({callId:randomUUID(),name:'kioku_result',arguments:{operationId:cancelJob},agent,signal})).value
+      terminal=(await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'kioku_result',arguments:{operationId:cancelJob},agent,signal})).value
       if(terminal.receipt.state!=='started')break
       await new Promise(resolve=>setTimeout(resolve,10))
     }
     assert.equal(terminal.receipt.cancelled,true,'Plan keeps cancellation available and records the actual terminal result')
     surface.stop();await surface.dispose();surface=undefined
-    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'protected',enabled:true,startupTimeoutMs:60000}))
-    assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).isError,true,'explicit protected reload reinstates its legacy fence')
+    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'protected',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
+    assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).isError,true,'explicit protected reload reinstates its legacy fence')
     surface.stop();await surface.dispose();surface=undefined
-    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,startupTimeoutMs:60000}))
-    assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).value.available,true,'development reload releases the old ordinary-tool restriction')
-    assert.equal((await ctx.tools.execute({callId:randomUUID(),name:'kioku_read',arguments:{path:'count'},agent,signal})).value.content,'x')
+    surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
+    assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).value.available,true,'development reload releases the old ordinary-tool restriction')
+    assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'kioku_read',arguments:{path:'count'},agent,signal})).value.content,'x')
   }finally{await intake?.dispose();surface?.stop();await surface?.dispose();await unmountOwned?.();await local?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

@@ -17,7 +17,8 @@ const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compa
 const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
   ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
 assert.equal(version, expectedVersion)
-const currentToolMessages = version.startsWith('0.1.7') || version.startsWith('0.2.')
+const currentToolMessages = typeof llm.createToolResultMessage === 'function'
+if (currentToolMessages) assert.equal(llm.createToolResultMessage({ callId: 'schema-probe', content: [], isError: false }).role, 'tool')
 
 async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(350), tool = 'read', options: { seed?: any[]; parentSession?: string; choose?: string; roleRatio?: number; contextWindow?: number; script?: (mock: any) => any[] } = {}) {
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
@@ -41,8 +42,8 @@ async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(
       if (event.type === 'assistant/message') { data.turn = 1; data.step = 1; data.stream = [] }
       if (event.type === 'tool/result' && currentToolMessages) {
         const result = data.message.content[0]
-        data.message = { ...data.message, role: 'tool', toolCallId: result.toolCallId,
-          content: result.content, isError: result.isError }
+        data.message = llm.createToolResultMessage({ callId: result.toolCallId,
+          content: result.content, isError: result.isError })
       }
       agent.session.append(event.type, data, { surfaceOp: 'append' })
     }

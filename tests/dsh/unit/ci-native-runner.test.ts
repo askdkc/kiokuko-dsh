@@ -1,15 +1,23 @@
 import { satisfies } from 'semver'
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { after } from 'node:test'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 
-const { nativeCiPlan } = await import(pathToFileURL(join(process.cwd(), 'scripts/run-ci-native.mjs')).href)
+const { nativeCiPlan: nativePlan } = await import(pathToFileURL(join(process.cwd(), 'scripts/run-ci-native.mjs')).href)
 const fixture = 'dsh-runtime'
 const manifest = JSON.parse(await import('node:fs/promises').then(({ readFile }) => readFile(join(process.cwd(), 'tests/fixtures', fixture, 'package.json'), 'utf8')))
 const version = manifest.dependencies['@deepseek-ai/dsh']
+// Planner tests own metadata-only state; they do not require a developer's install.
+const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
+const { tmpdir } = await import('node:os')
+const plannerRoot = await mkdtemp(join(tmpdir(), 'ci-planner-runtime-'))
+await mkdir(join(plannerRoot, '@deepseek-ai/dsh'), { recursive: true })
+await writeFile(join(plannerRoot, '@deepseek-ai/dsh/package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+after(() => rm(plannerRoot, { recursive: true, force: true }))
+const nativeCiPlan = (suite: string, environment: Record<string, string> = {}) => nativePlan(suite, { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot, KIOKUKO_DSH_RUNTIME_MODE: 'historical', ...environment })
 test('npm and pnpm resolve the canonical DSH release without a legacy package graph', async () => {
   const root = JSON.parse(await readFile('package.json', 'utf8'))
   const range = root.dsh.compatibility.dsh
@@ -21,25 +29,22 @@ test('npm and pnpm resolve the canonical DSH release without a legacy package gr
   for (const name of ['@deepseek-ai/dsh-agent', '@deepseek-ai/dsh-attachment', '@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai']) {
     assert.equal(root.peerDependencies[name], range, name)
   }
-  // Root development follows the channel; the repeatable fixture owns its graph.
-  for (const [name, selected] of Object.entries(root.devDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(selected, 'alpha', name)
-  }
+  // Package selectors and locked releases are reproducibility inputs, not compatibility gates.
   const fixtureLock = JSON.parse(await readFile('tests/fixtures/dsh-runtime/package-lock.json', 'utf8'))
   const dshPackages = (lock: any) => Object.entries(lock.packages).filter(([path]) => /node_modules\/@deepseek-ai\/dsh(?:-[^/]+)?$/.test(path))
   assert.ok(dshPackages(fixtureLock).length > 0)
-  for (const [path, entry] of dshPackages(fixtureLock)) assert.equal((entry as any).version, version, path)
+  for (const [path, entry] of dshPackages(fixtureLock)) assert.equal(typeof (entry as any).version, 'string', path)
   const npm = JSON.parse(await readFile('package-lock.json', 'utf8'))
   assert.deepEqual(npm.packages[''].devDependencies, root.devDependencies)
   const pnpm = parse(await readFile('pnpm-lock.yaml', 'utf8'))
   for (const [name, entry] of Object.entries(pnpm.importers['.'].devDependencies)) {
     if (!name.startsWith('@deepseek-ai/dsh-')) continue
-    assert.equal((entry as any).specifier, 'alpha', name)
+    assert.equal((entry as any).specifier, root.devDependencies[name], name)
     assert.equal(npm.packages[`node_modules/${name}`].version, (entry as any).version.split('(')[0], name)
   }
 })
-test('native CI runs every suite with the canonical current fixture', async () => {
-    const environment = { SENTINEL: 'kept', KIOKUKO_DSH_SOURCE_ROOT: '/not-the-selected-fixture', KIOKUKO_REQUIRE_DSH_NATIVE: '0', KIOKUKO_EXPECTED_DSH_VERSION: 'wrong' }
+test('native CI runs every suite with the explicitly selected runtime', async () => {
+    const environment = { SENTINEL: 'kept', KIOKUKO_REQUIRE_DSH_NATIVE: '0', KIOKUKO_EXPECTED_DSH_VERSION: 'wrong' }
     const before = { ...environment }
     for (const suite of ['unit', 'integration', 'e2e']) {
       const plan = nativeCiPlan(suite, environment)
@@ -49,7 +54,7 @@ test('native CI runs every suite with the canonical current fixture', async () =
       assert.ok(plan.args.slice(1).every((file: string) => file.startsWith(`tests/dsh/${suite}/`) && file.endsWith('.test.ts')))
       if (suite === 'integration') assert.ok(plan.args.includes('tests/dsh/integration/subagent-standard-preset-native.test.ts'))
       assert.equal(plan.cwd, process.cwd())
-      assert.equal(plan.env.KIOKUKO_DSH_PACKAGE_ROOT, join(process.cwd(), 'tests/fixtures', fixture, 'node_modules'))
+      assert.equal(plan.env.KIOKUKO_DSH_PACKAGE_ROOT, plannerRoot)
       assert.equal(plan.env.KIOKUKO_EXPECTED_DSH_VERSION, version, 'fixture node_modules is stale. Run: npm ci --prefix tests/fixtures/dsh-runtime')
       assert.equal(plan.env.KIOKUKO_REQUIRE_DSH_NATIVE, '1')
       assert.equal(plan.env.KIOKUKO_DSH_SOURCE_ROOT, undefined)
@@ -71,6 +76,7 @@ test('native CI runs every suite with the canonical current fixture', async () =
     assert.equal(lisp.env.KIOKUKO_REQUIRE_LISP_RUNTIME, '1')
     assert.ok(lisp.args.slice(1).every((file: string) => file === 'tests/dsh/e2e/coding-workflow-native.test.ts' || ['tests/dsh/unit/lisp/', 'tests/dsh/integration/lisp/'].some(prefix => file.startsWith(prefix))))
     assert.ok(lisp.args.includes('tests/dsh/e2e/coding-workflow-native.test.ts'), 'Lisp jobs require the real coding session');
+    assert.ok(lisp.args.includes('tests/dsh/integration/lisp/current-executor.test.ts'), 'latest official executor and fresh-turn regression remains required in Lisp lanes');
     for (const browser of ['browser-approval', 'browser-shortcuts', 'browser-coding']) {
       const plan = nativeCiPlan(browser, environment)
       assert.deepEqual(plan.args, [browser === 'browser-approval' ? 'scripts/verify-lisp-approval-web.mjs' : browser === 'browser-coding' ? 'scripts/verify-coding-workflow-web.mjs' : 'scripts/verify-shortcuts-web.mjs'])
@@ -104,7 +110,7 @@ test('recursive discovery executes import-only aliases through their declared le
   }
  });
 
-test('an explicitly selected newer host is tested without replacing it with the historical fixture', async () => {
+test('explicit historical reproduction preserves its selected release identity', async () => {
   const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises')
   const { tmpdir } = await import('node:os')
   const selected = await mkdtemp(join(tmpdir(), 'kiokuko-selected-host-'))
@@ -137,6 +143,11 @@ test('fixture preflight diagnoses stale installs and inconsistent declarations w
   try {
     await write('package.json', declaration); await write('package-lock.json', lock)
     assert.doesNotThrow(() => assertDshFixtureIdentity(temporary, installed))
+    const range = { dependencies: { [name]: '^1.0.0' } }
+    await write('package.json', range)
+    await write('package-lock.json', { packages: { ...lock.packages, '': range } })
+    assert.doesNotThrow(() => assertDshFixtureIdentity(temporary, installed), 'a dependency selector need not equal its exact locked release')
+    await write('package.json', declaration); await write('package-lock.json', lock)
     for (const stale of [{ name, version: '0.9.0' }, undefined, { name: 'other', version }]) {
       assert.throws(() => assertDshFixtureIdentity(temporary, stale), /node_modules is stale or missing:.*npm ci --prefix/)
     }
@@ -146,7 +157,7 @@ test('fixture preflight diagnoses stale installs and inconsistent declarations w
       { packages: {} }, null,
     ]) {
       await write('package-lock.json', broken)
-      assert.throws(() => assertDshFixtureIdentity(temporary, installed), /declaration\/lock mismatch:.*Reconcile/)
+      assert.throws(() => assertDshFixtureIdentity(temporary, installed), /(?:declaration\/lock mismatch:.*Reconcile|node_modules is stale or missing)/)
     }
     await write('package-lock.json', lock); await write('package.json', { dependencies: {} })
     assert.throws(() => assertDshFixtureIdentity(temporary, installed), /declaration\/lock mismatch/)
@@ -164,7 +175,7 @@ test('a symlink alias of the canonical fixture still checks installed identity',
   try {
     await mkdir(join(temporary, 'scripts'))
     await writeFile(join(temporary, 'package.json'), JSON.stringify({ type: 'module' }))
-    for (const file of ['run-ci-native.mjs', 'dsh-fixture-identity.mjs', 'repeated-memory-scenarios.mjs']) {
+    for (const file of ['run-ci-native.mjs', 'dsh-fixture-identity.mjs', 'stage-dsh-upstream.mjs', 'repeated-memory-scenarios.mjs']) {
       await copyFile(join(process.cwd(), 'scripts', file), join(temporary, 'scripts', file))
     }
     await writeFile(join(temporary, 'scripts/verification.json'), JSON.stringify({ nativeScopeExclusions: [], testAliases: [] }))
@@ -181,6 +192,37 @@ test('a symlink alias of the canonical fixture still checks installed identity',
     const alias = join(temporary, 'fixture-alias')
     await symlink(installed, alias, 'dir')
     const { nativeCiPlan: plan } = await import(pathToFileURL(join(temporary, 'scripts/run-ci-native.mjs')).href)
-    assert.throws(() => plan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: alias }), /node_modules is stale or missing:.*npm ci --prefix/)
+    assert.throws(() => plan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: alias, KIOKUKO_DSH_RUNTIME_MODE: 'historical' }), /node_modules is stale or missing:.*npm ci --prefix/)
   } finally { await rm(temporary, { recursive: true, force: true }) }
+})
+
+
+test('explicit source is preserved only when it is the same selected checkout, not merely the same version', async () => {
+  const { symlink } = await import('node:fs/promises')
+  const temporary = await mkdtemp(join(tmpdir(), 'dsh-source-selection-'))
+  try {
+    const packages = join(temporary, 'node_modules'), source = join(temporary, 'source'), other = join(temporary, 'other')
+    await mkdir(join(packages, '@deepseek-ai'), { recursive: true })
+    for (const root of [source, other]) {
+      await mkdir(join(root, 'apps/cli'), { recursive: true })
+      await writeFile(join(root, 'apps/cli/package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: 'next-label' }))
+    }
+    await symlink(join(source, 'apps/cli'), join(packages, '@deepseek-ai/dsh'), 'dir')
+    const environment = { KIOKUKO_DSH_PACKAGE_ROOT: packages, KIOKUKO_DSH_SOURCE_ROOT: source }
+    assert.equal(nativeCiPlan('unit', environment).env.KIOKUKO_DSH_SOURCE_ROOT, source)
+    assert.throws(() => nativeCiPlan('unit', { ...environment, KIOKUKO_DSH_SOURCE_ROOT: '' }), /nonempty path/)
+    assert.throws(() => nativeCiPlan('unit', { ...environment, KIOKUKO_DSH_SOURCE_ROOT: other }), /source and package identities differ/)
+    assert.throws(() => nativeCiPlan('unit', { ...environment, KIOKUKO_EXPECTED_DSH_SHA: 'a'.repeat(40) }), /exact official DSH SHA/)
+  } finally { await rm(temporary, { recursive: true, force: true }) }
+})
+
+
+test('default native plans reject unmarked historical or arbitrary external runtimes', () => {
+  assert.throws(() => nativePlan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot }), /staged official SHA identity/)
+  assert.throws(() => nativePlan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot, KIOKUKO_DSH_RUNTIME_MODE: 'current' }), /staged official SHA identity/)
+  assert.throws(() => nativePlan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot, KIOKUKO_DSH_RUNTIME_MODE: '' }), /must be current or historical/)
+  assert.throws(() => nativePlan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot, KIOKUKO_DSH_RUNTIME_MODE: 'historical', KIOKUKO_EXPECTED_DSH_SHA: 'a'.repeat(40) }), /Historical DSH mode cannot satisfy/)
+  const historical = nativePlan('unit', { KIOKUKO_DSH_PACKAGE_ROOT: plannerRoot, KIOKUKO_DSH_RUNTIME_MODE: 'historical' })
+  assert.equal(historical.env.KIOKUKO_DSH_RUNTIME_MODE, 'historical')
+  assert.equal(historical.env.KIOKUKO_EXPECTED_DSH_SHA, undefined)
 })

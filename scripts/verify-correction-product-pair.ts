@@ -1,3 +1,4 @@
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 // node --import tsx scripts/verify-correction-product-pair.ts MAIN_PACKAGE ABSOLUTE_RUSTC
 // Two independent fixture databases exercise the same source identity. This does
 // not connect production stores or measure language quality of a real model.
@@ -17,6 +18,7 @@ import {openConnection} from '../src/db/connection.js'
 import {recordEntry} from '../src/memory/entries.js'
 import {correctionDecisionFixture} from '../tests/dsh/helpers/correction-decisions.js'
 
+const selectedDsh = selectedDshRuntime(process.cwd())
 assert.ok(process.argv[2]&&process.argv[3],'Pass the built Kiokuko package and an installed absolute rustc')
 const main=realpathSync(resolve(process.argv[2]!)),rustc=realpathSync(process.argv[3]!)
 assert.equal(JSON.parse(await readFile(join(main,'package.json'),'utf8')).name,'kiokuko')
@@ -57,7 +59,7 @@ try{
     for(const explicit of [false,true])for(const drop of [false,true]){
       let questions=0
       const semantic=await correctionDecisionFixture(content.body)
-      const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules'),packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
+      const packages=selectedDsh.packageRoot,packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
       const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,extra:{lisp:{enabled:false},typedDecisions:semantic.configuration,answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}},nativeAnswer:async request=>{
         const q=request.questions[0];if(q.id.startsWith('correction-')){questions++;return {answers:[{id:q.id,selected:['見直す']}]}}
         return {answers:[{id:q.id,selected:['使わない']}]}

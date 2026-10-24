@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, realpath, rm } from 'node:fs/promises'
@@ -31,16 +32,27 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
   const runtime: any = { withDatabase: async (fn: any) => fn(db) }
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
   let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
+  const handles: any[] = []
   try {
-    for (const [plugin, config] of [[llm.default], [session.default], [projections.default], [prompt.default, { persona: '' }], [tools.default, { mode: 'native' }], [agents.default], [commands.default], [loop.default, { agents: [] }], [questions.default], [ask], [plan.default, { section: 'Use exit_plan_mode to submit the complete plan.' }]] as any[]) {
+    for (const [plugin, config] of [[llm.default], [session.default], [projections.default], [prompt.default, { persona: '' }], [tools.default], [agents.default], [commands.default], [loop.default, { agents: [] }], [questions.default], [ask], [plan.default, { section: 'Use exit_plan_mode to submit the complete plan.' }]] as any[]) {
+      if (plugin === tools.default) { await mountNativeTools(ctx, tools, packages!, fibers); continue }
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     const responses: any[] = [mock.textResponse('Plan ready')], model = new mock.MockAdapter(responses)
     ctx.llm.registerAdapter(['mock'], model)
-    const agent = await ctx.agentLoop.create(session.SessionId('plan-parent'), { provider: 'mock', model: 'qwen3-coder' }, { cwd: root })
+    const handle = await ctx.agents.create({ sessionId: session.SessionId('plan-parent'), agentOptions: { provider: 'mock', model: 'qwen3-coder' }, meta: { cwd: root } }); handles.push(handle)
+    const agent = handle.agent
     let effects = 0
     ctx.tools.register({ name: 'bash', description: 'forbidden effect', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => ++effects })
-    const call = (name: string, args: any = {}, signal = new AbortController().signal) => ctx.tools.execute({ name, arguments: args, callId: randomUUID(), agent, signal })
+    const call = async (name: string, args: any = {}, signal = new AbortController().signal) => {
+      // Current DSH conditionally admits Plan tools at step preparation. Use its
+      // real selection rather than pretending an out-of-step call is admitted.
+      const toolSet = typeof ctx.tools.resolve === 'function' ? await ctx.tools.resolve({
+        agent, modelSelection: { provider: 'mock', model: 'qwen3-coder' }, signal: new AbortController().signal,
+      }) : undefined
+      try { return await executeNativeTool(ctx, packages!, { name, arguments: args, callId: randomUUID(), agent, signal, toolSet }) }
+      finally { toolSet?.dispose() }
+    }
     assert.equal((await call('exit_plan_mode', { plan: '# Test plan' })).isError, true, 'inactive Plan mode retains native rejection')
     assert.equal((await call('bash')).isError, false, 'Lisp disabled preserves native effects')
     effects = 0
@@ -52,13 +64,15 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     })
     const enabled = (await ctx.commands.execute(agent, `/kioku-lisp ${mode === 'task' ? 'enable-task' : 'enable'}`, [], new AbortController().signal)).result
     assert.equal(enabled.kind, 'success', enabled.text)
+    ctx.planMode.set(agent, true)
     for (const name of ['exit_plan_mode', 'ask_user_question']) {
       assert.ok(ctx.tools.schemas(agent).some((s: any) => s.name === name), name)
-      assert.ok((await ctx.get(LISP_ASSEMBLY_SERVICE).project(agent, { sections: [], variables: {}, tools: [] })).tools.some((s: any) => s.name === name), 'request projection retains ' + name)
+      assert.ok((await ctx.get(LISP_ASSEMBLY_SERVICE).project(agent, { sections: [], variables: {}, tools: ctx.tools.schemas(agent) })).tools.some((s: any) => s.name === name), 'request projection retains ' + name)
     }
-    const child = await ctx.agentLoop.create(session.SessionId('plan-child'), { provider: 'mock', model: 'qwen3-coder' }, { cwd: root, parentSession: agent.session.id })
+    const childHandle = await ctx.agents.create({ sessionId: session.SessionId('plan-child'), agentOptions: { provider: 'mock', model: 'qwen3-coder' }, meta: { cwd: root, parentSession: agent.session.id } }); handles.push(childHandle)
+    const child = childHandle.agent
     for (const name of ['exit_plan_mode', 'ask_user_question']) {
-      const blocked = await ctx.tools.execute({ name, arguments: {}, callId: randomUUID(), agent: child, signal: new AbortController().signal })
+      const blocked = await executeNativeTool(ctx, packages!, { name, arguments: {}, callId: randomUUID(), agent: child, signal: new AbortController().signal })
       assert.equal(blocked.isError, true, 'child cannot borrow the parent control surface')
     }
     ctx.planMode.set(agent, true)
@@ -75,9 +89,10 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     assert.equal((await call('ask_user_question', { questions: [{ id: 'preference', question: 'Choose?', options: [{ label: 'Yes' }] }] })).isError, false)
     assert.equal(ctx.planMode.get(agent).active, true, 'question answers do not approve a plan')
     const markdown = '# Test plan\n\nPreserve the protected effects.'
-    assert.equal((await call('exit_plan_mode', { plan: markdown })).isError, true)
+    const declined = await call('exit_plan_mode', { plan: markdown })
+    assert.equal(declined.isError, true)
     assert.equal(ctx.planMode.get(agent).active, true)
-    assert.equal(requests.at(-1).questions[0].detail, markdown)
+    assert.equal(requests.at(-1).questions[0].detail, markdown, JSON.stringify(declined))
     assert.equal(requests.at(-1).questions[0].intent.kind, 'plan-review')
     assert.equal((await call('bash')).isError, true)
     choice = 'Approve'
@@ -106,6 +121,7 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     assert.equal(effects, 0)
   } finally {
     surface?.stop(); await surface?.dispose()
+    for (const handle of handles.reverse()) await handle.dispose()
     for (const fiber of fibers.reverse()) await fiber.dispose()
     db.close(); await rm(root, { recursive: true, force: true })
   }

@@ -27,9 +27,6 @@ import { migrateDatabase } from '../../../src/db/migrate.js'
 import type { DshDatabaseOperation } from '../../../src/dsh/runtime.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const expectedDshVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
-  ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
-const currentVersion = expectedDshVersion.startsWith('0.1.7') || expectedDshVersion.startsWith('0.2.') ? 4 : 3
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const sourceModules: Record<string, string> = { cordis: 'vendor/cordis', 'dsh-session': 'packages/core/session',
   'dsh-session-persistence-jsonl': 'packages/session/session-persistence-jsonl', 'dsh-session-query': 'packages/session-query/session-query',
@@ -40,6 +37,9 @@ const modulePath = (name: string) => sourceRoot ? join(sourceRoot, sourceModules
 const jsonlPath = modulePath('dsh-session-persistence-jsonl')
 const available = await access(jsonlPath).then(() => true, () => false)
 if (!available && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native history compatibility requires the selected DSH runtime')
+const currentVersion: number | undefined = available
+  ? (await import(pathToFileURL(modulePath('dsh-session')).href)).SESSION_FORMAT_VERSION : undefined
+if (available) assert.ok(Number.isInteger(currentVersion) && currentVersion! > 0, 'native session format must be explicitly exported')
 const options = { skip: available ? false : 'requires selected DSH runtime', timeout: 30_000 }
 const types = ['kiokuko/evolution-observation', 'kiokuko/completion-report', 'kiokuko/execution-status', 'kiokuko/deep-report', 'kiokuko/deep-status']
 
@@ -521,7 +521,7 @@ for (const version of [0, 1, 2] as const) test(`historical v${version} lookup re
 })
 
 for (const version of [2, 3] as const) test(`historical lookup selects v${version} over older generations and never falls back from its damaged body`, {
-  ...options, skip: version < currentVersion ? options.skip : 'requires a newer native generation',
+  ...options, skip: version < currentVersion! ? options.skip : 'requires a newer native generation',
 }, async () => {
   const f = await fixture()
   try {

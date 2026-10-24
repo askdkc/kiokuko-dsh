@@ -5,7 +5,7 @@
 
 ## インストール
 
-DeepSeek Harness は `>=0.2.1-alpha.2`、Node.js は 24.16.0 以上が宣言上の下限です。新しい DSH の版名だけでは拒否せず、実際のホスト API と隔離した動作試験で互換性を確認します。
+公式 DeepSeek Harness の現在のソースと Node.js 24.16.0 以上を使用します。DSH の版名による固定判定はせず、実際のホスト API と解決したソース revision に対する隔離試験で互換性を確認します。[検証範囲](current-upstream-compatibility-report.md)を参照してください。
 
 DeepSeek Harnessのcheckoutから導入します:
 
