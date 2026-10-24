@@ -4,6 +4,8 @@ import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
  * Host admission is a dependency double; these tests do not claim model intent quality.
  */
+import { planPreparation } from '../helpers/plan-script.js'
+import { nativeMock } from '../helpers/native-mock.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -1133,4 +1135,70 @@ test('KDSH-REVIEW-GATE-RECOVERY-001: advisory review exposes missing interpretat
   const deny=f.ctx.tools.guard(()=> 'Native policy denied')
   assert.equal((await f.execute('bash',{command:'inspect-approved-target'})).isError,true);deny()
   assert.equal(bodies,1);assert.equal(writes,0)
+})
+
+
+// Same repeated research request as the Web Plan fixture. A scripted adapter must
+// interpret each fresh human turn just like the real main model; taskType is not intent.
+test('Web Plan scripted research binds each current turn without bypassing unresolved-intent guards', async t => {
+  const task = 'Plan the repository workflow using Lisp. Do not implement changes. 通常実行で。'
+  const mock = nativeMock({ LlmAdapter: class {} })
+  let context: RequestIntentContext
+  const f = await fixture(t, { interpret: async (input, originalTask) => {
+    context = createRequestIntentContext({ task: originalTask, messageRefs: requestIntentMessageRefs(input.messages, originalTask),
+      ...(input.turn === 1 ? {} : { activeTask: {
+        taskId: 'plan-research', runId: 'plan-research', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/fixture',
+        type: 'research', state: 'Working', revision: input.turn, generation: 1, runStatus: 'active',
+        reason: 'Plan research fixture', evidence: [], allowedOps: ['wait', 'complete', 'ignore'], request: task, resumedFromTerminal: false,
+      } }),
+    })!
+    return { context, decision: unresolvedRequestIntent(context, 'decision_service_disabled') }
+  } })
+  let previousRefs: string[] | undefined
+  for (const [index, mode] of ['question', 'keep', 'approve'].entries()) {
+    const turn = index + 1
+    const messages = [human(`plan-${mode}`, task)]
+    if (turn > 1) { f.intake.finish(f.session, turn - 1); f.events.push(event('turn/end', turn - 1), event('turn/start', turn)) }
+    await f.capture(messages, turn)
+    if (turn > 1) {
+      const legacy = await f.execute(TASK_PREPARE_TOOL, { taskType: 'research' })
+      assert.equal(legacy.isError, false)
+      assert.equal(legacy.value.prepared, false, 'an active research task cannot borrow a legacy taskType')
+      assert.equal(legacy.value.status, 'awaiting_clarification')
+      assert.equal(legacy.value.question, 'その対象に、具体的に何をしてほしいですか？')
+    }
+    const projected = await f.intake.answerMessages({ agent: f.agent, turn, step: 0, messages, signal: signal() }, messages)
+    const request = { messages: projected, tools: [{ name: TASK_PREPARE_TOOL }] }
+    const id = `prepare-${mode}`
+    const [prepare, consume] = mock.prepareWork([mock.textResponse('Plan consumer')], 'research', id,
+      planPreparation(mock, id, mode))
+    const block = prepare(request).find((chunk: any) => chunk.type === 'block-end').block
+    const args = JSON.parse(block.arguments)
+    assert.deepEqual(args.requestIntent.evidenceRefs, requestIntentReferenceIds(context!))
+    if (previousRefs) {
+      const stale = await f.execute(TASK_PREPARE_TOOL, { ...args, requestIntent: { ...args.requestIntent, evidenceRefs: previousRefs } })
+      assert.equal(stale.isError, true, 'repeated human text does not permit previous-turn references')
+      assert.equal(f.admissions.length, index)
+    }
+    const result = await f.execute(TASK_PREPARE_TOOL, args)
+    assert.equal(result.isError, false, JSON.stringify(result))
+    assert.equal(result.value.prepared, true)
+    assert.equal(result.value.permissions, 'unchanged_native_policy')
+    assert.equal(result.value.requestIntent.action, 'research')
+    assert.equal(result.value.requestIntent.relation, mode === 'question' ? 'new' : 'same_scope_continuation')
+    consume({ messages: [{ role: 'tool', toolCallId: id, isError: result.isError, content: result.content }] })
+    previousRefs = args.requestIntent.evidenceRefs
+    assert.equal(f.admissions.length, turn)
+    assert.equal(f.bodies(), 0, 'preparation itself executes no project effects')
+  }
+})
+
+nativeTest('Web Plan scripted preparation rejects unknown stages and missing current host evidence', () => {
+  const mock = nativeMock({ LlmAdapter: class {} })
+  assert.throws(() => planPreparation(mock, 'prepare', 'unexpected'), /unknown Plan fixture mode/)
+  for (const mode of ['question', 'keep', 'approve']) {
+    assert.throws(() => planPreparation(mock, 'prepare', mode)({ messages: [] }), /current host evidence/)
+    assert.throws(() => planPreparation(mock, 'prepare', mode)({ messages: [{ source: { sections: [{ name: 'on-demand-intake',
+      text: 'Current request references and same-session work (host-bound, advisory only):\nnot-json' }] } }] }), SyntaxError)
+  }
 })
