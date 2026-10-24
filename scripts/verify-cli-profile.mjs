@@ -3,7 +3,7 @@
  * node scripts/verify-cli-profile.mjs DSH_BIN CLI_TGZ KIOKUKO_TGZ NODE_PTY XTERM_ANCHOR [WORK_ROOT] [all|install|tui|source]
  */
 import assert from 'node:assert/strict'
-import { createInputBarrier, inputWasHandled, questionWasAnswered } from './cli-input-barrier.mjs'
+import { createInputBarrier, inputWasHandled, questionWasAnswered, createQuestionSelection } from './cli-input-barrier.mjs'
 import { completeVerification } from './verification-completion.mjs'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -176,19 +176,33 @@ async function tui(resumeSessionId) {
       return true
     })
   }
-  const sentDeclines = new Set()
+  const selections = new Map()
+  const selectQuestion = (request, selected, onAnswered = () => {}) => {
+    if (!enterReady()) return
+    let selection = selections.get(request.requestSequence)
+    if (!selection) {
+      selection = createQuestionSelection(request.questions[0], selected)
+      selections.set(request.requestSequence, selection)
+    }
+    const latest = fresh().filter(value => value.type === 'native-question').at(-1)
+    const active = latest?.requestSequence === request.requestSequence && !fresh().some(value =>
+      value.type === 'native-question-response' && value.requestSequence === request.requestSequence)
+    const action = selection({ screen: screen(), frame: renderedFrame, active })
+    if (!action) return
+    appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'questionSelection',
+      requestSequence: request.requestSequence, selected, action, frame: renderedFrame, time: Date.now() }) + '\n')
+    if (action === 'submit') answerQuestion(request, selected, onAnswered)
+    else child.write(action === 'down' ? '\x1b[B' : '\x1b[A')
+  }
   const declinedQuestions = new Set()
   const wait = (predicate, description, timeoutMs) => until(predicate, description, timeoutMs, () => {
     const ready = enterReady()
     const request = fresh().filter(value => value.type === 'native-question').at(-1)
     const question = request?.questions?.[0]
     if (question?.detail !== 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
-      || sentDeclines.has(request.requestSequence) || !screen().includes('今回は保存しない') || !ready) return
+      || declinedQuestions.has(request.requestSequence) || !ready) return
     assert.deepEqual(question.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
-    sentDeclines.add(request.requestSequence)
-    appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclineSent', requestSequence: request.requestSequence, questionId: question.id, time: Date.now() }) + '\n')
-    child.write('\x1b[B')
-    answerQuestion(request, '今回は保存しない', () => {
+    selectQuestion(request, '今回は保存しない', () => {
       declinedQuestions.add(request.requestSequence)
       appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclined', requestSequence: request.requestSequence, questionId: question.id, time: Date.now() }) + '\n')
     }) // Decline once through the native UI; confirmation requires its matching answer.
@@ -354,13 +368,10 @@ async function tui(resumeSessionId) {
       }
       const lispRequest = `profile-fixture-lisp ${created.sessionId.slice(0, 8)}: evaluate (+ 20 22) using Lisp`
       await line(lispRequest)
-      let executionSelected = false
       await wait(() => {
-        if (!executionSelected && enterReady() && screen().includes('この作業をどう実行しますか') && screen().includes('通常実行')) {
+        if (enterReady() && screen().includes('この作業をどう実行しますか') && screen().includes('通常実行')) {
           const request = fresh().filter(value => value.type === 'native-question').at(-1)
-          assert.equal(request?.questions[0]?.id, 'enno-execution-mode')
-          executionSelected = true
-          answerQuestion(request, '通常実行') // Native UI's first focused option is the ordinary execution requested by this fixture.
+          if (request?.questions[0]?.id === 'enno-execution-mode') selectQuestion(request, '通常実行')
         }
         return fresh().some(value => value.type === 'fixture-lisp-consumed' && value.text === lispRequest && value.sessionId === created.sessionId)
       }, 'Lisp result was not consumed by the native model', 90000)

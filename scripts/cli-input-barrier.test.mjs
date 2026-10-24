@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createInputBarrier, inputWasHandled, createQuestionObserver, questionWasAnswered } from './cli-input-barrier.mjs'
+import { createInputBarrier, inputWasHandled, createQuestionObserver, questionWasAnswered, createQuestionSelection } from './cli-input-barrier.mjs'
 
 test('delayed PTY processing cannot spend the debounce interval before handling', () => {
   let time = 0, handled = false, writes = 0
@@ -144,4 +144,51 @@ test('cancellation and rejection keep their identity and never confirm a decline
     assert.equal(events.at(-1).code, code)
     assert.equal(questionWasAnswered({ events, eventOffset, requestSequence, questionId: 'memory', selected: ['今回は保存しない'] }), false)
   }
+})
+
+const options = ['整理して確認する', '今回は保存しない', '第三の選択']
+const question = { question: 'Choose the intended option', options: options.map(label => ({ label })) }
+const panel = index => `────▾  📋 Question 1/1   ────\nChoose the intended option\n${options.map((label, i) => `${i === index ? '❯●' : ' ○'} ${label}`).join('\n')}`
+
+test('selection waits for the exact post-navigation focus, not time or unrelated output', () => {
+  const select = createQuestionSelection(question, options[1])
+  assert.equal(select({ screen: panel(0), frame: 10 }), 'down')
+  assert.equal(select({ screen: panel(0), frame: 1000 }), undefined, 'delayed PTY processing must not submit or retry Down')
+  assert.equal(select({ screen: panel(1), frame: 10 }), undefined, 'a stale rendered frame cannot acknowledge navigation')
+  assert.equal(select({ screen: panel(2), frame: 1001 }), undefined, 'wrong focus cannot acknowledge navigation')
+  assert.equal(select({ screen: panel(1), frame: 1002 }), 'submit')
+  assert.equal(select({ screen: panel(1), frame: 1003 }), undefined, 'submit exactly once')
+})
+
+test('default, reverse and multiple-step option selection share the same barrier', () => {
+  assert.equal(createQuestionSelection(question, options[0])({ screen: panel(0), frame: 1 }), 'submit')
+  const reverse = createQuestionSelection(question, options[0])
+  assert.equal(reverse({ screen: panel(2), frame: 1 }), 'up')
+  assert.equal(reverse({ screen: panel(2), frame: 2 }), undefined)
+  assert.equal(reverse({ screen: panel(1), frame: 3 }), 'up')
+  assert.equal(reverse({ screen: panel(0), frame: 3 }), undefined)
+  assert.equal(reverse({ screen: panel(0), frame: 4 }), 'submit')
+})
+
+test('history, absent or ambiguous selection and closed requests cannot cause submission', () => {
+  const select = createQuestionSelection(question, options[1])
+  for (const screen of ['', options[1], `📋 Questionnaire answered\n❯● ${options[1]}`,
+    `📋 Question 1/1\n❯● ${options[1]} suffix`, `${panel(1)}\n❯● ${options[0]}`]) {
+    assert.equal(select({ screen, frame: 1 }), undefined)
+  }
+  assert.equal(select({ screen: panel(1), frame: 1, active: false }), undefined)
+  assert.equal(select({ screen: panel(1), frame: 2 }), 'submit')
+  assert.throws(() => createQuestionSelection(question, 'missing'), /single-select/)
+  assert.throws(() => createQuestionSelection({ ...question, multiSelect: true }, options[0]), /single-select/)
+  assert.throws(() => createQuestionSelection({ options: [{ label: 'x' }, { label: 'x' }] }, 'x'), /single-select/)
+})
+
+
+test('another active panel with identical options cannot reuse historical question text', () => {
+  const select = createQuestionSelection(question, options[1])
+  const other = panel(1).replace(question.question, 'A different question')
+  assert.equal(select({ screen: other, frame: 1 }), undefined)
+  assert.equal(select({ screen: `${question.question}\n${other}`, frame: 2 }), undefined)
+  assert.equal(select({ screen: `${panel(1)}\n${other}`, frame: 3 }), undefined)
+  assert.equal(select({ screen: panel(1), frame: 4 }), 'submit')
 })
