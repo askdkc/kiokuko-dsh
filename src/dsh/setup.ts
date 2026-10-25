@@ -14,7 +14,7 @@ const LEGACY_END = '<!-- END KIOKUKO MANAGED BLOCK -->'
 const LEGACY_DSH_START = /<!-- BEGIN KIOKUKO MANAGED BLOCK -->(?=\r?\n<!-- kiokuko-dsh-template-version: \d+ -->)/u
 
 export const DSH_MANAGED_BLOCK = `${BEGIN}
-<!-- kiokuko-dsh-template-version: 2 -->
+<!-- kiokuko-dsh-template-version: 3 -->
 <!-- Managed by kiokuko-dsh setup on plugin load. Edit outside the markers. -->
 
 ## Kiokuko DSH
@@ -33,6 +33,14 @@ Use its admitted workspace and directive; do not read or modify the SQLite file 
 Use kioku_read, kioku_write, kioku_edit, kioku_remove, kioku_exec and kioku_result for host-observed development. Project edits, external investigation, PATH commands, bash/zsh and builds/tests need no extra approval. Source/data deletion and durable user database mutations require concrete review; declare destructiveTargets for commands. Generated/temp/disposable artifacts are ordinary development. Lisp and normal tools coexist. Plan, goal, cancellation and execution ownership remain authoritative. Explicit human implementation instructions request Plan exit at the next accepted step; presenting a plan alone does not exit. Bind task_completion checks and relevant source/test/config paths before execution. Collect asynchronous final results. Host receipts distinguish work outcome, verification and saving; model fields such as passed cannot supply proof. Apply recalled candidates only after comparing conditions, provenance and source versions; old verification is not current success. After task completion ask permission to organize memories, show the exact proposal, and save only the approved revision. Comments require revision and another preview; decline saves nothing. Saving failures do not stop coding. Reconcile uncertain saves by the original approval key; never blindly create a new save identity or replay edits or commands.
 
 Discover unfamiliar repository filenames with native glob/grep before read; use an exact returned path. Never infer a test filename from a source basename or treat remembered/example paths as current filesystem evidence. Explicit user targets may be read directly; if missing, report that fact and discover relevant alternatives without silently changing the requested target. After a not-found error, do not repeat the unchanged read or assume a sandbox/configuration fault; check current path evidence. Do not create placeholder files or silently substitute another target to hide a missing-file error.
+
+### Engineering changes
+
+For generated artifacts, update the owning schema, template or generator, then use the repository's documented regeneration path and inspect the resulting diff; do not patch only the output.
+
+### UI design
+
+Choose design tokens by semantic role, not by current appearance. If a role is missing, extend the design system instead of repurposing an unrelated token; when changing theme contracts, verify supported light, dark and custom-theme fallback behavior.
 
 ${END}`
 

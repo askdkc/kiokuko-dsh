@@ -132,3 +132,28 @@ test('unowned generic blocks remain untouched; ambiguous DSH ownership fails clo
     assert.throws(() => renderDshInstructions(text), { code: 'CONFLICT' })
   }
 })
+
+
+test('setup refreshes generated ownership and semantic theme guidance once while preserving foreign bytes', async t => {
+  const options = await fixture(t)
+  const prefix = 'User rules\r\nAvoid unnecessary secondary labels and descriptions. Let the layout do the explaining.\r\n<!-- BEGIN KIOKUKO-AI MANAGED BLOCK -->\r\nAI rules\r\n<!-- END KIOKUKO-AI MANAGED BLOCK -->\r\n'
+  const suffix = '\r\nUser footer  \r\n'
+  const sentences = [
+    "For generated artifacts, update the owning schema, template or generator, then use the repository's documented regeneration path and inspect the resulting diff; do not patch only the output.",
+    'Choose design tokens by semantic role, not by current appearance. If a role is missing, extend the design system instead of repurposing an unrelated token; when changing theme contracts, verify supported light, dark and custom-theme fallback behavior.',
+  ]
+  await writeFile(options.agents, prefix + legacy.replaceAll('\n', '\r\n') + suffix)
+  await setupDsh(options)
+  const first = await readFile(options.agents, 'utf8')
+  assert.ok(first.startsWith(prefix))
+  assert.ok(first.endsWith(suffix))
+  for (const sentence of sentences) assert.equal(first.split(sentence).length - 1, 1)
+  assert.doesNotMatch(first, /bun run|Bun\.file|packages\/client|typecheck:tsc|Drizzle|Never alias imports|Avoid `else`/u)
+  let stale = first
+  for (const sentence of sentences) stale = stale.replace(sentence + '\r\n', '')
+  await writeFile(options.agents, stale)
+  assert.equal((await setupDsh(options)).instructions.status, 'updated')
+  assert.equal(await readFile(options.agents, 'utf8'), first)
+  assert.equal((await setupDsh(options)).instructions.status, 'unchanged')
+  assert.equal(await readFile(options.agents, 'utf8'), first)
+})
