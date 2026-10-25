@@ -1,8 +1,9 @@
 import { consumerInstallEnvironment } from './pack-install-environment.mjs'
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { resolveGuardrail } from './guardrail-artifacts.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { observeProcess, processDiagnostic } from './verification-diagnostics.mjs'
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -14,6 +15,7 @@ const exec = promisify(execFile)
 const checkStarted = performance.now()
 let failureDiagnostic
 const root = process.cwd()
+const selected = process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' ? selectedDshRuntime(root) : undefined
 const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
@@ -339,6 +341,15 @@ async function createAndSmokeTestTarball() {
   }), { point: 'pack-install', timeoutMs: 180_000 })
   process.stderr.write(`${JSON.stringify(installation.diagnostic)}\n`)
   if (!installation.ok) { failureDiagnostic = installation.diagnostic; throw new Error('Consumer installation failed') }
+  // Native acceptance runs in the selected DSH host, whose optional peers are
+  // deliberately omitted by the isolated npm install above.
+  if (selected) {
+    const peerScope = join(consumerRoot, 'node_modules', '@deepseek-ai')
+    await rm(peerScope, { recursive: true, force: true }); await mkdir(peerScope, { recursive: true })
+    for (const name of await readdir(join(selected.packageRoot, '@deepseek-ai'))) {
+      await symlink(await realpath(join(selected.packageRoot, '@deepseek-ai', name)), join(peerScope, name), process.platform === 'win32' ? 'junction' : 'dir')
+    }
+  }
   const packageRoot = join(consumerRoot, 'node_modules', 'kiokuko-dsh')
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
