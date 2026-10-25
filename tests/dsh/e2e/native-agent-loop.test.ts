@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -196,7 +197,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   await ctx.plugin(systemPrompt.default, { persona: '' })
   await ctx.plugin(fsLocal.default, { cwd: fixtureRoot })
   await ctx.plugin(workingDirectory.default, { defaultDirectory: fixtureRoot })
-  await ctx.plugin(tools.default, { mode: 'native' })
+  await mountNativeTools(ctx, tools, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, [])
   await ctx.plugin(agentRegistry.default)
   await ctx.plugin(skills.default)
   await ctx.plugin(agentLoop.default, { agents: [] })
@@ -339,7 +340,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
       { provider: 'mock', model: 'mock' },
       { cwd: fixtureRoot },
     )
-    liveScope = scope.createScope(ctx, liveAgent); liveAgent.ctx = liveScope.ctx; liveAgent.ctx.get('tools').presentAs('native')
+    liveScope = scope.createScope(ctx, liveAgent); liveAgent.ctx = liveScope.ctx;
     const signal = new AbortController().signal
     const nativeSkillSnapshot = await ctx.skills.snapshot({ scope: liveAgent, cwd: fixtureRoot, signal })
     const nativeToolSnapshot = await ctx.tools.schemas(liveAgent)

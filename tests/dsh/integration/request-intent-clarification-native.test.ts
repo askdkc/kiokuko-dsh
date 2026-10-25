@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Direct Core + native question service/model loop/owned effects. Provider and
  * model answers and the human UI response are scripted; no external model runs. */
 import assert from 'node:assert/strict'
@@ -85,7 +86,8 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           : plugin === prompt ? { persona: '' } : undefined
         fibers.push(await ctx.plugin(plugin.default, config))
       }
-      fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default, { agents: [] }))
       ctx.on('agent/error', (event: any) => errors.push(event.error))
       const native = nativeMock(llm), responses: any[] = [], model = new native.MockAdapter(responses)
       ctx.llm.registerAdapter(['fixture'], model)

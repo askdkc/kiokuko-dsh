@@ -1,3 +1,4 @@
+import { executeNativeTool, mountToolExecutor } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
@@ -307,9 +308,9 @@ test('advisory memory status keeps the native PTC transport and uses SDK subdisp
   const f = await fixture()
   const ctx = new cordis.Context(), fibers: any[] = []
   let scoped: any, unmount: (() => void) | undefined
-  const releaseRuntime = ctx.provide('ptcRuntime', { language: 'typescript' })
+  const releaseRuntime = ctx.provide('ptcRuntime', { language: 'typescript', programFormat: 'function-body', run() { throw new Error('Projection-only fixture must not execute a PTC program') } })
   try {
-    fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(toolModule.default, { mode: 'ptc' }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountToolExecutor(ctx, toolModule, packages, 'ptc', fibers)
     const session = { id: 'session' }, agent: any = { id: 'ordinary-agent', session }
     scoped = scope.createScope(ctx, agent); agent.ctx = scoped.ctx
     const tools = scoped.ctx.get('tools')
@@ -317,9 +318,9 @@ test('advisory memory status keeps the native PTC transport and uses SDK subdisp
     // injection before reading an optional service such as commands.
     unmount = mountMemoryApplication({ tools, on: scoped.ctx.on.bind(scoped.ctx) }, { runtime: f.runtime as any,
       resolve: execution => execution.agent === agent ? f.identity : undefined, refresh: async () => undefined })
-    assert.equal(tools.modeFor(agent), 'ptc')
-    assert.deepEqual(tools.wireSchemas(agent).schemas.map((schema: any) => schema.name), ['run_code'])
-    assert.equal(tools.modeFor(agent), 'ptc')
+    assert.deepEqual((await ctx.systemPrompt.assemble({ scope: agent, agent })).tools.map((tool: any) => tool.name), ['run_code'])
+    assert.ok((await ctx.systemPrompt.assemble({ scope: agent, agent })).sections.some((section: any) => section.name === 'tools:sdk'))
+    assert.deepEqual((await ctx.systemPrompt.assemble({ scope: agent, agent })).tools.map((tool: any) => tool.name), ['run_code'])
     const review = tools.get('task_memory_review', agent)
     assert.ok(review, 'pending review remains available to the run_code SDK')
     const result = await review.execute({ action: 'status' }, { agent, name: 'task_memory_review', callId: 'run:ptc:1', parent: { callId: 'run' }, rootCallId: 'run', signal: new AbortController().signal })
@@ -619,7 +620,7 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
       fibers.push(await ctx.plugin(plugin, config))
     }
   }
-  const fiber = ctx.plugin(tools.default, { mode: kind === 'carrier' ? 'ptc' : 'native' }); fibers.push(fiber); await fiber
+  await mountToolExecutor(ctx, tools, packages, kind === 'carrier' ? 'ptc' : 'native', fibers)
   const intake = new OnDemandIntake({
     validate: async input => { assert.equal(input.agent, agent); assert.equal(input.agent.session, session) },
     existing: async () => kind === 'resumed', classify: async () => ({ deferInference: true, ...(kind === 'resumed' ? { taskType: 'debug' as const } : {}) }),
@@ -638,7 +639,7 @@ for (const kind of ['direct', 'carrier', 'resumed'] as const) test(`host-only ${
   intake.mount(ctx, ctx.tools)
   const releaseEffect = ctx.tools.register({ name: 'effect_probe', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => { effects++; return 'unexpected effect' } })
   let call = 0
-  const invoke = (name: string, args: any = {}, overrides: any = {}) => ctx.tools.execute({ callId: `memory-preparation-${++call}`, name, arguments: args, agent, signal: new AbortController().signal, ...overrides })
+  const invoke = (name: string, args: any = {}, overrides: any = {}) => executeNativeTool(ctx, packages, { callId: `memory-preparation-${++call}`, name, arguments: args, agent, signal: new AbortController().signal, ...overrides })
   try {
     await intake.capture({ agent, turn: 1, step: 0, messages: [{ role: 'user', id: 'original', content: [{ type: 'text', text: 'Fix the migration expectations without unrelated edits.' }] }], signal: new AbortController().signal })
     assert.equal(f.status().ready, false)

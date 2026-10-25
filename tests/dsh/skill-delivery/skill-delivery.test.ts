@@ -1,3 +1,4 @@
+import { executeNativeTool } from '../helpers/native-tools.js'
 import { layaReply, layaV1Reply, serveLaya } from '../helpers/laya.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -26,7 +27,7 @@ const artifact = enabled ? JSON.parse(await readFile(join(packageRoot ?? process
 const content = (name: string) => artifact.resources.find((r: any) => r.id === `${name}/SKILL.md`).content as string
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
-const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
+const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check', 'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_result', 'kioku_write', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
   'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
   'lisp_inspect', 'lisp_observe', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
   'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
@@ -127,7 +128,7 @@ test('compiled Skill delivery: reload, full rollback, model switch and compacted
     await f.reload('full');f.responses.push(f.mock.textResponse('全文'));await f.turn()
     const full=await readFile(join(packageRoot??process.cwd(),'skills/kiokuko-soul/SKILL.md'),'utf8')
     assert.ok(textOf(f.model.requests.at(-1)).includes(full))
-    await f.reload('compiled');f.agent.options.model='gpt-fixture';f.responses.push(f.mock.textResponse('English'));await f.turn('Explain in English.')
+    await f.reload('compiled');f.agent.model.select({provider:f.agent.model.current().provider,model:'gpt-fixture'});f.responses.push(f.mock.textResponse('English'));await f.turn('Explain in English.')
     requireBody(f.model.requests.at(-1),'kiokuko-soul')
     const req=f.model.requests.at(-1)
     const system=req.system??req.messages.filter((m:any)=>m.role==='system').flatMap((m:any)=>m.content).map((b:any)=>b.text??'').join('\n')
@@ -293,7 +294,7 @@ test('Lisp selected during initial admission executes shared functions without s
     const release = f.agent.ctx.get('tools').register({ name: 'coding_workflow', description: 'untrusted replacement',
       parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: async () => ++replacementEffects })
     try {
-      const denied = await f.ctx.tools.execute({ agent: f.agent, name: 'coding_workflow', callId: 'replaced-control',
+      const denied = await executeNativeTool(f.ctx, packages!, { agent: f.agent, name: 'coding_workflow', callId: 'replaced-control',
         arguments: { action: 'status' }, signal: new AbortController().signal })
       assert.equal(denied.isError, true, 'same-name replacement cannot inherit the Goal-control exception')
       assert.equal(replacementEffects, 0)
@@ -379,10 +380,14 @@ test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the 
   const adapter=new provider.DeepSeekAdapter({options:()=>provider.resolveAdapterOptions({baseURL:'https://skill-delivery.invalid',thinking:'disabled',reasoningEffort:'off'}),resolveApiKey:async()=> 'fixture-key',resolveAuth:async()=>({headers:{Authorization:'Bearer fixture-key'}}),resolveUserId:()=> 'fixture-user',prepareExtensions:async()=>({fields:{},accept:async()=>{}})})
   const off=f.ctx.llm.registerAdapter(['deepseek-official'],adapter)
   try {
-    f.agent.options.provider='deepseek-official';f.agent.options.model='deepseek-v4-pro'
+    f.agent.model.select({ ...f.agent.model.current(), provider: 'deepseek-official' });f.agent.model.select({ ...f.agent.model.current(), model: 'deepseek-v4-pro' })
     await f.turn()
     assert.ok(wire.length>0)
-    const sent=wireText(wire[0])
+    // A public model change may send compaction before the ordinary request.
+    const ordinary=wire.find(body=>body.tools?.some((tool:any)=>(tool.function?.name??tool.name)==='prepare_requested_work'))
+    assert.ok(ordinary,'the selected provider must receive the actual native tool request')
+    assert.equal(ordinary.model,'deepseek-v4-pro')
+    const sent=wireText(ordinary)
     assert.ok(sent.includes(content('kiokuko-soul')))
     assert.ok(sent.includes(content('natural-japanese-output')))
     assert.equal(sent.split(content('kiokuko-soul')).length-1,1)

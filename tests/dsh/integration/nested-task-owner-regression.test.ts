@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 /** Scripted generation through the real native runtime; all workspaces are isolated. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -40,8 +41,9 @@ for (const mode of ['full-nested', 'core-nested', 'full-non-git-binding'] as con
   const errors: string[] = []
   try {
     for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [prompt.default, { persona: '' }],
-      [fsLocal.default, { cwd }], [workingDirectory.default, { defaultDirectory: cwd }], [tools.default, { mode: 'native' }],
+      [fsLocal.default, { cwd }], [workingDirectory.default, { defaultDirectory: cwd }], [tools.default],
       [agents.default], [skills.default], [loop.default, { agents: [] }], [fsTools]]) {
+      if (plugin === tools.default) { await mountNativeTools(ctx, tools, packages, fibers); continue }
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     const questions = ctx.plugin({ name: 'nested-task-owner-questions', apply(context: any) {
@@ -61,7 +63,7 @@ for (const mode of ['full-nested', 'core-nested', 'full-non-git-binding'] as con
     if (mode === 'core-nested') core = await mountCore(ctx, options)
     else { adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host) }
     const agent = await ctx.agentLoop.create(session.SessionId('nested-owner-session'), { provider: 'nested-mock', model: 'mock' }, { cwd })
-    local = scope.createScope(ctx, agent); agent.ctx = local.ctx; release = agent.ctx.get('tools').presentAs('native')
+    local = scope.createScope(ctx, agent); agent.ctx = local.ctx
     const off = ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
     try {
       agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: `Verify the marker in the exact file ${target}. Read that file only; do not modify files.\nread paths: ${cwd}\n完了条件: report the marker from this file.` }], source: { kind: 'user' } }))

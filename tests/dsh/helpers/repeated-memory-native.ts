@@ -1,3 +1,4 @@
+import { mountNativeTools } from './native-tools.js'
 import { intentFixtureDecisions } from './intent-decision-fixture.js'
 import { recordRepeatedStage } from './repeated-memory-report.js'
 import assert from 'node:assert/strict'
@@ -73,7 +74,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const memoryQuestions: {round:number;phase:'organize'|'review';proposal?:any}[] = []
   let auxiliaryHook: ((request: any) => Promise<void>) | undefined
   let activeFault: RoundFault = {}, activeSession = ''
-  for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
+  for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   ctx.llm.registerAdapter(['mock'], provider)
   const disposeApplicationVerifier = ctx.tools.register(tools.defineTool({ name: 'bash', description: 'Run only the disposable fixture regression verifier.',

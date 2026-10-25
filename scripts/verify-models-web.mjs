@@ -1,3 +1,4 @@
+import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { declineOptionalMemoryOffers, openSettings } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
@@ -314,18 +315,7 @@ try {
   // Reload persists the settings and catalog; the native default is separate.
   await page.reload();
   const conversation = page.locator('[data-conversation-content]:visible').first();
-  const previousSession = await poll(() => conversation.getAttribute('data-conversation-session'));
-  await page
-    .getByRole("button", { name: "New session", exact: true })
-    .first()
-    .click();
-  // New-session navigation can leave the previous composer mounted until the
-  // native session is ready. Sending into it loses the command during settling.
-  await poll(async () => {
-    const current = await conversation.getAttribute('data-conversation-session');
-    return current && current !== previousSession
-      && await conversation.getAttribute('data-content-phase') !== 'settling';
-  });
+  await newSessionForTest(page, conversation, poll);
   const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();
   await editor.waitFor();
   await editor.fill("/kiokuko model");

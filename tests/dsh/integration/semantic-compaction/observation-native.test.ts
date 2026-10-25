@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../../helpers/native-tools.js'
 import { collectReviewEvidence } from '../../../../src/memory/review/evidence.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,7 +36,7 @@ for (const shape of ['lines','single-line'] as const) for (const mode of ['auto'
   script.push((request: any) => {
     const text = resultText(request)
     if (mode === 'off' || shape === 'single-line') { assert.equal(text, original); return mock.toolCallResponse('evidence-write', 'write', { file_path: 'answer.txt', content: shape === 'single-line' ? original.slice(original.indexOf('中央の根拠'),original.indexOf('中央の根拠')+evidence.length) : original.slice(original.indexOf('中央の根拠')).split('\n')[0] }) }
-    assert.ok(text.startsWith(OBSERVATION_MARKER), 'the third native request must receive a packed result')
+    assert.ok(text.startsWith(OBSERVATION_MARKER), 'the third native request must receive a packed result: '+JSON.stringify({metrics:(d.service.status() as any).observationPack, compaction:(d.service.status() as any).semanticCompaction, reader:ctx.tools.schemas(agent).some((t:any)=>t.name==='observation_read')}))
     assert.ok(!text.includes('中央の根拠'))
     handle = JSON.parse(text.split('\n')[1]).handle
     offset = Array.from(original.slice(0, original.indexOf('中央の根拠'))).length
@@ -52,7 +53,7 @@ for (const shape of ['lines','single-line'] as const) for (const mode of ['auto'
   else script.push(mock.textResponse('Evidence written.'))
   class Provider extends mock.MockAdapter { override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 200000 } } } }
   const provider = new Provider(script)
-  for (const plugin of [llm, sessions, projection, prompt, workingDirectory, tools, registry, meter]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === tools ? { mode: 'native' } : undefined))
+  for (const plugin of [llm, sessions, projection, prompt, workingDirectory, tools, registry, meter]) { if (plugin === tools) await mountNativeTools(ctx, tools, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 1000 }))
   fibers.push(await ctx.plugin(fsLocal.default, { cwd: root }))
@@ -67,7 +68,6 @@ for (const shape of ['lines','single-line'] as const) for (const mode of ['auto'
   const agentHandle = await ctx.agents.create({ sessionId: sessions.SessionId('observation-native'), agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: root } })
   const agent = agentHandle.agent
   const agentScope = scope.createScope(ctx, agent); scopes.push(agentScope); agent.ctx = agentScope.ctx
-  const releaseNative = agent.ctx.get('tools').presentAs('native')
   const run = async () => {
     agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Continue.' }], source: { kind: 'user' } })); await agent.whenIdle()
     const end = agent.session.snapshotEvents().filter((e: any) => e.type === 'turn/end').at(-1)
@@ -112,5 +112,5 @@ for (const shape of ['lines','single-line'] as const) for (const mode of ['auto'
       assert.ok(!provider.requests.some((r:any)=>r.messages.some((m:any)=>m.content?.some((b:any)=>b.type==='tool-call'&&b.name==='observation_read'))))
     }
     t.diagnostic(JSON.stringify({...measured,shape}))
-  } finally { releaseNative(); coordinator.stop(); await coordinator.drain(); await agentHandle.dispose(); for (const scope of scopes.reverse()) await scope.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); await rm(root, { recursive: true, force: true }) }
+  } finally {  coordinator.stop(); await coordinator.drain(); await agentHandle.dispose(); for (const scope of scopes.reverse()) await scope.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); await rm(root, { recursive: true, force: true }) }
 })

@@ -1,3 +1,4 @@
+import { symbols } from '@deepseek-ai/cordis'
 import { requestInterpretationError, requestInterpretationRecovery } from './request-interpretation-guidance.js'
 import { collectClarificationContext, clarificationReply, reusableClarificationAnswer, type ClarificationContext } from './clarification-context.js'
 import { abortable } from './boundary-worker.js'
@@ -40,9 +41,10 @@ function parsePreparationRequest(value: unknown): PreparationRequest | undefined
 
 export interface DemandAgent { readonly ctx?: unknown; readonly id: string; cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void; followup?(message: any): unknown; readonly session?: { readonly id: string; snapshotEvents?(): readonly DshLogEvent[] } }
 export interface DemandInput { readonly agent: DemandAgent; readonly turn: number; readonly step: number; readonly messages: readonly unknown[]; readonly signal: AbortSignal }
-interface Execution { readonly agent?: DemandAgent; readonly callId: string; readonly name: string; readonly arguments: unknown; readonly signal: AbortSignal; readonly parent?: unknown }
+interface Execution { readonly agent?: DemandAgent; readonly callId: string; readonly name: string; readonly arguments: unknown; readonly signal: AbortSignal; readonly parent?: unknown; readonly token?: symbol }
 interface Definition { readonly name: string; readonly execute: (...args: any[]) => unknown }
 interface NativeTools {
+  readonly setExecutor?: unknown
   register(definition: any): () => void
   get(name: string, agent?: unknown): Definition | undefined
   guard(callback: (execution: Execution) => string | undefined): () => void
@@ -152,6 +154,7 @@ export class OnDemandIntake {
   readonly #clarificationContexts = new WeakMap<object,Map<string,ClarificationContext>>()
   readonly #clarifications = new Map<string, { agent: DemandAgent; turn: number; key: string; status: 'waiting' | 'queued'; result?: unknown; operation?: Promise<unknown> | undefined }>()
   readonly #executions = new WeakMap<object, { turn: Turn; execute: Definition['execute']; carrier?: PreparationRequest; carrierDigest?: string; skillRead?: boolean; evidenceReadDigest?: string; requestPreparation?: boolean; nativeUnownedDigest?: string; nativeCommandDigest?: string; nativeLispDigest?: string }>()
+  readonly #executorTransports = new WeakMap<object, { definition: Definition; runtime: { run: Definition['execute'] }; current: () => unknown }>()
   readonly #disposers: (() => void)[] = []
   readonly #pending = new Set<Promise<unknown>>()
   readonly #controlTools = new Map<string, Definition['execute']>()
@@ -409,7 +412,32 @@ export class OnDemandIntake {
       requestDigest: canonicalContentHash(state.task) }
   }
   private definition(execution: Execution): Definition | undefined {
-    try { return this.#tools?.get(execution.name, execution.agent) } catch { return undefined }
+    try {
+      const registered = this.#tools?.get(execution.name, execution.agent)
+      if (registered) return registered
+      const transport = this.#executorTransports.get(execution)
+      return transport && transport.current() === transport.runtime && transport.runtime.run === transport.definition.execute
+        ? transport.definition : undefined
+    } catch { return undefined }
+  }
+  /** Bind a reserved PTC transport only after its actual provider projects it.
+   * The runtime function is an identity check; dispatch still belongs to DSH.
+   * A native or missing executor cannot obtain a preparation-only carrier here. */
+  private async bindExecutorTransport(execution: Execution, context: { get?(name: string, required?: boolean): any }): Promise<void> {
+    if (execution.name !== 'run_code' || execution.parent !== undefined || typeof execution.token !== 'symbol'
+      || typeof this.#tools?.setExecutor !== 'function' || !context.get) return
+    // Cordis returns fresh contextual proxies; compare the underlying service,
+    // never invoke it outside the selected executor's dispatch.
+    const owner = execution.agent?.ctx as { get?(name: string, required?: boolean): any } | undefined
+    const services = typeof owner?.get === 'function' ? owner : context
+    const current = () => { const value = services.get!('ptcRuntime', false); return value?.[symbols.original] ?? value }
+    const runtime = current(), prompt = services.get!('systemPrompt', false)
+    if (typeof runtime?.run !== 'function' || typeof prompt?.assemble !== 'function') return
+    const projected = await prompt.assemble({ scope: execution.agent, agent: execution.agent })
+    execution.signal.throwIfAborted()
+    if (current() !== runtime || projected.tools.length !== 1 || projected.tools[0]?.name !== 'run_code'
+      || !projected.sections.some((section: { name: string }) => section.name === 'tools:sdk')) return
+    this.#executorTransports.set(execution, { definition: { name: 'run_code', execute: runtime.run }, runtime, current })
   }
   private async assess(state: Turn, decision: RequestIntentDecision | undefined): Promise<boolean> {
     if (!this.host.assess || decision?.action === 'answer' || decision?.action === 'research' || requestIntentIsUnresolved(decision)) return true
@@ -731,7 +759,7 @@ export class OnDemandIntake {
       this.host.answerContext?.retire(state.input.agent)
     }
   }
-  mount(context: { on(name: string, listener: (...args: any[]) => any, options?: { prepend: boolean }): () => void }, tools: NativeTools, systemPrompt?: { section(section: any): () => void }): void {
+  mount(context: { get?(name: string, required?: boolean): any; on(name: string, listener: (...args: any[]) => any, options?: { prepend: boolean }): () => void }, tools: NativeTools, systemPrompt?: { section(section: any): () => void }): void {
     if (!tools.get || !tools.guard || !tools.register) throw new Error('On-demand intake requires native tool identity and monotonic guards')
     this.#tools = tools
     // Preserve an already installed reader across replacement before capture.
@@ -806,6 +834,7 @@ export class OnDemandIntake {
         const decision = await next()
         return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
       }
+      await this.bindExecutorTransport(execution, context)
       const actual = this.definition(execution)
       if (!actual || typeof actual.execute !== 'function') return denied('Unknown native tool definition')
       const control = this.controlCall(execution, actual)

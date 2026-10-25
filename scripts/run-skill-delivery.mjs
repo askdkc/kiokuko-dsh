@@ -2,7 +2,7 @@ import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { execFile } from 'node:child_process'
 import { promisify, parseArgs } from 'node:util'
-import { mkdtemp, rm, access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, access, mkdir, readFile, writeFile, readdir, realpath, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { join, resolve } from 'node:path'
@@ -44,6 +44,14 @@ if(phase!=='source'){
     console.log('Skill delivery packed install started')
     await exec('npm',['install','--ignore-scripts','--omit=optional','--no-audit','--no-fund',archive],{cwd:consumer,env:{PATH:process.env.PATH,HOME:work,npm_config_cache:npmCache},timeout:180000,maxBuffer:16*1024*1024})
     console.log('Skill delivery packed install completed')
+    selectedDshRuntime(root) // Revalidate the selected source/package map after installation.
+    const peerScope = join(consumer, 'node_modules', '@deepseek-ai')
+    await rm(peerScope, { recursive: true, force: true }); await mkdir(peerScope, { recursive: true })
+    for (const name of await readdir(join(native, '@deepseek-ai'))) {
+      const source = await realpath(join(native, '@deepseek-ai', name))
+      await symlink(source, join(peerScope, name), process.platform === 'win32' ? 'junction' : 'dir')
+    }
+    await import(pathToFileURL(join(peerScope, 'dsh-tools/lib/pipeline.js')).href)
     const packageRoot=join(consumer,'node_modules','kiokuko-dsh')
     await verify(packageRoot)
   } finally { await rm(work,{recursive:true,force:true}) }

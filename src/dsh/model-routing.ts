@@ -17,11 +17,12 @@ export interface RoutableAgent {
   readonly id: string
   readonly ctx?: { on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void }
   readonly session?: DshNativeSession
+  readonly status?: string
+  readonly model?: { current(): ModelBinding | undefined; select(binding: ModelBinding): void }
+  runMaintenance?(task: (signal: AbortSignal) => Promise<void>): Promise<void>
 }
-/** Equivalent public hooks to DSH installModelSelection, with asynchronous host admission.
- * Assembly precedes agent/pre-step in 0.1.2-rc.1. Capture a detached selection
- * before next(), and reuse that exact value for every retry of this request.
- */
+/** Resolve routes before native step preparation, then retain the fixed route
+ * throughout prompt assembly, provider preparation and retries. */
 export type ModelRoutingChoice = ModelBinding | undefined | { kind: 'native' }
 export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (signal: AbortSignal) => Promise<ModelRoutingChoice>, ordinaryModel?: {
   load(): ModelBinding | undefined
@@ -34,9 +35,11 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
   let routed = false
   let captureOrdinary = false
   let previousOwner: string | undefined
-  const disposers = [
-    agent.ctx.on('system-prompt/assemble', async (_assembly: any, context: { signal?: AbortSignal }, next: () => Promise<any>) => {
-      const decision = await beforeAssembly(context.signal ?? new AbortController().signal)
+  const nativeRouting = agent.model !== undefined && typeof agent.runMaintenance === 'function'
+  const same = (a: ModelBinding, b: ModelBinding) => a.provider === b.provider && a.model === b.model && a.reasoningEffort === b.reasoningEffort
+  let routingFailure: unknown, maintenance: Promise<void> | undefined, disposed = false
+  const choose = async (signal: AbortSignal) => {
+      const decision = await beforeAssembly(signal)
       const owner = guidance?.owner?.()
       if (owner !== previousOwner) { ordinary = undefined; routed = false; captureOrdinary = false; previousOwner = owner }
       const native = decision !== undefined && 'kind' in decision && decision.kind === 'native'
@@ -48,14 +51,36 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
       assembled = selected ? Object.freeze({ ...selected }) : native ? undefined : routed ? ordinary : undefined
       routed = selected !== undefined
       if (native) { ordinary = undefined; captureOrdinary = false }
+  }
+  const prepareNative = async (signal: AbortSignal) => {
+    if (!nativeRouting || signal.aborted || disposed) return
+    routingFailure = undefined
+    await choose(signal)
+    signal.throwIfAborted()
+    if (disposed || !assembled) return
+    if (captureOrdinary) {
+      ordinary ??= agent.model!.current()
+      if (ordinary) await ordinaryModel?.save(ordinary)
+      captureOrdinary = false
+    }
+    signal.throwIfAborted()
+    if (!disposed) agent.model!.select(assembled)
+  }
+  const disposers = [
+    agent.ctx.on('system-prompt/assemble', async (_assembly: any, context: { signal?: AbortSignal; modelSelection?: ModelBinding }, next: () => Promise<any>) => {
+      if (routingFailure) throw routingFailure
+      await choose(context.signal ?? new AbortController().signal)
+      if (nativeRouting && assembled && context.modelSelection && !same(assembled, context.modelSelection)) {
+        throw new Error('Model route changed after native step preparation')
+      }
       const result = await next()
-      const prompt = await applyJapaneseOutputSkill(!assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } }, guidance?.prompts())
+      const prompt = await applyJapaneseOutputSkill(nativeRouting || !assembled ? result : { ...result, variables: { ...result.variables, provider: assembled.provider, model: assembled.model } }, guidance?.prompts())
       return await guidance?.assembled?.(prompt) ?? prompt
     }, { prepend: true }),
     agent.ctx.on('agent/request', async (_payload: unknown, next: () => Promise<any>) => {
       const resolved = await next()
       await guidance?.beforeRequest?.(assembled)
-      if (!assembled) return resolved
+      if (nativeRouting || !assembled) return resolved
       if (captureOrdinary) {
         ordinary ??= { provider: resolved.provider, model: resolved.model, ...(resolved.reasoningEffort === undefined ? {} : { reasoningEffort: resolved.reasoningEffort }) }
         await ordinaryModel?.save(ordinary)
@@ -65,7 +90,26 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
       return { ...rest, ...assembled }
     }, { prepend: true }),
   ]
-  return () => { for (const dispose of disposers.reverse()) dispose() }
+  if (nativeRouting) {
+    // Inbox insertion precedes the driver's wake. Maintenance retains native
+    // queue identity and Stop while asynchronous routing selects the next model.
+    disposers.push(agent.ctx.on('agent/inbox/inserted', ({ agent: owner }: { agent: RoutableAgent }) => {
+      if (owner !== agent || disposed || agent.status !== 'idle' || maintenance) return
+      maintenance = agent.runMaintenance!(prepareNative)
+      void maintenance.catch(error => { routingFailure = error }).finally(() => { maintenance = undefined })
+    }))
+    disposers.push(agent.ctx.on('tools/post-execute', async (execution: { agent?: object; parent?: unknown; signal: AbortSignal }, _result: unknown, next: () => Promise<unknown>) => {
+      const result = await next()
+      if (execution.agent === agent && execution.parent === undefined && !execution.signal.aborted) {
+        try { await prepareNative(execution.signal) } catch (error) { routingFailure = error }
+      }
+      return result
+    }))
+    disposers.push(agent.ctx.on('agent/turn-stopping', async ({ signal }: { signal: AbortSignal }) => {
+      try { await prepareNative(signal) } catch (error) { routingFailure = error }
+    }))
+  }
+  return () => { disposed = true; for (const dispose of disposers.reverse()) dispose() }
 }
 export function isModelAvailabilityFailure(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false

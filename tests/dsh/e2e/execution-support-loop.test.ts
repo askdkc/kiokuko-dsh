@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -38,8 +39,9 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   const ctx = new cordis.Context()
   const fibers: any[] = []
   for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [systemPrompt.default, { persona: '' }],
-    [workingDirectory.default, { defaultDirectory: root }], [fsLocal.default, { cwd: root }], [tools.default, { mode: 'native' }], [agents.default], [skills.default], [loop.default, { agents: [] }]]) {
-    const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
+    [workingDirectory.default, { defaultDirectory: root }], [fsLocal.default, { cwd: root }], [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }]]) {
+    if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot!, fibers); continue }
+      const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
   const mock = nativeMock(llm)
   const read = (id: string) => mock.toolCallResponse(id, 'read', { file_path: 'src/facts.md' })
@@ -97,7 +99,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
 
   try {
     const agent = await ctx.agentLoop.create(session.SessionId('execution-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
-    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx; releaseNative = agent.ctx.get('tools').presentAs('native')
+    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
     const snapshots = () => adapter.host.runtime!.withDatabase(db => Object.fromEntries([
       'ledger_runs', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states',
     ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['title', 'metadata_json'].includes(key))))])))
@@ -131,7 +133,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
-    otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx; releaseOtherNative = other.ctx.get('tools').presentAs('native')
+    otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx
     await settle(other, 'こんにちは', () => model.requests.length === pausedRequests + 1)
     expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')

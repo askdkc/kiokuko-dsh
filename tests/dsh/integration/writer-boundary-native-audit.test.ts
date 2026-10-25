@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {join} from 'node:path'
@@ -17,7 +18,8 @@ async function setup(){
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,questions]=mods
   const ctx=new cordis.Context(),fibers:any[]=[],asked:any[]=[],errors:any[]=[]
   for(const plugin of [llm,session,projection,systemPrompt,tools,agents,questions])fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:undefined))
-  fibers.push(await ctx.plugin(loop.default,{agents:[]}))
+  await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default,{agents:[]}))
   const mock=nativeMock(llm);let hold:any,mainCalls=0,answer:(q:any)=>any=()=>{throw Error('no answer configured')}
   class Provider extends llm.LlmAdapter{async listModels(provider:string){return[{provider,id:'mock',name:'mock'}]}async resolveModel(provider:string,id:string){return{provider,id,name:id}}async *stream(q:any){mainCalls++;if(hold)await Promise.race([hold,new Promise((_,reject)=>q.signal.addEventListener('abort',()=>reject(q.signal.reason),{once:true}))]);yield*mock.textResponse('ordinary request completed')}}
   ctx.llm.registerAdapter(['mock'],new Provider());ctx.on('agent/error',(e:any)=>errors.push(e.error),{global:true})

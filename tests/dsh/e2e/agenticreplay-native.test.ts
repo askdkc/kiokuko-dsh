@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 import { recordedRunDirectory } from '../helpers/agenticreplay-fixture.js'
 import { execFileSync } from 'node:child_process'
 import { isolateSkillHome } from '../helpers/skill-home.js'
@@ -53,6 +54,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
   try {
     for (const module of [llm, sessions, projection, tools, agents, skills, commands]) await ctx.plugin(module.default)
     await ctx.plugin(prompt.default, { persona: '' })
+    await mountNativeExecutor(ctx, packageRoot!)
     await ctx.plugin(loop.default, { agents: [] })
     const mock = nativeMock(llm)
     class AgenticReplayModel extends mock.MockAdapter {

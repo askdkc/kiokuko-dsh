@@ -1,5 +1,7 @@
 # Automatic native tool exposure
 
+On hosts where the executor supplies schemas after the prompt waterfall, Kiokuko preserves the provider's admitted tools and reports `unsupported_runtime` for presentation reduction. `phase`, `lean`, and `auto` do not claim tool or description savings on that API. Native permissions, task guards, and scoped protocol tools remain authoritative; no older runtime is selected.
+
 `toolExposure.mode` controls only which Kiokuko-owned definitions appear in native model requests. The default is `auto`. On all DSH native provider connections, normal chat, research, analysis, writing and review omit the nine Kiokuko model tools. Normal build, debug and devops use lean descriptions with the current phase and `nextAction` policy. An active Enno selection takes precedence over task type and uses that same policy. Native and external tools remain available. Configure explicitly with:
 
 ```yaml

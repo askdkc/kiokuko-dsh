@@ -32,7 +32,9 @@ export async function declineOptionalMemoryOffers(page) {
   const state = { declined: 0 }
   await page.addLocatorHandler(decline, async () => {
     await decline.click()
-    await page.keyboard.press('Enter')
+    // Submit only while the question control remains mounted; a global Enter
+    // can otherwise send a command that was already typed into the composer.
+    if (await decline.isVisible()) await decline.press('Enter')
     state.declined++
   })
   return state

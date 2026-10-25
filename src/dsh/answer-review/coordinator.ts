@@ -56,7 +56,7 @@ export class AnswerReviewCoordinator {
     const dispose = agent.ctx.on('agent/request', async (_payload: unknown, next: () => Promise<any>) => {
       const request = await next(), entry = this.entry(agent)
       if (!entry || request.purpose || typeof request.provider !== 'string' || typeof request.model !== 'string') return request
-      if (entry.state === 'consumed' && entry.model) {
+      if (entry.state === 'consumed' && entry.model && !agent.ctx?.get?.('tools', false)?.setExecutor) {
         const { reasoningEffort: _previous, ...rest } = request
         return { ...rest, ...entry.model, tools: [] }
       }
@@ -72,12 +72,12 @@ export class AnswerReviewCoordinator {
           result = { ...result, sections: [...result.sections, { name: 'kiokuko:grounding-citations', text: 'When reporting a fact from a tool result, cite its exact tool call ID using [tool-call:ID] in the same paragraph. Preserve target, revision, scope, time, numbers and negation. Do not invent IDs. If no corresponding evidence exists, state uncertainty. These citations support optional post-answer review.' }] }
         }
       }
-      return entry?.model && (entry.state === 'reserved' || entry.state === 'consumed')
+      return !agent.ctx?.get?.('tools', false)?.setExecutor && entry?.model && (entry.state === 'reserved' || entry.state === 'consumed')
         ? { ...result, tools: [], variables: { ...result.variables, provider: entry.model.provider, model: entry.model.model } } : result
     }, { prepend: true })
     const toolFence = agent.ctx.on('tools/pre-execute', (execution: { agent?: unknown }, next: () => Promise<unknown>) => {
       if (execution.agent === agent && this.entry(agent)?.state === 'consumed')
-        return { kind: 'block', feedback: [{ type: 'text', text: 'Automatic answer reconsideration must use existing original evidence. New tool execution requires a new user request.' }] }
+        return { kind: 'deny', reason: 'Automatic answer reconsideration must use existing original evidence. New tool execution requires a new user request.' }
       return next()
     }, { prepend: true })
     const input = agent.ctx.on('agent/inbox/inserted', (payload: { message: unknown }) => {

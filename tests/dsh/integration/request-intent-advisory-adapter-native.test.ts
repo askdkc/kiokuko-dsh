@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Actual native tools and full-adapter mapPreStep/gate/SQLite admission.
  * Finite-decision responses and question answers are scripted; no model accuracy,
  * external provider or deployed-host claim is made; native generation is scripted. */
@@ -71,7 +72,8 @@ for (const scenario of ['verify', 'change', 'unknown', 'scope-unknown'] as const
           : plugin === prompt ? { persona: '' } : undefined
         fibers.push(await ctx.plugin(plugin.default, config))
       }
-      fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default, { agents: [] }))
       fibers.push(await ctx.plugin({ name: 'advisory-adapter-questions', apply(context: any) {
         return context.provide('userQuestions', { async ask(request: any) {
           return { answers: request.questions.map((question: any) => ({ id: question.id,

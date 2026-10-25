@@ -3,6 +3,7 @@
  * node scripts/verify-cli-profile.mjs DSH_BIN CLI_TGZ KIOKUKO_TGZ NODE_PTY XTERM_ANCHOR [WORK_ROOT] [all|install|tui|source]
  */
 import assert from 'node:assert/strict'
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { createInputBarrier, inputWasHandled, questionWasAnswered, createQuestionSelection } from './cli-input-barrier.mjs'
 import { completeVerification } from './verification-completion.mjs'
 import { execFile } from 'node:child_process'
@@ -44,6 +45,9 @@ await writeFile(env.npm_config_userconfig, '', { mode: 0o600 })
 let sourcePackages
 const sourcePatches = []
 if (stage === 'source') {
+  const selected = selectedDshRuntime(resolve(import.meta.dirname, '..'))
+  assert.equal(dsh, await realpath(join(selected.packageRoot, '@deepseek-ai/dsh/lib/bin.js')), 'CLI source acceptance must use the selected official executable')
+  const hostAnchor = join(selected.packageRoot, '..', 'package.json')
   const cli = JSON.parse(await readFile(cliPackage, 'utf8'))
   const plugin = JSON.parse(await readFile(kiokukoPackage, 'utf8'))
   assert.equal(cli.name, '@askdkc/dsh-cli', 'source mode requires the actual CLI package manifest')
@@ -64,7 +68,7 @@ if (stage === 'source') {
   await writeFile(sourceHook, `import { registerHooks } from 'node:module';
 import { join } from 'node:path'; import { pathToFileURL } from 'node:url';
 const roots = ${JSON.stringify(sourcePackages)};
-const coreAnchor = ${JSON.stringify(dsh)};
+const coreAnchor = ${JSON.stringify(hostAnchor)};
 registerHooks({ resolve(specifier, context, nextResolve) {
   for (const [name, directory] of Object.entries(roots)) {
     if (specifier === name || specifier.startsWith(name + '/'))

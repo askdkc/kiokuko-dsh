@@ -25,7 +25,7 @@ export interface ReviewEvent { type: string; seq: number; data?: any }
 export interface ReviewAgent {
   id: string
   session: { id: string; header?: { parentSession?: unknown; origin?: string; delegationDepth?: number }; snapshotEvents(): readonly ReviewEvent[] }
-  ctx?: { on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void }
+  ctx?: { get?(name: string, required?: boolean): any; on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void }
   inbox?: { nextStep?: readonly unknown[]; nextTurn?: readonly unknown[]; remove?(id: string): boolean; append?(target: 'next-turn', message: unknown): void }
   cancel?(...args: any[]): void
   followup?(message: unknown): void

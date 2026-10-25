@@ -69,6 +69,14 @@ async function isolatedDependencies(packageRoot, dependencies) {
   for (const name of Object.keys(dependencies)) await copyDependency(name, root, packageRoot)
   return Object.fromEntries(copied)
 }
+/** The selected DSH host supplies this optional peer when the Lisp adapter is loaded. */
+async function hostToolPeer(consumer, manifest) {
+  const name='@deepseek-ai/dsh-tools'
+  if (!manifest.peerDependencies?.[name]) return {}
+  const installed=await installedPackage(name,root)
+  assert.equal(installed.directory,await realpath(join(nativeRoot,name)), 'module consumer must use the selected official host peer')
+  return isolatedDependencies(consumer,{[name]:manifest.peerDependencies[name]})
+}
 try {
   const staged = join(work, 'staged'), report = await stageModules(staged)
   const packed = {}
@@ -99,11 +107,12 @@ try {
     const composed = await pack(consumer, join(work, `configured-${combination}`))
     const microJudge=await verifyMicroJudge(composed.directory)
     if (configuration.includes('lisp')) {
+      assert.ok(manifest.peerDependencies?.['@deepseek-ai/dsh-tools'],'Lisp artifact must declare its lazy host tool peer')
       for (const path of ['docs/typesafe.md', 'PERMISSIONS.md', 'scripts/smoke-typesafe.mjs', 'dist/dsh/typesafe/client.js']) assert.ok(composed.files.some(file => file.path === path), `Missing TypeSafe module asset: ${path}`)
       assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('TypeSafe')))
     }
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
-    const resolvedDependencies = await isolatedDependencies(consumer, dependencies)
+    const resolvedDependencies = { ...await isolatedDependencies(consumer, dependencies), ...await hostToolPeer(consumer,manifest) }
     // Type consumers need declaration-only imports too. Node types are validation tooling.
     await isolatedDependencies(consumer, { '@types/node': '*' })
     await writeFile(join(consumer, 'consumer.mts'), "import { createConfiguredPlugin, DshModules } from 'kiokuko-dsh/core'\nconst plugin = createConfiguredPlugin([])\nvoid plugin.Config.parse({})\nvoid new DshModules([], [])\n")
@@ -132,7 +141,7 @@ try {
   for (const [combination, consumer] of baselines) {
     const manifest = JSON.parse(await readFile(join(consumer, 'package.json'), 'utf8'))
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
-    const resolvedDependencies = await isolatedDependencies(consumer, dependencies)
+    const resolvedDependencies = { ...await isolatedDependencies(consumer, dependencies), ...await hostToolPeer(consumer,manifest) }
     const microJudge=combination==='full'?await verifyMicroJudge(consumer):undefined
     const defaultIntake = combination === 'full' ? await verifyDefault(consumer, combination) : undefined
     const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)

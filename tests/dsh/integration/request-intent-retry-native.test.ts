@@ -1,3 +1,4 @@
+import { mountNativeTools, mountToolExecutor, executeNativeTool } from '../helpers/native-tools.js'
 /** Real native and PTC dispatch plus DecisionService fallback. Host admission is a
  * dependency double: this proves intake identity/permission boundaries, not model judgment. */
 import assert from 'node:assert/strict'
@@ -51,7 +52,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
         runtime.run = function (...args: any[]) { runtimePrograms++; return original.apply(this, args) }
         restoreRuntime = () => { runtime.run = original }
       }
-      fibers.push(await ctx.plugin(tools.default, { mode }))
+      await mountToolExecutor(ctx, tools, packages, mode, fibers)
       const session = sessions.Session.create(sessions.SessionId('intent-retry'), [],
         { version: 4, id: 'intent-retry', createdAt: 1, isSeeded: false, cwd: root })
       const agent = { id: 'intent-retry-agent', session, ctx }
@@ -79,7 +80,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
       const guidance = JSON.stringify(await intake.answerMessages(input, messages))
       const refs = requestIntentReferenceIds(context)
       const name = mode === 'ptc' ? 'run_code' : TASK_PREPARE_TOOL
-      const invoke = (args: unknown, overrides: Record<string, unknown> = {}) => ctx.tools.execute({
+      const invoke = (args: unknown, overrides: Record<string, unknown> = {}) => executeNativeTool(ctx, packages, {
         callId: `intent-${++calls}`, name, arguments: mode === 'ptc'
           ? { description: 'Prepare requested work only', code: `return await tools.prepare_requested_work(${JSON.stringify(args)})` } : args,
         agent, signal: signal(), ...overrides,
@@ -128,7 +129,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
       assert.equal((await invoke(request('new'), { callId: 'corrected' })).isError, true, 'same call identity cannot replay preparation')
       const denyWork = ctx.tools.guard(() => 'native execution denial remains authoritative')
       try {
-        const denied = await ctx.tools.execute({ callId: 'forbidden-work', name: mode === 'ptc' ? 'run_code' : 'effect_probe',
+        const denied = await executeNativeTool(ctx, packages, { callId: 'forbidden-work', name: mode === 'ptc' ? 'run_code' : 'effect_probe',
           arguments: mode === 'ptc' ? { description: 'Attempt work', code: 'return await tools.effect_probe({})' } : {}, agent, signal: signal() })
         assert.equal(denied.isError, true)
       } finally { denyWork(); releaseProbe() }
@@ -153,13 +154,13 @@ test('KDSH-REVIEW-GATE-RECOVERY-001: actual PTC preparation carrier reports unre
       fibers.push(await ctx.plugin(plugin.default,config))
     }
     ctx.get('ptcRuntime',false).run=()=>assert.fail('the preparation-only carrier must not evaluate a program')
-    fibers.push(await ctx.plugin(tools.default,{mode:'ptc'}))
+    await mountToolExecutor(ctx, tools, packages, 'ptc', fibers)
     const session=sessions.Session.create(sessions.SessionId('review-guidance-ptc'),[],{version:4,id:'review-guidance-ptc',createdAt:1,isSeeded:false,cwd:root})
     const agent={id:'review-guidance-agent',session,ctx},messages=[{id:'current-review',role:'user',source:{kind:'user'},content:[{type:'text',text:'Review src/parser.ts without changing files.'}]}]
     const task=messages[0]!.content[0]!.text,context=createRequestIntentContext({task,messageRefs:requestIntentMessageRefs(messages,task)})!
     intake=new OnDemandIntake({validate:async()=>{},existing:async()=>false,classify:async()=>({deferInference:true}),interpret:async()=>({context,decision:unresolvedRequestIntent(context,'decision_service_disabled')}),prepare:async()=>{admissions++;ready=true;return true},ready:candidate=>candidate===agent&&ready})
     intake.mount(ctx,ctx.tools);await intake.capture({agent,turn:1,step:0,messages,signal:signal()})
-    const receipt=await ctx.tools.execute({name:'run_code',callId:'carrier',arguments:{description:'Prepare requested work only',code:'return await tools.prepare_requested_work({"taskType":"review"})'},agent,signal:signal()})
+    const receipt=await executeNativeTool(ctx, packages, {name:'run_code',callId:'carrier',arguments:{description:'Prepare requested work only',code:'return await tools.prepare_requested_work({"taskType":"review"})'},agent,signal:signal()})
     assert.equal(receipt.isError,false,text(receipt))
     assert.equal(receipt.value.result.programExecuted,false)
     assert.equal(receipt.value.result.requestInterpretation.state,'required')

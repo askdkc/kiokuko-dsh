@@ -3,6 +3,10 @@ import type { DeepNativeAgent } from './native-executor.js'
 
 /** Read the exact Session's UI selection before falling back to creation options. */
 export function currentDeepModel(agent: DeepNativeAgent): DeepModel | undefined {
+  if (agent.model) {
+    const selected = DeepModelSchema.safeParse(agent.model.current())
+    return selected.success ? selected.data : undefined
+  }
   const context = agent.ctx as { get?(name: string, strict: boolean): any } | undefined
   const projection = agent.session && context?.get?.('sessionProjections', false)?.stateOf(agent.session, 'modelSelection')
   let candidate: unknown = agent.options

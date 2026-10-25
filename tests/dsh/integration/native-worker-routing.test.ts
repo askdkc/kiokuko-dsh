@@ -128,7 +128,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     let parentRequests = 0
     class ScriptedAdapter extends llm.LlmAdapter {
       async listModels(provider: string) { const id = provider === 'head' ? 'gpt-6.1-sol' : provider === 'worker' ? 'deepseek-flash' : 'mock'; return [{ provider, id, name: id }] }
-      async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } } }
+      async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 131072 }, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } } }
       async *stream(options: any) {
         requests.push(options)
         const child = options.sessionId !== 'standard-parent'
@@ -218,7 +218,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       } finally { releaseChildren?.(); releaseSecondChild?.() }
     }
     await parent.agent.whenIdle()
-    await waitBounded(childrenFinished, 'Continuable children did not settle')
+    await waitBounded(childrenFinished, 'Continuable children did not settle: ' + JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => ['agent/error','turn/end','tool/result'].includes(event.type)).map((event: any) => event.data)))
     assert.ok(requests.some(request => request.sessionId !== 'standard-parent'),
       `real child LLM request must occur: ${JSON.stringify({ requests: requests.map(request => ({ sessionId: request.sessionId, tools: request.tools?.map((tool: any) => tool.name) })), questions: questions.map(request => request.questions?.map((question: any) => ({ id: question.id, options: question.options?.map((option: any) => option.label) }))), events: parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result' || event.type === 'tool/call').map((event: any) => event.data) })}`)
     const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')

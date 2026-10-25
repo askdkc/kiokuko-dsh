@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
@@ -6,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import test from 'node:test'
+test.beforeEach(t => console.log('Deep native case:', t.name))
 import { initializeDatabase } from '../../../src/dsh/database.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
@@ -48,14 +50,14 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
   ])
   provider.listModels = async (id: string) => [{ provider: id, id: 'mock', name: 'Mock' }]
   const ctx = new cordis.Context()
-  for (const plugin of [llm, session, projection, systemPrompt, workingDirectory, fsLocal, tools, agents, skills, subagents, commands]) await ctx.plugin(plugin.default,
-    plugin === systemPrompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === fsLocal ? { cwd: root } : plugin === tools ? { mode: 'native' } : undefined)
+  for (const plugin of [llm, session, projection, systemPrompt, workingDirectory, fsLocal, tools, agents, skills, subagents, commands]) { if (plugin === tools) await mountNativeTools(ctx, tools, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, []); else await ctx.plugin(plugin.default,
+    plugin === systemPrompt ? { persona: '' } : plugin === workingDirectory ? { defaultDirectory: root } : plugin === fsLocal ? { cwd: root } : undefined) }
   await ctx.plugin(loop.default, { agents: [] }); await ctx.plugin(spawn, { providerName: 'spawn' })
   ctx.llm.registerAdapter(['mock'], provider)
   const adapter = createDshHostAdapter(ctx, {  repositoryRoot: root, databasePath, modelRoutes: [{ provider: 'mock', family: 'other', connection: 'api', protocol: 'chat-completions' }], agenticReplay: { enabled: false }, deepPlanning: { budget: { maxConcurrentAgents: 1 } } })
   const composition = await mountDshComposition(ctx, adapter.host)
   const parent = await ctx.agentLoop.create(session.SessionId('deep-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
-  const parentScope = scope.createScope(ctx, parent); parent.ctx = parentScope.ctx; const releaseNative = parent.ctx.get('tools').presentAs('native')
+  const parentScope = scope.createScope(ctx, parent); parent.ctx = parentScope.ctx
   try {
     const task = 'Design a read-only analysis stage.\nPreserve this code: `const x = 1`.'
     const executed = await ctx.commands.execute(parent, armed ? '/deep-planning' : `/deep-planning ${task}`, [], new AbortController().signal)
@@ -81,7 +83,7 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
     assert.ok((await adapter.host.deepPlanning!.reports.snapshot(parent.session.id)).some(e => e.kind === 'report' && e.text.includes('read-only analysis stage')))
     assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT count(*) AS count FROM enno_contracts').get<{count:number}>()!.count), 0)
   } finally {
-    composition.stopIngress(); releaseNative(); await adapter.dispose(); await composition.dispose(); await parentScope.dispose()
+    composition.stopIngress();  await adapter.dispose(); await composition.dispose(); await parentScope.dispose()
     await rm(root, { recursive: true, force: true }); await rm(data, { recursive: true, force: true })
   }
 })
@@ -113,7 +115,7 @@ for (const [providerId, modelId] of [['openrouter', 'deepseek/deepseek-v4.1-flas
     const unregister = f.registerAdapter([providerId], selected)
     try {
       // The parent model is absent: all four roles must be explicitly selected.
-      f.parent.options.provider = 'unregistered-parent'
+      f.parent.model.select({ ...f.parent.model.current(), provider: 'unregistered-parent' })
       const first = await f.command('/deep-planning --configure')
       assert.equal(first.result.kind, 'success', JSON.stringify(first))
       assert.equal(await f.deep.configuration.resolve('deep-cases', f.parent), null, 'closing saves only a draft')
@@ -183,7 +185,7 @@ for (const outcome of ['success', 'unknown-provider', 'missing-model', 'connecti
     const unregister = f.registerAdapter([providerId], selected)
     try {
       assert.equal(f.ctx.llm.listModelsForDisplay, undefined, 'exercise the real incomplete native inventory seam')
-      f.parent.options.provider = 'unregistered-parent'
+      f.parent.model.select({ ...f.parent.model.current(), provider: 'unregistered-parent' })
       const configured = await f.command('/deep-planning --configure')
       assert.equal(configured.result.kind, 'success', JSON.stringify(configured))
       const saved = await f.deep.configuration.resolve('deep-cases', f.parent)
@@ -211,7 +213,7 @@ test('Deep native: Japanese Skill reaches all OSS workers without tool access an
     mock.textResponse('{"kind":"supported","requirementIds":["request"],"reason":"質問に回答している","evidence":[]}'),
 
   ])
-  f.parent.options.model='qwen3-coder'
+  f.parent.model.select({ ...f.parent.model.current(), model: 'qwen3-coder' })
   f.provider.listModels=async(provider:string)=>[{provider,id:'qwen3-coder',name:'Qwen'}]
   try {
     await f.command('/deep-planning 設定の確認手順を日本語でまとめてください。')
@@ -279,11 +281,9 @@ test('Deep native: authenticated report transport is Session-bound and leaves na
   } finally {await unmountExport();unmountReport();await fiber.dispose();await fixture.close()}
 })
 test('Deep native: Web model selection overrides initial Agent options before any parent request', nativeOptions, async () => {
-  const fixture = await deepNativeFixture(() => [], { budget: { maxTotalTokens: 0 } })
+  const fixture = await deepNativeFixture(() => [], { initialModel: {provider:'unavailable-initial-provider',model:'mock'}, budget: { maxTotalTokens: 0 } })
   try {
-    const projection = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-api-session-controller/lib/types/model-selection-projection.js')).href)
-    projection.installModelSelectionProjection(fixture.ctx)
-    fixture.parent.options.provider = 'unavailable-initial-provider'
+    assert.equal(fixture.parent.options.provider,'unavailable-initial-provider')
     fixture.parent.session.append('model/selection', { provider: 'mock', model: 'mock' })
     assert.equal((await fixture.command('/deep-planning Use the selected Web model')).result.kind, 'success')
     const intent = await fixture.complete()

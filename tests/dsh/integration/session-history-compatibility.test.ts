@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 import { scheduleLegacyFinalizer } from '../helpers/legacy-finalizer.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
@@ -180,6 +181,7 @@ test('native Enno cancellation persists a hook cause and reopens without repair'
       await fiber
       f.disposers.push(() => fiber.dispose())
     }
+    const executorFibers:any[]=[];await mountNativeExecutor(f.ctx, packageRoot, executorFibers);f.disposers.push(async()=>{for(const fiber of executorFibers.reverse())await fiber.dispose()})
     const mock = nativeMock(llm)
     const adapter = new mock.MockAdapter([mock.textResponse('Finished fixture response.')])
     f.ctx.llm.registerAdapter(['mock'], adapter)

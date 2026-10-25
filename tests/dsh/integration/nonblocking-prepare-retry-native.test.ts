@@ -1,3 +1,4 @@
+import { executeNativeTool, mountNativeTools } from '../helpers/native-tools.js'
 /** Real published DSH tool registry and local Bash implementation. Only host
  * admission is doubled so one recoverable preparation error is deterministic. */
 import assert from 'node:assert/strict'
@@ -25,7 +26,8 @@ for (const mode of ['automatic', 'retry', 'unowned', 'authority-unavailable', 'a
       const config = name === 'dsh-fs-local' || name === 'dsh-bash-local' ? { cwd: root }
         : name === 'dsh-working-directory' ? { defaultDirectory: root }
           : name === 'dsh-shell-env' ? { dshHome: root } : {}
-      fibers.push(await ctx.plugin(plugin.default ?? plugin, config))
+      if (name === 'dsh-tools') await mountNativeTools(ctx, plugin, packages, fibers)
+      else fibers.push(await ctx.plugin(plugin.default ?? plugin, config))
     }
     const session = sessions.Session.create(sessions.SessionId('nonblocking-retry'), [], { version: 4, id: 'nonblocking-retry', createdAt: 1, isSeeded: false, cwd: root })
     const agent = { id: 'nonblocking-agent', session, ctx }
@@ -50,7 +52,7 @@ for (const mode of ['automatic', 'retry', 'unowned', 'authority-unavailable', 'a
     intake.mount(ctx, ctx.tools)
     const humanStop = new AbortController()
     await assert.doesNotReject(intake.capture({ agent, turn: 1, step: 0, messages, signal: humanStop.signal }), 'optional memory preparation is not execution authority')
-    const execute = (name: string, args: object) => ctx.tools.execute({ callId: `nonblocking-${++calls}`, name, arguments: args, agent, signal: signal() })
+    const execute = (name: string, args: object) => executeNativeTool(ctx, packages, { callId: `nonblocking-${++calls}`, name, arguments: args, agent, signal: signal() })
     const command = { command: 'printf NATIVE_BASH_REACHED', description: 'Inspect fixed harmless command output' }
     if (retry) {
       const failed = await execute(TASK_PREPARE_TOOL, { requestIntent: { ...requestIntent, relation: 'new' } })

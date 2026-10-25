@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { realpathSync } from 'node:fs'
@@ -25,7 +26,8 @@ for (const [layaMode, parentSession] of [[undefined, undefined], ['off', undefin
   }
   const adapter = new ReasoningAdapter([mock.textResponse('Goal, accepted constraints, completed work and next action.'), mock.textResponse('Continuing the task.')], ['old', 'new'])
   for (const plugin of [llm, sessions, projection, prompt, tools, registry, meter]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined))
-  fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+  await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin(compaction.default, { auto: false }))
   ctx.llm.registerAdapter(['mock'], adapter)
   const d = decisions({ ...(layaMode ? { decisionConfig: TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { model: 'aac6fef/laya-multilingual-coreml', runtimeFingerprint: `sha256:${'a'.repeat(64)}`, compaction: { mode: layaMode } } }), preflight: async () => {} } : {}), evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture',

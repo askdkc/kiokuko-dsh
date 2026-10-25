@@ -1,3 +1,4 @@
+import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import {completeVerification} from './verification-completion.mjs';
 // Packed plugin + published DSH Web + Chromium. Only model generation is scripted.
@@ -104,9 +105,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   await welcome.or(credentials).first().waitFor();if(await welcome.isVisible())await welcome.click()
   const conversation = page.locator('[data-conversation-content]:visible').first()
   const newSession = async()=>{
-    const old = await poll(()=>conversation.getAttribute('data-conversation-session'))
-    await page.getByRole('button',{name:'New session',exact:true}).first().click()
-    await poll(async()=>{const id=await conversation.getAttribute('data-conversation-session');return id&&id!==old&&await conversation.getAttribute('data-content-phase')!=='settling'})
+    await newSessionForTest(page, conversation, poll)
   }
   const records=async()=>(await readFile(receipts,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
   const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click()}

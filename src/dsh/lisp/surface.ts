@@ -328,11 +328,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     ? 'Explicit protected compatibility mode uses its existing sandbox and approval policy. Native development tools remain independently available. '+(approvalPolicy.mode()==='auto'?'Do not ask permission to submit, resubmit, run verification or apply changes already covered by auto policy.':'') : approvalPolicy.mode() === 'auto'
     ? 'Routine Lisp/project development is authorized. Source/data deletion and durable user DB mutation still require concrete confirmation. Cancellation, refusal and unknown outcomes remain authoritative.'
     : 'Routine Lisp/project development and verification are authorized without a dialog. Source/data deletion and durable user DB mutation require concrete confirmation. This legacy setting does not restrict ordinary tools.')
+  const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   // Native DSH assembles prompts BEFORE agent/pre-step. Register a live provider
   // now so activation, restored sessions and the next step see the current mode.
   const policyPrompt = ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
   if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp-approval', order: -89999,
     text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id) ? approvalText() : '' }))
+  // Keep enabled-mode guidance available even when a completed Goal releases
+  // its scoped registrations before a new request is admitted. No authority or
+  // process recovery is granted by this prompt provider.
+  if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp', order: -90000,
+    text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id) ? guide : '' }))
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
   const boundAgents = new Map<string, Agent>()
@@ -480,7 +486,6 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!policyPrompt) local.push(prompt.section({ name: 'kiokuko:lisp-approval', order: -89999, text: approvalText }))
     }
   }
-  const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   const modeOnly = <T>(binding: ReturnType<typeof owner>, run: () => Promise<T>): Promise<T> => {
     const agentContext = binding.agent.ctx
     return manager.taskAuthority.run(binding.owner, run, {

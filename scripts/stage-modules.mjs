@@ -68,6 +68,12 @@ export async function stageModules(output) {
   if ((await readdir(output)).length) throw new Error(`Staging requires an empty directory: ${output}`)
   const graphs = Object.fromEntries(await Promise.all(Object.entries(entries).map(async ([name, entry]) => [name, await graph(entry, name)])))
   for (const file of graphs.core.files) if (forbiddenCore(file)) throw new Error(`Core imports optional implementation: ${file}`)
+  // The Lisp dispatch adapter deliberately imports its optional host peer
+  // lazily, using a computed specifier. esbuild cannot infer that dependency.
+  // Keep it in the Lisp artifact; the memory-only core needs no tool pipeline.
+  assert.ok(graphs.lisp.files.has('dist/dsh/lisp/host-tool-dispatch.js'))
+  assert.ok(manifest.peerDependencies['@deepseek-ai/dsh-tools'])
+  graphs.lisp.dependencies.add('@deepseek-ai/dsh-tools')
   // guardrail/manifest.json pins each copied precompiled target; this is read-only verification.
   const guardrailIndex = JSON.parse(await readFile(join(root, 'guardrail/manifest.json'), 'utf8'))
   for (const asset of Object.values(guardrailIndex.targets)) resolveGuardrail(root, { platform: asset.platform, arch: asset.arch })

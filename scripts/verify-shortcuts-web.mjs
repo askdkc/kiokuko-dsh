@@ -1,3 +1,4 @@
+import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
@@ -95,12 +96,7 @@ export async function apply(ctx) {
     if (!reuse) await welcome.waitFor()
     if (await welcome.isVisible()) await welcome.click()
     const conversation = page.locator('[data-conversation-content]:visible').first()
-    const previous = await poll(() => conversation.getAttribute('data-conversation-session'))
-    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-    await poll(async () => {
-      const current = await conversation.getAttribute('data-conversation-session')
-      return current && current !== previous && await conversation.getAttribute('data-content-phase') !== 'settling'
-    })
+    await newSessionForTest(page, conversation, poll)
     const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
     const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click() }
     await editor.waitFor()

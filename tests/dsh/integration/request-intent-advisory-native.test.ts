@@ -1,3 +1,4 @@
+import { mountNativeTools, mountToolExecutor, executeNativeTool } from '../helpers/native-tools.js'
 /** Real native/PTC dispatch, DecisionService validation and SQLite CoreTasks admission.
  * Decision answers, Skill inventory and intake answers are deterministic doubles;
  * this does not exercise a paid model, the full plugin startup, or a deployed host. */
@@ -81,7 +82,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['verify', '
         ptc.run = function (...args: any[]) { runtimePrograms++; return original.apply(this, args) }
         restoreRuntime = () => { ptc.run = original }
       }
-      fibers.push(await ctx.plugin(tools.default, { mode }))
+      await mountToolExecutor(ctx, tools, packages, mode, fibers)
       const session = sessions.Session.create(sessions.SessionId('intent-advisory'), [],
         { version: 4, id: 'intent-advisory', createdAt: 1, isSeeded: false, cwd: root })
       const agent = { id: 'intent-advisory-agent', session, ctx, status: 'idle', async whenIdle() {} }
@@ -124,7 +125,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['verify', '
       assert.equal(initial.requestIntent?.unresolvedReason, action === 'unknown' ? 'provider_abstained_or_uncertain' : 'task_operation_unresolved')
       assert.equal(initial.requestIntent?.taskOperation, undefined); assert.equal(providerCalls, 1)
       const name = mode === 'ptc' ? 'run_code' : TASK_PREPARE_TOOL
-      const invoke = (args: unknown) => ctx.tools.execute({ callId: `advisory-${++calls}`, name,
+      const invoke = (args: unknown) => executeNativeTool(ctx, packages, { callId: `advisory-${++calls}`, name,
         arguments: mode === 'ptc' ? { description: 'Prepare original request only',
           code: `return await tools.prepare_requested_work(${JSON.stringify(args)})` } : args, agent, signal: signal() })
       const guidanceMessages = await intake.answerMessages(input, messages)
@@ -192,7 +193,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['verify', '
       assert.equal(await runtime.withDatabase(db => db.prepare('SELECT count(*) n FROM ledger_runs').get()!.n), 1)
       const denyWork = ctx.tools.guard(() => 'native execution denial remains authoritative')
       try {
-        const denied = await ctx.tools.execute({ callId: 'forbidden-work', name: mode === 'ptc' ? 'run_code' : 'effect_probe',
+        const denied = await executeNativeTool(ctx, packages, { callId: 'forbidden-work', name: mode === 'ptc' ? 'run_code' : 'effect_probe',
           arguments: mode === 'ptc' ? { description: 'Attempt work', code: 'return await tools.effect_probe({})' } : {}, agent, signal: signal() })
         assert.equal(denied.isError, true)
       } finally { denyWork(); releaseProbe() }

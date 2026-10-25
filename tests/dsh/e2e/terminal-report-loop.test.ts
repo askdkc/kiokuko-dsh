@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -85,6 +86,7 @@ test('a terminal Enno tool result stays in the native turn until a visible assis
     await use(tools.default)
     await use(agentRegistry.default)
     await use(skills.default)
+    await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     await use(agentLoop.default, { agents: [] })
 
     const adapter = new TerminalAdapter()

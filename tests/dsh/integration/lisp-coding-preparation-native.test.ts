@@ -72,15 +72,17 @@ test('ordinary optional prototype failures stay unverified without installing a 
 
 test('manual ON survives same-session reload and a new coding request starts unverified without another question',{timeout:120000},async()=>{
  let questions=0
- const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async()=>{questions++;throw new Error('manual ON must remain selected after reload')}})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('coding-lisp-') || q.questions[0].id.startsWith('lisp-early-')){questions++;throw new Error('manual ON must remain selected after reload')}return {answers:[{id:q.questions[0].id,selected:['通常実行']}]}}})
  try{
  const enabled=(await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result;assert.equal(enabled.kind,'success',enabled.text)
  await f.reload('compiled')
- f.responses.push((q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/selected/u);return f.mock.textResponse('The prototype has not run; implementation remains pending.')})
+ assert.equal(await f.agent.ctx.get('kiokukoLispCoding').manualSelected(f.agent),true)
+ // Reload preserves the choice but does not replay or silently recover a Lisp process.
+ assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/RECOVERY_REQUIRED/u)
+ f.responses.push(...codingPrelude(f.mock,'reload'),(q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/selected/u);return f.mock.textResponse('The prototype has not run; implementation remains pending.')})
  await f.turn('src/new.ts に関数を実装して。')
  const status=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
- assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'selected');assert.equal(status.codingPreparation.attempts,0)
- assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/先行試作は任意/u)
+ assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'prototype_required');assert.equal(status.codingPreparation.attempts,0)
  }finally{await f.close()}
 })
 

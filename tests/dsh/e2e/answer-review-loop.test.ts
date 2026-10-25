@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -11,7 +12,7 @@ import { mountCore } from '../../../src/dsh/core/host.js'
 import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { openConnection } from '../../../src/db/connection.js'
-import { nativeMock } from '../helpers/native-mock.js'
+import { nativeMock, nativeToolResults } from '../helpers/native-mock.js'
 import { serveLaya, layaV1Reply } from '../helpers/laya.js'
 
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT
@@ -49,6 +50,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
   })})
   try {
     for (const [plugin, config] of [[llm.default],[session.default],[projection.default],[prompt.default,{persona:''}],[tools.default],[agents.default],[skills.default],[loop.default,{agents:[]}]]) {
+      if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot!, fibers); continue }
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
     const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => {
@@ -84,7 +86,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       } finally { check.close() }
       return mock.toolCallResponse(number===1?'check':'check-followup','verify_sum',{})
     }
-    let expectedRequests = newRequest ? 5 : correction ? 4 : 3
+    let expectedRequests = newRequest ? 5 : correction ? (scenario==='paired-candidate'?5:4) : 3
     const script: any[] = [
       (request: any) => {
         const check = openConnection(databasePath)
@@ -105,9 +107,9 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
         const runs = check.prepare('SELECT status FROM ledger_runs').all()
         admitted = runs.length===2
         assert.equal(runs.length,admitted?2:1)
-        const retained = host==='full' && scenario!=='claimed-superseded'
+        const retained = false
         assert.equal(runs.filter(run=>run.status==='active').length,admitted || retained ? 1 : 0,
-          'queued full-host work retains its owner until preparation; completed and core turns retire it first')
+          'native pre-step preparation retires the superseded execution owner')
       } finally { check.close() }
       // Cancellation may leave the old execution owner in place until the
       // existing-owner admission path retires it and admits the new request.
@@ -118,7 +120,15 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       script.unshift(verifyWork(2))
       return interpretedPreparation(mock,'prepare-2','new','research','research')(request)
     },mock.textResponse('The checked sum is four.'))
-    else if(correction) script.push(mock.textResponse('Correction: the answer is four.'))
+    else if(correction) {
+      if(scenario==='paired-candidate') script.push(mock.toolCallResponse('forbidden-correction','verify_sum',{}), (request:any)=>{
+        const denied=nativeToolResults(request.messages).find((message:any)=>message.toolCallId==='forbidden-correction')
+        assert.equal(denied?.isError,true,'automatic correction cannot execute a new tool')
+        assert.equal(toolCalls,1,'denied correction produces no effect')
+        return mock.textResponse('Correction: the answer is four.')
+      })
+      else script.push(mock.textResponse('Correction: the answer is four.'))
+    }
     const model = new mock.MockAdapter(script)
     ctx.llm.registerAdapter(['ordinary'],model)
     // This fixture only returns a constant observation; mark its native effect contract read-only.
@@ -167,7 +177,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       assert.equal(toolCalls,newRequest?2:1,'only independently requested work executes tools: '+JSON.stringify(agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result').map((event:any)=>event.data)))
       if(scenario==='finding' || scenario==='tool-evidence') assert.match(JSON.stringify(model.requests.at(-1).messages),/unverified suggestions/)
       if(newRequest) for(const request of model.requests.slice(3)) assert.doesNotMatch(JSON.stringify(request.messages),/unverified suggestions/)
-      if(paired) { assert.equal(toolCalls,1); if(scenario==='paired-candidate') assert.deepEqual(model.requests.at(-1).tools,[]) }
+      if(paired) { assert.equal(toolCalls,1); if(scenario==='paired-candidate') assert.ok(model.requests.at(-1).tools.some((tool:any)=>tool.name==='verify_sum'), 'provider owns the fixed native schema; the host execution fence denies effects') }
       if(scenario!=='off') assert.equal(reviewInputs[0].task,originalRequest,'review retains the original tool-backed request')
       if(newRequest) assert.equal(reviewInputs[1].task,followupRequest,'superseding work gets its own review scope')
       if(scenario==='tool-evidence') assert.match(JSON.stringify(reviewInputs[0].evidence),/Verified sum: four/)

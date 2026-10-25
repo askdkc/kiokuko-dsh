@@ -68,7 +68,9 @@ export class SemanticCompactionCoordinator {
     if (current) { if (authority) current.authority = authority; return }
     if (agent.session && inspectable(agent.session) && !this.progress.has(agent.session)) this.progress.set(agent.session, new SessionProgress(agent.session))
     const registration: Registration = { ...(authority ? { authority } : {}), dispose: () => {} }
-    const disposeAssembly = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
+    let nativeAssembly: any
+    const disposeAssembly = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, context: any, next: () => Promise<any>) => {
+      if (context?.agent === agent && context.toolSet) nativeAssembly = context
       const assembly = await next()
       this.recordRoute(agent, assembly.variables ?? {})
       if (!this.deferredToolSurfaces.has(agent)) this.recordTools(agent, assembly.tools)
@@ -76,6 +78,17 @@ export class SemanticCompactionCoordinator {
     }, { prepend: true })
     const disposeStep = agent.ctx.on('agent/pre-step', async (step: Step, next: () => Promise<unknown>) => {
       if (step.agent !== agent || this.lifetime.signal.aborted) return next()
+      // Current DSH attaches executor schemas after the assembly waterfall.
+      // Read the public assembler's completed result with the SAME admitted
+      // step/tool set; never infer presentation from registry names or replace it.
+      if (!step.signal.aborted && this.supported() && nativeAssembly?.signal === step.signal) {
+        const prompt = this.ctx.get('systemPrompt', false)
+        if (typeof prompt?.assemble === 'function') {
+          const presented = await prompt.assemble(nativeAssembly)
+          step.signal.throwIfAborted()
+          this.recordTools(agent, presented.tools)
+        }
+      }
       const operation = this.run(step, registration.authority).then(async () => {
         // A classifier await may outlive a tool-surface/permission change.
         if (agent.session && this.requiresRestoration(agent, agent.session)) await this.run(step, registration.authority, true)

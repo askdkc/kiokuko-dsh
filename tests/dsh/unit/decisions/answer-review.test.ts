@@ -218,7 +218,7 @@ for (const mode of ['shadow','candidate'] as const) test(`paired ${mode} shares 
     assert.deepEqual(request.tools,[])
     let effects=0
     const blocked=await f.listeners.get('tools/pre-execute')!({agent:f.agent},async()=>{effects++;return {kind:'allow'}})
-    assert.equal(blocked.kind,'block');assert.equal(effects,0)
+    assert.equal(blocked.kind,'deny');assert.equal(effects,0)
     assert.equal(f.coordinator.hold(f.agent),false)
     assert.match(JSON.stringify(f.sent),/tool result 2/)
   }

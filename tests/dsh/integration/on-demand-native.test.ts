@@ -1,3 +1,4 @@
+import { executeNativeTool, mountToolExecutor } from '../helpers/native-tools.js'
 /** Real published DSH loop tests. Generation is scripted, never evidence of model intent quality. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -96,7 +97,8 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-working-directory', { defaultDirectory: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
     }
     for (const [plugin, config] of [[llm.default], [session.default], [projections.default], [prompt.default, { persona: '' }],
-      ...runtimePlugins, [tools.default, { mode: presentation === 'ptc-scoped' ? 'native' : presentation }], [agents.default], [skills.default], [loop.default, { agents: [] }], [approval.default], [commands.default]]) {
+      ...runtimePlugins, [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }], [approval.default], [commands.default]]) {
+      if (plugin === tools.default) { await mountToolExecutor(ctx, tools, packages!, presentation === 'ptc' ? 'ptc' : 'native', fibers); continue }
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     if(scenario==='owned-plan'){const fiber=ctx.plugin((await load('dsh-plan-mode')).default,{section:'Use Plan for planning; explicit implementation is admitted at the next boundary.'});fibers.push(fiber);await fiber}
@@ -195,7 +197,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
           if (scenario !== 'text' && scenario !== 'clarify' && scenario !== 'scope-spoof' && scenario !== 'answer-memory') assert.ok(row.toolNames.includes(presentation !== 'native' ? 'run_code' : TASK_PREPARE_TOOL), 'model must see the explicit preparation contract')
         }
         if (scenario === 'scope-spoof' && requests.length === 1) {
-          spoofedResult = await ctx.tools.execute({ callId: 'scope-spoof', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: { id: handle.agent.id, session: handle.agent.session, ctx: handle.agent.ctx }, signal: new AbortController().signal })
+          spoofedResult = await executeNativeTool(ctx, packages!, { callId: 'scope-spoof', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: { id: handle.agent.id, session: handle.agent.session, ctx: handle.agent.ctx }, signal: new AbortController().signal })
           assert.equal(spoofedResult.isError, true, 'same textual identifiers must not impersonate the bound agent object')
         }
         if (requests.length > 12) throw new Error('Native scripted fixture exceeded expected request bound')
@@ -263,7 +265,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       } finally { db.close() }
     }
     if (lispEnabled) assert.ok(ctx.get(LISP_CODING_SERVICE, false), 'real Lisp coding-choice ingress must be mounted')
-    handle = await ctx.agents.create({ sessionId: session.SessionId(`on-demand-${mode}-${scenario}`), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: root }, ...(presentation === 'ptc-scoped' ? { setup: (agentContext: any) => { agentContext.tools.presentAs('ptc') } } : {}) })
+    handle = await ctx.agents.create({ sessionId: session.SessionId(`on-demand-${mode}-${scenario}`), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: root }, ...(presentation === 'ptc-scoped' ? { setup: async (agentContext: any) => { await agentContext.plugin(await load('dsh-tool-executor-ptc'), {}) } } : {}) })
     if(scenario==='owned-plan')ctx.planMode.set(handle.agent,true)
     handle.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: task }], source: { kind: 'user' } }))
     await handle.agent.whenIdle()
@@ -296,7 +298,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       if (scenario === 'answer-memory') {
         assert.ok(answerMemory)
         assert.ok(JSON.stringify(requests[0].messages).includes(answerMemory.body), 'ordinary answer must receive genuinely retrieved project memory without opening an execution run')
-        const ungranted = await ctx.tools.execute({ callId: 'memory-is-not-permission', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: handle.agent, signal: new AbortController().signal })
+        const ungranted = await executeNativeTool(ctx, packages!, { callId: 'memory-is-not-permission', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: handle.agent, signal: new AbortController().signal })
         assert.equal(ungranted.isError, true, 'retrieved conversational memory grants no tool authority')
         const db = openConnection(databasePath)
         let forgotten: unknown
@@ -381,7 +383,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       if (scenario === 'build-write' || scenario === 'writing-write' || scenario === 'debug-write') assert.deepEqual(writes, [{ path: 'src/verified-fixture.txt', previous: scenario === 'debug-write' ? 'BROKEN_FIXTURE' : null, content: fixtureValue }])
       if (scenario === 'multi-tool') assert.deepEqual(bodies.map(body => body.name), ['fixture_probe', 'fixture_compare'])
       if (!isCoding) {
-      const stale = await ctx.tools.execute({ callId: 'stale-after-turn', name: 'fixture_probe', arguments: { value: 'must not run' }, agent: handle.agent, signal: new AbortController().signal })
+      const stale = await executeNativeTool(ctx, packages!, { callId: 'stale-after-turn', name: 'fixture_probe', arguments: { value: 'must not run' }, agent: handle.agent, signal: new AbortController().signal })
       ;(row as any).staleResult = stale
       assert.equal(stale.isError, true, 'closed or stale turn must not reuse an earlier task admission')
       assert.equal(bodies.length, expectedBodies, 'stale native call must not reach body')
@@ -394,7 +396,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
         await handle.dispose(); handle = undefined
         await mountHost()
         handle = await ctx.agents.create({ sessionId: session.SessionId(`on-demand-${mode}-${scenario}`), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: root }, seed })
-        const restored = await ctx.tools.execute({ callId: 'stale-after-reload', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: handle.agent, signal: new AbortController().signal })
+        const restored = await executeNativeTool(ctx, packages!, { callId: 'stale-after-reload', name: 'fixture_probe', arguments: { value: 'must not execute' }, agent: handle.agent, signal: new AbortController().signal })
         assert.equal(restored.isError, true, 'restoring the session does not restore an earlier call grant')
         const requestsBefore = requests.length, questionsBefore = questions.length
         handle.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'この仕組みを短く説明して。' }], source: { kind: 'user' } }))

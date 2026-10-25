@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Fault-injected classifier with the real DecisionService and published native host/loop. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -42,7 +43,8 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for 
       for (const plugin of [llm, session, projection, prompt, tools, agents, skills]) {
         const fiber = ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined); fibers.push(fiber); await fiber
       }
-      const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
+      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
       const questionFiber = ctx.plugin({ name: 'fault-question-observer', apply(context: any) { return context.provide('userQuestions', {
         async ask() { questions++; throw new Error('An ordinary answer must not open intake UI') },
       }) } }); fibers.push(questionFiber); await questionFiber

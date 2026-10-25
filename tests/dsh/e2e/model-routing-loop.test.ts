@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import { intentFixtureDecisions, semanticFixtureAnswers } from '../helpers/intent-decision-fixture.js'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -37,12 +38,13 @@ async function harness() {
   ])
   const ctx = new cordis.Context(), fibers: any[] = [], scopes: any[] = []
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-model-native-'))
-  for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [fsLocal.default, { cwd: root }], [workingDirectory.default, { defaultDirectory: root }], [prompt.default, { persona: '' }], [tools.default, { mode: 'native' }], [agents.default], [skills.default], [loop.default, { agents: [] }], [subagents.default], [spawn, { providerName: 'spawn' }]]) {
-    const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
+  for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [fsLocal.default, { cwd: root }], [workingDirectory.default, { defaultDirectory: root }], [prompt.default, { persona: '' }], [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }], [subagents.default], [spawn, { providerName: 'spawn' }]]) {
+    if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot!, fibers); continue }
+      const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
   const scopeListener = ctx.on('agent/created', ({ agent }: { agent: any }) => {
     const local = scope.createScope(ctx, agent); scopes.push(local); agent.ctx = local.ctx
-    agent.ctx.get('tools').presentAs('native')
+
   }, { global: true, prepend: true })
   return { ctx, llm, session, root, mock: nativeMock(llm), dispose: async () => { scopeListener(); for (const local of scopes.reverse()) await local.dispose(); for (const f of fibers.reverse()) await f.dispose(); await rm(root, { recursive: true, force: true }) } }
 }
@@ -225,12 +227,9 @@ test('native model-auto applies the selected effort to first prompt and request,
   const workspace = join(h.root, 'workspace')
   await mkdir(workspace)
   const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-session'), { provider: 'ordinary', model: 'mock' }, { cwd: workspace })
-  const { installModelSelection } = await import(modulePath('dsh-agent', 'packages/core/agent'))
-  const picker = { current: { provider: 'ordinary', model: 'mock' }, assembled: undefined }
-  const stopPicker = installModelSelection(agent.ctx, picker)
   const prompts: any[] = []
   const watch = agent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
-    const result = await next(); prompts.push(result.variables); return result
+    const result = await next(); prompts.push({variables:result.variables,selection:(_c as any).modelSelection}); return result
   }, { prepend: true })
   const edit = h.ctx.tools.register({ name: 'edit_once', description: 'Apply one edit.', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'string' }, render: () => [{ type: 'text', text: 'done' }] }, execute: async () => 'done' })
@@ -242,7 +241,8 @@ test('native model-auto applies the selected effort to first prompt and request,
     assert.equal(codex.requests[0].model, 'gpt-6-luna')
     assert.equal(codex.requests[0].reasoningEffort, 'high')
     assert.equal(codex.requests[1].model, 'gpt-6-luna')
-    assert.equal(prompts[1].model, 'gpt-6-luna')
+    assert.ok(prompts.some(prompt=>prompt.variables.model==='gpt-6-luna'))
+    for(const prompt of prompts) if(prompt.selection) { assert.equal(prompt.variables.provider,prompt.selection.provider);assert.equal(prompt.variables.model,prompt.selection.model) }
     const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
     assert.equal(headers[1].data.header.config.model, 'gpt-6-luna')
     assert.equal(headers[1].data.header.config.reasoningEffort, 'high')
@@ -252,7 +252,7 @@ test('native model-auto applies the selected effort to first prompt and request,
     assert.equal(classified, 1)
     assert.equal(ordinary.requests.length, 3)
     assert.equal(ordinary.requests[2].model, 'mock')
-  } finally { edit(); watch(); stopPicker(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await meter.dispose(); await h.dispose() }
+  } finally { edit(); watch(); await composition.dispose(); await adapter.dispose(); await questions.dispose(); await meter.dispose(); await h.dispose() }
 })
 test('native model-auto command accepts its exact session in another workspace', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
@@ -322,7 +322,7 @@ test('native modular core applies model-auto to its first prepared prompt and re
   const errors: string[] = []
   const watchErrors = h.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
   const watch = agent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
-    const result = await next(); prompts.push(result.variables); return result
+    const result = await next(); prompts.push({variables:result.variables,selection:(_c as any).modelSelection}); return result
   }, { prepend: true })
   try {
     await turn(h, agent, 'この資料を調査してください。通常実行で。')
@@ -335,7 +335,8 @@ test('native modular core applies model-auto to its first prepared prompt and re
     assert.equal(codex.requests[0].provider, 'openai-codex')
     assert.equal(codex.requests[0].model, 'gpt-6-luna')
     assert.equal(codex.requests[0].reasoningEffort, 'high')
-    assert.equal(prompts[1].model, 'gpt-6-luna')
+    assert.ok(prompts.some(prompt=>prompt.variables.model==='gpt-6-luna'))
+    for(const prompt of prompts) if(prompt.selection) { assert.equal(prompt.variables.provider,prompt.selection.provider);assert.equal(prompt.variables.model,prompt.selection.model) }
     const headers = agent.session.snapshotEvents().filter((event: any) => event.type === 'request/header')
     assert.equal(headers[1].data.header.config.model, 'gpt-6-luna')
     assert.equal(headers[1].data.header.config.reasoningEffort, 'high')

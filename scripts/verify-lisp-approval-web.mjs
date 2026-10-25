@@ -1,3 +1,4 @@
+import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { intentDecisionWebFixture } from './lib/intent-decision-web-fixture.mjs'
 import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
@@ -107,17 +108,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   if (await welcome.isVisible()) await welcome.click()
   const conversation = page.locator('[data-conversation-content]:visible').first()
   const newSession = async () => {
-    // Startup restores a session independently of New session. Wait for that
-    // initial binding so its completion cannot masquerade as our navigation.
-    const previous = await poll(() => conversation.getAttribute('data-conversation-session'))
-    await page.getByRole('button', { name: 'New session', exact: true }).first().click()
-    // New session starts asynchronous navigation. Wait for its rendered binding
-    // before filling the composer, or the replacement discards the first command.
-    await poll(async () => {
-      const current = await conversation.getAttribute('data-conversation-session')
-      return current && current !== previous
-        && await conversation.getAttribute('data-content-phase') !== 'settling'
-    })
+    await newSessionForTest(page, conversation, poll)
   }
   const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
   const command = async text => {

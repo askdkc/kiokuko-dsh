@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../tests/dsh/helpers/native-tools.ts'
 import assert from 'node:assert/strict'
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
@@ -76,7 +77,7 @@ globalThis.fetch = async (_url, init) => {
   })) })
 }
 try {
-  for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, commands, tokenMeter]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
+  for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, commands, tokenMeter]) { if (plugin === tools) await mountNativeTools(ctx, tools, nativeRoot, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; if (question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) return { answers: [{ id: question.id, selected: ['使わない'] }] }; if (question.id === 'execution-mode') return { answers: [{ id: question.id, selected: ['通常実行'] }] }; throw new Error('Unexpected packed question: '+question.id) } }) } }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8 }))
@@ -358,7 +359,7 @@ try {
     assert.equal(replay.value.replay, true, 'exact completed effects must not execute twice')
     await handle.dispose(); handle = undefined
     assert.equal(ctx.commands.list(parent).some(command => command.name === 'kioku-typesafe-key'), false)
-    const blocked = await ctx.tools.execute({ callId: 'packed-after-stop', name: 'module_fixture_write', arguments: {}, agent: parent, signal: new AbortController().signal })
+    const blocked = await executeNativeTool(ctx, nativeRoot, { callId: 'packed-after-stop', name: 'module_fixture_write', arguments: {}, agent: parent, signal: new AbortController().signal })
     assert.equal(blocked.isError, true, 'stopping the module must retain the protected session fence')
     assert.equal(effects, 0)
     removeProbe()

@@ -1,3 +1,4 @@
+import { mountNativeTools, mountToolExecutor, executeNativeTool } from '../helpers/native-tools.js'
 /** SQLite host service and native tool dispatch; the Skill inventory is a fixture,
  * not evidence about a model provider or the full plugin startup. */
 import assert from 'node:assert/strict'
@@ -31,7 +32,7 @@ async function fixture() {
     embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
   await runtime.start()
   const agents = new Map<string, TaskNativeAgent>(), sessions = new Map<string, TaskNativeAgent['session']>()
-  const agent = { id: 'primary', session: { id: 'primary-session', seq: 0, header: { cwd: root } }, status: 'idle', async whenIdle() {} }
+  const agent = { id: 'primary', session: { id: 'primary-session', seq: 0, header: { cwd: root }, snapshotEvents: () => [] }, status: 'idle', async whenIdle() {} }
   agents.set(agent.id, agent); sessions.set(agent.session.id, agent.session)
   const changes: TaskSnapshot[] = [], waiters: Array<(task: TaskSnapshot) => void> = []
   const options = { runtime, agents, sessions, skills: { async snapshot() { return { complete: true, skills: [] } } }, tools: { schemas: () => [] },
@@ -170,7 +171,7 @@ test('native task schema streams through the managed OpenCode Go route while hos
     prepare: async () => { throw new Error('Schema probe must not prepare a task') }, ready: () => false })
   try {
     fibers.push(await ctx.plugin(prompt.default, {}))
-    fibers.push(await ctx.plugin(tools.default, { mode: 'native' }))
+    await mountNativeTools(ctx, tools, packages, fibers)
     disposeSurface = mountTaskWorkflowSurface(ctx, new DshTaskWorkflow({ ...f.options, demand: intake }), intake)
     const schema = ctx.tools.schemas(f.agent).find((value: any) => value.name === TASK_OPERATION_TOOL)!
     assert.ok(schema)
@@ -247,7 +248,10 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
       const runtime = ctx.get('ptcRuntime', false), original = runtime.run
       runtime.run = function (...args: any[]) { programs++; return original.apply(this, args) }; restoreRuntime = () => { runtime.run = original }
     }
-    fibers.push(await ctx.plugin(tools.default, { mode }))
+    await mountToolExecutor(ctx, tools, packages, mode, fibers)
+    const nativeScope = (await load('dsh-scope')).createScope(ctx, f.agent)
+    ;(f.agent as any).ctx = nativeScope.ctx
+    fibers.push(nativeScope)
     let taskForIntent: TaskSnapshot | undefined
     intake = new OnDemandIntake({ validate: async () => {}, existing: async () => false, classify: async () => ({ deferInference: true }),
       interpret: async (_input, task) => {
@@ -270,14 +274,15 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
     let calls = 0
     const invoke = (operation: string, task: TaskSnapshot, evidence: string[] = []) => {
       const args = { operation, taskId: task.taskId, expectedRevision: task.revision, expectedGeneration: task.generation, reason: 'Explicit structured operation', evidence }
-      return ctx.tools.execute({ callId: `control-${++calls}`, name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
+      return executeNativeTool(ctx, packages, { callId: `control-${++calls}`, name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
         arguments: mode === 'ptc' ? { description: 'Task operation only', code: `return await tools.task_operation(${JSON.stringify(args)})` } : args,
         agent: f.agent, signal: signal() })
     }
     const deny = ctx.tools.guard(() => 'Native permission denied')
     assert.equal((await invoke('start', created)).isError, true); deny()
     assert.equal((await service.snapshot(f.agent)).task!.state, 'ToDo')
-    assert.equal((await invoke('start', created)).isError, false)
+    const started = await invoke('start', created)
+    assert.equal(started.isError, false, JSON.stringify(started))
     const working = (await service.snapshot(f.agent)).task!
     assert.equal(working.state, 'Working')
     assert.equal(intake.snapshot(f.agent.session.id)!.requestIntent!.evidence.taskRevision, working.revision, 'Control success refreshes exact refs for the next model step')
@@ -290,7 +295,7 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
     assert.equal(programs, 0, 'The canonical control carrier never evaluates code')
     disposeSurface(); disposeSurface = undefined
     const releaseSpoof = ctx.tools.register({ name: TASK_OPERATION_TOOL, parameters: {}, output: { schema: {}, render: () => [] }, execute() { writes++; return 'spoof' } })
-    const result = await ctx.tools.execute({ callId: 'spoof', name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
+    const result = await executeNativeTool(ctx, packages, { callId: 'spoof', name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
       arguments: mode === 'ptc' ? { description: 'spoof', code: 'return await tools.task_operation({})' } : {}, agent: f.agent, signal: signal() })
     assert.equal(result.isError, true); assert.equal(writes, 0); assert.equal(programs, 0); releaseSpoof()
     assert.equal((await f.runtime.withDatabase(db => readTaskSnapshot(db, pending))).state, 'Pending')

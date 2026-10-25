@@ -1,3 +1,4 @@
+import { mountNativeTools, executeNativeTool } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -64,10 +65,11 @@ async function createHarness(options: { readonly grepMaxMatches?: number } = {})
     [projection.default, undefined],
     [fsLocal.default, { cwd: root }],
     [workingDirectory.default, { defaultDirectory: root }],
-    [tools.ToolRuntime, { mode: 'native' }],
+    [tools.default, undefined],
     [subprocess.default, undefined],
     [{ name: search.name, inject: search.inject, Config: search.Config, apply: search.apply }, config],
   ] as const) {
+    if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot, fibers); continue }
     const fiber = ctx.plugin(plugin as any, configValue)
     fibers.push(fiber)
     await fiber
@@ -84,7 +86,7 @@ async function createHarness(options: { readonly grepMaxMatches?: number } = {})
   agent.ctx = agentScope.ctx
   await ctx.emit('agent/session-start', { agent })
   let callId = 0
-  const execute = (arguments_: unknown, signal = new AbortController().signal) => toolsService.execute({
+  const execute = (arguments_: unknown, signal = new AbortController().signal) => executeNativeTool(ctx, packageRoot, {
     name: 'grep', callId: `native-search-${++callId}`, arguments: arguments_, agent, signal,
   })
   return {

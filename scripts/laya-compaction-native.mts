@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../tests/dsh/helpers/native-tools.js'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { readFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -28,6 +29,7 @@ export async function captureCompactionArm(fixture: EvaluationFixture, arm: 'ori
   let handle: any, coordinator: SemanticCompactionCoordinator | undefined
   try {
     for (const plugin of [llm, sessions, projection, prompt, tools, registry, meter]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined))
+    await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
     // Fixed native configuration across arms, below summary pressure so summaries cannot inflate savings.
     fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 150 }))

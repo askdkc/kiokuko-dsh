@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../../helpers/native-tools.js'
 import {interpretedPreparation} from '../../helpers/coding-script.js'
 import {assessTaskCompletion} from '../../../../src/dsh/task-completion.js'
 import assert from 'node:assert/strict'
@@ -46,7 +47,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   const privateEntry = recordEntry(db, { workspace: other.workspace, kind: 'lesson', title: 'E_LOCK_TIMEOUT', body: 'PRIVATE_MUST_NEVER_APPEAR', createdBy: 'fixture', scope: { visibility: 'project' } })
   const ctx = new cordis.Context(), fibers: any[] = [], errors: string[] = [], script: any[] = []
   ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
-  for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined))
+  for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages!, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   ctx.llm.registerAdapter(['mock'], provider)

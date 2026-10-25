@@ -1,3 +1,4 @@
+import { mountNativeTools } from './native-tools.js'
 import { execFileSync } from 'node:child_process'
 import { realpathSync } from 'node:fs'
 import { mkdtemp, rm, mkdir } from 'node:fs/promises'
@@ -12,7 +13,7 @@ const { createDshHostAdapter, mountDshComposition, DshSkillPrompts } = await imp
 import { nativeMock } from './native-mock.js'
 import { mountDshAgenticReplayCommand } from '../../../src/dsh/agenticreplay-command-surface.js'
 
-export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nativeMock>, root: string, dbPath: string) => any[], options: { budget?: object; agenticReplay?: boolean; questions?: (request: any) => Promise<any>; root?: string; dataRoot?: string; keepFiles?: boolean; sessionId?: string; displayMetadata?: boolean } = {}) {
+export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nativeMock>, root: string, dbPath: string) => any[], options: { initialModel?: {provider:string;model:string}; budget?: object; agenticReplay?: boolean; questions?: (request: any) => Promise<any>; root?: string; dataRoot?: string; keepFiles?: boolean; sessionId?: string; displayMetadata?: boolean } = {}) {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
   const [cordis,llm,session,projection,systemPrompt,workingDirectory,fsLocal,scope,tools,agents,loop,skills,subagents,spawn,commands] = await Promise.all(
     ['cordis','llm','session','session-projection','system-prompt','working-directory','fs-local','scope','tools','agent','agent-loop','skill','subagent','subagent-spawn-in-process','commands'].map(name => import(pathToFileURL(join(packages,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
@@ -24,7 +25,7 @@ export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nat
   if(!db.prepare("SELECT 1 FROM repositories WHERE workspace='deep-cases'").get()) registerRepositoryAndLocation(db,{repositoryId:'deep-cases',workspace:'deep-cases',displayName:'Deep cases',canonicalRoot:root,remoteFingerprint:null,bindingSchemaVersion:1,agentTemplateVersion:1});db.close()
   const mock=nativeMock(llm), provider=new mock.MockAdapter(makeScript(mock,root,dbPath))
   const ctx=new cordis.Context(), fibers:any[]=[]
-  for(const plugin of [llm,session,projection,systemPrompt,workingDirectory,fsLocal,tools,agents,skills,subagents,commands]) fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:plugin===workingDirectory?{defaultDirectory:root}:plugin===fsLocal?{cwd:root}:plugin===tools?{mode:'native'}:undefined))
+  for(const plugin of [llm,session,projection,systemPrompt,workingDirectory,fsLocal,tools,agents,skills,subagents,commands]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages, fibers); else fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:plugin===workingDirectory?{defaultDirectory:root}:plugin===fsLocal?{cwd:root}:undefined)) }
   fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))
   if(options.questions) fibers.push(await ctx.plugin({name:'deep-case-questions',apply(c:any){return c.provide('userQuestions',{ask:options.questions})}}))
   const displayAdapters = new Map<string, typeof provider>()
@@ -41,11 +42,11 @@ export async function deepNativeFixture(makeScript: (mock: ReturnType<typeof nat
   const adapter=createDshHostAdapter(ctx,{skillPrompts:new DshSkillPrompts({mode:process.env.KIOKUKO_TEST_COMPILED_SKILLS==='1'?'compiled':'full'}),repositoryRoot:root,databasePath:dbPath,modelRoutes:[{provider:'mock',family:'other',connection:'api',protocol:'chat-completions'}],agenticReplay:{enabled:options.agenticReplay??false},deepPlanning:{budget:options.budget??{}}})
   const composition=await mountDshComposition(ctx,adapter.host)
   const disposeAgenticReplay=options.agenticReplay&&adapter.host.agenticReplay?mountDshAgenticReplayCommand(ctx,true,adapter.host.agenticReplay):undefined
-  const parent=await ctx.agentLoop.create(session.SessionId(options.sessionId ?? 'deep-case-parent'),{provider:'mock',model:'mock'},{cwd:root})
-  const parentScope=scope.createScope(ctx,parent); parent.ctx=parentScope.ctx; const releaseNative=parent.ctx.get('tools').presentAs('native')
+  const parent=await ctx.agentLoop.create(session.SessionId(options.sessionId ?? 'deep-case-parent'),options.initialModel ?? {provider:'mock',model:'mock'},{cwd:root})
+  const parentScope=scope.createScope(ctx,parent); parent.ctx=parentScope.ctx
   const deep=adapter.host.deepPlanning!
   const command=(line:string)=>ctx.commands.execute(parent,line,[],new AbortController().signal)
   const complete=async()=>{await parent.whenIdle();const intent=await deep.store.intent(parent.session.id);if(intent?.runId){await deep.kick(parent);await deep.scheduler.idle(intent.runId)};await adapter.host.memoryFinalizer!.whenIdle();return intent}
   return {root,dbPath,ctx,parent,provider,adapter,deep,command,complete,mock,llm,registerAdapter,
-    close:async()=>{composition.stopIngress();disposeAgenticReplay?.();releaseNative();await adapter.dispose();await composition.dispose();await parentScope.dispose();for(const fiber of fibers.reverse())await fiber?.dispose?.();if(!options.keepFiles){await rm(root,{recursive:true,force:true});await rm(data,{recursive:true,force:true})}} }
+    close:async()=>{composition.stopIngress();disposeAgenticReplay?.();await adapter.dispose();await composition.dispose();await parentScope.dispose();for(const fiber of fibers.reverse())await fiber?.dispose?.();if(!options.keepFiles){await rm(root,{recursive:true,force:true});await rm(data,{recursive:true,force:true})}} }
 }

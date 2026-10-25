@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../../helpers/native-tools.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp,mkdir,rm } from 'node:fs/promises'
@@ -21,6 +22,7 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
   let adapter:ReturnType<typeof createDshHostAdapter>|undefined,composition:Awaited<ReturnType<typeof mountDshComposition>>|undefined
   try{
     for(const plugin of [llm,session,projection,systemPrompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:undefined))
+    await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'review-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-execution-mode'?'通常実行':'chat']}))}}})}}))
     const mock=nativeMock(llm)

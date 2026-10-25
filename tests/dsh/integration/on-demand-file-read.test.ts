@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Real native file reads; scripted generation does not establish model intent quality. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -35,7 +36,8 @@ for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'na
         fibers.push(await ctx.plugin(plugin.default ?? plugin, plugin === fs ? { cwd: root }
           : plugin === directory ? { defaultDirectory: root } : plugin === prompt ? { persona: '' } : undefined))
       }
-      fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default, { agents: [] }))
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
       if (outcome === 'native-denial') ctx.tools.guard((execution: any) => execution.name === 'read' ? 'native file denial' : undefined)
       if (outcome === 'stop') ctx.tools.guard((execution:any)=>{if(execution.name!=='read')return;stopped=true;handle.agent.cancel({kind:'user'},{keepInbox:true});return 'NATIVE_USER_STOP'})

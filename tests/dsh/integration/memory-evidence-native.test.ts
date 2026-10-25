@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
@@ -30,6 +31,7 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
   try {
     await mkdir(join(root,'.git')) // Keep workspace identity independent of parent directories.
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
+    await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
     // Explicit eager mode exercises conversation retrieval/fencing; default unowned work has independent nonblocking native coverage.

@@ -1,3 +1,4 @@
+import { mountToolExecutor } from '../helpers/native-tools.js'
 /** Actual published native PTC regression; the model is scripted and no paid API is called. */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -46,7 +47,8 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
     const runtimePlugins: any[][] = []
     for (const [name, config] of [['dsh-fs-local', { cwd: root }], ['dsh-working-directory', { defaultDirectory: root }], ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined], ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }], ['dsh-ptc-runtime-node', { timeoutMs: 10000 }]] as const) runtimePlugins.push([(await load(name)).default, config])
     for (const [plugin, config] of [[llm.default], [sessions.default], [projections.default], [prompt.default, { persona: '' }], ...runtimePlugins,
-      [tools.default, { mode: 'ptc' }], [agents.default], [skills.default], [commands.default], [loop.default, { agents: [] }]]) {
+      [tools.default], [agents.default], [skills.default], [commands.default], [loop.default, { agents: [] }]]) {
+      if (plugin === tools.default) { await mountToolExecutor(ctx, tools, packages!, 'ptc', fibers); continue }
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     const runtime = ctx.get('ptcRuntime', false)
@@ -76,7 +78,7 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
           assert.deepEqual(names, ['run_code'])
           response = mock.toolCallResponse('prepare', 'run_code', { description: 'Prepare requested work only', code: 'return await tools.prepare_requested_work({"taskType":"build"})' })
         } else if (step === 2) {
-          row.registryModeAfterPreparation = ctx.tools.modeFor(handle.agent)
+          row.registryToolsAfterPreparation = (await ctx.systemPrompt.assemble({ scope: handle.agent, agent: handle.agent })).tools.map((tool: any) => tool.name)
           const diagnostic = openConnection(databasePath)
           try { row.bindingsAfterPreparation = diagnostic.prepare('SELECT mode,required_json FROM task_memory_bindings').all() } finally { diagnostic.close() }
           row.preparation = messageResult('prepare')

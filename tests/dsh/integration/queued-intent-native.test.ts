@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Real queued native messages; scripted generation/provider responses prove routing, not model accuracy. */
 import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import assert from 'node:assert/strict'
@@ -63,7 +64,8 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       for (const plugin of [llm, session, projection, prompt, tools, agents, skills, commands]) {
         const fiber = ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined); fibers.push(fiber); await fiber
       }
-      const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
+      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
       const questions = ctx.plugin({ name: 'queued-intake-questions', apply(context: any) { return context.provide('userQuestions', { async ask(request: any) {
         const id = request.questions[0].id; asked.push(id)
         assert.notEqual(id, 'taskType', 'clear queued requests must not ask their purpose')

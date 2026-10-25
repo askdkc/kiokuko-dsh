@@ -1,3 +1,4 @@
+import { executeNativeTool, mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
@@ -28,11 +29,11 @@ test('KDSH-COMPLETION-INPUT-GUIDANCE-001: actual native errors name missing fiel
   initializeCodingWorkflow(db,{...identity,requestId:'completion-guidance',task:'Implement src/check.mjs'})
   const definition=structuredClone(CODING_MINIMUM_DEFINITION_EXAMPLE);definition.criteria[0]!.evidence='output'
   proposeCodingWorkflow(db,identity,'propose',1,definition)
-  const agent={id:'agent',session:{id:'session'}},ctx=new cordis.Context();ctx.provide('systemPrompt',{tools:()=>()=>{},section:()=>()=>{},getSectionOrder:()=>0});const fiber=ctx.plugin(tools.default);await fiber
+  const agent={id:'agent',session:{id:'session'}},ctx=new cordis.Context();ctx.provide('systemPrompt',{tools:()=>()=>{},section:()=>()=>{},getSectionOrder:()=>0});const fibers:any[]=[];await mountNativeTools(ctx,tools,packages,fibers)
   let approvals=0,sequence=0
   const dispose=mountTaskCompletion({tools:ctx.tools,on:ctx.on.bind(ctx)},{runtime:{withDatabase:async(fn:any)=>fn(db)} as any,
     resolve:execution=>execution.agent===agent?{...identity,agent}:undefined,approve:async()=>{approvals++;return true}})
-  const call=(args:unknown)=>ctx.tools.execute({name:'task_completion',callId:`guidance-${++sequence}`,arguments:args,agent,signal:new AbortController().signal})
+  const call=(args:unknown)=>executeNativeTool(ctx, packages, {name:'task_completion',callId:`guidance-${++sequence}`,arguments:args,agent,signal:new AbortController().signal})
   const diagnostics=(result:any)=>{assert.equal(result.isError,true);assert.equal(result.value,undefined,'native failure never carries a successful value');const message=result.content.map((part:any)=>part.text??'').join('');assert.match(message,/TASK_COMPLETION_INPUT_INVALID/u);assert.doesNotMatch(message,/DO_NOT_ECHO/u);const recovery=JSON.parse(message.slice(message.indexOf('\nRecovery: ')+11));assert.equal(recovery.code,'TASK_COMPLETION_INPUT_INVALID');assert.equal(recovery.verified,false);return recovery}
   try{
     const status=await call({action:'status'});assert.equal(status.isError,false)
@@ -55,5 +56,5 @@ test('KDSH-COMPLETION-INPUT-GUIDANCE-001: actual native errors name missing fiel
     assert.ok(after.value.bindingGuide.native_command.requiredFields.includes('sourcePaths'))
     assert.equal(after.value.bindingGuide.criteria[0].requiredAssertion,'output_matches')
     assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_completion_executions').get()!.n,0)
-  }finally{dispose();await fiber.dispose();db.close();await rm(root,{recursive:true,force:true})}
+  }finally{dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(root,{recursive:true,force:true})}
 })

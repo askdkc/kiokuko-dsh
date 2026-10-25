@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../../helpers/native-tools.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { realpathSync } from 'node:fs'
@@ -27,8 +28,9 @@ async function nativeFixture(enabled = true, text = 'Old file content. '.repeat(
   }
   const provider = new Provider(options.script?.(mock) ?? Array.from({ length: 12 }, () => mock.textResponse('Required task and acceptance criteria retained.')))
   for (const plugin of [llm, sessions, projection, prompt, tools, registry, meter, pruner]) fibers.push(await ctx.plugin(plugin.default, plugin === prompt ? { persona: '' } : undefined))
-  fibers.push(await ctx.plugin(loop.default, { agents: [] }))
-  fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 150, ...(options.roleRatio === undefined ? {} : { modelPolicies: [{ provider: 'mock', model: 'goki', thresholdRatio: options.roleRatio, retainTokens: 100 }] }) }))
+  await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+    fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+  fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8, retainTokens: 150, headroomTokens: 0, maxTokens: 128, ...(options.roleRatio === undefined ? {} : { modelPolicies: [{ provider: 'mock', model: 'goki', thresholdRatio: options.roleRatio, retainTokens: 100 }] }) }))
   ctx.llm.registerAdapter(['mock'], provider)
   const d = decisions({ evaluate: async batch => ({ provider: 'fixture', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: q.id === 'fruit' ? 'apple' : q.id === 'timing' ? 'compact' : options.choose ?? 'shorten' })) }) })
   const coordinator = enabled ? new SemanticCompactionCoordinator(ctx, d.service, realpathSync(process.cwd())) : undefined

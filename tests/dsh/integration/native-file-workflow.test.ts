@@ -1,3 +1,4 @@
+import { executeNativeTool, mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, realpathSync } from 'node:fs'
@@ -21,13 +22,14 @@ test('native file workflow preserves sequential edits and reconciles metadata dr
   let handle: any
   try {
     for (const plugin of [llm, sessions, projection, prompt, tools, agents, fs, directory, policy, files]) {
+      if (plugin === tools) { await mountNativeTools(ctx, tools, packages, fibers); continue }
       fibers.push(await ctx.plugin(plugin.default ?? plugin, plugin === fs ? { cwd: root }
         : plugin === directory ? { defaultDirectory: root } : plugin === prompt ? { persona: '' } : undefined))
     }
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
     handle = await ctx.agents.create({ sessionId: sessions.SessionId('file-workflow'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: root } })
     let sequence = 0
-    const call = (name: string, args: object) => ctx.tools.execute({ callId: `file-${++sequence}`, name, arguments: args, agent: handle.agent, signal: new AbortController().signal })
+    const call = (name: string, args: object) => executeNativeTool(ctx, packages, { callId: `file-${++sequence}`, name, arguments: args, agent: handle.agent, signal: new AbortController().signal })
     const read = () => call('read', { file_path: 'PLAN.md' })
     const edit = (old_string: string, new_string: string) => call('edit', { file_path: 'PLAN.md', old_string, new_string })
     await writeFile(path, '# Plan\nfirst\nsecond\n')

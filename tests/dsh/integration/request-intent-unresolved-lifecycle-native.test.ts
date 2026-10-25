@@ -1,3 +1,4 @@
+import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Direct modular Core host lifecycle through real native queued turns. Only finite
  * provider answers and model generation are scripted; no external model runs. */
 import assert from 'node:assert/strict'
@@ -65,6 +66,7 @@ test(`direct Core queued ${uncertain} uncertainty preserves current authority wh
         : plugin === prompt ? { persona: '' } : undefined
       fibers.push(await ctx.plugin(plugin.default, config))
     }
+    await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
     fibers.push(await ctx.plugin({ name: 'unresolved-lifecycle-questions', apply(context: any) {
       return context.provide('userQuestions', { async ask(request: any) {

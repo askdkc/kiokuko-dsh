@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm } from 'node:fs/promises'
@@ -23,6 +24,7 @@ test('native result DTOs survive text-only logs without automatic episode extrac
   let adapter:ReturnType<typeof createDshHostAdapter>|undefined,composition:Awaited<ReturnType<typeof mountDshComposition>>|undefined,disposeTool:(()=>void)|undefined
   try {
     for(const [plugin,config] of [[llm.default??llm],[session.default??session],[projection.default??projection],[systemPrompt.default??systemPrompt,{persona:''}],[tools.default??tools],[agents.default??agents],[skills.default??skills],[loop.default??loop,{agents:[]}]]) {
+      if (plugin === (tools.default ?? tools)) { await mountNativeTools(ctx, tools, packageRoot!, fibers); continue }
       const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber
     }
     const nativeResults:any[]=[]

@@ -30,3 +30,22 @@ export async function executeNativeTool(ctx: any, packages: string, input: any):
   assert.equal(batch.results.length, 1, 'a one-call native batch must settle exactly once')
   return batch.results[0].result
 }
+
+/** Select the current host executor after its real PTC runtime is mounted. */
+export async function mountToolExecutor(ctx: any, tools: any, packages: string, mode: 'native' | 'ptc', fibers: any[]): Promise<void> {
+  if (mode === 'native') return mountNativeTools(ctx, tools, packages, fibers)
+  assert.equal(typeof tools.default?.prototype?.setExecutor, 'function', 'PTC fixtures require the selected executor API')
+  fibers.push(await ctx.plugin(tools.default, {}))
+  const executor = await import(pathToFileURL(join(packages, '@deepseek-ai/dsh-tool-executor-ptc/lib/index.js')).href)
+  fibers.push(await ctx.plugin(executor, {}))
+  const assembly = await ctx.systemPrompt.assemble({})
+  assert.deepEqual(assembly.tools.map((tool: any) => tool.name), ['run_code'])
+  assert.equal(ctx.tools.get('run_code'), undefined, 'current PTC transport belongs to its executor, not the registry')
+  assert.equal(typeof ctx.get('ptcRuntime').run, 'function')
+}
+
+/** Mount only the executor after a fixture has installed its registry and prompt. */
+export async function mountNativeExecutor(ctx: any, packages: string, fibers: any[] = []): Promise<void> {
+  const executor = await import(pathToFileURL(join(packages, '@deepseek-ai/dsh-tool-executor-native/lib/index.js')).href)
+  fibers.push(await ctx.plugin(executor, {}))
+}

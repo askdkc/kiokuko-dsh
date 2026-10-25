@@ -1,3 +1,4 @@
+import { executeNativeTool, mountToolExecutor } from '../helpers/native-tools.js'
 /** Raw registration coverage through the pinned native scheduler and actual PTC interpreter. */
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
@@ -13,7 +14,7 @@ const available = packages !== undefined && existsSync(join(packages, '@deepseek
 if (!available && (packages !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1')) throw new Error('Native transport coverage requires an installed pinned DSH package root')
 for (const mode of ['native', 'ptc'] as const) test(`raw register validates transport before effects in actual ${mode} runtime`, { skip: !available, timeout: 60_000 }, async () => {
   const version = JSON.parse(await readFile(join(packages!, '@deepseek-ai/dsh/package.json'), 'utf8')).version
-  const expected = JSON.parse(await readFile('tests/fixtures/dsh-runtime/package.json', 'utf8')).dependencies['@deepseek-ai/dsh']
+  const expected = process.env.KIOKUKO_EXPECTED_DSH_VERSION ?? JSON.parse(await readFile('tests/fixtures/dsh-runtime/package.json', 'utf8')).dependencies['@deepseek-ai/dsh']
   assert.equal(version, expected)
   const load = (name: string) => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)
   const cordis = await load('cordis'), ctx = new cordis.Context(), fibers: any[] = []
@@ -26,7 +27,7 @@ for (const mode of ['native', 'ptc'] as const) test(`raw register validates tran
       ['dsh-subprocess-local', undefined], ['dsh-sandbox-local', undefined],
       ['dsh-sandbox-policy', { mode: 'read-only', workspaceRoot: root }],
       ['dsh-ptc-runtime-node', { timeoutMs: 10_000 }], ['dsh-tools', { mode }],
-    ] as const) { const fiber = ctx.plugin((await load(name)).default, config); fibers.push(fiber); await fiber }
+    ] as const) { if (name === 'dsh-tools') { await mountToolExecutor(ctx, await load(name), packages!, mode, fibers); continue } const fiber = ctx.plugin((await load(name)).default, config); fibers.push(fiber); await fiber }
     const definitions = createDshToolDefinitions({
       bind() { binds++; return { runId: 'run', workspace: 'workspace', orchestrationId: 'orch', revision: 1, routeEpoch: 0, workUnitId: 'work', leaseToken: 'lease' } },
       async execute() { effects++; return { kind: 'retry', reason: 'business validation' } },
@@ -34,7 +35,7 @@ for (const mode of ['native', 'ptc'] as const) test(`raw register validates tran
     for (const definition of definitions) ctx.tools.register(definition)
     let call = 0
     async function invoke(args: unknown) {
-      return ctx.tools.execute({ callId: `call-${++call}`, name: mode === 'native' ? 'enno_work_report' : 'run_code',
+      return executeNativeTool(ctx, packages!, { callId: `call-${++call}`, name: mode === 'native' ? 'enno_work_report' : 'run_code',
         arguments: mode === 'native' ? args : { description: 'Check raw transport boundary', code: `return await tools.enno_work_report(${JSON.stringify(args)})` }, signal: new AbortController().signal })
     }
     for (const args of [{ result: '{}' }, { result: { changedPaths: [1] } }, { result: { mutated: 'false' } }, { result: '{}', workspace: 'forged' }]) {

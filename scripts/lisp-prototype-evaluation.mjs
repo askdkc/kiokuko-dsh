@@ -89,7 +89,7 @@ async function liveAdapter(f, packages, config, guide, wrap) {
     return { ...call, stream: options => nativeStream(options, call.stream) }
   }
   const off = f.ctx.llm.registerAdapter(['deepseek-official'], adapter)
-  f.agent.options.provider = 'deepseek-official'; f.agent.options.model = config.model
+  f.agent.model.select({ provider: 'deepseek-official', model: config.model })
   return { off, requestDigests }
 }
 

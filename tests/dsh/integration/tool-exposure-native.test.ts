@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../helpers/native-tools.js'
 import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
@@ -42,7 +43,8 @@ async function harness() {
   ])
   const ctx = new cordis.Context(), fibers: any[] = []
   for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [prompt.default, { persona: '' }], [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }], [subagents.default], [spawn, { providerName: 'spawn' }]]) {
-    const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
+    if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot, fibers); continue }
+      const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-tool-exposure-'))
   return { ctx, llm, session, root, dispose: async () => { for (const fiber of fibers.reverse()) await fiber.dispose(); await rm(root, { recursive: true, force: true }) } }
@@ -281,6 +283,28 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     assert.equal(requests.length, 4)
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
+    const currentExecutor = typeof (h.ctx as any).tools.setExecutor === 'function'
+    if (currentExecutor) {
+      // Executor schemas are fixed before the prompt waterfall. Unsupported
+      // presentation reduction must preserve the exact native provider output.
+      assert.deepEqual(phaseBody.tools, fullBody.tools)
+      assert.ok(phaseWarnings.some(line=>line.includes('unsupported_runtime')))
+      for (const mode of ['lean', 'auto'] as const) for (const taskType of Object.keys(fixtureRequests) as Array<keyof typeof fixtureRequests>) {
+        fixtureTaskType=taskType
+        await mountFixture(mode)
+        const agent=await h.ctx.agentLoop.create(h.session.SessionId(`current-${mode}-${taskType}`),{provider:protocol.provider,model:protocol.model},{cwd:h.root})
+        const before: number=requests.length, effects: number=toolCalls.length
+        await preparedTurn(agent,true)
+        assert.equal(requests.length,before+3)
+        for(const request of requests.slice(before)) assert.deepEqual(request.body.tools,fullBody.tools,'provider owns the admitted schemas, including external/protocol definitions')
+        assert.equal(toolCalls.length,effects+1,'the actual native tool batch executes once')
+        assert.deepEqual(toolCalls.at(-1),{message:'payload-1'})
+        assert.ok(completedSessions.has(agent.session.id))
+        assert.equal(finalAnswers.get(agent.session.id),'Tool result received.')
+      }
+      console.log(JSON.stringify({protocol:protocol.name,executorOwned:true,projection:'unavailable',nativeSchemasPreserved:true,externalRoundtrips:toolCalls.length}))
+      return
+    }
     assert.deepEqual(phaseNames, ['curator_check', 'memory_checkpoint'], `phase fallback diagnostics: ${phaseWarnings.join(' | ') || '(none)'}`)
     // Each native session owns different message identities. Normalize only the
     // host-bound reference values; all other serialized content must match.

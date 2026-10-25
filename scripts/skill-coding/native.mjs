@@ -1,3 +1,4 @@
+import { mountNativeTools } from '../../tests/dsh/helpers/native-tools.ts'
 import { selectedDshRuntime } from '../dsh-fixture-identity.mjs';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,7 +11,8 @@ export async function nativeSession({ model, prompt, tools, budget, adapterOverr
     const ctx = new cordis.Context();
     try {
         for (const plugin of [llm, session, projection, system, registry, toolPlugin])
-            await ctx.plugin(plugin.default, plugin === system ? { persona: '' } : undefined);
+            if (plugin === toolPlugin) await mountNativeTools(ctx, toolPlugin, selected.packageRoot, []);
+            else await ctx.plugin(plugin.default, plugin === system ? { persona: '' } : undefined);
         await ctx.plugin(loop.default, { agents: [], maxParallelToolCalls: 1 });
         if (adapterOverride)
             ctx.llm.registerAdapter([model.provider], adapterOverride(llm));
