@@ -2,7 +2,7 @@ import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,8 +10,25 @@ import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { LispConfig, LispError } from '../../../../src/dsh/lisp/contracts.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
+import { CompiledLispCache } from '../../../../src/dsh/lisp/compiled-cache.js'
 
 const native = { skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected native SBCL' : false, timeout: 120000 }
+
+test('compiled cache: aliased state roots retain canonical bundle identity and reuse', native, async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-cache-alias-')))
+  try {
+    const state = join(base, 'state'), alias = join(base, 'alias')
+    await mkdir(state); await symlink(state, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const config = LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
+    const cache = new CompiledLispCache(join(alias, 'compiled'), fileURLToPath(new URL('../../../../lisp/', import.meta.url)), config)
+    const first = await cache.ensure(new AbortController().signal, () => {})
+    assert.equal(first.path, await realpath(first.path))
+    assert.equal(first.reused, false)
+    const second = await cache.ensure(new AbortController().signal, () => {})
+    assert.equal(second.path, first.path); assert.equal(second.key, first.key); assert.equal(second.reused, true)
+    assert.deepEqual(await readdir(join(state, 'compiled')), [first.key])
+  } finally { await rm(base, { recursive: true, force: true }) }
+})
 async function fixture(startupTimeoutMs = 60000) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-compiled-')))
   const root = join(base, 'project'), library = join(base, 'lisp'), dataRoot = join(base, 'data')

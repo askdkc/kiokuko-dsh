@@ -2,9 +2,27 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { copyFile, mkdir, mkdtemp, realpath, rm, symlink } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, realpath, rename, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
+import { prepareLayout } from '../../../../src/dsh/lisp/sandbox.js'
+import { checkedDirectory } from '../../../../src/dsh/lisp/files.js'
+
+test('sandbox layout binds an aliased state directory once and still rejects a replaced scratch root', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-layout-alias-')))
+  try {
+    const state = join(base, 'state'), alias = join(base, 'alias'), outside = join(base, 'outside')
+    await mkdir(state); await mkdir(outside)
+    await symlink(state, alias, process.platform === 'win32' ? 'junction' : 'dir')
+    const layout = await prepareLayout(join(alias, 'worker'), base)
+    assert.equal(layout.base, join(state, 'worker'))
+    for (const path of [layout.scratch, layout.inputs, layout.cache]) assert.equal(path, await realpath(path))
+    assert.equal((await checkedDirectory(layout.scratch)).path, join(state, 'worker/scratch'))
+    await rename(layout.scratch, join(layout.base, 'old-scratch'))
+    await symlink(outside, layout.scratch, process.platform === 'win32' ? 'junction' : 'dir')
+    await assert.rejects(checkedDirectory(layout.scratch), { code: 'ROOT_CHANGED' })
+  } finally { await rm(base, { recursive: true, force: true }) }
+})
 
 test('protected launch pins relocated host Node without trusting adjacent executables or PATH overrides', async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-host-node-')))

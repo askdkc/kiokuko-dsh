@@ -118,12 +118,13 @@ export class CompiledLispCache {
     this.assertStopped()
     signal.throwIfAborted(); const start = performance.now(); progress({ state: 'checking' })
     await mkdir(this.root, { recursive: true, mode: 0o700 })
-    const base = await mkdtemp(join(this.root, '.build-'))
+    const root = await realpath(this.root)
+    const base = await mkdtemp(join(root, '.build-'))
     let stopped = true
     try {
       const layout = await prepareLayout(base, this.library)
       layout.protected=this.config.executionMode==='protected'
-      const key = await this.identity(layout, signal), path = join(this.root, key)
+      const key = await this.identity(layout, signal), path = join(root, key)
       signal.throwIfAborted()
       const reused = await this.existing(path, key)
       if (!reused) {
@@ -143,7 +144,7 @@ export class CompiledLispCache {
         const publishedDirectory = await open(publish, 'r'); try { await publishedDirectory.sync() } finally { await publishedDirectory.close() }
         signal.throwIfAborted()
         await rename(publish, path)
-        const directory = await open(this.root, 'r'); try { await directory.sync() } finally { await directory.close() }
+        const directory = await open(root, 'r'); try { await directory.sync() } finally { await directory.close() }
       }
       const result = { key, path, reused, prepareMs: Math.round(performance.now() - start) }
       progress({ state: 'ready', key, reused, prepareMs: result.prepareMs })

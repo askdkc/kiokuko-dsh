@@ -20,8 +20,10 @@ function literal(path: string): string {
   return `"${path}"`
 }
 export async function prepareLayout(base: string, library: string): Promise<SandboxLayout> {
-  const layout = { base, library: await realpath(library), scratch: join(base, 'scratch'), inputs: join(base, 'inputs'), cache: join(base, 'cache') }
-  for (const path of [base, layout.scratch, layout.inputs, layout.cache]) await mkdir(path, { recursive: true, mode: 0o700 })
+  await mkdir(base, { recursive: true, mode: 0o700 })
+  const root = await realpath(base)
+  const layout = { base: root, library: await realpath(library), scratch: join(root, 'scratch'), inputs: join(root, 'inputs'), cache: join(root, 'cache') }
+  for (const path of [layout.scratch, layout.inputs, layout.cache]) await mkdir(path, { recursive: true, mode: 0o700 })
   return layout
 }
 /** The OS boundary applies to arbitrary Lisp, FFI, exec, Python and shell alike. */
