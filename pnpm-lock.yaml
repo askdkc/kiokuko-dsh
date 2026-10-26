@@ -22,7 +22,7 @@ importers:
         version: 3.18.5-alpha.2
       agenticreplay:
         specifier: '>=0.1.0 <1.0.0'
-        version: 0.1.2
+        version: 0.1.9
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -848,8 +848,8 @@ packages:
     resolution: {integrity: sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==}
     engines: {node: '>= 20'}
 
-  agenticreplay@0.1.2:
-    resolution: {integrity: sha512-UMSxm9zcaN6oZQ0fdO0VxXBN1ARz471kwJLhY8n8LmR4dfIxUmQfPIfz+wcv9bxQtCfF9t7LN1aFACK7N4ysWA==}
+  agenticreplay@0.1.9:
+    resolution: {integrity: sha512-9L2obE1QgKMC2da/AWsh5q2ZXopTdQVaHpJalUAmcEXtypzDOTLj836AKd4m0HoGhv6qzHYQTWNR7B3CgrnqDw==}
     engines: {node: '>=24.0.0'}
     hasBin: true
     bundledDependencies:
@@ -1997,7 +1997,7 @@ snapshots:
 
   agent-base@9.0.0: {}
 
-  agenticreplay@0.1.2: {}
+  agenticreplay@0.1.9: {}
 
   ansi-regex@5.0.1:
     optional: true
