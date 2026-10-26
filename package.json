@@ -195,6 +195,7 @@
     "test:sampledb": "npm run build && node --import tsx tests/ci/verify-sample-database.ts",
     "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
+    "prepublishOnly": "npm ci --include=dev --include=optional --ignore-scripts",
     "prepare": "npm run build",
     "test:agenticreplay:package": "npm run build && node scripts/verify-agenticreplay-consumer.mjs && node scripts/verify-agenticreplay-consumer.mjs --pnpm",
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
