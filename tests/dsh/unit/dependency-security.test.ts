@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path'
 import test from 'node:test'
 import { gte } from 'semver'
 import { parse } from 'yaml'
+import { z } from 'zod'
 
 const root = resolve(import.meta.dirname, '../../..')
 const json = (name: string) => JSON.parse(readFileSync(join(root, name), 'utf8'))
@@ -17,7 +18,7 @@ test('security overrides resolve consistently in both package-manager lockfiles'
   const npm = json('package-lock.json')
   const pnpm = yaml('pnpm-lock.yaml')
   const workspace = yaml('pnpm-workspace.yaml')
-  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.1', sharp: '0.35.5', 'global-agent': '4.1.3' })) {
+  for (const [name, minimum] of Object.entries({ 'adm-zip': '0.6.1', sharp: '0.35.5', 'global-agent': '4.1.3', zod: '4.6.6' })) {
     const version = manifest.overrides[name]
     assert.ok(gte(version, minimum), `${name}: the published security fix must not regress`)
     assert.equal(workspace.overrides[name], version)
@@ -30,6 +31,36 @@ test('security overrides resolve consistently in both package-manager lockfiles'
     assert.ok(npmVersions.length > 0 && pnpmVersions.length > 0)
     assert.deepEqual([...new Set(npmVersions)], [version])
     assert.deepEqual([...new Set(pnpmVersions)], [version])
+  }
+})
+
+test('both lockfiles exclude the affected undici release', () => {
+  const npm = json('package-lock.json')
+  const pnpm = yaml('pnpm-lock.yaml')
+  const npmVersions = Object.entries(npm.packages)
+    .filter(([key]) => key.endsWith('/node_modules/undici') || key === 'node_modules/undici')
+    .map(([, entry]) => (entry as { version: string }).version)
+  const pnpmVersions = Object.keys(pnpm.packages).filter(key => key.startsWith('undici@'))
+    .map(key => key.slice('undici@'.length))
+  assert.ok(npmVersions.length > 0 && pnpmVersions.length > 0)
+  for (const version of [...npmVersions, ...pnpmVersions]) {
+    assert.ok(gte(version, '7.30.1'), `undici@${version}: security fix must not regress`)
+  }
+})
+
+test('Zod rejects oversized constrained collections before parsing their elements', () => {
+  let parsed = 0
+  const item = z.string().transform(value => { parsed++; return value })
+  for (const [schema, valid, oversized] of [
+    [z.array(item).max(1), ['a'], ['a', 'b']],
+    [z.set(item).max(1), new Set(['a']), new Set(['a', 'b'])],
+    [z.map(item, item).max(1), new Map([['a', 'b']]), new Map([['a', 'b'], ['c', 'd']])],
+  ] as const) {
+    parsed = 0
+    assert.equal(schema.safeParse(oversized).success, false)
+    assert.equal(parsed, 0, 'oversized input must not parse every element')
+    assert.equal(schema.safeParse(valid).success, true)
+    assert.ok(parsed > 0)
   }
 })
 

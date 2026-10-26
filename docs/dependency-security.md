@@ -103,3 +103,39 @@ The dependency tests check these explicit booleans, the absence of sharp install
 hooks, esbuild transformation, protobuf encoding/decoding, sharp image processing,
 and bundled ONNX CPU inference. Platform coverage is limited to the hosts where
 these tests actually run; upgrades that introduce new hooks need review.
+
+## 2026-10-26 advisory follow-up
+
+The root npm and pnpm graphs now resolve Zod 4.6.6 and undici 7.30.1.
+The Zod override also removes the exact 4.4.3 copies requested by the repository's
+DSH development dependencies; unrelated DSH resolutions are retained.
+
+| Dependabot alerts | Advisory | Resolution |
+| --- | --- | --- |
+| #14 / #22 | [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5) | Zod 4.5.4 / 4.4.3 → 4.6.6 in both lockfiles. |
+| #21 / #25 | [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c) | undici 7.30.0 → 7.30.1 in both lockfiles. |
+| #15–#18 | GHSA-333x-w4r6-6crp, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h, GHSA-w74x-v6f9-j3xg | Unresolved: AgenticReplay bundles fast-uri 3.1.8; the required 3.x fix is 3.1.9. |
+
+The official AgenticReplay 0.1.7 tarball still bundles fast-uri 3.1.8, as does
+the locked 0.1.2 release. Root npm overrides do not replace that bundled copy;
+`npm audit fix --dry-run` reports that it cannot fix the bundled dependency.
+No ineffective fast-uri override or unrelated AgenticReplay update is retained.
+The upstream distribution needs to include fast-uri 3.1.9 or later, or expose
+that dependency for normal package-manager resolution. pnpm's patchedDependencies
+would not repair npm consumers; no new install-time patch framework is added.
+These four advisories remain in the npm audit. No alert was dismissed.
+
+Validation used Node 24.16.0 and npm 11.13.0 in a disposable checkout: clean
+`npm ci --ignore-scripts`, typecheck, build, and 86 dependency-security,
+model-service, model-selection/navigation and tool-schema tests passed.
+The Zod regression rejects oversized bounded arrays, sets and maps before
+parsing their elements; it fails against the prior dependency.
+
+Root pnpm frozen-lockfile validation remains blocked by a pre-existing manifest
+mismatch: optional peer `@deepseek-ai/dsh-tools` is absent from the importer.
+Both unchanged HEAD and the patched graph fail with ERR_PNPM_OUTDATED_LOCKFILE
+on the CI-selected pnpm 11.7.0. Full pnpm installation was not validated.
+The security-only pnpm edit preserves all unrelated package versions and uses
+the same official tarball integrity values as npm. Root overrides do not repair
+an independently installed host's dependencies. Running profiles were not updated,
+and GitHub alerts remain open until the source is pushed and reassessed.
