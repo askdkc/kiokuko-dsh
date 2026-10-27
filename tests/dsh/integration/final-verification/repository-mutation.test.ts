@@ -1,360 +1,876 @@
-import { submitReviewedPlan } from '../../helpers/reviewed-plan.js'
-import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import test from 'node:test'
-import { openConnection } from '../../../../src/db/connection.js'
-import { migrateDatabase } from '../../../../src/db/migrate.js'
-import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
-import { verificationBoundaryKey } from '../../../../src/dsh/verification-identity.js'
-import { answerEnno, finishEnno, prepareEnnoVerification, reportEnnoWork, submitOdunoIdeal, submitOdunoMeditation } from '../../../../src/enno-oduno/service.js'
-import { captureRepositoryState } from '../../../../src/enno-oduno/repository-state.js'
-import { readEnnoSnapshot } from '../../../../src/enno-oduno/store.js'
-import { assessTaskCompletion, bindTaskCriterion, initializeTaskCompletion } from '../../../../src/dsh/task-completion.js'
+import { submitReviewedPlan } from "../../helpers/reviewed-plan.js";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { openConnection } from "../../../../src/db/connection.js";
+import { migrateDatabase } from "../../../../src/db/migrate.js";
+import { prepareAgentTask } from "../../../../src/dsh/task-intake.js";
+import { verificationBoundaryKey } from "../../../../src/dsh/verification-identity.js";
+import {
+  answerEnno,
+  finishEnno,
+  prepareEnnoVerification,
+  reportEnnoWork,
+  submitOdunoIdeal,
+  submitOdunoMeditation,
+} from "../../../../src/enno-oduno/service.js";
+import { captureRepositoryState } from "../../../../src/enno-oduno/repository-state.js";
+import { readEnnoSnapshot } from "../../../../src/enno-oduno/store.js";
+import {
+  assessTaskCompletion,
+  bindTaskCriterion,
+  initializeTaskCompletion,
+} from "../../../../src/dsh/task-completion.js";
 
 const capabilities = [
-  { kind: 'skill', name: 'kiokuko-soul', description: 'Routes work.' },
-  { kind: 'skill', name: 'kiokuko-single-purpose-functions', description: 'Focuses functions.' },
-]
+  { kind: "skill", name: "kiokuko-soul", description: "Routes work." },
+  {
+    kind: "skill",
+    name: "kiokuko-single-purpose-functions",
+    description: "Focuses functions.",
+  },
+];
 
-async function fixture(command: string, maxAttempts = 8, git = true, tapSkip = false) {
-  const root = await mkdtemp(join(tmpdir(), 'kiokuko-final-evidence-'))
-  const repository = join(root, 'repo')
-  await mkdir(repository)
-  await writeFile(join(repository, 'source.txt'), 'original')
-  if (tapSkip) await writeFile(join(repository, 'check.test.mjs'),
-    "import test from 'node:test'; test('required check', { skip: true }, () => {});\n")
-  if (git) execFileSync('git', ['init', '-q', repository])
+async function fixture(
+  command: string,
+  maxAttempts = 8,
+  git = true,
+  tapSkip = false,
+) {
+  const root = await mkdtemp(join(tmpdir(), "kiokuko-final-evidence-"));
+  const repository = join(root, "repo");
+  await mkdir(repository);
+  await writeFile(join(repository, "source.txt"), "original");
+  if (tapSkip)
+    await writeFile(
+      join(repository, "check.test.mjs"),
+      "import test from 'node:test'; test('required check', { skip: true }, () => {});\n",
+    );
+  if (git) execFileSync("git", ["init", "-q", repository]);
+  else
+    await writeFile(
+      join(repository, ".kiokuko.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        repositoryId: "repo_non_git_final_evidence",
+        workspace: "non-git-final-evidence",
+        agentFile: "AGENTS.md",
+        templateVersion: 1,
+      }),
+    );
   // Keep Kiokuko's own DB outside the repository under verification.
-  const database = openConnection(join(root, 'state.sqlite3'))
-  const cleanup = async () => { database.close(); await rm(root, { recursive: true, force: true }) }
+  const database = openConnection(join(root, "state.sqlite3"));
+  const cleanup = async () => {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  };
   try {
-    migrateDatabase(database, join(process.cwd(), 'migrations'))
+    migrateDatabase(database, join(process.cwd(), "migrations"));
     const prepared = await prepareAgentTask(database, {
-      requestId: 'final-evidence', cwd: repository, task: 'Implement and verify source.txt',
-      profileHints: { taskType: 'build', target: 'source.txt', expected: 'verified output', constraints: null },
-      capabilities, dshSessionId: 'evidence-session', skillDiscoveryMode: 'off',
-    })
-    const identity = { runId: prepared.run.runId, workspace: prepared.project.workspace, orchestrationId: prepared.intake.sessionId }
-    const snapshot = () => readEnnoSnapshot(database, identity)
-    submitOdunoIdeal(database, { ...identity, expectedRevision: 1, idempotencyKey: 'ideal',
-      ideal: { objective: 'Verify the implementation', principles: ['Require fresh evidence'], skillContributions: [], successSignals: ['verified'] } })
-    const plan = await submitReviewedPlan(database, { ...identity, expectedRevision: 1, idempotencyKey: 'plan',
-      scope: ['source.txt'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: 'Fresh evidence exists' }],
-      workPlan: { objective: 'Verify source', units: [{
-        id: 'work', objective: 'Implement source', scope: ['source.txt'], dependencies: [], routes: ['code'],
-        skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify behavior' }],
-        acceptanceCriteria: ['Verified'], focusedVerifiers: [{ id: 'focused', kind: 'test', executable: process.execPath,
-          args: ['--eval', 'process.exit(0)'], cwd: '.', timeoutMs: 5_000 }],
-      }] },
-      skillRequirements: [], finalVerifiers: [{ id: 'final-build', kind: tapSkip ? 'test' : 'build', executable: process.execPath,
-        args: tapSkip ? ['--test', '--test-reporter=tap', 'check.test.mjs'] : ['--eval', command], cwd: '.', timeoutMs: 5_000 }], maxAttempts, capabilities,
-      provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user',
-        workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' },
-    })
-    const approved = plan.ennoOduno.nextAction === 'ask_user_confirmation'
-      ? answerEnno(database, { ...identity, expectedRevision: 2, idempotencyKey: 'approve', action: 'approve' }) : plan
-    const lease = approved.executionLease!
-    const report = await reportEnnoWork(database, { ...identity, expectedRevision: 2, idempotencyKey: 'work',
-      workUnitId: 'work', leaseToken: lease.leaseToken, routeEpoch: lease.routeEpoch,
-      result: { outcome: 'completed', summary: 'Implemented', mutated: false, changedPaths: [] },
-    }, { descendantSettleMs: 0 })
-    assert.equal(report.ennoOduno.nextAction, 'run_final_verification')
-    const input = () => ({ ...identity, expectedRevision: snapshot().revision, idempotencyKey: verificationBoundaryKey(snapshot()) })
-    return { database, repository, identity, snapshot, input, cleanup }
-  } catch (error) { await cleanup(); throw error }
+      requestId: "final-evidence",
+      cwd: repository,
+      task: "Implement and verify source.txt",
+      profileHints: {
+        taskType: "build",
+        target: "source.txt",
+        expected: "verified output",
+        constraints: null,
+      },
+      capabilities,
+      dshSessionId: "evidence-session",
+      skillDiscoveryMode: "off",
+    });
+    assert.equal(prepared.executionContext.repositoryRoot, repository);
+    const identity = {
+      runId: prepared.run.runId,
+      workspace: prepared.project.workspace,
+      orchestrationId: prepared.intake.sessionId,
+    };
+    const snapshot = () => readEnnoSnapshot(database, identity);
+    submitOdunoIdeal(database, {
+      ...identity,
+      expectedRevision: 1,
+      idempotencyKey: "ideal",
+      ideal: {
+        objective: "Verify the implementation",
+        principles: ["Require fresh evidence"],
+        skillContributions: [],
+        successSignals: ["verified"],
+      },
+    });
+    const plan = await submitReviewedPlan(database, {
+      ...identity,
+      expectedRevision: 1,
+      idempotencyKey: "plan",
+      scope: ["source.txt"],
+      exclusions: [],
+      acceptanceCriteria: [
+        { id: "verified", description: "Fresh evidence exists" },
+      ],
+      workPlan: {
+        objective: "Verify source",
+        units: [
+          {
+            id: "work",
+            objective: "Implement source",
+            scope: ["source.txt"],
+            dependencies: [],
+            routes: ["code"],
+            skillNames: ["kiokuko-single-purpose-functions"],
+            expertRefs: [
+              { id: "code.verification.v1", reason: "Verify behavior" },
+            ],
+            acceptanceCriteria: ["Verified"],
+            focusedVerifiers: [
+              {
+                id: "focused",
+                kind: "test",
+                executable: process.execPath,
+                args: ["--eval", "process.exit(0)"],
+                cwd: ".",
+                timeoutMs: 5_000,
+              },
+            ],
+          },
+        ],
+      },
+      skillRequirements: [],
+      finalVerifiers: [
+        {
+          id: "final-build",
+          kind: tapSkip ? "test" : "build",
+          executable: process.execPath,
+          args: tapSkip
+            ? ["--test", "--test-reporter=tap", "check.test.mjs"]
+            : ["--eval", command],
+          cwd: ".",
+          timeoutMs: 5_000,
+        },
+      ],
+      maxAttempts,
+      capabilities,
+      provenance: {
+        scope: "explicit_user",
+        exclusions: "explicit_user",
+        acceptanceCriteria: "explicit_user",
+        workPlan: "inferred",
+        skillSet: "repository_evidence",
+        finalVerifiers: "repository_evidence",
+        maxAttempts: "inferred",
+      },
+    });
+    const approved =
+      plan.ennoOduno.nextAction === "ask_user_confirmation"
+        ? answerEnno(database, {
+            ...identity,
+            expectedRevision: 2,
+            idempotencyKey: "approve",
+            action: "approve",
+          })
+        : plan;
+    const lease = approved.executionLease!;
+    const report = await reportEnnoWork(
+      database,
+      {
+        ...identity,
+        expectedRevision: 2,
+        idempotencyKey: "work",
+        workUnitId: "work",
+        leaseToken: lease.leaseToken,
+        routeEpoch: lease.routeEpoch,
+        result: {
+          outcome: "completed",
+          summary: "Implemented",
+          mutated: false,
+          changedPaths: [],
+        },
+      },
+      { descendantSettleMs: 0 },
+    );
+    assert.equal(report.ennoOduno.nextAction, "run_final_verification");
+    const input = () => ({
+      ...identity,
+      expectedRevision: snapshot().revision,
+      idempotencyKey: verificationBoundaryKey(snapshot()),
+    });
+    return { database, repository, identity, snapshot, input, cleanup };
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
 }
 
-test('a successful last allowed work attempt can verify, accept and complete meditation', async () => {
-  const f = await fixture('process.exit(0)', 1)
+test("a successful last allowed work attempt can verify, accept and complete meditation", async () => {
+  const f = await fixture("process.exit(0)", 1);
   try {
-    assert.equal(f.snapshot().attempts, 1)
-    const input = f.input()
-    const verified = await prepareEnnoVerification(f.database, input, { descendantSettleMs: 0 })
-    assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
-    assert.deepEqual(await prepareEnnoVerification(f.database, input), verified)
-    const review = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-last',
-      review: { decision: 'accept', summary: 'Fresh final verification passed.' } })
-    assert.equal(review.ennoOduno.nextAction, 'submit_meditation')
-    const done = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'meditate-last',
-      meditation: { summary: 'No deletion candidates.', inspectedPaths: ['source.txt'], deletionCandidates: [] } })
-    assert.equal(done.ennoOduno.nextAction, 'complete')
-  } finally { await f.cleanup() }
-})
+    assert.equal(f.snapshot().attempts, 1);
+    const input = f.input();
+    const verified = await prepareEnnoVerification(f.database, input, {
+      descendantSettleMs: 0,
+    });
+    assert.equal(verified.ennoOduno.nextAction, "submit_final_review");
+    assert.deepEqual(
+      await prepareEnnoVerification(f.database, input),
+      verified,
+    );
+    const review = await finishEnno(f.database, {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "accept-last",
+      review: {
+        decision: "accept",
+        summary: "Fresh final verification passed.",
+      },
+    });
+    assert.equal(review.ennoOduno.nextAction, "submit_meditation");
+    const done = submitOdunoMeditation(f.database, {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "meditate-last",
+      meditation: {
+        summary: "No deletion candidates.",
+        inspectedPaths: ["source.txt"],
+        deletionCandidates: [],
+      },
+    });
+    assert.equal(done.ennoOduno.nextAction, "complete");
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('stream-observed skipped checks remain visible after final evidence is persisted and reloaded', async () => {
-  const f = await fixture('console.log("# skipped 1"); process.exit(0)')
+test("stream-observed skipped checks remain visible after final evidence is persisted and reloaded", async () => {
+  const f = await fixture('console.log("# skipped 1"); process.exit(0)');
   try {
-    const prepared = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(prepared.verifierResults?.[0]?.status, 'passed')
-    assert.equal(prepared.verifierResults?.[0]?.skipped, true)
-    assert.equal(f.snapshot().finalEvidence[0]?.skipped, true)
-  } finally { await f.cleanup() }
-})
+    const prepared = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(prepared.verifierResults?.[0]?.status, "passed");
+    assert.equal(prepared.verifierResults?.[0]?.skipped, true);
+    assert.equal(f.snapshot().finalEvidence[0]?.skipped, true);
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('an external edit after acceptance returns meditation to verification', async () => {
-  const f = await fixture('process.exit(0)')
+test("an external edit after acceptance returns meditation to verification", async () => {
+  const f = await fixture("process.exit(0)");
   try {
-    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    const accepted = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-before-edit',
-      review: { decision: 'accept', summary: 'Evidence was fresh at review.' } })
-    assert.equal(accepted.ennoOduno.nextAction, 'submit_meditation')
-    await writeFile(join(f.repository, 'source.txt'), 'edited after acceptance')
-    const result = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'meditate-after-edit',
-      meditation: { summary: 'Inspected source.', inspectedPaths: ['source.txt'], deletionCandidates: [] } })
-    assert.equal(result.ennoOduno.nextAction, 'run_final_verification')
-    assert.equal(f.snapshot().finalEvidenceReady, false)
-    assert.equal(f.database.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(f.identity.runId)?.status, 'active')
-  } finally { await f.cleanup() }
-})
+    await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    const accepted = await finishEnno(f.database, {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "accept-before-edit",
+      review: { decision: "accept", summary: "Evidence was fresh at review." },
+    });
+    assert.equal(accepted.ennoOduno.nextAction, "submit_meditation");
+    await writeFile(
+      join(f.repository, "source.txt"),
+      "edited after acceptance",
+    );
+    const result = submitOdunoMeditation(f.database, {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "meditate-after-edit",
+      meditation: {
+        summary: "Inspected source.",
+        inspectedPaths: ["source.txt"],
+        deletionCandidates: [],
+      },
+    });
+    assert.equal(result.ennoOduno.nextAction, "run_final_verification");
+    assert.equal(f.snapshot().finalEvidenceReady, false);
+    assert.equal(
+      f.database
+        .prepare("SELECT status FROM ledger_runs WHERE run_id = ?")
+        .get(f.identity.runId)?.status,
+      "active",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('opted-in Enno acceptance requires a pre-bound fresh verifier for every criterion', async () => {
-  const f = await fixture('process.exit(0)')
+test("opted-in Enno acceptance requires a pre-bound fresh verifier for every criterion", async () => {
+  const f = await fixture("process.exit(0)");
   try {
-    initializeTaskCompletion(f.database, f.identity.runId, 'enforce')
-    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    const request = { ...f.identity, expectedRevision: 2, idempotencyKey: 'accept-with-criterion',
-      review: { decision: 'accept' as const, summary: 'Checks succeeded.' } }
-    await assert.rejects(finishEnno(f.database, request), /require fresh bound verification evidence/)
-    const criterionId = assessTaskCompletion(f.database, f.identity.runId).criteria[0]!.criterionId
-    const method = { kind: 'enno_verifier', verifierId: 'final-build', assertion: 'exit_zero' }
-    assert.equal(bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'propose-final-verifier', criterionId,
-      method, approved: false }).approved, false)
-    await assert.rejects(finishEnno(f.database, request), /require fresh bound verification evidence/)
-    assert.equal(bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'approve-final-verifier', criterionId,
-      method, approved: true }).approved, true)
-    assert.equal(f.snapshot().finalEvidenceReady, false, 'approval after execution invalidates that earlier proof')
-    assert.equal(assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state, 'stale')
-    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(f.database.prepare('SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL').get<{ n: number }>()?.n, 2)
-    const verifiedKey = f.input().idempotencyKey
-    bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'repeat-approved-final-verifier', criterionId,
-      method, approved: true })
-    assert.equal(f.input().idempotencyKey, verifiedKey)
-    assert.equal(f.snapshot().finalEvidenceReady, true)
-    assert.equal((await finishEnno(f.database, request)).ennoOduno.nextAction, 'submit_meditation')
-  } finally { await f.cleanup() }
-})
+    initializeTaskCompletion(f.database, f.identity.runId, "enforce");
+    await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    const request = {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "accept-with-criterion",
+      review: { decision: "accept" as const, summary: "Checks succeeded." },
+    };
+    await assert.rejects(
+      finishEnno(f.database, request),
+      /require fresh bound verification evidence/,
+    );
+    const criterionId = assessTaskCompletion(f.database, f.identity.runId)
+      .criteria[0]!.criterionId;
+    const method = {
+      kind: "enno_verifier",
+      verifierId: "final-build",
+      assertion: "exit_zero",
+    };
+    assert.equal(
+      bindTaskCriterion(f.database, {
+        runId: f.identity.runId,
+        callId: "propose-final-verifier",
+        criterionId,
+        method,
+        approved: false,
+      }).approved,
+      false,
+    );
+    await assert.rejects(
+      finishEnno(f.database, request),
+      /require fresh bound verification evidence/,
+    );
+    assert.equal(
+      bindTaskCriterion(f.database, {
+        runId: f.identity.runId,
+        callId: "approve-final-verifier",
+        criterionId,
+        method,
+        approved: true,
+      }).approved,
+      true,
+    );
+    assert.equal(
+      f.snapshot().finalEvidenceReady,
+      false,
+      "approval after execution invalidates that earlier proof",
+    );
+    assert.equal(
+      assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state,
+      "stale",
+    );
+    await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(
+      f.database
+        .prepare(
+          "SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL",
+        )
+        .get<{ n: number }>()?.n,
+      2,
+    );
+    const verifiedKey = f.input().idempotencyKey;
+    bindTaskCriterion(f.database, {
+      runId: f.identity.runId,
+      callId: "repeat-approved-final-verifier",
+      criterionId,
+      method,
+      approved: true,
+    });
+    assert.equal(f.input().idempotencyKey, verifiedKey);
+    assert.equal(f.snapshot().finalEvidenceReady, true);
+    assert.equal(
+      (await finishEnno(f.database, request)).ennoOduno.nextAction,
+      "submit_meditation",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('opted-in Enno selected-test criterion rejects an exit-zero run with a skipped required test', async () => {
-  const f = await fixture('process.exit(0)', 8, true, true)
+test("opted-in Enno selected-test criterion rejects an exit-zero run with a skipped required test", async () => {
+  const f = await fixture("process.exit(0)", 8, true, true);
   try {
-    initializeTaskCompletion(f.database, f.identity.runId, 'enforce')
-    const criterionId = assessTaskCompletion(f.database, f.identity.runId).criteria[0]!.criterionId
-    bindTaskCriterion(f.database, { runId: f.identity.runId, callId: 'approved-selected-tap', criterionId,
-      method: { kind: 'enno_verifier', verifierId: 'final-build', assertion: 'selected_tests_pass' }, approved: true })
-    const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(verified.verifierResults?.[0]?.status, 'passed')
-    assert.equal(verified.verifierResults?.[0]?.skipped, true)
-    assert.equal(verified.verifierResults?.[0]?.tapSummary?.skipped, 1)
-    assert.equal(f.snapshot().finalEvidence[0]?.tapSummary?.skipped, 1)
-    assert.equal(assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state, 'unmet')
-    await assert.rejects(finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'reject-skipped',
-      review: { decision: 'accept', summary: 'The check exited zero.' } }), /require fresh bound verification evidence/)
-  } finally { await f.cleanup() }
-})
+    initializeTaskCompletion(f.database, f.identity.runId, "enforce");
+    const criterionId = assessTaskCompletion(f.database, f.identity.runId)
+      .criteria[0]!.criterionId;
+    bindTaskCriterion(f.database, {
+      runId: f.identity.runId,
+      callId: "approved-selected-tap",
+      criterionId,
+      method: {
+        kind: "enno_verifier",
+        verifierId: "final-build",
+        assertion: "selected_tests_pass",
+      },
+      approved: true,
+    });
+    const verified = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(verified.verifierResults?.[0]?.status, "passed");
+    assert.equal(verified.verifierResults?.[0]?.skipped, true);
+    assert.equal(verified.verifierResults?.[0]?.tapSummary?.skipped, 1);
+    assert.equal(f.snapshot().finalEvidence[0]?.tapSummary?.skipped, 1);
+    assert.equal(
+      assessTaskCompletion(f.database, f.identity.runId).criteria[0]?.state,
+      "unmet",
+    );
+    await assert.rejects(
+      finishEnno(f.database, {
+        ...f.identity,
+        expectedRevision: 2,
+        idempotencyKey: "reject-skipped",
+        review: { decision: "accept", summary: "The check exited zero." },
+      }),
+      /require fresh bound verification evidence/,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-for (const decision of ['accept', 'replan'] as const) {
-  test(`final review at the attempt limit still blocks ${decision === 'accept' ? 'failed verification' : 'requested replanning'}`, async () => {
-    const f = await fixture(decision === 'accept' ? 'process.exit(1)' : 'process.exit(0)', 1)
+for (const decision of ["accept", "replan"] as const) {
+  test(`final review at the attempt limit still blocks ${decision === "accept" ? "failed verification" : "requested replanning"}`, async () => {
+    const f = await fixture(
+      decision === "accept" ? "process.exit(1)" : "process.exit(0)",
+      1,
+    );
     try {
-      const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-      assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
-      const review = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'reject-last',
-        review: { decision, summary: 'Acceptance is not satisfied.' } })
-      assert.equal(review.ennoOduno.status, 'blocked')
-      assert.equal(f.snapshot().revision, 2, 'no new implementation attempt is authorized')
-    } finally { await f.cleanup() }
-  })
+      const verified = await prepareEnnoVerification(f.database, f.input(), {
+        descendantSettleMs: 0,
+      });
+      assert.equal(verified.ennoOduno.nextAction, "submit_final_review");
+      const review = await finishEnno(f.database, {
+        ...f.identity,
+        expectedRevision: 2,
+        idempotencyKey: "reject-last",
+        review: { decision, summary: "Acceptance is not satisfied." },
+      });
+      assert.equal(review.ennoOduno.status, "blocked");
+      assert.equal(
+        f.snapshot().revision,
+        2,
+        "no new implementation attempt is authorized",
+      );
+    } finally {
+      await f.cleanup();
+    }
+  });
 }
 
 for (const [label, command] of [
-  ['build artifact', 'require("node:fs").writeFileSync("source.elc", "compiled")'],
-  ['source edit', 'require("node:fs").writeFileSync("source.txt", "changed")'],
-  ['temporary edit restored', 'const fs = require("node:fs"); fs.writeFileSync("source.txt", "changed"); setTimeout(() => fs.writeFileSync("source.txt", "original"), 100)'],
+  [
+    "build artifact",
+    'require("node:fs").writeFileSync("source.elc", "compiled")',
+  ],
+  ["source edit", 'require("node:fs").writeFileSync("source.txt", "changed")'],
+  [
+    "temporary edit restored",
+    'const fs = require("node:fs"); fs.writeFileSync("source.txt", "changed"); setTimeout(() => fs.writeFileSync("source.txt", "original"), 100)',
+  ],
 ]) {
   test(`final verification hands ${label} to planning instead of looping on a completed receipt`, async () => {
-    const f = await fixture(command!)
+    const f = await fixture(command!);
     try {
-      const input = f.input()
-      const response = await prepareEnnoVerification(f.database, input, { descendantSettleMs: 50 })
-      assert.equal(response.verifierResults?.[0]?.status, 'passed', 'exit 0 alone is not sufficient')
-      assert.equal(response.verifierResults?.[0]?.changedDuringVerification, true)
-      assert.equal(response.ennoOduno.nextAction, 'review_plan')
-      assert.equal(response.ennoOduno.contractRevision, 3)
-      assert.equal(f.snapshot().finalEvidenceReady, false)
-      assert.equal(f.snapshot().attempts, 2)
-      assert.match(JSON.stringify(response.ennoOduno.directive), /Repository changes were observed/)
-      assert.deepEqual(await prepareEnnoVerification(f.database, input), response)
-      assert.equal(f.snapshot().attempts, 2, 'receipt replay must not charge another attempt')
-      assert.equal(f.database.prepare('SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL').get()?.n, 1)
-      await assert.rejects(finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'unsafe-finish',
-        review: { decision: 'accept', summary: 'Do not accept stale evidence' } }))
-      if (label === 'build artifact') assert.equal(await readFile(join(f.repository, 'source.elc'), 'utf8'), 'compiled')
-    } finally { await f.cleanup() }
-  })
+      const input = f.input();
+      const response = await prepareEnnoVerification(f.database, input, {
+        descendantSettleMs: 50,
+      });
+      assert.equal(
+        response.verifierResults?.[0]?.status,
+        "passed",
+        "exit 0 alone is not sufficient",
+      );
+      assert.equal(
+        response.verifierResults?.[0]?.changedDuringVerification,
+        true,
+      );
+      assert.equal(response.ennoOduno.nextAction, "review_plan");
+      assert.equal(response.ennoOduno.contractRevision, 3);
+      assert.equal(f.snapshot().finalEvidenceReady, false);
+      assert.equal(f.snapshot().attempts, 2);
+      assert.match(
+        JSON.stringify(response.ennoOduno.directive),
+        /Repository changes were observed/,
+      );
+      assert.deepEqual(
+        await prepareEnnoVerification(f.database, input),
+        response,
+      );
+      assert.equal(
+        f.snapshot().attempts,
+        2,
+        "receipt replay must not charge another attempt",
+      );
+      assert.equal(
+        f.database
+          .prepare(
+            "SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL",
+          )
+          .get()?.n,
+        1,
+      );
+      await assert.rejects(
+        finishEnno(f.database, {
+          ...f.identity,
+          expectedRevision: 2,
+          idempotencyKey: "unsafe-finish",
+          review: {
+            decision: "accept",
+            summary: "Do not accept stale evidence",
+          },
+        }),
+      );
+      if (label === "build artifact")
+        assert.equal(
+          await readFile(join(f.repository, "source.elc"), "utf8"),
+          "compiled",
+        );
+    } finally {
+      await f.cleanup();
+    }
+  });
 }
 
-test('external edits require a new verification identity even without a contract revision change', async () => {
-  const f = await fixture('process.exit(0)')
+test("external edits require a new verification identity even without a contract revision change", async () => {
+  const f = await fixture("process.exit(0)");
   try {
-    const first = f.input()
-    const response = await prepareEnnoVerification(f.database, first, { descendantSettleMs: 0 })
-    assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
-    assert.equal(f.input().idempotencyKey, first.idempotencyKey)
-    const current = f.snapshot()
-    assert.notEqual(verificationBoundaryKey({ ...current, mutationRevision: current.mutationRevision + 1 }), first.idempotencyKey)
-    assert.notEqual(verificationBoundaryKey({ ...current, contract: { ...current.contract,
-      finalVerifiers: [{ ...current.contract.finalVerifiers[0]!, args: ['--eval', 'process.exit(1)'] }],
-    } }), first.idempotencyKey)
-    await writeFile(join(f.repository, 'source.txt'), 'external edit')
-    assert.equal(f.snapshot().finalEvidenceReady, false)
-    const second = f.input()
-    assert.notEqual(second.idempotencyKey, first.idempotencyKey)
-    assert.equal(second.expectedRevision, first.expectedRevision)
-    const refreshed = await prepareEnnoVerification(f.database, second, { descendantSettleMs: 0 })
-    assert.equal(refreshed.ennoOduno.nextAction, 'submit_final_review')
-    assert.equal(f.snapshot().finalEvidenceReady, true)
-    assert.equal(f.database.prepare('SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL').get()?.n, 2)
-  } finally { await f.cleanup() }
-})
+    const first = f.input();
+    const response = await prepareEnnoVerification(f.database, first, {
+      descendantSettleMs: 0,
+    });
+    assert.equal(response.ennoOduno.nextAction, "submit_final_review");
+    assert.equal(f.input().idempotencyKey, first.idempotencyKey);
+    const current = f.snapshot();
+    assert.notEqual(
+      verificationBoundaryKey({
+        ...current,
+        mutationRevision: current.mutationRevision + 1,
+      }),
+      first.idempotencyKey,
+    );
+    assert.notEqual(
+      verificationBoundaryKey({
+        ...current,
+        contract: {
+          ...current.contract,
+          finalVerifiers: [
+            {
+              ...current.contract.finalVerifiers[0]!,
+              args: ["--eval", "process.exit(1)"],
+            },
+          ],
+        },
+      }),
+      first.idempotencyKey,
+    );
+    await writeFile(join(f.repository, "source.txt"), "external edit");
+    assert.equal(f.snapshot().finalEvidenceReady, false);
+    const second = f.input();
+    assert.notEqual(second.idempotencyKey, first.idempotencyKey);
+    assert.equal(second.expectedRevision, first.expectedRevision);
+    const refreshed = await prepareEnnoVerification(f.database, second, {
+      descendantSettleMs: 0,
+    });
+    assert.equal(refreshed.ennoOduno.nextAction, "submit_final_review");
+    assert.equal(f.snapshot().finalEvidenceReady, true);
+    assert.equal(
+      f.database
+        .prepare(
+          "SELECT count(*) AS n FROM enno_verifier_runs WHERE work_unit_id IS NULL",
+        )
+        .get()?.n,
+      2,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('a nonzero verifier with stable evidence still reaches final review, never automatic acceptance', async () => {
-  const f = await fixture('process.exit(1)')
+test("a nonzero verifier with stable evidence still reaches final review, never automatic acceptance", async () => {
+  const f = await fixture("process.exit(1)");
   try {
-    const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
-    assert.equal(verified.verifierResults?.[0]?.status, 'failed')
-    const reviewed = await finishEnno(f.database, { ...f.identity, expectedRevision: 2, idempotencyKey: 'failed-review',
-      review: { decision: 'accept', summary: 'An exit failure cannot be accepted' },
-    })
-    assert.equal(reviewed.ennoOduno.nextAction, 'review_plan')
-  } finally { await f.cleanup() }
-})
+    const verified = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(verified.ennoOduno.nextAction, "submit_final_review");
+    assert.equal(verified.verifierResults?.[0]?.status, "failed");
+    const reviewed = await finishEnno(f.database, {
+      ...f.identity,
+      expectedRevision: 2,
+      idempotencyKey: "failed-review",
+      review: {
+        decision: "accept",
+        summary: "An exit failure cannot be accepted",
+      },
+    });
+    assert.equal(reviewed.ennoOduno.nextAction, "review_plan");
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('mutation at the attempt limit blocks instead of creating an unbounded replan', async () => {
-  const f = await fixture('require("node:fs").writeFileSync("source.elc", "compiled")', 2)
+test("mutation at the attempt limit blocks instead of creating an unbounded replan", async () => {
+  const f = await fixture(
+    'require("node:fs").writeFileSync("source.elc", "compiled")',
+    2,
+  );
   try {
-    const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(response.ennoOduno.status, 'blocked')
-    assert.equal(f.snapshot().attempts, 2)
-    assert.equal(f.database.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get(f.identity.runId)?.status, 'failed')
-  } finally { await f.cleanup() }
-})
+    const response = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(response.ennoOduno.status, "blocked");
+    assert.equal(f.snapshot().attempts, 2);
+    assert.equal(
+      f.database
+        .prepare("SELECT status FROM ledger_runs WHERE run_id = ?")
+        .get(f.identity.runId)?.status,
+      "failed",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('a corrected verifier proceeds through plan approval, work, review and meditation to completion', async () => {
-  const f = await fixture('require("node:fs").writeFileSync("source.elc", "compiled")')
+test("a corrected verifier proceeds through plan approval, work, review and meditation to completion", async () => {
+  const f = await fixture(
+    'require("node:fs").writeFileSync("source.elc", "compiled")',
+  );
   try {
-    await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    const rejected = f.snapshot()
-    assert.equal(rejected.status, 'zenki_planning')
-    const { scope, exclusions, acceptanceCriteria, workPlan, provenance, maxAttempts } = rejected.contract
-    const revised = await submitReviewedPlan(f.database, { ...f.identity, expectedRevision: rejected.revision,
-      idempotencyKey: 'corrected-plan', scope, exclusions, acceptanceCriteria, workPlan, skillRequirements: [], provenance,
-      maxAttempts, capabilities, finalVerifiers: [{ ...rejected.contract.finalVerifiers[0], args: ['--eval', 'process.exit(0)'] }],
-    })
-    assert.equal(revised.ennoOduno.nextAction, 'ask_user_confirmation', 'repair never silently bypasses approval')
-    const revision = revised.ennoOduno.contractRevision!
-    const approved = answerEnno(f.database, { ...f.identity, expectedRevision: revision, idempotencyKey: 'approve-repair', action: 'approve' })
-    await reportEnnoWork(f.database, { ...f.identity, expectedRevision: revision, idempotencyKey: 'work-repair',
-      workUnitId: 'work', leaseToken: approved.executionLease!.leaseToken, routeEpoch: approved.executionLease!.routeEpoch,
-      result: { outcome: 'completed', summary: 'Verified existing work against corrected plan', mutated: false, changedPaths: [] },
-    }, { descendantSettleMs: 0 })
-    const verified = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 0 })
-    assert.equal(verified.ennoOduno.nextAction, 'submit_final_review')
-    const reviewed = await finishEnno(f.database, { ...f.identity, expectedRevision: revision, idempotencyKey: 'review-repair',
-      review: { decision: 'accept', summary: 'Fresh verification passed' },
-    })
-    assert.equal(reviewed.ennoOduno.nextAction, 'submit_meditation')
-    const completed = submitOdunoMeditation(f.database, { ...f.identity, expectedRevision: revision, idempotencyKey: 'meditate-repair',
-      meditation: { summary: 'No deletion necessary', inspectedPaths: ['source.txt'], deletionCandidates: [] },
-    })
-    assert.equal(completed.ennoOduno.status, 'completed')
-    assert.equal(await readFile(join(f.repository, 'source.elc'), 'utf8'), 'compiled')
-  } finally { await f.cleanup() }
-})
+    await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    const rejected = f.snapshot();
+    assert.equal(rejected.status, "zenki_planning");
+    const {
+      scope,
+      exclusions,
+      acceptanceCriteria,
+      workPlan,
+      provenance,
+      maxAttempts,
+    } = rejected.contract;
+    const revised = await submitReviewedPlan(f.database, {
+      ...f.identity,
+      expectedRevision: rejected.revision,
+      idempotencyKey: "corrected-plan",
+      scope,
+      exclusions,
+      acceptanceCriteria,
+      workPlan,
+      skillRequirements: [],
+      provenance,
+      maxAttempts,
+      capabilities,
+      finalVerifiers: [
+        {
+          ...rejected.contract.finalVerifiers[0],
+          args: ["--eval", "process.exit(0)"],
+        },
+      ],
+    });
+    assert.equal(
+      revised.ennoOduno.nextAction,
+      "ask_user_confirmation",
+      "repair never silently bypasses approval",
+    );
+    const revision = revised.ennoOduno.contractRevision!;
+    const approved = answerEnno(f.database, {
+      ...f.identity,
+      expectedRevision: revision,
+      idempotencyKey: "approve-repair",
+      action: "approve",
+    });
+    await reportEnnoWork(
+      f.database,
+      {
+        ...f.identity,
+        expectedRevision: revision,
+        idempotencyKey: "work-repair",
+        workUnitId: "work",
+        leaseToken: approved.executionLease!.leaseToken,
+        routeEpoch: approved.executionLease!.routeEpoch,
+        result: {
+          outcome: "completed",
+          summary: "Verified existing work against corrected plan",
+          mutated: false,
+          changedPaths: [],
+        },
+      },
+      { descendantSettleMs: 0 },
+    );
+    const verified = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 0,
+    });
+    assert.equal(verified.ennoOduno.nextAction, "submit_final_review");
+    const reviewed = await finishEnno(f.database, {
+      ...f.identity,
+      expectedRevision: revision,
+      idempotencyKey: "review-repair",
+      review: { decision: "accept", summary: "Fresh verification passed" },
+    });
+    assert.equal(reviewed.ennoOduno.nextAction, "submit_meditation");
+    const completed = submitOdunoMeditation(f.database, {
+      ...f.identity,
+      expectedRevision: revision,
+      idempotencyKey: "meditate-repair",
+      meditation: {
+        summary: "No deletion necessary",
+        inspectedPaths: ["source.txt"],
+        deletionCandidates: [],
+      },
+    });
+    assert.equal(completed.ennoOduno.status, "completed");
+    assert.equal(
+      await readFile(join(f.repository, "source.elc"), "utf8"),
+      "compiled",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
 for (const git of [false, true]) {
   test(`read-only final verification accepts existing edits (git=${git})`, async () => {
-    const f = await fixture('require("node:fs").statSync("source.txt")', 8, git)
+    const f = await fixture(
+      'require("node:fs").statSync("source.txt")',
+      8,
+      git,
+    );
     try {
-      if (git) execFileSync('git', ['-C', f.repository, 'add', 'source.txt'])
-      await writeFile(join(f.repository, 'source.txt'), 'completed implementation')
-      const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
-      assert.equal(response.verifierResults?.[0]?.status, 'passed')
-      assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
-      assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
-      assert.equal(f.snapshot().revision, 2)
-      assert.equal(f.snapshot().finalEvidenceReady, true)
-    } finally { await f.cleanup() }
-  })
+      if (git) execFileSync("git", ["-C", f.repository, "add", "source.txt"]);
+      await writeFile(
+        join(f.repository, "source.txt"),
+        "completed implementation",
+      );
+      const response = await prepareEnnoVerification(f.database, f.input(), {
+        descendantSettleMs: 50,
+      });
+      assert.equal(response.verifierResults?.[0]?.status, "passed");
+      assert.equal(
+        response.verifierResults?.[0]?.changedDuringVerification,
+        false,
+      );
+      assert.equal(response.ennoOduno.nextAction, "submit_final_review");
+      assert.equal(f.snapshot().revision, 2);
+      assert.equal(f.snapshot().finalEvidenceReady, true);
+    } finally {
+      await f.cleanup();
+    }
+  });
 
   test(`same-content rewrites do not invalidate final evidence (git=${git})`, async () => {
-    const f = await fixture('const fs = require("node:fs"); fs.writeFileSync("source.txt", "original"); setTimeout(() => {}, 150)', 8, git)
+    const f = await fixture(
+      'const fs = require("node:fs"); fs.writeFileSync("source.txt", "original"); setTimeout(() => {}, 150)',
+      8,
+      git,
+    );
     try {
-      if (git) execFileSync('git', ['-C', f.repository, 'add', 'source.txt'])
-      const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
-      assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
-      assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
-    } finally { await f.cleanup() }
-  })
+      if (git) execFileSync("git", ["-C", f.repository, "add", "source.txt"]);
+      const response = await prepareEnnoVerification(f.database, f.input(), {
+        descendantSettleMs: 50,
+      });
+      assert.equal(
+        response.verifierResults?.[0]?.changedDuringVerification,
+        false,
+      );
+      assert.equal(response.ennoOduno.nextAction, "submit_final_review");
+    } finally {
+      await f.cleanup();
+    }
+  });
 }
 
-test('non-Git verification still detects temporary source changes restored before exit', async () => {
-  const f = await fixture('const fs = require("node:fs"); fs.writeFileSync("source.txt", "changed"); setTimeout(() => fs.writeFileSync("source.txt", "original"), 200)', 8, false)
+test("non-Git verification still detects temporary source changes restored before exit", async () => {
+  const f = await fixture(
+    'const fs = require("node:fs"); fs.writeFileSync("source.txt", "changed"); setTimeout(() => fs.writeFileSync("source.txt", "original"), 200)',
+    8,
+    false,
+  );
   try {
-    const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
-    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, true)
-    assert.equal(response.ennoOduno.nextAction, 'review_plan')
-  } finally { await f.cleanup() }
-})
+    const response = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 50,
+    });
+    assert.equal(
+      response.verifierResults?.[0]?.changedDuringVerification,
+      true,
+    );
+    assert.equal(response.ennoOduno.nextAction, "review_plan");
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('Git-ignored build output does not require another plan approval', async () => {
-  const f = await fixture('const fs = require("node:fs"); fs.mkdirSync("dist", { recursive: true }); fs.writeFileSync("dist/output.js", "compiled")')
+test("Git-ignored build output does not require another plan approval", async () => {
+  const f = await fixture(
+    'const fs = require("node:fs"); fs.mkdirSync("dist", { recursive: true }); fs.writeFileSync("dist/output.js", "compiled")',
+  );
   try {
-    await writeFile(join(f.repository, '.gitignore'), '/dist/\n')
-    const response = await prepareEnnoVerification(f.database, f.input(), { descendantSettleMs: 50 })
-    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, false)
-    assert.equal(response.ennoOduno.nextAction, 'submit_final_review')
-    assert.equal(await readFile(join(f.repository, 'dist/output.js'), 'utf8'), 'compiled')
-  } finally { await f.cleanup() }
-})
+    await writeFile(join(f.repository, ".gitignore"), "/dist/\n");
+    const response = await prepareEnnoVerification(f.database, f.input(), {
+      descendantSettleMs: 50,
+    });
+    assert.equal(
+      response.verifierResults?.[0]?.changedDuringVerification,
+      false,
+    );
+    assert.equal(response.ennoOduno.nextAction, "submit_final_review");
+    assert.equal(
+      await readFile(join(f.repository, "dist/output.js"), "utf8"),
+      "compiled",
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('unavailable audit blocks with a host error instead of falsely blaming changes or requesting approval', async () => {
-  const f = await fixture('require("node:fs").statSync("source.txt")')
+test("unavailable audit blocks with a host error instead of falsely blaming changes or requesting approval", async () => {
+  const f = await fixture('require("node:fs").statSync("source.txt")');
   try {
-    const input = f.input()
+    const input = f.input();
     const response = await prepareEnnoVerification(f.database, input, {
       descendantSettleMs: 0,
-      captureRepositoryState: () => { throw new Error('audit read failure') },
-    })
-    assert.equal(response.ennoOduno.status, 'blocked')
-    assert.equal(f.snapshot().revision, 2)
-    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, undefined)
-    assert.equal(f.snapshot().finalEvidenceReady, false)
-    assert.match(f.snapshot().blocker ?? '', /audit is unavailable/)
-    assert.doesNotMatch(f.snapshot().blocker ?? '', /Repository changes were observed/)
-    assert.deepEqual(await prepareEnnoVerification(f.database, input), response)
-  } finally { await f.cleanup() }
-})
+      captureRepositoryState: () => {
+        throw new Error("audit read failure");
+      },
+    });
+    assert.equal(response.ennoOduno.status, "blocked");
+    assert.equal(f.snapshot().revision, 2);
+    assert.equal(
+      response.verifierResults?.[0]?.changedDuringVerification,
+      undefined,
+    );
+    assert.equal(f.snapshot().finalEvidenceReady, false);
+    assert.match(f.snapshot().blocker ?? "", /audit is unavailable/);
+    assert.doesNotMatch(
+      f.snapshot().blocker ?? "",
+      /Repository changes were observed/,
+    );
+    assert.deepEqual(
+      await prepareEnnoVerification(f.database, input),
+      response,
+    );
+  } finally {
+    await f.cleanup();
+  }
+});
 
-test('audit failure after a successful process preserves its result but cannot become reusable evidence', async () => {
-  const f = await fixture('require("node:fs").statSync("source.txt")')
+test("audit failure after a successful process preserves its result but cannot become reusable evidence", async () => {
+  const f = await fixture('require("node:fs").statSync("source.txt")');
   try {
-    let captures = 0
+    let captures = 0;
     const response = await prepareEnnoVerification(f.database, f.input(), {
       descendantSettleMs: 0,
-      captureRepositoryState: root => {
-        if (++captures > 1) throw new Error('audit became unavailable')
-        return captureRepositoryState(root)
+      captureRepositoryState: (root) => {
+        if (++captures > 1) throw new Error("audit became unavailable");
+        return captureRepositoryState(root);
       },
-    })
-    assert.equal(response.verifierResults?.[0]?.status, 'passed')
-    assert.equal(response.verifierResults?.[0]?.changedDuringVerification, undefined)
-    assert.equal(response.ennoOduno.status, 'blocked')
-    assert.equal(f.snapshot().finalEvidenceReady, false)
-    assert.equal(f.snapshot().revision, 2)
-  } finally { await f.cleanup() }
-})
+    });
+    assert.equal(response.verifierResults?.[0]?.status, "passed");
+    assert.equal(
+      response.verifierResults?.[0]?.changedDuringVerification,
+      undefined,
+    );
+    assert.equal(response.ennoOduno.status, "blocked");
+    assert.equal(f.snapshot().finalEvidenceReady, false);
+    assert.equal(f.snapshot().revision, 2);
+  } finally {
+    await f.cleanup();
+  }
+});
