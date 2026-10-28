@@ -1,3 +1,4 @@
+import { installPackedConsumer } from './pack-install-environment.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { completeVerification } from './verification-completion.mjs';
 import { execFile } from 'node:child_process'
@@ -42,7 +43,14 @@ if(phase!=='source'){
     // standalone invocation still keeps its cache inside this disposable tree.
     const npmCache=process.env.npm_config_cache??join(work,'cache')
     console.log('Skill delivery packed install started')
-    await exec('npm',['install','--ignore-scripts','--omit=optional','--no-audit','--no-fund',archive],{cwd:consumer,env:{PATH:process.env.PATH,HOME:work,npm_config_cache:npmCache},timeout:180000,maxBuffer:16*1024*1024})
+    const installation = await installPackedConsumer(archive, {
+      cwd: consumer,
+      home: work,
+      cache: npmCache,
+    })
+    process.stderr.write(`${JSON.stringify(installation.diagnostic)}\n`)
+    if (!installation.ok)
+      throw new Error('Skill delivery packed consumer installation failed')
     console.log('Skill delivery packed install completed')
     selectedDshRuntime(root) // Revalidate the selected source/package map after installation.
     const peerScope = join(consumer, 'node_modules', '@deepseek-ai')

@@ -133,3 +133,174 @@ test('safe diagnostic: Node-style AbortError without exit status remains explici
  const pending=observeProcess(signal=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Object.assign(new Error(mixed),{code:'ABORT_ERR',stderr:mixed})),{once:true})),{point:'pack-install',timeoutMs:100,now:()=>100,schedule:fn=>{fire=fn;return 1},clear:()=>{}})
  fire();const x=await pending;assert.equal(x.diagnostic.timedOut,true);assert.equal(x.diagnostic.terminationRequested,'SIGTERM');assert.equal(x.diagnostic.code,'ABORT_ERR');assert.equal(x.diagnostic.signal,null);assert.equal(x.diagnostic.exitCode,null);assert.equal(x.diagnostic.killed,null);clean(x)
 })
+
+import { installPackedConsumer } from './pack-install-environment.mjs'
+import * as installFs from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { execFile as installExecFile } from 'node:child_process'
+import { promisify } from 'node:util'
+const installExec = promisify(installExecFile)
+async function npmFixture(t, body) {
+  const root = await installFs.mkdtemp(
+    join(tmpdir(), 'packed-install-control-'),
+  )
+  await installFs.mkdir(join(root, 'bin'))
+  await installFs.writeFile(
+    join(root, 'bin/npm'),
+    `#!${process.execPath}\n${body}\n`,
+    { mode: 0o755 },
+  )
+  t.after(() => installFs.rm(root, { recursive: true, force: true }))
+  return {
+    root,
+    cwd: root,
+    home: root,
+    cache: join(root, 'cache'),
+    inherited: { PATH: join(root, 'bin') + ':' + process.env.PATH },
+  }
+}
+
+test(
+  'packed Skill installer preserves transport at its actual call site and emits only safe diagnostics',
+  { timeout: 10000 },
+  async (t) => {
+    const f = await npmFixture(
+      t,
+      `const assert=require('node:assert/strict');assert.equal(process.env.HTTPS_PROXY,'http://fixture.invalid:8080');assert.equal(process.env.NODE_OPTIONS,undefined);assert.equal(process.env.npm_config_registry,undefined);for(const arg of ['--ignore-scripts','--omit=optional','--prefer-offline','--fetch-timeout=30000','--fetch-retries=1','--fetch-retry-mintimeout=1000','--fetch-retry-maxtimeout=5000'])assert.ok(process.argv.includes(arg),arg);`,
+    )
+    const keys = ['PATH', 'HTTPS_PROXY', 'NODE_OPTIONS', 'npm_config_registry'],
+      previous = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
+    Object.assign(process.env, f.inherited, {
+      HTTPS_PROXY: 'http://fixture.invalid:8080',
+      NODE_OPTIONS: '--require missing-untrusted-hook',
+      npm_config_registry: 'https://untrusted.invalid',
+    })
+    try {
+      const source = readFileSync(
+        process.env.SKILL_INSTALL_SOURCE_FILE ??
+          join(sourceRoot, 'scripts/run-skill-delivery.mjs'),
+        'utf8',
+      )
+      const tree = ts.createSourceFile(
+        'skill.mjs',
+        source,
+        ts.ScriptTarget.Latest,
+        true,
+      )
+      const cache = walk(
+        tree,
+        (node) =>
+          ts.isVariableStatement(node) &&
+          node.declarationList.declarations.some(
+            (d) => d.name.getText(tree) === 'npmCache',
+          ),
+      )[0]
+      assert.ok(cache)
+      const statements = [...cache.parent.statements],
+        start = statements.indexOf(cache),
+        end = statements.findIndex(
+          (node) =>
+            ts.isExpressionStatement(node) &&
+            ts.isCallExpression(node.expression) &&
+            node.expression.arguments[0]?.text ===
+              'Skill delivery packed install completed',
+        )
+      assert.ok(end > start)
+      const body = statements
+        .slice(start, end)
+        .map((node) => node.getText(tree))
+        .join('\n')
+      const output = [],
+        mockProcess = {
+          env: process.env,
+          stderr: { write: (text) => output.push(text) },
+        }
+      const run = new Function(
+        'exec',
+        'installPackedConsumer',
+        'process',
+        'work',
+        'consumer',
+        'archive',
+        'join',
+        'console',
+        `return(async()=>{${body}})()`,
+      )
+      await run(
+        installExec,
+        installPackedConsumer,
+        mockProcess,
+        f.root,
+        f.cwd,
+        'fixture.tgz',
+        join,
+        { log() {} },
+      )
+      assert.equal(output.length, 1)
+      const diagnostic = JSON.parse(output[0])
+      assert.equal(diagnostic.success, true)
+      assert.equal(diagnostic.timedOut, false)
+      assert.equal(diagnostic.timeoutMs, 180000)
+    } finally {
+      for (const key of keys)
+        if (previous[key] === undefined) delete process.env[key]
+        else process.env[key] = previous[key]
+    }
+  },
+)
+
+test(
+  'packed consumer install retains network failure evidence without disclosing npm output',
+  { timeout: 10000 },
+  async (t) => {
+    const f = await npmFixture(
+      t,
+      `process.stderr.write('ETIMEDOUT Authorization: Bearer ${secret}');process.exitCode=1`,
+    )
+    const result = await installPackedConsumer('fixture.tgz', f)
+    assert.equal(result.ok, false)
+    assert.equal(result.diagnostic.exitCode, 1)
+    assert.equal(result.diagnostic.timedOut, false)
+    assert.ok(JSON.stringify(result.diagnostic).includes('ETIMEDOUT'))
+    clean(result)
+  },
+)
+
+test(
+  'packed consumer install deadline drains npm and its owned child before returning',
+  { timeout: 12000 },
+  async (t) => {
+    const f = await npmFixture(
+      t,
+      `const {spawn}=require('node:child_process');const {writeFileSync}=require('node:fs');const child=spawn(process.execPath,['-e','setTimeout(()=>{},8000)'],{stdio:'ignore'});writeFileSync('child.pid',String(child.pid));process.on('SIGTERM',()=>{});setTimeout(()=>{},8000)`,
+    )
+    const started = performance.now(),
+      result = await installPackedConsumer('fixture.tgz', {
+        ...f,
+        timeoutMs: 600,
+      })
+    assert.equal(result.ok, false)
+    assert.equal(result.diagnostic.timedOut, true)
+    assert.equal(result.diagnostic.killed, true)
+    assert.ok(
+      performance.now() - started < 7000,
+      'npm shutdown is bounded by the deadline plus five-second cleanup',
+    )
+    const pid = Number(
+      await installFs.readFile(join(f.root, 'child.pid'), 'utf8'),
+    )
+    const state = await installExec('ps', [
+      '-p',
+      String(pid),
+      '-o',
+      'stat=',
+    ]).catch((error) => {
+      if (error.code !== 1) throw error
+      return { stdout: '' }
+    })
+    assert.ok(
+      !state.stdout.trim() || state.stdout.trim().startsWith('Z'),
+      'install child must no longer run',
+    )
+  },
+)
