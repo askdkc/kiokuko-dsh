@@ -371,6 +371,7 @@ async function tui(resumeSessionId) {
         assert.equal(done.kind, 'success', JSON.stringify(done))
       }
       const lispRequest = `profile-fixture-lisp ${created.sessionId.slice(0, 8)}: evaluate (+ 20 22) using Lisp`
+      const completionReviewOffset = fresh().length
       await line(lispRequest)
       await wait(() => {
         if (enterReady() && screen().includes('この作業をどう実行しますか') && screen().includes('通常実行')) {
@@ -395,6 +396,17 @@ async function tui(resumeSessionId) {
           && value.event.data.turn === completed.event.data.turn && value.event.data.phase === 'capture'
           && value.event.data.status === 'saved' && value.event.data.reflection === 'model') && enterReady()
       }, 'completed native Lisp turn did not save automatic repository learning')
+      await wait(() => {
+        const review = fresh()
+          .slice(completionReviewOffset)
+          .find(
+            (value) =>
+              value.type === 'native-question' &&
+              value.questions?.[0]?.detail ===
+                'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.',
+          )
+        return review && declinedQuestions.has(review.requestSequence) && enterReady() && composerText() === ''
+      }, 'managed Lisp task completion review did not settle before the next composer input')
       const beforeCancel = native('command/done').length
       await line('/kioku-lisp cancel')
       await wait(() => native('command/done').length > beforeCancel, 'Lisp cancel did not complete', 90000)
