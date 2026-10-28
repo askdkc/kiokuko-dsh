@@ -702,7 +702,8 @@ export class DshLifecycleMemory {
     task?: { revision: number; generation: number; repositoryRoot: string },
     native?: NativeReviewScope,
   ): void {
-    if (this.repositoryLearning.observesNativeTurns(sessionId)) return;
+    if (native && this.repositoryLearning.observesNativeTurns(sessionId))
+      return;
     const state = this.states.get(sessionId),
       questions = this.host.get("userQuestions", false) as
         DshUserQuestions | undefined;

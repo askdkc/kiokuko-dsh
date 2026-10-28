@@ -446,3 +446,220 @@ test("repository reset invalidates a different session reflection already in fli
     await f.close();
   }
 });
+
+for (const boundary of [
+  "before-response",
+  "mid-stream",
+  "after-response",
+] as const) {
+  test(`repository reflection connection loss ${boundary} saves only observations and the next turn remains usable`, async () => {
+    const f = await fixture();
+    const original = f.host.model!;
+    try {
+      f.host.model = async function* () {
+        if (boundary !== "before-response")
+          yield {
+            type: "text-delta",
+            text: boundary === "mid-stream" ? '{"lessons":[' : '{"lessons":[]}',
+          };
+        if (boundary === "after-response")
+          yield { type: "finish", reason: { kind: "stop" } };
+        throw new Error(
+          "private network failure detail must not enter diagnostics",
+        );
+      };
+      const a = f.agent("network-recovery");
+      turn(a, 1);
+      await f.memory.whenIdle();
+      const first = await f.snapshot();
+      assert.equal(first.turnCount, 1);
+      assert.ok(
+        first.points.every(
+          (point) =>
+            point.kind === "observation" &&
+            point.reflectionStatus === "unavailable",
+        ),
+      );
+      assert.ok(
+        a.events.some(
+          (event) =>
+            event.type === "kiokuko/repository-learning" &&
+            event.data.status === "saved" &&
+            event.data.reason === "model_call_failed",
+        ),
+      );
+      assert.ok(!JSON.stringify(first).includes("private network failure"));
+      f.host.model = original;
+      turn(a, 2);
+      await f.memory.whenIdle();
+      assert.equal((await f.snapshot()).turnCount, 2);
+      assert.equal(
+        f.host.modelCalls.length,
+        2,
+        "there is no automatic network retry loop",
+      );
+    } finally {
+      await f.close();
+    }
+  });
+}
+
+for (const boundary of [
+  "transaction",
+  "commit-ack",
+  "commit-ack-unreadable",
+] as const) {
+  test(`repository save recovery reconciles ${boundary} against real SQLite without duplicate saves`, async () => {
+    const f = await fixture();
+    const original = f.runtime.withDatabase.bind(f.runtime);
+    let injected = false;
+    try {
+      f.runtime.withDatabase = async (operation) => {
+        if (injected && boundary === "commit-ack-unreadable")
+          throw new Error("read unavailable fixture");
+        let saved = false;
+        const result = await original((db, config) =>
+          operation(
+            {
+              filePath: db.filePath,
+              close() {},
+              exec: (sql) => db.exec(sql),
+              prepare: (sql) => {
+                if (
+                  !injected &&
+                  sql.startsWith("INSERT INTO repository_learning_state")
+                ) {
+                  saved = true;
+                  if (boundary === "transaction") {
+                    injected = true;
+                    throw new Error("write failure fixture");
+                  }
+                }
+                return db.prepare(sql);
+              },
+            },
+            config,
+          ),
+        );
+        if (saved && !injected) {
+          injected = true;
+          throw new Error("commit succeeded but acknowledgement lost");
+        }
+        return result;
+      };
+      const a = f.agent("save-recovery");
+      turn(a, 1);
+      await f.memory.whenIdle();
+      f.runtime.withDatabase = original;
+      assert.equal(
+        (await f.snapshot()).turnCount,
+        boundary === "transaction" ? 0 : 1,
+      );
+      const last = a.events
+        .filter(
+          (event) =>
+            event.type === "kiokuko/repository-learning" &&
+            event.data.phase === "capture",
+        )
+        .at(-1)!;
+      assert.equal(
+        last.data.saveState,
+        boundary === "transaction"
+          ? "not_saved"
+          : boundary === "commit-ack"
+            ? "saved"
+            : "unknown",
+      );
+      const calls = f.host.modelCalls.length;
+      await f.restart();
+      await f.memory.whenIdle();
+      assert.equal((await f.snapshot()).turnCount, 1);
+      assert.equal(
+        f.host.modelCalls.length,
+        calls + (boundary === "transaction" ? 1 : 0),
+      );
+      assert.equal(
+        await f.runtime.withDatabase(
+          (db) =>
+            db
+              .prepare(
+                "SELECT count(*) AS n FROM repository_learning_pending_admissions",
+              )
+              .get<{ n: number }>()!.n,
+        ),
+        0,
+      );
+      turn(a, 2);
+      await f.memory.whenIdle();
+      assert.equal((await f.snapshot()).turnCount, 2);
+    } finally {
+      f.runtime.withDatabase = original;
+      await f.close();
+    }
+  });
+}
+
+test("a delayed repository reflection cannot commit after its native agent moves to another workspace", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  try {
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.host.model = async function* () {
+      started();
+      await gate;
+      yield { type: "text-delta", text: '{"lessons":[]}' };
+      yield { type: "finish", reason: { kind: "stop" } };
+    };
+    const a = f.agent("moved-workspace");
+    turn(a, 1);
+    await entered;
+    a.a.session.header.cwd = "/";
+    release();
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, 0);
+  } finally {
+    release?.();
+    await f.close();
+  }
+});
+
+test("native user Stop discards the in-flight reflection and reload does not resurrect it", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  try {
+    let started!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    f.host.model = async function* () {
+      started();
+      await gate;
+      yield { type: "text-delta", text: '{"lessons":[]}' };
+      yield { type: "finish", reason: { kind: "stop" } };
+    };
+    const a = f.agent("stopped-reflection");
+    turn(a, 1);
+    await entered;
+    a.a.cancel({ kind: "user" });
+    release();
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, 0);
+    const calls = f.host.modelCalls.length;
+    await f.restart();
+    await f.memory.whenIdle();
+    assert.equal(f.host.modelCalls.length, calls);
+    assert.equal((await f.snapshot()).turnCount, 0);
+  } finally {
+    release?.();
+    await f.close();
+  }
+});

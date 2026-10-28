@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { forgetMemory } from "../../../src/memory/forget.js";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -486,6 +488,15 @@ test("durable predispatch admission retires unsaved in-flight turns after reset 
   admitRepositoryTurn(f.db, root, old.sessionId, old.turnId, 0);
   admitRepositoryTurn(f.db, root, old.sessionId, old.turnId, 0);
   const reset = resetRepositoryLearning(f.db, root);
+  assert.equal(
+    f.db
+      .prepare(
+        "SELECT count(*) AS n FROM repository_learning_pending_admissions",
+      )
+      .get<{ n: number }>()!.n,
+    0,
+    "explicit reset clears the pending queue and retains only retired identities",
+  );
   f.db.close();
   const db = openConnection(path);
   try {
@@ -524,3 +535,53 @@ test("durable predispatch admission retires unsaved in-flight turns after reset 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+for (const boundary of ["before-commit", "after-commit"] as const) {
+  test(`process exit ${boundary} is reconciled after reopen without duplicating a turn or retaining a SQLite lock`, () => {
+    const directory = mkdtempSync(join(tmpdir(), "learning-process-recovery-"));
+    const path = join(directory, "memory.sqlite");
+    const f = fixture(path);
+    f.db.close();
+    const source = pathToFileURL(
+      join(process.cwd(), "src/memory/repository-learning.ts"),
+    ).href;
+    const connection = pathToFileURL(
+      join(process.cwd(), "src/db/connection.ts"),
+    ).href;
+    execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "-e",
+        `
+      import {saveTurn} from ${JSON.stringify(source)};
+      import {openConnection} from ${JSON.stringify(connection)};
+      const db=openConnection(${JSON.stringify(path)});
+      const proxy={filePath:db.filePath,close(){},prepare:sql=>db.prepare(sql),exec(sql){
+        if(sql==='COMMIT'&&${JSON.stringify(boundary)}==='before-commit')process.exit(0);
+        db.exec(sql);
+        if(sql==='COMMIT'&&${JSON.stringify(boundary)}==='after-commit')process.exit(0);
+      }};
+      saveTurn(proxy,${JSON.stringify(turn())});
+      throw new Error('Expected process to exit without acknowledging the save');
+    `,
+      ],
+      { cwd: process.cwd(), stdio: "pipe" },
+    );
+    const db = openConnection(path);
+    try {
+      assert.equal(
+        readRepositoryLearning(db, root).turnCount,
+        boundary === "before-commit" ? 0 : 1,
+      );
+      assert.equal(saveTurn(db, turn()).inserted, boundary === "before-commit");
+      assert.equal(readRepositoryLearning(db, root).turnCount, 1);
+      assert.equal(saveTurn(db, turn()).inserted, false);
+    } finally {
+      db.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+}

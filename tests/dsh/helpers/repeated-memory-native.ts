@@ -279,7 +279,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       assert.equal(saved.length, readonly || fault.saveFailure ? 0 : 1, 'only approved native replay may be saved')
       if (saved.length) {
         const proposal = JSON.parse(saved[0]!.proposal_json)
-        if (route === 'normal') assert.ok(proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'approved memory must contain the actual successful fixture verifier')
+        if (route === 'normal') assert.ok(proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'approved memory must contain the actual successful fixture verifier: '+JSON.stringify({attempts:proposal.attempts,applicationCommand}))
         else assert.ok(proposal.attempts.length > 0 && !proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'Enno review must not invent a Bash verifier receipt')
         assert.ok(memoryQuestions.some(question => question.round === number && question.phase === 'review' && JSON.stringify(question.proposal) === saved[0]!.proposal_json), 'the saved proposal must equal the displayed revision')
       }

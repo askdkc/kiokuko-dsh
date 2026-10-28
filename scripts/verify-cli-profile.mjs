@@ -387,8 +387,14 @@ async function tui(resumeSessionId) {
       assert.equal(receipt.result.isError, false, JSON.stringify(receipt))
       assert.equal(receipt.result.value.ok, true, JSON.stringify(receipt))
       await wait(() => screen().includes('PROFILE_LISP_OK'), 'Lisp answer did not render')
-      await wait(() => declinedQuestions.size > 0 && enterReady(),
-        'native completion memory review was not declined')
+      const lispInput = native('user/message').find(value => value.sessionId === created.sessionId && value.event.data.content?.some(block => block.text === lispRequest))
+      assert.ok(lispInput, 'Lisp input must be recorded in the same session')
+      await wait(() => {
+        const completed = native('turn/end').find(value => value.sessionId === created.sessionId && value.event.seq > lispInput.event.seq && value.event.data.reason.kind === 'completed')
+        return completed && native('plugin:kiokuko-dsh/repository-learning').some(value => value.sessionId === created.sessionId
+          && value.event.data.turn === completed.event.data.turn && value.event.data.phase === 'capture'
+          && value.event.data.status === 'saved' && value.event.data.reflection === 'model') && enterReady()
+      }, 'completed native Lisp turn did not save automatic repository learning')
       const beforeCancel = native('command/done').length
       await line('/kioku-lisp cancel')
       await wait(() => native('command/done').length > beforeCancel, 'Lisp cancel did not complete', 90000)

@@ -421,6 +421,12 @@ export function resetRepositoryLearning(
       "DELETE FROM repository_learning_turns WHERE repository_key=?",
     ).run(key);
     db.prepare(
+      "INSERT OR IGNORE INTO repository_learning_retired_turns SELECT repository_key,session_id,turn_id FROM repository_learning_pending_admissions WHERE repository_key=?",
+    ).run(key);
+    db.prepare(
+      "DELETE FROM repository_learning_pending_admissions WHERE repository_key=?",
+    ).run(key);
+    db.prepare(
       "DELETE FROM repository_learning_state WHERE repository_key=?",
     ).run(key);
     return { admissionEpoch: learningEpoch(db) };

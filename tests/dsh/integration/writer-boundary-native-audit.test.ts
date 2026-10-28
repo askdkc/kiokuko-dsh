@@ -21,7 +21,7 @@ async function setup(){
   await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
   const mock=nativeMock(llm);let hold:any,mainCalls=0,answer:(q:any)=>any=()=>{throw Error('no answer configured')}
-  class Provider extends llm.LlmAdapter{async listModels(provider:string){return[{provider,id:'mock',name:'mock'}]}async resolveModel(provider:string,id:string){return{provider,id,name:id}}async *stream(q:any){mainCalls++;if(hold)await Promise.race([hold,new Promise((_,reject)=>q.signal.addEventListener('abort',()=>reject(q.signal.reason),{once:true}))]);yield*mock.textResponse('ordinary request completed')}}
+  class Provider extends llm.LlmAdapter{async listModels(provider:string){return[{provider,id:'mock',name:'mock'}]}async resolveModel(provider:string,id:string){return{provider,id,name:id}}async *stream(q:any){if(q.purpose==='compaction'&&String(q.system).startsWith('Extract compact repository-scoped learning')){assert.deepEqual(q.tools,[]);yield*mock.textResponse(JSON.stringify({lessons:[]}));return}mainCalls++;if(hold)await Promise.race([hold,new Promise((_,reject)=>q.signal.addEventListener('abort',()=>reject(q.signal.reason),{once:true}))]);yield*mock.textResponse('ordinary request completed')}}
   ctx.llm.registerAdapter(['mock'],new Provider());ctx.on('agent/error',(e:any)=>errors.push(e.error),{global:true})
   ctx.on('user-questions/request',(q:any)=>{asked.push(q);return answer(q)},{global:true})
   const agent=await ctx.agentLoop.create(session.SessionId(f.binding.sessionId),{provider:'mock',model:'mock'},{cwd:f.root})
@@ -36,3 +36,18 @@ const reply=(q:any,label:string)=>({answers:[{id:q.questions[0].id,selected:[lab
 test('actual native UserQuestionService receives exact live agent and saves exact approved preview',async()=>{const f=await setup();try{f.setAnswer(q=>reply(q,f.asked.length===1?'整理して確認する':'この内容を保存する'));f.memory.completed('native-task','completed',f.agent.session.id);await f.memory.whenIdle();assert.equal(f.asked.length,2);assert.ok(f.asked.every(q=>q.agent===f.agent));assert.equal(count(f.database,'replay_memories'),1);const p=JSON.parse(f.database.prepare('SELECT proposal_json FROM replay_memories').get<any>().proposal_json);assert.ok(f.asked[1].questions[0].detail.includes(JSON.stringify(p,null,2)));assert.equal(p.attempts[0].outcome,'succeeded');assert.deepEqual(f.errors,[])}finally{await f.close()}})
 test('unanswered native review does not block a new ordinary native turn; actual native cancel must cancel review',async()=>{const f=await setup();let release:any;try{f.setAnswer(q=>f.asked.length===1?reply(q,'整理して確認する'):new Promise(r=>{release=()=>r(reply(q,'この内容を保存する'))}));f.memory.completed('native-task','completed',f.agent.session.id);await wait(()=>!!release);assert.equal(count(f.database,'replay_memories'),0);f.agent.followup(f.llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Hello, do ordinary work now.'}]}));await wait(()=>f.calls===1&&f.agent.status==='idle');assert.equal(count(f.database,'replay_memories'),0);f.hold();f.agent.followup(f.llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Start another ordinary turn.'}]}));await wait(()=>f.calls===2&&f.agent.status==='running');f.agent.cancel({kind:'user'},{keepInbox:true});await f.agent.whenIdle();assert.ok(f.agent.session.snapshotEvents().some((e:any)=>e.type==='turn/end'&&e.data.reason?.kind==='aborted'));release();await f.memory.whenIdle();assert.equal(count(f.database,'replay_memories'),0,'explicit native user Stop must not allow late review approval to save')}finally{release?.();await f.close()}})
 test('changed terminal generation must invalidate pending native review scope',async()=>{const f=await setup();let release:any;try{f.setAnswer(q=>f.asked.length===1?reply(q,'整理して確認する'):new Promise(r=>{release=()=>r(reply(q,'この内容を保存する'))}));f.memory.completed('native-task','completed',f.agent.session.id,{revision:1,generation:1,repositoryRoot:f.root});await wait(()=>!!release);f.database.prepare("UPDATE ledger_runs SET task_revision=task_revision+1,task_generation=task_generation+1,task_state='Working',status='active' WHERE run_id='native-task'").run();release();await f.memory.whenIdle();assert.equal(count(f.database,'replay_memories'),0,'changed task generation must invalidate reviewed source scope')}finally{release?.();await f.close()}})
+
+test('explicit managed completion remains reviewable after native turn learning is active',async()=>{
+  const f=await setup()
+  try{
+    f.setAnswer(q=>reply(q,f.asked.length===1?'整理して確認する':'この内容を保存する'))
+    f.agent.followup(f.llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Complete ordinary native conversation.'}]}))
+    await f.agent.whenIdle();await f.memory.whenIdle()
+    assert.equal(f.asked.length,0,'ordinary turn learning must not require approval')
+    f.memory.completed('native-task','completed',f.agent.session.id)
+    await f.memory.whenIdle()
+    assert.equal(f.asked.length,2,'explicit managed completion retains organization and exact-preview approval')
+    assert.equal(count(f.database,'replay_memories'),1)
+    assert.deepEqual(f.errors,[])
+  }finally{await f.close()}
+})

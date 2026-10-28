@@ -542,3 +542,106 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
     },
   );
 }
+
+for (const interruption of ["stop", "reset", "reload"] as const) {
+  test(
+    `public native learning recovers from ${interruption} while its old model response is delayed`,
+    { timeout: 30000 },
+    async () => {
+      const f = await nativeSkillFixture({ packages, explicit: false, extra });
+      const original = f.model.stream.bind(f.model);
+      let release!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let reflections = 0;
+      const diagnostics: any[] = [];
+      const off = f.ctx.on(
+        "kiokuko/repository-learning",
+        (_id: string, data: any) => diagnostics.push(data),
+        { global: true },
+      );
+      const snapshot = () => {
+        const db = openConnection(join(f.dir, "kiokuko-dsh.sqlite3"));
+        try {
+          return readRepositoryLearning(db, f.dir);
+        } finally {
+          db.close();
+        }
+      };
+      const waitFor = async (predicate: () => boolean) => {
+        const deadline = Date.now() + 5000;
+        while (!predicate() && Date.now() < deadline) await delay(10);
+        assert.ok(predicate(), JSON.stringify(diagnostics));
+      };
+      f.model.stream = async function* (request: any) {
+        if (
+          String(request.system).startsWith(
+            "Extract compact repository-scoped learning",
+          )
+        ) {
+          reflections++;
+          if (reflections === 1) {
+            entered();
+            await gate;
+          }
+          yield* f.mock.textResponse('{"lessons":[]}');
+          return;
+        }
+        yield* original(request);
+      };
+      try {
+        f.responses.push(f.mock.textResponse("Ordinary first answer."));
+        await f.turn("Discuss this fixture without using tools.");
+        await started;
+        if (interruption === "stop")
+          f.agent.cancel({ kind: "user" }, { keepInbox: true });
+        if (interruption === "reset") {
+          const result = await f.ctx.commands.execute(
+            f.agent,
+            "/kioku-memory learning reset",
+            [],
+            new AbortController().signal,
+          );
+          assert.equal(result.result.kind, "success");
+        }
+        if (interruption === "reload") await f.reload("compiled");
+        if (interruption === "stop")
+          await waitFor(() =>
+            diagnostics.some((data) => data.saveState === "discarded"),
+          );
+        release();
+        await waitFor(() =>
+          interruption === "reload"
+            ? snapshot().turnCount === 1
+            : diagnostics.some((data) => data.saveState === "discarded"),
+        );
+        assert.equal(snapshot().turnCount, interruption === "reload" ? 1 : 0);
+        if (interruption !== "reload") {
+          await f.reload("compiled");
+          await delay(30);
+          assert.equal(
+            reflections,
+            1,
+            "discarded old turn is not dispatched again after reload",
+          );
+        }
+        f.responses.push(f.mock.textResponse("New instruction completed."));
+        await f.turn(
+          "Now answer a different ordinary instruction without tools.",
+        );
+        await waitFor(
+          () => snapshot().turnCount === (interruption === "reload" ? 2 : 1),
+        );
+      } finally {
+        release?.();
+        off();
+        await f.close();
+      }
+    },
+  );
+}

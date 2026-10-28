@@ -82,3 +82,28 @@ success-rate improvement. Native integration tests use the real DSH plugin/model
 routing and controlled model responses; they are not live-provider effectiveness
 measurements. Source application alone does not update an already running DSH
 process.
+
+## Interrupted saves and recovery
+
+Reflection has a bounded deadline and no automatic network retry. A disconnected
+or invalid model stream may still save the observed turn with an unavailable or
+invalid reflection, without inventing a lesson. Foreground work can continue.
+SQLite writes retry only recognized lock contention under the existing finite
+backoff policy; no tool or external side effect is replayed by learning recovery.
+
+| Boundary                                               | Durable result and recovery                                                                                                                                                                                         |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Before/during/after the model response                 | Save observations only if reflection fails; the next turn remains usable.                                                                                                                                           |
+| Failure inside the save transaction                    | Roll back turn and projection together. Capture diagnostics report `saveState: not_saved`; reload the plugin to retry the latest retained native turn, or use `/kioku-memory learning reset` to discard it.         |
+| Commit succeeded but acknowledgement was lost          | Re-read the exact repository/session/turn. Report `saved` when found, `unknown` if storage cannot be read. Do not assume rollback or repeat tools. Reload reconciles the stored identity before any new reflection. |
+| Process exits before/after commit                      | SQLite rollback or committed turn survives reopening. The exact identity prevents a second save. Recovery remains limited to the latest 512 retained native events.                                                 |
+| Explicit native Stop or agent/workspace ownership loss | Discard unsaved in-flight reflection, retain only a payload-free retired identity, and reject its late result after reload. Already committed observations are not undone.                                          |
+| Plugin reload                                          | Abort the old coordinator; reconstruct the latest retained turn. A saved turn is a duplicate, an unsaved turn can be retried. No raw reflection response is persisted for retry.                                    |
+| New instruction or next turn                           | Completed earlier turns append in order to the current projection; they do not replace a newer snapshot with an old snapshot. Stop can cancel outstanding reflection so the next instruction can proceed.           |
+| Reset/forget                                           | Existing admission epochs and tombstones reject pre-reset results. Reset also clears current-repository pending admissions; new turns remain enabled.                                                               |
+
+Capture diagnostics retain only safe identities/counts, `saveState`, and a
+`reload_or_reset` recovery hint when a save is absent or uncertain. There is no
+background retry queue or indefinite lease on a model request. A model timeout,
+unknown save outcome or exhausted SQLite retry is not claimed automatically
+recovered. Reset does not erase native logs or user data.

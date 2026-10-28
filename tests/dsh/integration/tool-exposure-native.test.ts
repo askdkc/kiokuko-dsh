@@ -64,6 +64,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   const h = await harness()
   const pi = await import(modulePath('dsh-llm-pi-ai', 'packages/llm/llm-pi-ai'))
   const requests: { url: string; bodyText: string; body: Record<string, any> }[] = []
+  const auxiliaryRequests: typeof requests = []
   const toolCalls: unknown[] = []
   const unexpectedRequests: string[] = []
   let roundtrip: 'capture' | 'prepare' | 'tool-call' | 'final-answer' = 'capture'
@@ -97,6 +98,12 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     if (protocol.name === 'deepseek' || protocol.name === 'anthropic') {
       assert.ok(Array.isArray(body.messages))
       assert.ok(body.tools.every((tool: any) => typeof tool.name === 'string' && tool.input_schema))
+    }
+    if (bodyText.includes('Extract compact repository-scoped learning')) {
+      assert.deepEqual(body.tools, [], 'background reflection must not expose effectful tools')
+      auxiliaryRequests.push({ url: request.url, bodyText, body })
+      // This serializer fixture deliberately rejects recording-only model probes.
+      return new Response(JSON.stringify({ error: { message: 'intentional auxiliary fixture response' } }), { status: 400, headers: { 'content-type': 'application/json' } })
     }
     requests.push({ url: request.url, bodyText, body })
     const preparing = roundtrip === 'prepare'
@@ -281,6 +288,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
     try { await preparedTurn(phaseAgent) } finally { console.warn = previousWarn }
     assert.equal(requests.length, 4)
+    if (protocol.name === 'deepseek') assert.equal(auxiliaryRequests.length, 2, 'each finished foreground turn attempts its independent reflection')
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
     const currentExecutor = typeof (h.ctx as any).tools.setExecutor === 'function'

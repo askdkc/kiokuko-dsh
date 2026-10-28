@@ -33,7 +33,10 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
       async resolveModel(provider:string,id:string){return {provider,id,name:id,context:{contextWindow:200000}}}
       async *stream(request:any){
         requests.push(request)
-        if(request.system?.startsWith('Review durable project memories')){
+        if(request.purpose==='compaction'&&String(request.system).startsWith('Extract compact repository-scoped learning')){
+          assert.deepEqual(request.tools,[])
+          yield*mock.textResponse(JSON.stringify({lessons:[]}))
+        }else if(request.system?.startsWith('Review durable project memories')){
           reviewCalls++;assert.deepEqual(request.tools,[])
           const input=JSON.parse(request.messages[0].content[0].text)
           yield*mock.textResponse(JSON.stringify({schemaVersion:2,proposals:[{action:'add',kind:'preference',title:'EMBERLANG 日本語',body:'EMBERLANGプロジェクトの応答言語設定は日本語。',evidenceIds:[input.evidence[0].id],claims:[{id:'language',text:'EMBERLANGプロジェクトの応答言語設定は日本語。',evidence:[{evidenceId:input.evidence[0].id,supportingText:input.evidence[0].text}]}]}]}))
@@ -104,7 +107,7 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const 
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'EMBERLANG の回答言語は？'}]}))
     await wait(()=>agent.status==='idle'&&mainCalls===9)
     assert.equal(adapter.host.resolveSessionRunId!(agent.session),runId)
-    const final=requests.filter(r=>!r.system?.startsWith('Review durable')).at(-1)
+    const final=requests.filter(r=>r.purpose!=='compaction').at(-1)
     assert.match(JSON.stringify(final.messages),/EMBERLANGプロジェクトの応答言語設定は日本語/)
     const delivered=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT count(*) AS n FROM context_delivery_entries WHERE entry_id=?').get<{n:number}>(saved.id)!.n)
     assert.equal(delivered,0,'conversational retrieval must not create execution delivery receipts')

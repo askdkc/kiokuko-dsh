@@ -24,13 +24,15 @@ export function apply(ctx) {
     async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 131072 } } },
     async prepareCall(provider, model) { return { model: await this.resolveModel(provider, model), stream: options => this.stream(options) } },
     async *stream(options) {
+      const reflection = options.purpose === 'compaction' && String(options.system).startsWith('Extract compact repository-scoped learning')
+      if (reflection) assert.deepEqual(options.tools, [])
       const input = [...options.messages].reverse().find(message => message.role === 'user' && message.source?.kind === 'user')
       const text = input?.content?.filter(block => block.type === 'text').map(block => block.text).join('\n') ?? ''
-      record({ type: 'fixture-request', text, sessionId: options.sessionId, purpose: options.purpose, tools: options.tools?.map(tool => tool.name) ?? [] })
+      record({ type: reflection ? 'fixture-repository-learning' : 'fixture-request', text, sessionId: options.sessionId, purpose: options.purpose, tools: options.tools?.map(tool => tool.name) ?? [] })
       if (text.includes('profile-fixture-hello') && options.tools?.length) {
         for (const name of ['prepare_requested_work', 'kioku_read']) assert.ok(options.tools?.some(tool => tool.name === name), `Kiokuko tool ${name} was not ready`)
       }
-      let answer = 'PROFILE_FIXTURE_OK'
+      let answer = reflection ? JSON.stringify({ lessons: [] }) : 'PROFILE_FIXTURE_OK'
       if (text.includes('profile-fixture-lisp') && options.tools?.length) {
         const nativeResult = id => options.messages.flatMap(message => message.role === 'tool' && message.toolCallId === id ? [message]
           : (message.content ?? []).filter(block => block.type === 'tool-result' && block.toolCallId === id)).at(-1)
@@ -95,7 +97,7 @@ export function apply(ctx) {
   ctx.on('kiokuko/task-state', task => record({ type: 'task-state', task }), { global: true })
   ctx.on('user-questions/request', createQuestionObserver(record), { prepend: true, global: true })
   ctx.on('session/event', (session, event) => {
-    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'turn/end', 'command/run', 'command/done'].includes(event.type)) {
+    if (['user/message', 'assistant/message', 'tool/call', 'tool/result', 'turn/end', 'command/run', 'command/done', 'plugin:kiokuko-dsh/repository-learning'].includes(event.type)) {
       record({ type: 'native-event', sessionId: session.id, event })
     }
   }, { global: true })

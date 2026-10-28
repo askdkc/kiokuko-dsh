@@ -427,6 +427,7 @@ export class DshExecutionSupport {
       } catch { return assembly }
     }))
     this.#disposers.push(ctx.on('llm/stream', (request: any, next: () => AsyncIterable<any>) => {
+      if (request.purpose === 'compaction') return next()
       // Read-only at the final native model-request seam. PTC children absent
       // from model history deliberately remain unknown.
       try {

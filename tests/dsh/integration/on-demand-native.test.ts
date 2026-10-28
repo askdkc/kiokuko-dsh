@@ -182,6 +182,11 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       async listModels(provider: string) { return [{ provider, id: 'fixture', name: 'fixture' }] }
       async resolveModel(provider: string, id: string) { return { provider, id, name: id } }
       async *stream(options: any) {
+        if (options.purpose === 'compaction' && String(options.system).startsWith('Extract compact repository-scoped learning')) {
+          assert.deepEqual(options.tools, [])
+          backgroundRequests.push({ sessionId: options.sessionId, purpose: options.purpose, system: options.system, tools: options.tools })
+          yield* mock.textResponse(JSON.stringify({ lessons: [] })); return
+        }
         if (options.purpose === 'compaction' && /^(Extract up to|Return JSON array|Check each supplied)/.test(options.system ?? '')) {
           backgroundRequests.push({ sessionId: options.sessionId, purpose: options.purpose, system: options.system, tools: options.tools })
           yield* mock.textResponse('[]'); return
