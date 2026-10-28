@@ -74,3 +74,22 @@ test('bounded hostile text completes; input budget remains charged before redact
   assert.throws(()=>projectAgenticReplayJson(`password=${S}`,16),/queue_limit/)
   assert.deepEqual(boundedAgenticReplayPayload({text:`password=${S}`},16,'fixture'),{payload:{format:'fixture',content_omitted:true,omission_reason:'payload_limit'},omitted:true,omissionReason:'payload_limit'})
 })
+
+// The byte budget bounds both UTF-16 working text and its JSON UTF-8 encoding,
+// not six bytes for every ordinary character (only control escapes need six).
+for (const text of ['x'.repeat(100), '日'.repeat(100), '🙂'.repeat(100), '\u0000'.repeat(100), '\ud800'.repeat(100)]) {
+  test(`projection budget exact boundary for ${JSON.stringify(text.slice(0, 2))}`, () => {
+    const cost = 16 + Math.max(text.length * 2, Buffer.byteLength(JSON.stringify(text)))
+    assert.throws(() => projectAgenticReplayJson(text, cost - 1), /queue_limit/)
+    assert.equal(projectAgenticReplayJson(text, cost), text)
+    assert.equal(projectAgenticReplayJson(text, cost + 1), text)
+  })
+}
+test('projection charges expanding redaction and preserves caller input', () => {
+  const input = 'password=x'
+  const output = scrub(input)
+  const cost = 16 + Math.max(output.length * 2, Buffer.byteLength(JSON.stringify(output)))
+  assert.throws(() => projectAgenticReplayJson(input, cost - 1), /queue_limit/)
+  assert.equal(projectAgenticReplayJson(input, cost), output)
+  assert.equal(input, 'password=x')
+})

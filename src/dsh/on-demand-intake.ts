@@ -1,3 +1,4 @@
+import { isCodingWorkflowStatus } from './coding-workflow/host.js'
 import { symbols } from '@deepseek-ai/cordis'
 import { requestInterpretationError, requestInterpretationRecovery } from './request-interpretation-guidance.js'
 import { collectClarificationContext, clarificationReply, reusableClarificationAnswer, type ClarificationContext } from './clarification-context.js'
@@ -162,6 +163,8 @@ export class OnDemandIntake {
   readonly #lifecycle = new AbortController()
   #tools?: NativeTools
   #startupSkillReader: Definition['execute'] | undefined
+  #startupQuestionTool: Definition['execute'] | undefined
+  readonly #questionTools = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   readonly #skillReaders = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   #stopped = false
   constructor(private readonly host: Dependencies, private readonly options: { onlyWhenDeferred?: boolean } = {}) {}
@@ -176,13 +179,20 @@ export class OnDemandIntake {
       && (!proof.turn || this.bound(execution) === proof.turn && !proof.turn.input.signal.aborted && !['closed', 'stale'].includes(proof.turn.status))
       && this.definition(execution)?.execute === proof.execute && canonicalContentHash(execution.arguments) === proof.digest
       && (proof.invoke ? [...this.#controlTools].some(([name, invoke]) => invoke === proof.invoke
-        && this.#tools?.get(name, execution.agent)?.execute === invoke) : this.#controlTools.get(execution.name) === proof.execute)
+        && this.#tools?.get(name, execution.agent)?.execute === invoke) : this.#controlTools.get(execution.name) === proof.execute || this.conversationControl(execution, this.definition(execution)!))
   }
   controlTask(execution: Execution): string | undefined {
     return this.isControl(execution) ? this.#controlExecutions.get(execution)?.turn?.task : undefined
   }
+  /** Observational/conversational calls still traverse native policy; never grant effect authority. */
+  private conversationControl(execution: Execution, actual: Definition): boolean {
+    const state = this.bound(execution)
+    return !!state && state.status === 'answer' && execution.parent === undefined
+      && (execution.name === 'ask_user_question' && actual.execute === this.#questionTools.get(state.input.agent)
+        || isCodingWorkflowStatus(actual, execution.arguments))
+  }
   private controlCall(execution: Execution, actual: Definition): { execute: Definition['execute']; digest: string; invoke?: Definition['execute']; args?: unknown } | undefined {
-    if (this.#controlTools.get(execution.name) === actual.execute) return { execute: actual.execute, digest: canonicalContentHash(execution.arguments) }
+    if (this.#controlTools.get(execution.name) === actual.execute || this.conversationControl(execution, actual)) return { execute: actual.execute, digest: canonicalContentHash(execution.arguments) }
     if (execution.name !== 'run_code' || !execution.arguments || typeof execution.arguments !== 'object' || Array.isArray(execution.arguments)) return undefined
     const value = execution.arguments as Record<string, unknown>
     if (Object.keys(value).sort().join(',') !== 'code,description' || typeof value.code !== 'string' || value.code.length > 8192
@@ -278,6 +288,8 @@ export class OnDemandIntake {
       // validated owner's first reader once, including absence; never rebind it.
       if (!this.#skillReaders.has(input.agent)) this.#skillReaders.set(input.agent,
         this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
+      if (!this.#questionTools.has(input.agent)) this.#questionTools.set(input.agent,
+        this.#startupQuestionTool ?? this.#tools?.get('ask_user_question', input.agent)?.execute)
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
       // Native authority is independent of optional memory, Skills and model
       // classification. Never manufacture an owned task merely to run Bash.
@@ -536,7 +548,8 @@ export class OnDemandIntake {
     if(reason.assessment && state.assessment?.result.outcome==='unavailable') {
       const a=state.assessment.result
       return {prepared:false,status:'assessment_unavailable',semantic:a.semantic,detector:a.detector.state==='unavailable'?a.detector.reason:a.detector.result.status,
-        originalTask:state.task,permissions:'unchanged_native_policy',detail:'原文照合または有限領域検査を利用できません。実行は準備されていません。'}
+        originalTask:state.task,permissions:'unchanged_native_policy',preparedExecutionAllowed:false,nextAction:'report_assessment_unavailable',
+        recovery:'Preserve the request and report the unavailable assessment. Do not repeat clarification, claim preparation succeeded, or switch tools to bypass this preparation boundary.',detail:'原文照合または有限領域検査を利用できません。実行は準備されていません。'}
     }
     const scope = state.requestIntent?.action === 'change' && state.requestIntent.changeScope === 'unknown'
       || reason.message.startsWith('The requested change scope')
@@ -595,7 +608,8 @@ export class OnDemandIntake {
         state.input.agent.followup!({ id: answerMessageId, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: content }] })
         await this.diagnose(state,{kind:'answer',questionRef:id,answerRef:answerMessageId})
         pending.status = 'queued'
-        pending.result = { ...result, status: 'clarification_answer_queued', answer: value }
+        pending.result = { ...result, status: 'clarification_answer_queued', answer: value, answerRef: answerMessageId,
+          nextAction: 'await_queued_answer_capture', detail: 'The answer is already queued as native user input. Do not ask it again or reuse old references. Continue only after the host captures the queued answer and supplies its current references.' }
         return pending.result
       } catch (error) {
         if (signal.aborted) { if (this.#clarifications.get(sessionId) === pending) this.#clarifications.delete(sessionId); throw error }
@@ -752,6 +766,12 @@ export class OnDemandIntake {
   }
   /** An admitted host continuation still needs capture to retire the previous turn's receipt. */
   continuing(agent: DemandAgent): boolean { return !this.#stopped && this.host.ready(agent) }
+  /** Exact captured task at a native lifecycle boundary, never a later selected task. */
+  boundaryTask(session: object & { id: string }, turn: number) {
+    const state = this.#turns.get(session.id), task = state?.requestIntentContext?.activeTask
+    if (state?.input.agent.session !== session || state.input.turn !== turn || !task || task.state !== 'Working') return undefined
+    return { agent: state.input.agent, expected: { taskId: task.taskId, revision: task.revision, generation: task.generation } }
+  }
   finish(session: object & { id: string }, turn: number): void {
     const state = this.#turns.get(session.id)
     if (state?.input.agent.session === session && state.input.turn === turn) {
@@ -765,6 +785,8 @@ export class OnDemandIntake {
     // Preserve an already installed reader across replacement before capture.
     // When absent, capture binds the validated agent's installed preset reader.
     this.#startupSkillReader = tools.get('skill')?.execute
+    // Trust the validated host registry, not a later same-name replacement.
+    this.#startupQuestionTool = tools.get('ask_user_question')?.execute
     if (systemPrompt && !this.options.onlyWhenDeferred) this.#disposers.push(systemPrompt.section({ name: 'kiokuko:on-demand-intake', order: -99999, text: 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' + ON_DEMAND_GUIDANCE }))
     const definition = { name: TASK_PREPARE_TOOL, modelFacing: true,
       description: 'Prepare the exact original user request for tool-backed work. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
@@ -917,7 +939,7 @@ export class OnDemandIntake {
         return decision?.kind === 'cancel' ? denied('Native tool policy cancelled this call') : decision
       } catch (error) {
         if (error instanceof RequestClarification) {
-          try { await this.clarify(state, execution.signal, error); return denied('Awaiting user clarification; no work was executed. Continue through the clarified human request.') }
+          try { const result = await this.clarify(state, execution.signal, error); return denied(`Execution was not prepared; no work was executed. ${JSON.stringify(result)}`) }
           catch (cancelled) { return denied(cancelled instanceof Error ? cancelled.message : 'Clarification cancelled') }
         }
         return denied(error instanceof Error ? error.message : 'Execution preparation failed')
@@ -990,7 +1012,7 @@ export class OnDemandIntake {
         } catch (error) {
           if (!(error instanceof RequestClarification)) throw error
           const result = { ...(await this.clarify(state, execution.signal, error) as object), programExecuted: false }
-          return { isError: false, value: { logs: ['Awaiting user clarification. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+          return { isError: false, value: { logs: ['Execution was not prepared. No program was evaluated.'], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
         }
     }, { prepend: true }))
     this.#disposers.push(tools.guard(execution => {

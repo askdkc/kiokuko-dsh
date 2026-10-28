@@ -1,3 +1,4 @@
+import { DshRepositoryLearning } from "./repository-learning.js";
 import {
   memoryFailureDiagnostic,
   type MemoryFailureDiagnostic,
@@ -158,6 +159,7 @@ export class DshLifecycleMemory {
   private owners = 1;
   private replay: DshAgenticReplayHostServices | undefined;
   private reflector: ReplayReflector | undefined;
+  private repositoryLearning!: DshRepositoryLearning;
   constructor(
     private readonly host: Host,
     private readonly runtime: Pick<DshCoreRuntime, "withDatabase">,
@@ -170,6 +172,7 @@ export class DshLifecycleMemory {
       shared.owners++;
       return shared;
     }
+    this.repositoryLearning = new DshRepositoryLearning(host, runtime, root);
     const configured = host.get(REPLAY_REFLECTOR_SERVICE, false);
     if (
       configured &&
@@ -699,6 +702,7 @@ export class DshLifecycleMemory {
     task?: { revision: number; generation: number; repositoryRoot: string },
     native?: NativeReviewScope,
   ): void {
+    if (this.repositoryLearning.observesNativeTurns(sessionId)) return;
     const state = this.states.get(sessionId),
       questions = this.host.get("userQuestions", false) as
         DshUserQuestions | undefined;
@@ -1091,11 +1095,13 @@ export class DshLifecycleMemory {
     this.pending.add(operation);
   }
   async whenIdle(): Promise<void> {
+    await this.repositoryLearning.whenIdle();
     await Promise.allSettled([...this.pending]);
   }
   stop(): void {
     if (this.stopped || --this.owners > 0) return;
     this.stopped = true;
+    this.repositoryLearning.stop();
     for (const controller of this.controllers.keys()) controller.abort();
     for (const dispose of this.disposers.reverse()) dispose();
     this.states.clear();

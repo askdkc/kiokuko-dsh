@@ -160,6 +160,13 @@ class Host {
   get(name:string){return name==='agents'?{list:()=>[...this.agents.values()],get:(id:string)=>this.agents.get(id)}:name==='sessions'?{get:(id:string)=>this.sessions.get(id)}:
     name==='tools'?{get:(name:string)=>this.definitions.get(name),register:(d:any)=>{this.definitions.set(d.name,d);return ()=>this.definitions.delete(d.name)}}:undefined}
   on(name:string,fn:Function){const list=this.handlers.get(name)??[];list.push(fn);this.handlers.set(name,list);return ()=>{this.handlers.set(name,(this.handlers.get(name)??[]).filter(x=>x!==fn))}}
+  preStep(step:any,next:()=>Promise<any>){
+    for(const handler of [...(this.handlers.get('agent/pre-step')??[])].reverse()){
+      const following=next
+      next=()=>handler(step,following)
+    }
+    return next()
+  }
   emit(name:string,...args:any[]){for(const fn of this.handlers.get(name)??[])fn(...args)}
 }
 /** Mirrors native acceptance: pre-step returns messages, then the loop commits its system head first. */
@@ -180,7 +187,7 @@ function nativeSurface(host:Host,id:string,root:string){
   const agent={id:`agent-${id}`,session,ctx:host}
   host.agents.set(agent.id,agent);host.sessions.set(session.id,session)
   const step=async(turn=1)=>{
-    const decision=await host.handlers.get('agent/pre-step')![0]!({agent,turn,messages:[humanMessage()]},async()=>({kind:'enter',messages:session.surface.nodes.length?[]:[humanMessage()]}))
+    const decision=await host.preStep({agent,turn,messages:[humanMessage()]},async()=>({kind:'enter',messages:session.surface.nodes.length?[]:[humanMessage()]}))
     assert.equal(decision.kind,'enter')
     if(!session.surface.nodes.length)session.append('system/message',{message:{role:'system',content:[{type:'text',text:'Native system prompt'}]}},{surfaceOp:'append'})
     for(const message of decision.messages)session.append('user/message',message,{surfaceOp:'append'})
@@ -234,7 +241,7 @@ test('optional replay projection preserves native acceptance and never writes ah
  const f=await nativeFixture()
  try{
   f.memory.context=async()=>projectedContext()
-  const hook=f.host.handlers.get('agent/pre-step')![0]!,reject={kind:'reject',reason:'Native admission refused'}
+  const hook=f.host.preStep.bind(f.host),reject={kind:'reject',reason:'Native admission refused'}
   assert.equal(await hook({agent:f.agent,messages:[humanMessage()]},async()=>reject),reject);assert.equal(f.events.length,0)
   const human=humanMessage(),accepted={kind:'enter',messages:[human],startsRequestSeries:true}
   const decision=await hook({agent:f.agent,turn:1,messages:[human]},async()=>accepted)
@@ -256,10 +263,10 @@ test('unavailable or slow optional context cannot veto the native stream',async(
  try{
   f.memory.context=()=>new Promise(()=>{})
   const decision={kind:'enter',messages:[humanMessage()]},start=performance.now()
-  assert.equal(await f.host.handlers.get('agent/pre-step')![0]!({agent:f.agent,messages:[humanMessage()]},async()=>decision),decision)
+  assert.equal(await f.host.preStep({agent:f.agent,messages:[humanMessage()]},async()=>decision),decision)
   assert.ok(performance.now()-start<1000)
   f.memory.context=async()=>({workMayContinue:true,diagnostics:['memory_unavailable']})
-  assert.equal(await f.host.handlers.get('agent/pre-step')![0]!({agent:f.agent,messages:[humanMessage()]},async()=>decision),decision)
+  assert.equal(await f.host.preStep({agent:f.agent,messages:[humanMessage()]},async()=>decision),decision)
   assert.equal(f.events.length,0)
  }finally{await f.close()}
 })
@@ -271,7 +278,7 @@ for(const change of ['abort','dispose','replace-session'] as const)for(const ini
   const retrieving=new Promise<void>(resolve=>{entered=resolve})
   f.memory.context=()=>new Promise(resolve=>{release=()=>resolve(projectedContext());entered()})
   const decision={kind:'enter',messages:[humanMessage()]},count=f.events.length,surface=[...f.session.surface.nodes]
-  const pending=f.host.handlers.get('agent/pre-step')![0]!({agent:f.agent,turn:2,messages:[humanMessage()],signal:controller.signal},async()=>decision)
+  const pending=f.host.preStep({agent:f.agent,turn:2,messages:[humanMessage()],signal:controller.signal},async()=>decision)
   await retrieving
   if(change==='abort')controller.abort();else if(change==='dispose')f.memory.stop();else f.host.sessions.set(f.session.id,{...f.session})
   release();assert.equal(await pending,decision);assert.equal(f.events.length,count);assert.deepEqual(f.session.surface.nodes,surface)

@@ -7,6 +7,8 @@ export interface DshAgenticReplayBinding {
   readonly workspaceRoot: string
   readonly sessionCwd: string
   readonly storeRoot: string
+  /** Native DSH turn observed at pre-step, never inferred from model call count. */
+  readonly turn?: number
   readonly kiokukoRunId?: string
 }
 export type AgenticReplayState = 'starting' | 'recording' | 'finalizing' | 'completed' | 'incomplete' | 'failed'
@@ -44,6 +46,7 @@ export interface DshAgenticReplayHostServices {
 }
 /** Structural execution contract checked against the native tool registry. No runtime DSH dependency. */
 export interface AgenticReplayToolExecution {
+  readonly turn?: number
   readonly token: symbol
   readonly parent?: symbol
   readonly callId: string

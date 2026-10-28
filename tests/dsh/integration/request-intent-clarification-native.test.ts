@@ -44,7 +44,7 @@ const boundIntent = (request: any) => {
   return JSON.parse(text.split('advisory only):\n')[1]!.split('\n')[0]!)
 }
 
-for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dismissed', 'stopped', 'stale', 'foreign-answer'] as const) {
+for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dismissed', 'stopped', 'stale-stopped', 'stale', 'foreign-answer'] as const) {
   test(`direct Core native semantic clarification: ${scenario}`, { skip: !available, timeout: 30_000 },
     async () => withIsolatedSkillHome(async () => {
     const providerModule = await import(packageRoot
@@ -195,7 +195,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         return native.textResponse('The clarified document update was completed in the same task.')
       })
       agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: firstRequest }] }))
-      if (scenario === 'stopped' || scenario === 'stale') {
+      if (scenario === 'stopped' || scenario === 'stale-stopped' || scenario === 'stale') {
         await Promise.race([questionReady, agent.whenIdle().then(() => { assert.ok(release, `semantic clarification must ask the native user: ${errors.map(String).join('; ')}`) })])
         assertUnchanged()
         assert.equal(await readFile(join(dir, 'PLAN.md'), 'utf8'), originalContent)
@@ -204,6 +204,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           // Fault injection: a concurrent authority revision invalidates the
           // already-presented question. No inference grants a replacement lease.
           database(db => db.prepare('UPDATE ledger_runs SET task_revision=task_revision+1,task_generation=task_generation+1 WHERE run_id=?').run(created.taskId))
+          if (scenario === 'stale-stopped') agent.cancel({ kind: 'user' })
         }
         release!()
       }
@@ -214,6 +215,13 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         assert.ok(agent.session.snapshotEvents().some((event: any) => event.type === 'turn/end'
           && event.data.reason?.kind === 'aborted'), 'actual native user Stop reaches its aborted boundary')
         assert.equal(taskCanExecute(readCurrent()), false, 'stopped work has no executable authority')
+      }
+      if (scenario === 'stale-stopped') {
+        const current = readCurrent()
+        assert.equal(taskCanExecute(current), true, 'an aborted stale question must not revoke a newer task generation')
+        assert.equal(current.revision, working!.revision + 1)
+        assert.equal(current.generation, working!.generation + 1)
+        assert.equal(current.pendingStop, undefined)
       }
       assert.equal(asked.length, 1, 'a single unresolved scope gets a single native question')
       database(db=>assertNativeDecisionDiagnostics(db,agent.session.id,answeredScenario,scenario==='reversed-answered'||scenario==='target-answered'))

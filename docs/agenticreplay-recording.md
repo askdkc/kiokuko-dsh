@@ -104,6 +104,14 @@ generation; it never reopens old events. `show`/`export` accept only
 completed traces from that native session and workspace. Cursors expire when the
 plugin reloads. Lists contain the most recent 200 generations.
 
+A recording generation spans the native session, not one user turn. Native turn
+completion and DSH's own session-log export do not append `run.end`; explicit
+recording stop, session disposal, or plugin shutdown does. Model calls use the
+native pre-step turn and tools use their native execution turn. Responses retain
+the originating call's turn, including late results. If the host cannot supply
+that position, call events use the unknown group `turn: 0` with
+`native_turn_known: false`, never a guessed model-call counter.
+
 `status` shows a compact summary: recording state first, then the next command,
 storage location and any missing observations. Internal diagnostics are omitted
 from the default display. Use `status --json` for the full diagnostic snapshot.
@@ -117,7 +125,11 @@ reports unavailable questions or failed preference persistence. Feature capabili
 `available` alone does not mean this session has opted into recording. An empty
 trace means no attributable observation has started. `completed` means the chosen
 recording scope was persisted without known missing events; it does not mean the
-task succeeded. Unknown usage is not measured zero. Process exit codes are absent.
+task succeeded or every body was captured. `run.end.attrs.omitted_bodies` counts
+bodies omitted by capture limits in that generation; the affected events also
+retain `content_omitted` and `omission_reason`. The manifest's capture status stays
+`unverified` for these internal observations, even after successful finalization.
+Unknown usage is not measured zero. Process exit codes are absent.
 
 ## Storage and contents
 
@@ -148,7 +160,13 @@ bodies. Neither mode records environment variables, replayState, attachment byte
 raw HTTP, shell frames or raw MCP transport. Reasoning defaults off. Auxiliary
 compaction/title calls default off (`includeAuxiliary: true` opts in); requests
 without an exact session binding remain excluded. Unknown chunks are counted as
-unsupported. Model errors/abort reasons and final post-policy tool results are
+unsupported. Text projection charges both UTF-16 working storage and the actual
+JSON UTF-8 encoding. It bounds input before copying and rechecks redaction expansion;
+it does not assume every ordinary character becomes a six-byte escape. Queue,
+trace, and projection limits still apply. Sub-budget large bodies use the SDK's
+existing content-addressed JSON blobs; bodies beyond the limits remain explicitly
+omitted, not silently truncated or advertised as replay-complete.
+Model errors/abort reasons and final post-policy tool results are
 recorded without changing native values or exceptions.
 
 These are **DSH internal observations**: `httpCapture=false`,

@@ -39,3 +39,14 @@ test('context manifest drops whole items at its item and byte limits', () => {
   assert.ok(Buffer.byteLength(JSON.stringify(manifest)) <= 16_384)
   assert.deepEqual(requestSourceManifest(undefined, config), { coverage: 'unknown', omittedCount: 0, items: [] })
 })
+
+test('incident-size 239-message request fits the default bounded capture budget', () => {
+  const current = AgenticReplayConfig.parse({ capture: { content: 'redacted' } })
+  const messages = Array.from({ length: 239 }, () => ({ role: 'user', content: [{ type: 'text', text: 'x'.repeat(2960) }] }))
+  const event = modelRequest({ provider: 'mock', model: 'mock', messages }, 'size-class', current)
+  assert.notEqual(event.attrs?.content_omitted, true)
+  const bytes = Buffer.byteLength(JSON.stringify(event.payload))
+  assert.ok(bytes >= 700_000 && bytes <= 750_000, `incident-size class: ${bytes}`)
+  assert.equal((event.payload as any).messages.length, 239)
+  assert.equal((event.payload as any).messages[238].content[0].text.length, 2960)
+})

@@ -25,7 +25,7 @@ export function createDshAgenticReplayHost(ctx: Context, config: AgenticReplayCo
   // plugin registration on the composition root, so use their scoped context.
   const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
   const observerContext = profile === 'dsh-cli' || profile === 'dsh-tui' ? ctx : ctx.root ?? ctx
-  const bindings = new Map<string, { agent: object; session: object; binding: DshAgenticReplayBinding }>()
+  const bindings = new Map<string, { agent: object; session: object; binding: DshAgenticReplayBinding; turn?: number | undefined }>()
   let accepting = true
   const withIndex: WithAgenticReplayIndex = operation => runtime.withDatabase(async db => await operation(new DshAgenticReplayStore(db)))
   const recorder = new DshAgenticReplayRecorder(config, withIndex)
@@ -33,9 +33,9 @@ export function createDshAgenticReplayHost(ctx: Context, config: AgenticReplayCo
   const operations = new Map<string, Promise<void>>()
   let shutdown: Promise<void> | undefined
   const disposers: (() => void)[] = []
-  function enrich(entry: { agent: object; session: object; binding: DshAgenticReplayBinding }): DshAgenticReplayBinding {
+  function enrich(entry: { agent: object; session: object; binding: DshAgenticReplayBinding; turn?: number | undefined }): DshAgenticReplayBinding {
     const runId = native.recordingRun?.(entry.agent) ?? native.logicalRun(entry.session as { id: string })
-    return Object.freeze({ ...entry.binding, ...(runId === undefined ? {} : { kiokukoRunId: runId }) })
+    return Object.freeze({ ...entry.binding, ...(entry.turn === undefined ? {} : { turn: entry.turn }), ...(runId === undefined ? {} : { kiokukoRunId: runId }) })
   }
   function recordingAuthority(binding: DshAgenticReplayBinding): DshAgenticReplayBinding | undefined {
     const entry = bindings.get(binding.sessionId), parent = entry && native.recordingParent?.(entry.agent)
@@ -95,11 +95,15 @@ export function createDshAgenticReplayHost(ctx: Context, config: AgenticReplayCo
   try {
     // On hot reload, an existing agent will not emit session-start again.
     // The next pre-step carries its exact native pair; do not scan the registry.
-    disposers.push((observerContext as any).on('agent/pre-step', async (payload: { agent?: { id: string; session?: object }; signal?: AbortSignal }, next: () => unknown) => {
+    disposers.push((observerContext as any).on('agent/pre-step', async (payload: { agent?: { id: string; session?: object }; turn?: number; signal?: AbortSignal }, next: () => unknown) => {
       try {
         const agent = payload.agent, session = agent?.session
         const binding = agent && session ? services.resolveSessionBinding(agent, session) : undefined
         if (binding && agent && session) {
+          const entry = bindings.get(binding.sessionId)!
+          // The native pre-step contract supplies the owning turn. Do not reuse
+          // an old turn if a host cannot provide an authoritative position.
+          entry.turn = Number.isSafeInteger(payload.turn) && payload.turn! >= 0 ? payload.turn : undefined
           // Managed children are never asked, so recording-by-default reaches them through
           // the authority the recorder already gates them on: a child inherits the parent's
           // exact decision instead of storing a decision of its own that nothing reads.

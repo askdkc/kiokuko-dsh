@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { readFile, access, symlink, writeFile, mkdir, chmod, rename } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
@@ -35,6 +36,7 @@ test('oversized model requests keep bounded metadata and a correlated response',
     const modelRequest = events.find(event => event.type === 'model.request')!
     const modelResponse = events.find(event => event.type === 'model.response')!
     assert.equal(modelRequest.attrs?.content_omitted, true)
+    assert.equal(events.find(event => event.type === 'run.end')?.attrs?.omitted_bodies, 1)
     assert.equal((modelRequest.payload as any).omission_reason, 'payload_limit')
     assert.equal(events.find(event => event.seq === modelResponse.causes?.[0])?.seq, modelRequest.seq)
     assert.equal(events.filter(event => event.type === 'note' && event.attrs?.diagnostic === 'content_omitted').length, 1)
@@ -617,3 +619,83 @@ test('run.start records observed runtime evidence rather than a fixed verified r
     assert.equal(payload.runtime.dshVersion, null, 'the test runner does not expose a DSH launcher version');
   } finally { await f.dispose() }
 });
+
+test('three native turns preserve request/result ownership without ending the session run', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    for (const turn of [1, 2, 3]) {
+      const binding = { ...f.binding, turn }
+      // Two LLM calls in one native turn must not become two invented turns.
+      for (let call = 0; call < 2; call++) await collect(f.recorder.stream(binding, request, () => chunks(response())))
+      const exec = { token: Symbol(), callId: `call-${turn}`, rootCallId: `call-${turn}`, name: 'fixture', arguments: {}, turn }
+      f.recorder.preTool(binding, exec)
+      f.recorder.toolResult(binding, exec, { isError: false, content: [] })
+      await f.recorder.flushDiagnostics(binding.sessionId)
+      const dir = f.recorder.status(binding.sessionId).trace!.run_directory!
+      const open = await (await TraceReader.open(dir)).events()
+      assert.equal(open.filter(event => event.type === 'run.end').length, 0)
+      assert.equal(f.recorder.status(binding.sessionId).trace!.state, 'recording')
+    }
+    await f.recorder.closeSessionRecording(f.binding.sessionId, 'session_disposed')
+    const row = (await f.reader.list(f.binding))[0]!
+    const dir = await recordedRunDirectory(f.root, row.agenticreplay_run_id)
+    const events = await (await TraceReader.open(dir)).events()
+    assert.deepEqual(events.filter(event => event.type === 'model.request').map(event => event.turn), [1, 1, 2, 2, 3, 3])
+    for (const event of events.filter(event => ['model.response', 'tool.result'].includes(event.type))) {
+      assert.equal(event.turn, events.find(cause => cause.seq === event.causes?.[0])!.turn)
+      assert.ok(event.turn >= 1 && event.turn <= 3)
+    }
+    assert.equal(events.filter(event => event.type === 'run.end').length, 1)
+    assert.equal(JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')).capture.status, 'unverified')
+  } finally { await f.dispose() }
+})
+
+
+test('sub-budget multi-message requests retain redacted content in digest-verified blobs', async () => {
+  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 524_288 })
+  try {
+    const texts = ['a'.repeat(40_000), 'b'.repeat(40_000), 'c'.repeat(40_000) + ' password=FAKEONLY_DUMMY_CREDENTIAL status=ok']
+    const input = { ...request, messages: texts.map(text => ({ role: 'user', content: [{ type: 'text', text }] })) }
+    await collect(f.recorder.stream(f.binding, input, () => chunks(response())))
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    assert.equal(row.state, 'completed')
+    const dir = await recordedRunDirectory(f.root, row.agenticreplay_run_id)
+    const events = await (await TraceReader.open(dir)).events()
+    const event = events.find(event => event.type === 'model.request')!
+    assert.notEqual(event.attrs?.content_omitted, true)
+    const ref = event.payload as { $blob: string; bytes: number }
+    assert.ok(ref.$blob, 'existing SDK content-addressed spill preserves the full request')
+    const digest = ref.$blob.replace('sha256:', '')
+    const bytes = await readFile(join(dir, 'blobs', digest.slice(0, 2), digest))
+    assert.equal(bytes.length, ref.bytes)
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), digest)
+    const restored = JSON.parse(bytes.toString('utf8'))
+    assert.deepEqual(restored.messages.map((message: any) => message.content[0].text),
+      [texts[0], texts[1], 'c'.repeat(40_000) + ' password=[REDACTED] status=ok'])
+    assert.equal(bytes.includes('FAKEONLY_DUMMY_CREDENTIAL'), false)
+    assert.equal(f.recorder.diagnostics.omittedBodies, 0)
+    assert.equal(input.messages[2]!.content[0]!.text, texts[2], 'caller data is not mutated')
+  } finally { await f.dispose() }
+})
+
+
+test('late tool results keep their original turn and absent attribution stays explicit', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const first = { ...f.binding, turn: 1 }, second = { ...f.binding, turn: 2 }
+    const exec = { token: Symbol(), callId: 'late', rootCallId: 'late', name: 'fixture', arguments: {}, turn: 1 }
+    f.recorder.preTool(first, exec)
+    await collect(f.recorder.stream(second, request, () => chunks(response())))
+    f.recorder.toolDecision(exec, { kind: 'allow' })
+    f.recorder.toolResult(second, exec, { isError: false, content: [] })
+    await collect(f.recorder.stream(f.binding, request, () => chunks(response())))
+    await f.recorder.shutdown()
+    const row = (await f.reader.list(f.binding))[0]!
+    const events = await (await TraceReader.open(await recordedRunDirectory(f.root, row.agenticreplay_run_id))).events()
+    assert.equal(events.find(event => event.type === 'tool.result')?.turn, 1)
+    assert.equal(events.find(event => event.attrs?.decision === 'allow')?.turn, 1)
+    const requests = events.filter(event => event.type === 'model.request')
+    assert.deepEqual(requests.map(event => [event.turn, event.attrs?.native_turn_known]), [[2, true], [0, false]])
+  } finally { await f.dispose() }
+})

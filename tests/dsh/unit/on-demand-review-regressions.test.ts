@@ -1007,10 +1007,11 @@ test('accepted native clarification creates a fresh source revision and preserve
     questions:{async ask(r){asks++;return {answers:[{id:r.questions[0].id,selected:[],custom:'I now explicitly request the implementation in src/parser.ts. Replace the earlier explanation-only instruction for this file.'}]}}}})
   ;(f.agent as any).followup=(m:any)=>followups.push(m)
   await f.capture([message]);const args={requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(original.context)}}
-  const result=await f.execute(TASK_PREPARE_TOOL,args);assert.equal(result.value.status,'clarification_answer_queued')
-  await f.execute(TASK_PREPARE_TOOL,args)
+  const result=await f.execute(TASK_PREPARE_TOOL,args);assert.equal(result.value.status,'clarification_answer_queued');assert.equal(result.value.nextAction,'await_queued_answer_capture');assert.equal(typeof result.value.answerRef,'string')
+  const repeated=await f.execute(TASK_PREPARE_TOOL,args)
+  assert.equal(repeated.value.answerRef,result.value.answerRef)
   assert.equal(asks,1);assert.equal(followups.length,1);assert.equal(f.admissions.length,0)
-  const fresh=followups[0];assert.notEqual(fresh.id,message.id);assert.equal(fresh.source.kind,'user')
+  const fresh=followups[0];assert.equal(result.value.answerRef,fresh.id);assert.notEqual(fresh.id,message.id);assert.equal(fresh.source.kind,'user')
   assert.match(fresh.content[0].text,/Latest native user answer/);assert.match(fresh.content[0].text,/source revision request-clarification-/)
   assert.match(fresh.content[0].text,/Replace the earlier explanation-only/);assert.match(fresh.content[0].text,/Preserve unrelated constraints/)
 })
@@ -1028,7 +1029,10 @@ test('unavailable assessment reports infrastructure failure without asking the h
   const task='Implement src/parser.ts.',message=human('unavailable-not-an-answer',task),intent=activeIntent([message],task,'same_scope_continuation','change','implementation')
   const f=await fixture(t,{interpret:async()=>intent,assess:async()=>({semantic:'supported',semanticInputDigest:'d'.repeat(64),detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},outcome:'unavailable'}),questions:{async ask(){assert.fail('Infrastructure failure is not a semantic question')}}})
   await f.capture([message]);const r=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(intent.context)}})
-  assert.equal(r.value.status,'assessment_unavailable');assert.equal(r.value.detector,'artifact_unavailable');assert.equal(f.admissions.length,0)
+  assert.equal(r.value.status,'assessment_unavailable');assert.equal(r.value.detector,'artifact_unavailable');assert.equal(r.value.nextAction,'report_assessment_unavailable');assert.equal(r.value.preparedExecutionAllowed,false);assert.equal(f.intake.awaitingClarification(f.agent),false);assert.equal(f.admissions.length,0)
+  const blocked=await f.execute('review_probe');assert.equal(blocked.isError,true)
+  assert.match(JSON.stringify(blocked),/assessment_unavailable/);assert.doesNotMatch(JSON.stringify(blocked),/Awaiting user clarification/)
+  assert.equal(f.bodies(),0)
 })
 
 for (const cancelled of [true,false]) test(`native choice ${cancelled?'cancellation closes':'provider failure retains'} its capture without starting effects`,async t=>{
@@ -1202,4 +1206,94 @@ nativeTest('Web Plan scripted preparation rejects unknown stages and missing cur
     assert.throws(() => planPreparation(mock, 'prepare', mode)({ messages: [{ source: { sections: [{ name: 'on-demand-intake',
       text: 'Current request references and same-session work (host-bound, advisory only):\nnot-json' }] } }] }), SyntaxError)
   }
+})
+
+
+test('native clarification tool remains available before preparation without admitting effects', async t => {
+  const f = await fixture(t)
+  let questions = 0
+  const definition = { name: 'ask_user_question', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { questions++; return { answers: [] } } }
+  const release = f.ctx.tools.register(definition); t.after(release)
+  await f.capture()
+  assert.equal((await f.execute('ask_user_question', { questions: [{ id: 'scope', question: 'Which file?' }] })).isError, false)
+  assert.equal(questions, 1); assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute('review_probe')).isError, true)
+  assert.equal((await f.execute('ask_user_question', {}, { parent: {} })).isError, true)
+  release()
+  t.after(f.ctx.tools.register({ ...definition, execute: () => { questions++; return {} } }))
+  assert.equal((await f.execute('ask_user_question', {})).isError, true, 'replacement implementation must not inherit conversation capability')
+  assert.equal(questions, 1)
+})
+
+
+test('real native question entry delegates to the user surface before optional preparation', async t => {
+  const f = await fixture(t)
+  let asked = 0
+  f.ctx.provide('userQuestions', { async ask(request: any) {
+    asked++; assert.equal(request.agent, f.agent)
+    return { answers: [{ id: 'target', selected: [], custom: 'PLAN.md' }] }
+  } })
+  const built = join(packages, '@deepseek-ai/dsh-tool-ask-user/lib/index.js')
+  const tool = await import(pathToFileURL(existsSync(built) ? built : join(packages, '@deepseek-ai/dsh-tool-ask-user/src/index.ts')).href)
+  const fiber = await f.ctx.plugin(tool, { mode: 'legacy' }); t.after(() => fiber.dispose())
+  await f.capture()
+  const result = await f.execute('ask_user_question', { questions: [{ id: 'target', question: 'Which file?' }] })
+  assert.equal(result.isError, false)
+  assert.deepEqual(result.value, { answers: [{ id: 'target', selected: [], custom: 'PLAN.md' }] })
+  assert.equal(asked, 1); assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute('review_probe')).isError, true)
+})
+
+test('only branded coding status is conversational; workflow effects and spoofed status retain admission', async t => {
+  const { mountCodingWorkflow } = await import('../../../src/dsh/coding-workflow/host.js')
+  const f = await fixture(t)
+  let reads = 0
+  const release = mountCodingWorkflow(f.ctx, { runtime: { async withDatabase() { reads++; throw new Error('observational status reached') } } as any,
+    resolve: () => ({ agent: f.agent, runId: 'run', sessionId: f.session.id, repositoryRoot: '/tmp' }), lisp: () => undefined })
+  t.after(release)
+  await f.capture()
+  const status = await f.execute('coding_workflow', { action: 'status' })
+  assert.match(JSON.stringify(status), /observational status reached/)
+  assert.equal(reads, 1); assert.equal(f.admissions.length, 0)
+  for (const args of [{ action: 'next' }, { action: 'status', extra: true }]) {
+    const blocked = await f.execute('coding_workflow', args)
+    assert.equal(blocked.isError, true)
+    assert.match(JSON.stringify(blocked), /Before tool-backed work/)
+  }
+  const readsBeforeReplacement = reads
+  release()
+  t.after(f.ctx.tools.register({ name: 'coding_workflow', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { reads++; return {} } }))
+  assert.equal((await f.execute('coding_workflow', { action: 'status' })).isError, true)
+  assert.equal(reads, readsBeforeReplacement)
+})
+
+for (const boundary of ['deny', 'cancel', 'argument-change', 'stop'] as const) test(`clarification control preserves native ${boundary} boundary`, async t => {
+  const f = await fixture(t)
+  let calls = 0
+  t.after(f.ctx.tools.register({ name: 'ask_user_question', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { calls++; return {} } }))
+  await f.capture()
+  if (boundary === 'stop') f.intake.stop()
+  else t.after(f.ctx.on('tools/pre-execute', async (execution: any, next: () => Promise<any>) => {
+    if (execution.name !== 'ask_user_question') return next()
+    if (boundary === 'argument-change') { execution.arguments = { changed: true }; return next() }
+    return { kind: boundary, reason: 'native policy' }
+  }))
+  assert.equal((await f.execute('ask_user_question', {})).isError, true)
+  assert.equal(calls, 0); assert.equal(f.admissions.length, 0)
+})
+
+
+test('native boundary task proof belongs to the exact captured session and turn', async t => {
+  const task = 'Continue the current task.', message = human('boundary-task', task)
+  const original = activeIntent([message], task, 'same_scope_continuation', 'verify')
+  const context = createRequestIntentContext({ ...original.context, activeTask: {
+    taskId: 'boundary-task', runId: 'boundary-task', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/tmp',
+    type: 'research', state: 'Working', runStatus: 'active', revision: 4, generation: 7, allowedOps: ['wait'],
+    reason: 'Started', evidence: [], request: task, resumedFromTerminal: false,
+  } })!
+  const f = await fixture(t, { interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'fixture') }) })
+  await f.capture([message])
+  assert.deepEqual(f.intake.boundaryTask(f.session, 1)?.expected, { taskId: 'boundary-task', revision: 4, generation: 7 })
+  assert.equal(f.intake.boundaryTask({ id: f.session.id }, 1), undefined)
+  assert.equal(f.intake.boundaryTask(f.session, 2), undefined)
 })

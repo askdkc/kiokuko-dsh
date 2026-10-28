@@ -919,7 +919,16 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       listen('agent/session-start', ({ agent }: { agent: NativeAgent }) => track(answerReview.recover(agent as ReviewAgent, async row => { bind(agent); await sessions.flush(agent.session); await tasks.finish({ ...row, admitted: true }, row.status) })))
       listen('agent/error', ({ agent }: { agent: NativeAgent }) => { const current = active.get(agent.session?.id); if (current?.agent === agent) { current.failed = true; answerReview.cancel(agent.session.id) } })
       listen('session/event', (session: { id: string }, event: any) => {
-        if (event.type === 'turn/end') demand?.finish(session, event.data?.turn)
+        if (event.type === 'turn/end') {
+          // A selected SQLite task can be waiting for clarification without a Core
+          // execution owner. Human Stop still revokes that exact captured generation.
+          const captured = event.data?.reason?.kind === 'aborted' && !active.has(session.id)
+            ? demand?.boundaryTask(session, event.data?.turn) : undefined
+          if (captured) void track(taskWorkflow.operate(captured.agent as any, {
+            operation: 'wait', expected: captured.expected, reason: 'Native turn was aborted while awaiting preparation',
+          }, lifecycle.signal)).catch(() => { /* Stale authority must not stop a replacement task. */ })
+          demand?.finish(session, event.data?.turn)
+        }
         if(event.type==='request/context'){
           const current=active.get(session.id)
           if(current?.task.admitted&&!current.checkpointed){

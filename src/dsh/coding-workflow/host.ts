@@ -63,6 +63,11 @@ export function isCodingWorkflowTool(definition: unknown): boolean {
   return typeof definition === 'object' && definition !== null && codingToolDefinitions.has((definition as { execute: object }).execute)
 }
 
+export function isCodingWorkflowStatus(definition: unknown, args: unknown): boolean {
+  return isCodingWorkflowTool(definition) && (definition as { name?: string }).name === 'coding_workflow'
+    && statusSchema.safeParse(args).success
+}
+
 export const CODING_GUIDANCE = 'For this coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
@@ -162,6 +167,10 @@ export function mountCodingWorkflow(ctx: {
   definitions.push(onCodingInterrupted(runId => controllers.get(runId)?.controller.abort(new Error('Coding task stopped'))))
   const executeAction = async (input: LegacyInput, identity: HostIdentity, execution: Execution) => {
     execution.signal.throwIfAborted()
+    if (input.action === 'status') {
+      current(identity, execution)
+      return host.runtime.withDatabase(db => nextCodingWork(db, identity, { readOnly: true }))
+    }
     if (input.action === 'propose' || input.action === 'revise') {
       const before = await host.runtime.withDatabase(db => readCodingWorkflow(db, identity.runId))
       const updated = await host.runtime.withDatabase(db => proposeCodingWorkflow(db, identity, execution.callId,
@@ -231,6 +240,7 @@ export function mountCodingWorkflow(ctx: {
     return next()
   }, { prepend: true }))
   definitions.push(ctx.on('tools/result', async (execution: Execution) => {
+    if (isCodingWorkflowStatus(ctx.tools.get?.(execution.name, execution.agent), execution.arguments)) return
     const identity = host.resolve(execution)
     if (identity) {
       if (['enno_plan_submit', 'enno_plan_review'].includes(execution.name)) await choose(identity, execution)

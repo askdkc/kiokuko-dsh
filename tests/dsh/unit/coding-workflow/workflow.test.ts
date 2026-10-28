@@ -539,3 +539,21 @@ test('a hidden formal question stays pending; a late yes after cancellation cann
   assert.equal(readCodingWorkflow(f.db,f.identity.runId)?.state,'cancelled');assert.equal(activated,0)
  }finally{host.unmount();await f.close()}
 })
+
+
+test('read-only status preserves retry blockers and database mutations while next still repairs them', async () => {
+  const f = await fixture()
+  try {
+    f.propose(); f.choose(); f.bind('parser-check')
+    for (let i = 1; i <= 3; i++) recordCodingAttempt(f.db, f.identity, `readonly-attempt-${i}`, 'parser-check', 'old-source', i * 100000)
+    const before = readCodingWorkflow(f.db, f.identity.runId)!
+    assert.equal(before.state, 'blocked')
+    const changes = f.db.prepare('SELECT total_changes() n').get()!.n
+    const status = codingStatus(f.db, f.identity, { readOnly: true })
+    assert.equal(status.applicable, true)
+    assert.deepEqual(readCodingWorkflow(f.db, f.identity.runId), before)
+    assert.equal(f.db.prepare('SELECT total_changes() n').get()!.n, changes)
+    nextCodingWork(f.db, f.identity)
+    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.state, 'ready', 'stateful next preserves explicit recovery behavior')
+  } finally { await f.close() }
+})

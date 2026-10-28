@@ -24,6 +24,7 @@ export interface TraceEvent {
   causes?: number[]
 }
 export interface EventInit {
+  turn?: number | undefined
   type: 'run.start' | 'run.end' | 'model.request' | 'model.response' | 'tool.call' | 'tool.result' | 'note' | 'error'
   actor: 'harness' | 'model' | 'tool'
   causes?: number[]

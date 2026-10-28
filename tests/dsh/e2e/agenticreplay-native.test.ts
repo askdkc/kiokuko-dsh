@@ -72,6 +72,8 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
       mock.toolCallResponse('prepare-a', TASK_PREPARE_TOOL, { taskType: 'research' }),
       mock.toolCallResponse('call-one', 'agenticreplay_test_tool', {command:`OPENAI_API_KEY=${S}`} ),
       mock.textResponse(`A: fixture policy denied the tool result. {"password":"${S}"}`),
+      mock.textResponse('A: second native turn acknowledged.'),
+      mock.textResponse('A: third native turn acknowledged.'),
       mock.toolCallResponse('prepare-b', TASK_PREPARE_TOOL, { taskType: 'research' }),
       mock.toolCallResponse('pending', 'agenticreplay_test_tool', {}),
       mock.textResponse('B: fixture policy denied the pending tool result.'),
@@ -122,6 +124,14 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(toolCalls, 1, 'the tool body executes in the explicitly prepared native turn')
     assert.equal(results.get('call-one')?.isError, true)
     assert.match(JSON.stringify(results.get('call-one')), /fixture policy denial/u)
+    for (const turn of [2, 3]) {
+      a.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `Acknowledge native turn ${turn}.` }] }))
+      await a.whenIdle()
+      assert.deepEqual(errors, [])
+      const openStatus = await command(a, 'status --json')
+      assert.ok(['starting', 'recording'].includes(openStatus.trace.state), 'native turn completion is not session recording completion; persistence is asynchronous')
+      assert.equal(openStatus.trace.ended_at, null)
+    }
     await command(a, 'stop')
     const rows = await command(a, 'list')
     assert.equal(rows.length, 1)
@@ -130,7 +140,11 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.match(await readFile(join(root, '.gitignore'), 'utf8'), /^\.agenticreplay\/$/mu)
     const id = rows[0].agenticreplay_run_id
     const page = await command(a, `show ${id}`)
-    assert.equal(page.events.filter((e: any) => e.type === 'model.request').length, 3)
+    assert.deepEqual(page.events.filter((e: any) => e.type === 'model.request').map((e: any) => e.turn), [1, 1, 1, 2, 3])
+    assert.equal(page.events.filter((e: any) => e.type === 'run.end').length, 1)
+    for (const event of page.events.filter((e: any) => ['model.response', 'tool.result'].includes(e.type))) {
+      assert.equal(event.turn, page.events.find((cause: any) => cause.seq === event.causes[0]).turn)
+    }
     assert.equal(page.events.find((e: any) => e.type === 'tool.result' && e.attrs.name === 'agenticreplay_test_tool').attrs.is_error, true)
     assert.equal(page.events.find((e: any) => e.type === 'tool.result' && e.attrs.name === TASK_PREPARE_TOOL).attrs.is_error, false)
     const exported = await command(a, `export ${id}`)
@@ -149,6 +163,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     const bId = bRowsBefore[0].agenticreplay_run_id
     const manifest = JSON.parse(await readFile(join(await recordedRunDirectory(root,id), 'manifest.json'), 'utf8'))
     assert.deepEqual(manifest.env_allowlisted, {})
+    assert.equal(manifest.capture.status, 'unverified', 'observation does not claim exact replay capture')
     // Unload while a native pre-execute gate is pending. Results must still be observed.
     let entered!: () => void
     const pending = new Promise<void>(resolve => { entered = resolve })

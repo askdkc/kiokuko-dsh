@@ -27,14 +27,14 @@ export function codingItems(value: CodingWorkflow, assessment: CompletionAssessm
       : item.dependsOn.every(id => complete.has(id)) ? value.activeItemId === item.itemId ? 'running' : 'ready' : 'pending',
   }))
 }
-export function codingStatus(db: SqliteDatabase, identity: CodingIdentity) {
-  projectEnnoCodingWorkflow(db, identity)
+export function codingStatus(db: SqliteDatabase, identity: CodingIdentity, options: { readOnly?: boolean } = {}) {
+  if (!options.readOnly) projectEnnoCodingWorkflow(db, identity)
   let value = readCodingWorkflow(db, identity.runId)
   if (!value) return { applicable: false as const, revision: 0, expectedRevision: 1,
     minimumValidInput: { tool: 'coding_workflow_apply', arguments: { action: 'propose', expectedRevision: 1,
       definition: CODING_MINIMUM_DEFINITION_EXAMPLE } } }
   assertCodingIdentity(value, identity)
-  if (value.blocker?.kind === 'retry_budget') {
+  if (!options.readOnly && value.blocker?.kind === 'retry_budget') {
     const changed = value.blocker.criterionIds.every(id => {
       const row = db.prepare('SELECT method_json FROM dsh_completion_bindings WHERE run_id=? AND criterion_id=?')
         .get<{ method_json: string }>(value!.runId, codingCriterionId(value!, id))
@@ -206,8 +206,8 @@ export function answerCodingChoice(db: SqliteDatabase, identity: CodingIdentity,
     value.state = input.choice === 'cancelled' ? 'cancelled' : 'ready'
   })
 }
-export function nextCodingWork(db: SqliteDatabase, identity: CodingIdentity) {
-  const status = codingStatus(db, identity)
+export function nextCodingWork(db: SqliteDatabase, identity: CodingIdentity, options: { readOnly?: boolean } = {}) {
+  const status = codingStatus(db, identity, options)
   if (!status.applicable) return status
   if (!status.definition) return { ...status, next: 'propose_goal_items_and_criteria' }
   if (status.pendingScopeChange) return { ...status, next: 'revise_goal_for_scope_change' }

@@ -82,12 +82,38 @@ export function projectAgenticReplayJson(value: unknown, maxBytes: number): unkn
   let remaining = maxBytes
   const seen = new Set<object>()
   function charge(n: number) { remaining -= n; if (remaining < 0) throw new AgenticReplayError('queue_limit') }
+  // Bound working UTF-16 storage before scanning/redacting, then account for the
+  // actual JSON UTF-8 representation without allocating an escaped copy. A
+  // blanket length * 6 wrongly discarded ordinary sub-budget request bodies.
+  function textCost(text: string): number {
+    const storage = text.length * 2
+    if (storage > remaining) throw new AgenticReplayError('queue_limit')
+    let encoded = 2 // JSON quotes
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index)
+      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) encoded += 2
+      else if (code < 32) encoded += 6
+      else if (code < 128) encoded++
+      else if (code < 2048) encoded += 2
+      else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length
+        && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) { encoded += 4; index++ }
+      else encoded += code >= 0xd800 && code <= 0xdfff ? 6 : 3
+      if (encoded > remaining) throw new AgenticReplayError('queue_limit')
+    }
+    return Math.max(storage, encoded)
+  }
+  function projectText(text: string): string {
+    const inputCost = textCost(text) // reject over-budget input before copying
+    const output = scrubAgenticReplayText(text)
+    charge(Math.max(inputCost, textCost(output))) // short secrets may expand
+    return output
+  }
   function visit(item: unknown, depth: number): unknown {
     charge(16)
     if (depth > 32) throw new AgenticReplayError('projection_depth')
     if (item === null || typeof item === 'boolean') return item
     if (typeof item === 'number') return Number.isFinite(item) ? item : null
-    if (typeof item === 'string') { charge(item.length * 6); return scrubAgenticReplayText(item) }
+    if (typeof item === 'string') return projectText(item)
     if (typeof item !== 'object') return undefined
     if (seen.has(item)) throw new AgenticReplayError('projection_cycle')
     if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) return '[runtime object omitted]'
@@ -100,11 +126,11 @@ export function projectAgenticReplayJson(value: unknown, maxBytes: number): unkn
       const result: Record<string, unknown> = {}
       for (const key in item) {
         if (!Object.hasOwn(item, key)) continue
-        charge(key.length * 6 + 16)
+        charge(16)
+        const safeKey = projectText(key)
         if (/authorization|cookie|credential|api.?key|password|secret|token|replayState|signal|context/iu.test(key) || isCredentialName(key)) continue
         const descriptor = Object.getOwnPropertyDescriptor(item, key)
         if (!descriptor || !('value' in descriptor)) continue
-        const safeKey = scrubAgenticReplayText(key)
         if (safeKey === '__proto__' || safeKey === 'constructor') continue
         result[safeKey] = visit(descriptor.value, depth + 1)
       }
