@@ -1,3 +1,4 @@
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
@@ -22,7 +23,7 @@ test('scripted evaluation setup hands off within the same admitted native turn',
     const task = 'Inspect the protected Lisp task API and current status, without changing files.'
     try {
       assert.equal((await f.ctx.commands.execute(f.agent, '/kioku-lisp enable-task', [], new AbortController().signal)).result.kind, 'success')
-      const setupResponses = [f.mock.toolCallResponse('setup-prepare', 'prepare_requested_work', { taskType: 'research' }),
+      const setupResponses = [interpretedPreparation(f.mock,'setup-prepare','new','research','research'),
         f.mock.toolCallResponse('setup-describe', 'lisp_describe', { operationId: 'setup-describe' })]
       f.model.stream = withNativeEvaluationSetup(f.model.stream.bind(f.model), setupResponses, async () => {
         handoffs++

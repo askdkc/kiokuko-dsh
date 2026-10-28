@@ -40,7 +40,7 @@ function requireBody(request: any, name: string, detail = '') {
 }
 
 function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
-  return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra, ...(nativeAnswer ? { nativeAnswer } : {}) })
+  return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra:{typedDecisions:{mode:'off'},...extra}, ...(nativeAnswer ? { nativeAnswer } : {}) })
 }
 
 async function enableLisp(f: Awaited<ReturnType<typeof fixture>>, command: string, point: string): Promise<void> {
@@ -91,7 +91,7 @@ for(const explicit of [false,true]) test(`compiled Skill delivery: production en
   try {
     f.responses.push(f.mock.textResponse('説明します。'));await f.turn()
     requireBody(f.model.requests[0],'kiokuko-soul');requireBody(f.model.requests[0],'natural-japanese-output')
-    f.responses.push(f.mock.toolCallResponse('prepare-skill-audit', 'prepare_requested_work', { taskType: 'research' }))
+    f.responses.push(interpretedPreparation(f.mock,'prepare-skill-audit','new','research','research'))
     for (const name of names) f.responses.push(f.mock.toolCallResponse(`load-${name}`, 'skill', { name }))
     f.responses.push(f.mock.textResponse('確認しました。'))
     await f.turn('Inspect every installed bundled Skill with the native skill tool and report its contents.')
@@ -153,7 +153,7 @@ test('delivery counterexample: disconnected native Skill reader is caught while 
     return name==='kiokuko-lisp'?undefined:original.call(this,name,path)
   })
   try {
-    f.responses.push(f.mock.toolCallResponse('prepare-disconnected-read', 'prepare_requested_work', { taskType: 'research' }),
+    f.responses.push(interpretedPreparation(f.mock,'prepare-disconnected-read','new','research','research'),
       f.mock.toolCallResponse('disconnected-read','skill',{name:'kiokuko-lisp'}),f.mock.textResponse('取得できませんでした。'))
     await f.turn('Inspect the installed kiokuko-lisp Skill with the native skill tool and report its contents.')
     assert.equal(f.model.requests.length,3)
@@ -177,7 +177,7 @@ test('Lisp task mode preserves on-demand preparation while blocking native mutat
       return f.mock.toolCallResponse('blocked-write', 'write', {})
     }, (request: any) => {
       assert.equal(resultOf(request).isError, true)
-      return f.mock.toolCallResponse('prepare-lisp-status', 'prepare_requested_work', { taskType: 'research' })
+      return interpretedPreparation(f.mock,'prepare-lisp-status','new','verify','review')(request)
     }, (request: any) => {
       assert.equal(resultOf(request).isError, false)
       assert.equal(JSON.parse(resultOf(request).content[0].text).prepared, true)
@@ -203,7 +203,7 @@ test('compiled Skill delivery: protected Lisp enable and lisp_describe reach the
     const toolkit = skill.slice(skill.indexOf('## Task toolkit example')).match(/```lisp\n([\s\S]*?)\n```/u)?.[1]
     assert.ok(toolkit, 'the shipped task toolkit example must be present')
     f.responses.push(
-      f.mock.toolCallResponse('prepare-task-tools', 'prepare_requested_work', { taskType: 'research' }),
+      interpretedPreparation(f.mock,'prepare-task-tools','new','operate'),
       f.mock.toolCallResponse('describe-lisp','lisp_describe',{operationId:'describe-guide'}),
       f.mock.toolCallResponse('define-task-tools', 'lisp_eval', { operationId: 'define-task-tools', code: `${toolkit}\n(replace-once "value=0" "0" "42")` }),
       f.mock.toolCallResponse('describe-task-tool', 'lisp_describe', { operationId: 'describe-task-tool', symbol: 'kioku.user::replace-once' }),
@@ -248,7 +248,7 @@ test('Lisp selected during initial admission executes shared functions without s
       const block = nativeToolResults(request.messages).at(-1)
       return JSON.parse(block.content.find((b: any) => b.type === 'text').text)
     }
-    f.responses.push(f.mock.toolCallResponse('prepare-initial-lisp', 'prepare_requested_work', { taskType: 'debug' }), ...codingPrelude(f.mock, 'initial'),
+    f.responses.push(interpretedPreparation(f.mock,'prepare-initial-lisp','new','change','debug'), ...codingPrelude(f.mock, 'initial'),
       f.mock.toolCallResponse('initial-prototype', 'lisp_eval', { operationId: 'initial-prototype', prototype: true,
         code: '(progn (assert (= (+ 1 1) 2)) (assert (/= (+ 0 1) 2)) 2)' }),
       (request: any) => {
@@ -326,7 +326,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
   try {
     await writeFile(join(f.dir, 'a.txt'), 'old-a'); await writeFile(join(f.dir, 'b.txt'), 'old-b')
     await enableLisp(f, 'enable', 'skill-workflow-enable')
-    f.responses.push(f.mock.toolCallResponse('prepare-workflow', 'prepare_requested_work', { taskType: 'research' }),
+    f.responses.push(interpretedPreparation(f.mock,'prepare-workflow','new','change','writing'),
       f.mock.toolCallResponse('workflow-write', 'lisp_eval', args), (request: any) => {
       const result = latestResult(request); hostId = result.operationId
       assert.equal(result.changeSummary.states.APPLIED, 2); assert.equal(result.proposals, undefined)

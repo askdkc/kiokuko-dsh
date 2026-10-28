@@ -109,8 +109,8 @@ export function nativeMock(llm: any) {
     ) {
       super();
     }
-    prepareNext(taskType: string, id: string) {
-      this.script.splice(0, 1, ...prepareWork([this.script[0]], taskType, id));
+    prepareNext(taskType: string, id: string, prepare?: (request: any) => any) {
+      this.script.splice(0, 1, ...prepareWork([this.script[0]], taskType, id, prepare));
     }
     async listModels(provider: string) {
       return this.modelIds.map((id) => ({ provider, id, name: id }));

@@ -23,6 +23,11 @@ import type { DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
 import { createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 
+// Module lifecycle tests explicitly disable optional inference; native request-intent
+// suites exercise the enabled independent assessment and its unavailable boundary.
+const mountFixtureCore: typeof mountCore = (ctx, config = {}, modules) =>
+  mountCore(ctx, { typedDecisions: { mode: 'off' }, ...config }, modules)
+
 function scopedHooks() {
   const listeners = new Map<string, Function>(), handlers = new Map<string, Function[]>()
   return { listeners, on(name: string, callback: Function, options?: { prepend?: boolean }) {
@@ -87,7 +92,17 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
     return listeners.has('tools/execute') ? listeners.get('tools/execute')!(execution, body) : body()
   }
   return { root, ctx, agent, session, events, listeners, tools, sections, providers, services, execute,
-    prepare: (taskType = 'research', signal?: AbortSignal) => execute(TASK_PREPARE_TOOL, { taskType }, signal),
+    async prepare(taskType = 'research', signal?: AbortSignal) {
+      const result = await execute(TASK_PREPARE_TOOL, { taskType }, signal)
+      if (result.status !== 'request_interpretation_required') return result
+      // Script the model's response to the public recovery contract. No hidden
+      // host context or fixture authority is injected, and no effect ran yet.
+      assert.equal(result.prepared, false)
+      const action = taskType === 'research' ? 'research' : taskType === 'review' ? 'verify' : taskType === 'devops' ? 'operate' : 'change'
+      return execute(TASK_PREPARE_TOOL, { taskType, requestIntent: { relation: 'new', action,
+        ...(action === 'change' ? { changeScope: taskType === 'writing' ? 'document' : 'implementation' } : {}),
+        evidenceRefs: result.currentReferences } }, signal)
+    },
     async event(event: any) { events.push(event); await listeners.get('session/event')?.(session, event) },
     async cleanup() { await rm(root, { recursive: true, force: true }) } }
 
@@ -123,7 +138,7 @@ const requireIntakeChoice: DshModule<CoreModuleHost> = {
 test('mounted core keeps memory advisory and exposes a session-bound diagnostic after interrupted completion', async () => {
   const f = await fixture({ask: async r => ({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})}), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
@@ -159,7 +174,7 @@ test('mounted core keeps memory advisory and exposes a session-bound diagnostic 
 
 test('core native path handles conversation, research, writing and project memory without coding choices or optional runtimes', async () => {
   const f = await fixture()
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
     assert.equal(f.sections.length, 2)
     assert.doesNotMatch(f.sections[0].text, /\| `kiokuko-enno-oduno`|\| `kiokuko-single-purpose-functions`/)
@@ -211,7 +226,7 @@ test('mounted core answers a first factual question through Laya without executi
     if (request.questions?.['task-type']) requests.push(request)
     return layaV1Reply(request, (id, choices) => id === 'task-type' ? 'chat' : choices.includes('none') ? 'none' : 'no')
   })
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     intakeMode:'eager',typedDecisions: { provider: 'laya-coreml', 'laya-coreml': { socketPath: socket.path, protocol: 'v1', model: 'laya-rl-agent' } } })
   try {
     const task = '富士山って日本で一番高い山？'
@@ -238,7 +253,7 @@ test('core model-auto leaves first prompt unprepared and reuses an explicitly pr
   const f = await fixture(), commands: any[] = [], scope = scopedHooks(), agentHooks = scope.listeners
   ;(f.agent as any).ctx = { on: scope.on }
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'off' } })
   try {
     f.listeners.get('agent/created')!({ agent: f.agent })
@@ -275,7 +290,7 @@ test('core PTC mode exposes memory review only after requested work is prepared'
     get: (name: string) => f.services[name],
     on: scope.on,
   }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     modelAutoMode: { mode: 'off' }, typedDecisions: { mode: 'off' } })
   try {
     const db = openConnection(join(f.root, 'memory.sqlite3'))
@@ -293,7 +308,7 @@ test('core PTC mode exposes memory review only after requested work is prepared'
     assert.deepEqual(initial.tools.map((tool: any) => tool.name), ['run_code'])
     assert.equal(presentation, 'ptc', 'ordinary first assembly must not prepare execution')
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [message], turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [message] }))
-    const prepared = await f.execute('run_code', { description: 'Prepare requested work only', code: 'return await tools.prepare_requested_work({"taskType":"build"})' })
+    const prepared = await f.execute('run_code', { description: 'Prepare requested work only', code: `return await tools.prepare_requested_work(${JSON.stringify({requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(createRequestIntentContext({task:'Run migration expectations review programs',messageRefs:requestIntentMessageRefs([message],'Run migration expectations review programs')})!)}})})` })
     assert.equal(prepared.isError, false)
     assert.equal(prepared.value.result.prepared, true)
     assert.equal(programs, 0, 'the preparation-only carrier must not execute a program')
@@ -324,7 +339,7 @@ test('a local writing feature can prepare and dispose through the same contract 
   const f = await fixture(), events: string[] = []
   const feature: DshModule<CoreModuleHost> = { id: 'writing', coreVersion: 1, requires: [], configure: value => value,
     async mount({ host, defer }) { defer(host.beforeTask(async input => { events.push(input.task) })); return { stopIngress() { events.push('stop') }, async drain() { events.push('drain') }, async dispose() { events.push('dispose') } } } }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') }, [{ module: feature }])
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') }, [{ module: feature }])
   try {
     const messages = [{ role: 'user', content: 'Write a concise project summary.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -350,7 +365,7 @@ test('resource-only extension is available in full and compiled fallback without
 test('persisted protected sessions cannot become native work when the required module is absent', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const db = openConnection(databasePath)
     db.prepare('INSERT INTO dsh_lisp_sessions(session_id,root_path,enabled,epoch,updated_at) VALUES(?,?,1,?,?)').run(f.session.id, f.root, 'epoch', new Date().toISOString())
@@ -370,7 +385,7 @@ test('persisted protected sessions cannot become native work when the required m
 test('legacy memory checkpoint checks native identity but never saves without post-task human approval', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -393,16 +408,16 @@ test('legacy memory checkpoint checks native identity but never saves without po
 test('reload after a legacy checkpoint asks for clarification without admitting or duplicating work', async () => {
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
   const config = { repositoryRoot: f.root, databasePath }
-  let handle = await mountCore(f.ctx, config)
+  let handle = await mountFixtureCore(f.ctx, config)
   const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
   const prepare = () => f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
   try {
     assert.equal((await prepare()).kind, 'enter')
     await f.prepare('research')
-    await handle.dispose(); handle = await mountCore(f.ctx, config)
+    await handle.dispose(); handle = await mountFixtureCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
     await f.tools.find(tool => tool.name === 'memory_checkpoint').execute({ outcome: 'completed', memories: [{ kind: 'fact', title: 'One saved fact', body: 'This exact request is saved once.' }] }, { name: 'memory_checkpoint', agent: f.agent, signal: new AbortController().signal })
-    await handle.dispose(); handle = await mountCore(f.ctx, config)
+    await handle.dispose(); handle = await mountFixtureCore(f.ctx, config)
     assert.equal((await prepare()).kind, 'enter')
     const workflow = f.services.kiokukoTaskWorkflow as DshTaskWorkflow
     const before = await workflow.snapshot(f.agent)
@@ -417,7 +432,9 @@ test('reload after a legacy checkpoint asks for clarification without admitting 
       } finally { db.close() }
     }
     const durableBefore = readDurableState()
-    const clarification = await f.prepare('research')
+    const unresolved = await f.execute(TASK_PREPARE_TOOL,{taskType:'research'})
+    assert.equal(unresolved.status,'request_interpretation_required')
+    const clarification = await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'unknown',action:'unknown',evidenceRefs:unresolved.currentReferences}})
     assert.equal(clarification.prepared, false, 'uncertain replay must not grant preparation')
     assert.equal(clarification.status, 'awaiting_clarification')
     assert.equal(clarification.nextAction, 'ask_user_once', 'this fixture has no native question service')
@@ -425,7 +442,7 @@ test('reload after a legacy checkpoint asks for clarification without admitting 
     assert.equal(clarification.originalTask, messages[0]!.content)
     assert.ok(clarification.question.trim())
     assert.ok(clarification.questionId)
-    assert.deepEqual(await f.prepare('research'), clarification, 'unanswered retries reuse the same question')
+    assert.deepEqual(await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'unknown',action:'unknown',evidenceRefs:unresolved.currentReferences}}), clarification, 'unanswered retries reuse the same question')
     assert.deepEqual(await workflow.snapshot(f.agent), before, 'no task or lifecycle transition is authorized')
     assert.deepEqual(readDurableState(), durableBefore, 'no new run, owner change, or memory write')
     const db = openConnection(databasePath)
@@ -463,7 +480,7 @@ test('configured resource deployment preserves omitted/user files and compiled d
 
 test('native error and cancellation preserve distinct terminal outcomes', async () => {
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     for (const [index, reason] of ['error', 'aborted'].entries()) {
       const turn = index + 1, messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
@@ -486,7 +503,7 @@ test('cancelling intake releases the pending owner and admits the next request',
   let asked = false
   const f = await fixture({ ask: async () => { asked = true; controller.abort(); throw new Error('User cancelled intake') } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
     const signal = controller.signal
     const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
@@ -514,7 +531,7 @@ test('intake answer failure without signal abort releases the failed owner', asy
   let asked = false
   const f = await fixture({ ask: async () => { asked = true; throw new Error('Question service unavailable') } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
     const signal = new AbortController().signal
     const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
@@ -541,7 +558,7 @@ test('intake answer failure without signal abort releases the failed owner', asy
 test('max-tokens is an interrupted boundary and releases ownership before the next request', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const first = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
@@ -566,7 +583,7 @@ test('max-tokens is an interrupted boundary and releases ownership before the ne
 test('max-tokens is finalized by native idle when no next request arrives', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -585,7 +602,7 @@ test('max-tokens is finalized by native idle when no next request arrives', asyn
 test('a missing or wrong-turn boundary never releases the current owner', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const first = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
@@ -612,7 +629,7 @@ test('a missing or wrong-turn boundary never releases the current owner', async 
 test('a non-admitted intake run is failed and released by a native blocked boundary', async () => {
   const f = await fixture()
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
     const first = [{ role: 'user', content: 'Inspect the repository contents.' }]
     const result = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: first, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: first }))
@@ -638,7 +655,7 @@ test('a late valid intake answer after signal cancellation is not persisted', as
     return { answers: [{ id: request.questions[0].id, selected: ['chat'] }] }
   } })
   const databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath }, [{ module: requireIntakeChoice }])
   try {
     const signal = controller.signal
     const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
@@ -660,7 +677,7 @@ test('a late valid intake answer after signal cancellation is not persisted', as
 test('cancellation at the prepared-task handoff releases the owner before host registration', async () => {
   const controller = new AbortController(), failure = new Error('Cancelled at task handoff')
   const f = await fixture(), databasePath = join(f.root, 'memory.sqlite3')
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath })
   try {
     const messages = [{ role: 'user', content: 'Inspect the repository contents.' }]
     const entry = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: controller.signal }, async () => ({ kind: 'enter', messages }))
@@ -696,7 +713,7 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
   }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), intakeMode:'eager',typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), intakeMode:'eager',typedDecisions: { provider, nimble: { endpoint: 'http://127.0.0.1:8000/v1/systemone', model: 'fixture-model' } } })
   try {
     const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
     const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
@@ -731,7 +748,7 @@ test('core Score selection reaches model context through native pre-step', async
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
   }
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'),
     intakeMode:'eager',typedDecisions: { provider: 'typesafe', skillSelection: { mode: 'score', minScore: 2, minConfidence: .8 } } })
   try {
     const messages = [{ role: 'user', content: '文章を読みやすく修正して' }]
@@ -746,7 +763,7 @@ test('core connects to an existing start-laya v1 worker without credentials or r
   f.services.commands = { register(command: any) { commands.push(command); return () => {} } }
   f.services.credentials = { resolve() { throw new Error('No cloud credentials for Laya') } }
   const socket = await serveLaya(t, request => layaV1Reply(request))
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { 'laya-coreml': { socketPath: socket.path } } })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3'), typedDecisions: { 'laya-coreml': { socketPath: socket.path } } })
   try {
     const command = commands.find(c => c.name === 'kioku-decisions'), signal = new AbortController().signal
     const status = await command.handler({ rawInput: 'status', signal })
@@ -765,7 +782,7 @@ test('ordinary conversation turns stay intake-free until new explicit work is pr
     asked.push(request.questions[0].id)
     return { answers: [{ id: request.questions[0].id, selected: ['質問、相談、会話'] }] }
   } })
-  const handle = await mountCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
+  const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
     for (const [i, text] of ['その件について', 'それで？', 'もう少し具体的に', 'この資料を調査してください'].entries()) {
       const turn = i + 1, messages = [{ role: 'user', content: text }]
@@ -787,7 +804,7 @@ test('ordinary conversation turns stay intake-free until new explicit work is pr
 
 
 test('default optional memory lookup needs no task and a same-name replacement inherits no authority',async()=>{
- const f=await fixture(),handle=await mountCore(f.ctx,{repositoryRoot:f.root,databasePath:join(f.root,'memory.sqlite3')})
+ const f=await fixture(),handle=await mountFixtureCore(f.ctx,{repositoryRoot:f.root,databasePath:join(f.root,'memory.sqlite3')})
  try{
   const messages=[{role:'user',content:'Find approved Parser experience.'}]
   await f.listeners.get('agent/pre-step')!({agent:f.agent,messages,turn:1,step:0,signal:new AbortController().signal},async()=>({kind:'enter',messages}))

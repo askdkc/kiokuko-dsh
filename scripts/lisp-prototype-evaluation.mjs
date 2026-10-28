@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { DshSkillPrompts } from '../src/dsh/skill-prompts.ts'
 import { loadSkillSources } from '../src/dsh/skill-sources.ts'
 import { compileSkillBundle } from '../src/dsh/skill-compiler.ts'
+import { interpretedPreparation } from '../tests/dsh/helpers/coding-script.ts'
 import { nativeSkillFixture } from '../tests/dsh/helpers/skill-native.ts'
 import { withIsolatedSkillHome } from '../tests/dsh/helpers/skill-home.ts'
 import { createEvaluationBudget, parseEvaluationConfig } from './skill-evaluation-config.mjs'
@@ -49,7 +50,8 @@ export function withNativeEvaluationSetup(stream, responses, ready) {
   let index = 0, prepared
   return async function* (request) {
     if (index < responses.length) {
-      for (const chunk of responses[index++]) { request.signal?.throwIfAborted(); yield chunk }
+      const response=responses[index++]
+      for (const chunk of typeof response==='function'?response(request):response) { request.signal?.throwIfAborted(); yield chunk }
       return
     }
     prepared ??= Promise.resolve().then(ready)
@@ -116,7 +118,7 @@ async function runCase({ scenario, variant, sources, artifact, packages, config,
     assert.equal(enabled.result.kind, 'success', 'protected Lisp must start; missing runtime is not a skip')
     // Replace formerly direct idle dispatch with observable scripted native
     // setup in the original scenario's turn. No second-turn ownership race.
-    const setupResponses = [f.mock.toolCallResponse('prepare-evaluation', 'prepare_requested_work', { taskType: 'research' }),
+    const setupResponses = [interpretedPreparation(f.mock,'prepare-evaluation','new','research','research'),
       f.mock.toolCallResponse('runtime-info', 'lisp_eval', { operationId: 'runtime-info', code: '(list (lisp-implementation-type) (lisp-implementation-version))' })]
     if (scenario.seed) setupResponses.push(f.mock.toolCallResponse(`${scenario.id}-seed`, 'lisp_eval', { operationId: `${scenario.id}-seed`, code: nodeProbe(scenario.seed) }))
     const wrap = stream => withNativeEvaluationSetup(stream, setupResponses, async () => {

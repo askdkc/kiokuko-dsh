@@ -1,3 +1,4 @@
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mountToolExecutor } from '../helpers/native-tools.js'
 /** Actual published native PTC regression; the model is scripted and no paid API is called. */
 import assert from 'node:assert/strict'
@@ -76,7 +77,8 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
         let response: any[]
         if (step === 1) {
           assert.deepEqual(names, ['run_code'])
-          response = mock.toolCallResponse('prepare', 'run_code', { description: 'Prepare requested work only', code: 'return await tools.prepare_requested_work({"taskType":"build"})' })
+          const preparation=interpretedPreparation(mock,'prepare','new','verify','review')(options).find((chunk:any)=>chunk.block?.type==='tool-call').block
+          response = mock.toolCallResponse('prepare', 'run_code', { description: 'Prepare requested work only', code: `return await tools.prepare_requested_work(${preparation.arguments})` })
         } else if (step === 2) {
           row.registryToolsAfterPreparation = (await ctx.systemPrompt.assemble({ scope: handle.agent, agent: handle.agent })).tools.map((tool: any) => tool.name)
           const diagnostic = openConnection(databasePath)

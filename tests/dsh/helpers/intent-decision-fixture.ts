@@ -11,7 +11,7 @@ export function semanticFixtureAnswers(batch: DecisionBatch, expected: (task:str
   const truth=expected(state.source.task)
   const matches=truth && state.candidate.action===truth.action && (truth.action!=='change'||state.candidate.changeScope===truth.changeScope)
     && (!truth.relation||state.candidate.relation===truth.relation)
-  return batch.questions.map(q=>({id:q.id,status:'selected',choiceId:!truth?'insufficient':matches?'supported':'contradicted'}))
+  return batch.questions.map(q=>!truth?{id:q.id,status:'abstained',reason:'insufficient'}:{id:q.id,status:'selected',choiceId:matches?'supported':'contradicted'})
 }
 export function intentFixtureDecisions(expected: (task:string) => FixtureIntent|undefined) {
   return new DecisionService(TypedDecisionsConfig.parse({mode:'auto'}),()=>({capabilities:{maxQuestions:256,maxChoices:256,maxBytes:262144},async evaluate(batch) {

@@ -47,6 +47,8 @@ function runNodeTests(testFiles, testTempRoot) {
     ? (testFiles.some(file => file.includes(`${path.sep}lisp${path.sep}`)) ? 2 : 4)
     : Number(process.env.KIOKUKO_TEST_CONCURRENCY);
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 64) throw new Error('KIOKUKO_TEST_CONCURRENCY must be an integer from 1 to 64');
+  const timeoutMs = Number(process.env.KIOKUKO_TEST_TIMEOUT_MS ?? 30 * 60_000);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('KIOKUKO_TEST_TIMEOUT_MS must be a positive integer');
   return new Promise((resolve, reject) => {
     const childEnvironment = {
       ...process.env,
@@ -65,7 +67,7 @@ function runNodeTests(testFiles, testTempRoot) {
       // A timed-out series must also stop its native fixture subprocesses.
       detached: process.platform !== 'win32',
     });
-    let killTimer;
+    let killTimer, timedOut = false;
     const stopGroup = (signal) => {
       try {
         if (process.platform === 'win32') child.kill(signal);
@@ -76,7 +78,10 @@ function runNodeTests(testFiles, testTempRoot) {
       stopGroup('SIGTERM');
       killTimer ??= setTimeout(() => stopGroup('SIGKILL'), 5_000);
     };
+    // This supervisor remains responsive when a test starves its own timers.
+    const watchdog = setTimeout(() => { timedOut = true; interrupt(); }, timeoutMs);
     const cleanup = () => {
+      clearTimeout(watchdog);
       clearTimeout(killTimer);
       process.off('SIGTERM', interrupt); process.off('SIGINT', interrupt);
     };
@@ -87,6 +92,10 @@ function runNodeTests(testFiles, testTempRoot) {
       // has exited. Kill only the dedicated fixture process group.
       if (process.platform !== 'win32' || killTimer !== undefined) stopGroup('SIGKILL');
       cleanup();
+      if (timedOut) {
+        reject(new Error(`Test suite exceeded wall-clock timeout (${timeoutMs} ms)`));
+        return;
+      }
       if (signal !== null) {
         reject(new Error(`Test process terminated by ${signal}`));
         return;

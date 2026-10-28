@@ -113,7 +113,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     assert.ok(!preparing || referenceLine, 'the provider must receive the current request evidence')
     const action = ['research', 'analysis'].includes(fixtureTaskType) ? 'research' : fixtureTaskType === 'review' ? 'verify' : fixtureTaskType === 'devops' ? 'operate' : 'change'
     const changeScope = action === 'change' ? fixtureTaskType === 'writing' ? 'document' : 'implementation' : 'unknown'
-    const toolArguments = preparing ? JSON.stringify(fixtureTaskType === 'analysis' ? { taskType: fixtureTaskType } : { taskType: fixtureTaskType, requestIntent: {
+    const toolArguments = preparing ? JSON.stringify({ taskType: fixtureTaskType, requestIntent: {
       relation: 'new', action, changeScope, evidenceRefs: JSON.parse(referenceLine!).requiredReferences,
     } }) : '{"message":"payload-1"}'
     const toolCallId = preparing ? 'call_fixture_prepare' : 'call_fixture_external'

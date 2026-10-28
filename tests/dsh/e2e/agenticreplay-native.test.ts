@@ -1,3 +1,4 @@
+import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 import { recordedRunDirectory } from '../helpers/agenticreplay-fixture.js'
 import { execFileSync } from 'node:child_process'
@@ -69,12 +70,12 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
       }
     }
     const model = new AgenticReplayModel([
-      mock.toolCallResponse('prepare-a', TASK_PREPARE_TOOL, { taskType: 'research' }),
+      interpretedPreparation(mock,'prepare-a','new','research','research'),
       mock.toolCallResponse('call-one', 'agenticreplay_test_tool', {command:`OPENAI_API_KEY=${S}`} ),
       mock.textResponse(`A: fixture policy denied the tool result. {"password":"${S}"}`),
       mock.textResponse('A: second native turn acknowledged.'),
       mock.textResponse('A: third native turn acknowledged.'),
-      mock.toolCallResponse('prepare-b', TASK_PREPARE_TOOL, { taskType: 'research' }),
+      interpretedPreparation(mock,'prepare-b','new','research','research'),
       mock.toolCallResponse('pending', 'agenticreplay_test_tool', {}),
       mock.textResponse('B: fixture policy denied the pending tool result.'),
     ])
@@ -114,7 +115,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     // This fixture has no human question service; explicit commands authorize both sessions.
     await command(a, 'start')
     await command(b, 'start')
-    ctx.tools.register({ name: 'agenticreplay_test_tool', description: 'fixture', parameters: {},
+    ctx.tools.register({ name: 'agenticreplay_test_tool',[Symbol.for('kiokuko.coding.read-only')]:true, description: 'fixture', parameters: {},
       output: { schema: { type: 'string' }, render: (_: unknown, text: string) => [{ type: 'text', text }] }, execute: () => { toolCalls++; return 'body-success' } })
     ctx.on('tools/post-execute', (execution: any, _result: any, next: any) => execution.name === 'agenticreplay_test_tool'
       ? { kind: 'block', feedback: [{ type: 'text', text: `fixture policy denial OPENAI_API_KEY=${S}` }] } : next(), { global: true })

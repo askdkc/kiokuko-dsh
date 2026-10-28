@@ -60,6 +60,7 @@ test('native turn accepts steering after a tool without replacing its initial re
     return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
   } }); await questions
   const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
+    decisions:intentFixtureDecisions(task=>task.includes('追記は不要')?{action:'verify',relation:'same_scope_continuation'}:task.includes('README')?{action:'change',changeScope:'document'}:undefined),
     migrationsDirectory: join(process.cwd(), 'migrations'), llm: { async *stream() { throw new Error('Optional memory backend unavailable') } } })
   const composition = await mountDshComposition(h.ctx, adapter.host)
   const model = new h.mock.MockAdapter([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('verified')])
@@ -73,7 +74,7 @@ test('native turn accepts steering after a tool without replacing its initial re
     execute: async () => { writes++; agent.steer(h.llm.createUserMessage({ content: [{ type: 'text', text: '追記は不要です。検証してください。' }], source: { kind: 'user' } })); return 'edited' },
   })
   try {
-    model.prepareNext('debug', 'prepare-steering')
+    model.prepareNext('writing', 'prepare-steering', interpretedPreparation(h.mock,'prepare-steering','new','change','writing'))
     await turn(h, agent, 'README.mdを修正してください。')
     assert.deepEqual(errors, [])
     assert.equal(writes, 1)
@@ -200,7 +201,7 @@ test('native model-auto applies the selected effort to first prompt and request,
   const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
     capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 },
     evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
-      answers: batch.questions.map(question => ({ id: question.id, status: 'selected' as const,
+      answers: semanticFixtureAnswers(batch, task => task.includes('README') ? {action:'change',changeScope:'document'} : undefined) ?? batch.questions.map(question => ({ id: question.id, status: 'selected' as const,
         choiceId: batch.purpose === 'memory-reuse' ? 'apple' : batch.purpose === 'model-routing' ? (++classified, 'luna-high') : 'retain' })) }),
   }))
   const meter = h.ctx.plugin({ name: 'model-auto-meter', apply(ctx: any) {
@@ -215,7 +216,7 @@ test('native model-auto applies the selected effort to first prompt and request,
       context: { contextWindow: 200_000 }, inputModalities: ['text', 'image'],
       reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
   }
-  const prepared = h.mock.prepareWork([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('done')], 'debug', 'prepare-auto')
+  const prepared = h.mock.prepareWork([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('done')], 'writing', 'prepare-auto', interpretedPreparation(h.mock,'prepare-auto','new','change','writing'))
   const codex = new CodexAdapter(prepared.slice(1), ['gpt-6-luna', 'gpt-6-sol'])
   const ordinary = new h.mock.MockAdapter([prepared[0], h.mock.textResponse('manual task')])
   h.ctx.llm.registerAdapter(['openai-codex'], codex)
@@ -247,7 +248,7 @@ test('native model-auto applies the selected effort to first prompt and request,
     assert.equal(headers[1].data.header.config.model, 'gpt-6-luna')
     assert.equal(headers[1].data.header.config.reasoningEffort, 'high')
     agent.session.append('model/selection', { provider: 'ordinary', model: 'mock' })
-    ordinary.prepareNext('debug', 'prepare-manual')
+    ordinary.prepareNext('writing', 'prepare-manual', interpretedPreparation(h.mock,'prepare-manual','new','change','writing'))
     await turn(h, agent, '次のREADME修正をしてください。通常実行で。')
     assert.equal(classified, 1)
     assert.equal(ordinary.requests.length, 3)
@@ -308,7 +309,7 @@ test('native modular core applies model-auto to its first prepared prompt and re
       context: { contextWindow: 200_000 }, inputModalities: ['text'],
       reasoning: { efforts: ['low', 'medium', 'high'].map(id => ({ id, name: id })) } } }
   }
-  const prepared = h.mock.prepareWork([h.mock.textResponse('調査しました。')], 'research', 'prepare-core-auto')
+  const prepared = h.mock.prepareWork([h.mock.textResponse('調査しました。')], 'research', 'prepare-core-auto', interpretedPreparation(h.mock,'prepare-core-auto','new','research','research'))
   const codex = new CodexAdapter(prepared.slice(1), ['gpt-6-luna', 'gpt-6-sol'])
   const meter = h.ctx.plugin({ name: 'core-model-auto-meter', apply(ctx: any) {
     return ctx.provide('tokenMeter', { measure: () => ({ totalTokens: 100, logRevision: 0, nodes: [] }) })
@@ -460,7 +461,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n), 0)
     await composition.dispose(); await adapter.dispose()
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
-    model.prepareNext('debug', 'prepare-recovered')
+    model.prepareNext('debug', 'prepare-recovered', interpretedPreparation(h.mock,'prepare-recovered','same_scope_continuation','change','debug'))
     await turn(h, agent, '続けてください。')
     await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(writes, 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type))))
@@ -471,7 +472,7 @@ test('native code normal execution: cancel, plugin reload, original input recove
     assert.equal(model.requests.every(r => r.provider === 'ordinary' && r.model === 'mock'), true)
     const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0, 0])
-    model.prepareNext('debug', 'prepare-next-feature')
+    model.prepareNext('debug', 'prepare-next-feature', interpretedPreparation(h.mock,'prepare-next-feature','new','change','debug'))
     await turn(h, agent, '別のfeature.mjsの変更も実装してください。')
     assert.equal(questionCount, 3)
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }

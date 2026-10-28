@@ -9,5 +9,5 @@ test('independent fixture contradicts wrong actions and abstains on an unknown o
  assert.ok(candidate.ok);if(!candidate.ok)return
  const batch=buildIntentAssessmentBatch(context,candidate.decision)
  assert.ok(semanticFixtureAnswers(batch,source=>source===task?{action:'answer'}:undefined)?.every(answer=>answer.status==='selected'&&answer.choiceId==='contradicted'))
- assert.ok(semanticFixtureAnswers(batch,()=>undefined)?.every(answer=>answer.status==='selected'&&answer.choiceId==='insufficient'))
+ assert.ok(semanticFixtureAnswers(batch,()=>undefined)?.every(answer=>answer.status==='abstained'&&answer.reason==='insufficient'))
 })

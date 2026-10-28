@@ -58,29 +58,47 @@ export function questionWasAnswered({ events, eventOffset, requestSequence, ques
  * No timeout/repaint alone can release Enter, and no input is ever retried.
  */
 export function createQuestionSelection(question, selected) {
-  const labels = question.options?.map(option => option.label) ?? []
+  const labels = question.options?.map((option) => option.label) ?? []
   const target = labels.indexOf(selected)
-  if (question.multiSelect || target < 0 || new Set(labels).size !== labels.length
-    || typeof question.question !== 'string' || !question.question.trim())
+  if (
+    question.multiSelect ||
+    target < 0 ||
+    new Set(labels).size !== labels.length ||
+    typeof question.question !== 'string' ||
+    !question.question.trim()
+  )
     throw new Error('Expected a unique single-select option')
-  let pending, submitted = false
+  let pending,
+    submitted = false
   return ({ screen, frame, active = true }) => {
     if (!active || submitted) return undefined
-    const screenRows = screen.split('\n').map(row => row.trim())
-    const header = screenRows.findLastIndex(row => /(?:^|\s)📋 Question \d+\/\d+(?:\s|$)/u.test(row))
+    const screenRows = screen.split('\n').map((row) => row.trim())
+    const header = screenRows.findLastIndex((row) =>
+      /(?:^|\s)📋 Question \d+\/\d+(?:\s|$)/u.test(row),
+    )
     if (header < 0) return undefined
     const rows = screenRows.slice(header + 1)
     // These probe questions fit on one line. Historical text above the active
     // panel or another question reusing its labels cannot identify this request.
-    if (!rows.includes(question.question.trim())) return undefined
-    const focused = labels.map((label, index) => rows.includes(`❯● ${label}`) ? index : -1).filter(index => index >= 0)
+    // The PTY can retain a separate right column beside the question panel.
+    // Match the whole prompt cell, preserving rejection of a different prompt.
+    if (
+      !rows.some((row) => row.split(/\s{2,}/u)[0] === question.question.trim())
+    )
+      return undefined
+    const focused = labels
+      .map((label, index) => (rows.includes(`❯● ${label}`) ? index : -1))
+      .filter((index) => index >= 0)
     if (focused.length !== 1) return undefined
     const index = focused[0]
     if (pending) {
       if (frame <= pending.frame || index !== pending.index) return undefined
       pending = undefined
     }
-    if (index === target) { submitted = true; return 'submit' }
+    if (index === target) {
+      submitted = true
+      return 'submit'
+    }
     // Only move through real options, never through the custom-input tail.
     const delta = target > index ? 1 : -1
     pending = { frame, index: index + delta }

@@ -192,3 +192,36 @@ test('another active panel with identical options cannot reuse historical questi
   assert.equal(select({ screen: `${panel(1)}\n${other}`, frame: 3 }), undefined)
   assert.equal(select({ screen: panel(1), frame: 4 }), 'submit')
 })
+
+
+test('question identity ignores a separate terminal column after the full rendered prompt', () => {
+  const select = createQuestionSelection(question, options[1])
+  const columns = panel(0).replace(
+    question.question,
+    `${question.question}             \"`,
+  )
+  assert.equal(select({ screen: columns, frame: 1 }), 'down')
+  assert.equal(
+    select({
+      screen: panel(1).replace(
+        question.question,
+        `${question.question}        r`,
+      ),
+      frame: 2,
+    }),
+    'submit',
+  )
+  assert.equal(
+    createQuestionSelection(
+      question,
+      options[0],
+    )({
+      screen: panel(0).replace(
+        question.question,
+        `${question.question} extended`,
+      ),
+      frame: 3,
+    }),
+    undefined,
+  )
+})

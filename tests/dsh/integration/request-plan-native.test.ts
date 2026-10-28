@@ -360,8 +360,8 @@ for (const mode of ['core', 'adapter'] as const)
               assert.equal(
                 asked.filter((id) => id.startsWith('request-clarification-'))
                   .length,
-                legacy ? 1 : 0,
-                'clear plan adoption needs no repeated generic question',
+                0,
+                'clear plan adoption needs no generic human question, including a legacy model request',
               )
               assert.equal(
                 asked.filter((id) => id === 'enno-execution-mode').length <= 1,

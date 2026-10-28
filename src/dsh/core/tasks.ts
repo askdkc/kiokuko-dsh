@@ -211,9 +211,22 @@ export class CoreTasks {
     }
     const intentType = requestIntent && !unresolvedIntent
       ? requestIntentTaskType(requestIntent, input.profileHints?.taskType ?? undefined) : undefined
-    const classification = await classifyTaskForIntake(this.decisions, input.requestId, input.task,
-      intentType ?? input.profileHints?.taskType, input.signal)
-    const deferTaskTypeInference = !input.profileHints?.taskType && (input.deferTaskTypeInference || classification.deferInference)
+    // A module's explicit request for a fresh category choice wins over an
+    // advisory inferred type; a resolved action does not answer that question.
+    const explicitChoice = input.profileHints?.taskType === null
+    const classification = explicitChoice
+      ? { taskType: null, deferInference: true }
+      : await classifyTaskForIntake(
+          this.decisions,
+          input.requestId,
+          input.task,
+          intentType ?? input.profileHints?.taskType,
+          input.signal,
+        )
+    const deferTaskTypeInference =
+      explicitChoice ||
+      (!input.profileHints?.taskType &&
+        (input.deferTaskTypeInference || classification.deferInference))
     const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, deferTaskTypeInference,
       profileHints: { ...input.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : {}) } })
     return this.runtime.withDatabase(async db => {
