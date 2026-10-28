@@ -1,3 +1,4 @@
+import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
 import { nativeExecutionOwnership } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
@@ -77,7 +78,6 @@ import { stableLispCapabilities } from '../lisp-service-key.js'
 import { LedgerStore } from '../../ledger/store.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
 import { readExecutionFrame } from '../execution-frame.js'
-import { findSecret } from '../../memory/secrets.js'
 import { classifyRequestIntent, createRequestIntentContext, rebindRequestIntentDecision, requestIntentMessageRefs,
   requestIntentReferenceIds, requestIntentTaskType, requestIntentIsUnresolved, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner } from '../memory-owner.js'
@@ -213,23 +213,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
           text: `${condition.field}: ${condition.text}`, field: condition.field }))
       return { activeGoal, activeTask, proposals }
     })
-    const precedingAssistant = [...(session.snapshotEvents?.() ?? [])].reverse().find(event => event.type === 'assistant/message'
-      && (coreEventTurn(event) ?? Number.MAX_SAFE_INTEGER) < input.turn)
-    let proposals = facts.proposals
-    if (precedingAssistant && proposals.length < 8) {
-      const data = precedingAssistant.data && typeof precedingAssistant.data === 'object' && !Array.isArray(precedingAssistant.data)
-        ? precedingAssistant.data as Record<string, unknown> : undefined
-      const message = data?.message && typeof data.message === 'object' && !Array.isArray(data.message)
-        ? data.message as Record<string, unknown> : data
-      const content = Array.isArray(message?.content) ? message.content : []
-      const text = content.filter((block: any) => block?.type === 'text').map((block: any) => block.text)
-        .filter((value: unknown): value is string => typeof value === 'string').join('\n').trim()
-      const id = typeof message?.id === 'string' ? message.id : `seq:${precedingAssistant.seq}`
-      if (message?.role === 'assistant' && text && text.length <= 8192 && findSecret(text) === undefined) {
-        proposals = [...proposals, { id: `assistant-${canonicalContentHash([session.id, id])}`, revision: null,
-          digest: canonicalContentHash(text), text }]
-      }
-    }
+    const proposals = [...facts.proposals, ...nativeRequestProposals(session.snapshotEvents?.() ?? [], input.turn, session.id)].slice(0, 8)
     return createRequestIntentContext({ task, messageRefs, ...(facts.activeGoal ? { activeGoal: facts.activeGoal } : {}), ...(facts.activeTask ? { activeTask: facts.activeTask } : {}), proposals: proposals.slice(0, 8) })
   }
   const persistRequestIntent = async (requestId: string, context: RequestIntentContext, decision: RequestIntentDecision | undefined) => {
@@ -349,6 +333,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       })
     },
     classify: (input, task) => classifyTaskForIntake(decisions, dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, undefined, input.signal),
+    requestContext: requestIntentContextFor,
     interpret: interpretRequestIntent,
     prepare: async (input, taskType, requestIntent, requestIntentContext) => {
       const task = await prepareCoreTask(input as PreStep, input.signal, taskType, requestIntent, requestIntentContext)
@@ -484,6 +469,7 @@ export async function mountCore(ctx: Context, input: CoreConfig = {}, registrati
       throw new KiokukoError('CONFLICT', 'request_intent_required_for_active_goal')
     }
     const resumesScope = requestIntent && (requestIntent.relation === 'same_scope_continuation' || requestIntent.relation === 'scope_change')
+      && !!(requestIntentContext?.activeTask || requestIntentContext?.activeGoal)
     if (existing?.turn === payload.turn) {
       if (existing.agent !== payload.agent) throw new Error('Core task agent changed')
       if(!steering)return existing.task

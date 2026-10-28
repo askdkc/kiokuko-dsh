@@ -231,7 +231,8 @@ export function validateMainModelRequestIntent(raw: unknown, context: RequestInt
   if (parsed.data.evidenceRefs.some(reference => !allowed.has(reference))) return { ok: false, reason: 'unknown_reference' }
   const requiredRefs = requestIntentRequiredReferenceIds(context)
   if (!requiredRefs.every(reference => parsed.data.evidenceRefs.includes(reference))) return { ok: false, reason: 'missing_reference' }
-  if (parsed.data.relation === 'scope_change' && !context.activeGoal && !context.activeTask) return { ok: false, reason: 'no_active_goal' }
+  if (parsed.data.relation === 'scope_change' && !context.activeGoal && !context.activeTask
+    && !context.proposals.some(item => parsed.data.evidenceRefs.includes(`proposal:${canonicalContentHash([item.id, item.revision, item.digest])}`))) return { ok: false, reason: 'no_active_goal' }
   if (parsed.data.taskOperation) {
     if (!context.activeTask) return { ok: false, reason: 'invalid_task_operation' }
     try { validateTaskOperation(context.activeTask, { operation: parsed.data.taskOperation,

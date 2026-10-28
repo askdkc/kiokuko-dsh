@@ -68,7 +68,7 @@ export function isCodingWorkflowStatus(definition: unknown, args: unknown): bool
     && statusSchema.safeParse(args).success
 }
 
-export const CODING_GUIDANCE = 'For this coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
+export const CODING_GUIDANCE = 'An observational coding_workflow status may return applicable:false when no native task is enrolled; this is not an execution error or a requirement to enroll ordinary conversation. For an explicitly prepared coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
   const definition = value.definition!
@@ -188,8 +188,10 @@ export function mountCodingWorkflow(ctx: {
     output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: JSON.stringify(result) }] },
     execute: async (raw: unknown, execution: Execution) => {
       const identity = host.resolve(execution)
-      if (!identity || execution.name !== name) throw new KiokukoError('CONFLICT', 'Coding workflow requires this active native task')
       const input = normalize(parseInput(schema, raw, name))
+      if (!identity && execution.name === name && input.action === 'status') return { applicable:false, reason:'no_active_native_task',
+        nextAction:'Continue ordinary native work. Use an explicitly prepared coding workflow only when the current request calls for it.' }
+      if (!identity || execution.name !== name) throw new KiokukoError('CONFLICT', 'Coding workflow requires this active native task')
       return executeAction(input, identity, execution)
     },
   })

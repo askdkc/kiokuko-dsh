@@ -157,3 +157,19 @@ test('removed Intel host is unavailable even with a stale artifact root and cann
     if(result.state==='unavailable')assert.equal(result.reason,'unsupported_platform')
   } finally {Object.defineProperty(process,'platform',platform);Object.defineProperty(process,'arch',arch)}
 })
+
+test('independent comparison reports only bounded failed criterion names, without raw provider output', async () => {
+  const context=createRequestIntentContext({task:'Implement src/parser.ts; preserve other files.',messageRefs:[{id:'current-human',digest:hash('current-human')}]})!
+  const candidate=validateMainModelRequestIntent({relation:'new',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(context)},context)
+  assert.ok(candidate.ok);if(!candidate.ok)return
+  const service=new DecisionService(TypedDecisionsConfig.parse({provider:'laya-coreml','laya-coreml':{protocol:'v1',model:'laya-rl-agent',socketPath:'/tmp/unused-criterion-fixture.sock'}}),()=>({
+    capabilities:{maxQuestions:256,maxChoices:256,maxBytes:262144},async evaluate(batch){
+      return {provider:'fixture',requestedModel:'fixture',policyVersion:'criterion-diagnostics',answers:batch.questions.map(question=>question.id==='semantic-constraints'
+        ? {id:question.id,status:'abstained' as const,reason:'insufficient' as const}
+        : {id:question.id,status:'selected' as const,choiceId:question.id==='semantic-reference'?'contradicted':'supported'})}
+    },
+  }))
+  const result=await assessRequestIntent(service,'criterion-diagnostics',context,candidate.decision,signal())
+  assert.equal(result?.semantic,'contradicted')
+  assert.deepEqual(result?.semanticIssues,['reference','constraints'])
+})

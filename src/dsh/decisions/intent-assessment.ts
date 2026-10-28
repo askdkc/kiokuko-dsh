@@ -5,7 +5,7 @@ import type { DecisionService } from './service.js'
 import { runMicroJudge, type Expression, type FiniteDomainProblem, type MicroJudgeResult } from './micro-judge.js'
 export const INTENT_ASSESSMENT_POLICY='source-candidate-independent-v1'
 export type SemanticVerdict='supported'|'contradicted'|'insufficient'|'unavailable'
-export interface IntentAssessment { semantic: SemanticVerdict; semanticInputDigest: string; semanticOutputDigest?: string; providerDecisionId?: string; detector: MicroJudgeResult; outcome: 'consistent'|'clarify'|'unavailable' }
+export interface IntentAssessment { semantic: SemanticVerdict; semanticInputDigest: string; semanticOutputDigest?: string; providerDecisionId?: string; semanticIssues?: readonly string[]; detector: MicroJudgeResult; outcome: 'consistent'|'clarify'|'unavailable' }
 const criteria=[
   ['action','The proposed action and artifact scope preserve every requested action, negation, quotation, actor and distinction between explanation, verification and implementation.'],
   ['reference','Every proposed continuation, scope change and adopted proposal refers to the exact supplied current-session source. Omitted or uncertain targets are not replaced by the current directory.'],
@@ -69,17 +69,19 @@ export async function assessRequestIntent(service:DecisionService|undefined,requ
   if(service && (await service.bind(requestId,signal)).mode==='off')return undefined
   const batch=buildIntentAssessmentBatch(context,candidate),semanticInputDigest=canonicalContentHash(batch)
   let semantic:SemanticVerdict='unavailable',semanticOutputDigest:string|undefined,providerDecisionId:string|undefined
+  let semanticIssues:string[]=[]
   if(service)try{
     const result=await service.evaluate(requestId,batch,signal,INTENT_ASSESSMENT_POLICY,undefined,{onEvaluation:o=>{providerDecisionId=o.decisionId}})
     signal.throwIfAborted()
     if(result.status==='completed'){
       semanticOutputDigest=canonicalContentHash(result.result)
       const answers=result.result.answers
+      semanticIssues=criteria.filter(([name])=>!answers.some(a=>a.id===`semantic-${name}`&&a.status==='selected'&&a.choiceId==='supported')).map(([name])=>name)
       semantic=answers.some(a=>a.status==='selected'&&a.choiceId==='contradicted')?'contradicted':answers.length===criteria.length&&answers.every(a=>a.status==='selected'&&a.choiceId==='supported')?'supported':'insufficient'
     }
   }catch{signal.throwIfAborted()}
   const problem=compileIntentRelations(context,candidate,semantic)
   const detector=await runMicroJudge(problem,canonicalContentHash([requestId,semanticInputDigest]),signal,options)
   const outcome=semantic==='unavailable'||detector.state==='unavailable'||!detector.result.complete?'unavailable':detector.result.status==='entailed'?'consistent':'clarify'
-  return {semantic,semanticInputDigest,...(semanticOutputDigest?{semanticOutputDigest}:{}),...(providerDecisionId?{providerDecisionId}:{}),detector,outcome}
+  return {semantic,semanticIssues,semanticInputDigest,...(semanticOutputDigest?{semanticOutputDigest}:{}),...(providerDecisionId?{providerDecisionId}:{}),detector,outcome}
 }

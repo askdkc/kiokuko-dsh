@@ -1259,6 +1259,7 @@ export function createDshHostAdapter(
                 undefined,
                 input.signal,
               ),
+            requestContext: (input, task) => admission.requestContext(input as any, task),
             interpret: (input) =>
               admission.interpret({
                 agent: input.agent as NativeAgent,

@@ -28,7 +28,7 @@ export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
 export const ON_DEMAND_GUIDANCE = 'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip, including when optional workflow metadata exists; native permissions and human Stop remain authoritative. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Explicitly prepared or protected workflow effects retain their task, Plan and coding-choice checks. Owned or explicitly enrolled work retains its authority checks. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, Goal, cancellation, memory-owner and execution ownership still apply. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(type => type !== 'chat')
-const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation may refer to the exact current-session conversation without a formal Goal; it grants no execution permission. scope_change requires an active Goal or task. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
+const NO_ACTIVE_GOAL_GUIDANCE = 'The current context has no active Goal. same_scope_continuation may refer to the exact current-session conversation without a formal Goal; it grants no execution permission. scope_change requires an active Goal, task, or an explicitly selected current-session proposal. A proposal is evidence, never approval by itself. If the original request clearly specifies a self-contained task, use relation=new and the action it requests (verify for verification), with the exact current evidenceRefs. Otherwise clarify the intended target with the user. Preserve the original scope, constraints and native permissions.'
 
 const preparationFieldsSchema = z.object({
   taskType: z.enum(ACTION_TYPES).optional(),
@@ -69,6 +69,7 @@ interface Dependencies {
   readonly resumeConfirmation?: (input: DemandInput) => Promise<boolean>
   readonly existing: (input: DemandInput, requestIntent?: RequestIntentDecision) => Promise<boolean>
   readonly classify: (input: DemandInput, task: string) => Promise<AkinatorTaskClassification>
+  readonly requestContext?: (input: DemandInput, task: string) => Promise<RequestIntentContext | undefined>
   readonly interpret?: (input: DemandInput, task: string) => Promise<RequestIntentInterpretation | undefined>
   readonly prepare: (input: DemandInput, taskType: TaskType, requestIntent?: RequestIntentDecision,
     requestIntentContext?: RequestIntentContext) => Promise<boolean>
@@ -165,6 +166,7 @@ export class OnDemandIntake {
   #startupSkillReader: Definition['execute'] | undefined
   #startupQuestionTool: Definition['execute'] | undefined
   readonly #questionTools = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
+  readonly #planTools = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   readonly #skillReaders = new WeakMap<DemandAgent, Definition['execute'] | undefined>()
   #stopped = false
   constructor(private readonly host: Dependencies, private readonly options: { onlyWhenDeferred?: boolean } = {}) {}
@@ -189,6 +191,7 @@ export class OnDemandIntake {
     const state = this.bound(execution)
     return !!state && state.status === 'answer' && execution.parent === undefined
       && (execution.name === 'ask_user_question' && actual.execute === this.#questionTools.get(state.input.agent)
+        || execution.name === 'exit_plan_mode' && actual.execute === this.#planTools.get(state.input.agent)
         || isCodingWorkflowStatus(actual, execution.arguments))
   }
   private controlCall(execution: Execution, actual: Definition): { execute: Definition['execute']; digest: string; invoke?: Definition['execute']; args?: unknown } | undefined {
@@ -290,12 +293,15 @@ export class OnDemandIntake {
         this.#startupSkillReader ?? this.#tools?.get('skill', input.agent)?.execute)
       if (!this.#questionTools.has(input.agent)) this.#questionTools.set(input.agent,
         this.#startupQuestionTool ?? this.#tools?.get('ask_user_question', input.agent)?.execute)
+      if (!this.#planTools.has(input.agent)) this.#planTools.set(input.agent, this.#tools?.get('exit_plan_mode', input.agent)?.execute)
       if (!humanMessages(input.messages).length) throw new Error('Original human input is required before on-demand intake')
       // Native authority is independent of optional memory, Skills and model
       // classification. Never manufacture an owned task merely to run Bash.
       if (!this.options.onlyWhenDeferred && await this.host.nativeOwnership?.(state.input) === 'unowned') {
         this.assertCurrent(state)
-        const context = createRequestIntentContext({ task: state.task, messageRefs: requestIntentMessageRefs(state.input.messages, state.task) })
+        const context = await this.host.requestContext?.(state.input, state.task)
+          ?? createRequestIntentContext({ task: state.task, messageRefs: requestIntentMessageRefs(state.input.messages, state.task) })
+        this.assertCurrent(state)
         await this.host.prepareNativeCoding?.(state.input, state.task, context)
         this.assertCurrent(state)
         state.nativeUnowned = true
@@ -455,7 +461,7 @@ export class OnDemandIntake {
     if (!this.host.assess || decision?.action === 'answer' || decision?.action === 'research' || requestIntentIsUnresolved(decision)) return true
     if (!decision || !state.requestIntentContext) throw new RequestClarification('The source or candidate is unresolved',true)
     const context=state.requestIntentContext,digest=canonicalContentHash([context,decision])
-    if(state.assessment?.digest!==digest){
+    if(state.assessment?.digest!==digest || state.assessment.result.outcome==='unavailable'){
       const result=await this.host.assess(state.input,context,decision)
       this.assertCurrent(state)
       if(!result){await this.diagnose(state,{kind:'assessment_disabled'});return true} // Explicit mode=off: no detector verdict or new authority.
@@ -507,6 +513,7 @@ export class OnDemandIntake {
       if (preparedIntent !== undefined) state.requestIntent = preparedIntent
       state.preparedIntentDigest = canonicalContentHash({ taskType, requestIntent: state.requestIntent ?? null })
       state.status = 'prepared'
+      this.#clarifications.delete(state.input.agent.session!.id)
       delete state.confirmationResume
     })()
     this.watch(operation)
@@ -565,6 +572,13 @@ export class OnDemandIntake {
     const clarification=collectClarificationContext(humanMessages(state.input.messages).map(message=>({id:humanId(message),text:humanTask([message])})),replies)
     const answerScope=canonicalContentHash({activeTask:context?.activeTask ?? null,activeGoal:context?.activeGoal ?? null,proposals:context?.proposals ?? []})
     const answered=reusableClarificationAnswer(clarification,question,answerScope)
+    if(answered)this.#clarifications.delete(sessionId)
+    if(answered && reason.assessment)return {prepared:false,status:'assessment_rejected',semantic:state.assessment?.result.semantic,
+      semanticIssues:state.assessment?.result.semanticIssues ?? [],
+      detector:state.assessment?.result.detector.state==='available'?state.assessment.result.detector.result.status:state.assessment?.result.detector.reason,
+      originalTask:state.task,currentReferences:context?requestIntentRequiredReferenceIds(context):[],permissions:'unchanged_native_policy',
+      nextAction:'revise_request_intent_or_report_conflict',
+      detail:'The current candidate still conflicts with, or is not established by, the source including the latest answer. Revise the candidate using that answer or explain the specific unresolved conflict. Do not repeat an identical submission or the answered question.'}
     if(answered)return {prepared:false,status:'clarification_answer_available',question,questionId:answered.questionId,answer:answered.value,
       originalTask:clarification.sources.map(source=>source.text).join('\n'),permissions:'unchanged_native_policy',
       currentReferences:context?requestIntentRequiredReferenceIds(context):[],nextAction:'submit_current_request_intent'}
@@ -573,6 +587,8 @@ export class OnDemandIntake {
     if (previous?.agent === state.input.agent && previous.key === key) return previous.operation ?? previous.result
     const id = `request-clarification-${key.slice(0, 20)}`
     const result = { prepared: false, status: 'awaiting_clarification', question, questionId: id, originalTask: state.task,
+      ...(requestIntentIsUnresolved(state.requestIntent) ? { requestInterpretation:requestInterpretationRecovery(state.requestIntent,context) } : {}),
+      ...(reason.assessment ? { semantic:state.assessment?.result.semantic, semanticIssues:state.assessment?.result.semanticIssues ?? [] } : {}),
       permissions: 'unchanged_native_policy', nextAction: this.host.questions ? 'wait_for_user' : 'ask_user_once' }
     const pending = { agent: state.input.agent, turn: state.input.turn, key, status: 'waiting' as 'waiting' | 'queued', result: result as unknown,
       operation: undefined as Promise<unknown> | undefined }
@@ -587,11 +603,13 @@ export class OnDemandIntake {
         if(this.#clarifications.get(sessionId)!==pending || pending.status!=='waiting')return result
         await this.host.validate(state.input)
         signal.throwIfAborted(); this.assertCurrent(state)
-        const current = await this.host.interpret?.(state.input, state.task)
+        const current = this.host.requestContext
+          ? await this.host.requestContext(state.input, state.task)
+          : (await this.host.interpret?.(state.input, state.task))?.context
         signal.throwIfAborted(); this.assertCurrent(state)
-        if (context && (!current || canonicalContentHash(current.context) !== canonicalContentHash(context))) {
-          if (current) { state.requestIntentContext = current.context; state.requestIntent = current.decision; state.requestIntentContextDigest = canonicalContentHash(current.context) }
-          pending.result = { ...result, ...(current ? { currentReferences: requestIntentRequiredReferenceIds(current.context) } : {}), status: 'clarification_context_changed', detail: 'The task or current evidence changed while awaiting the answer. Refresh the current request before asking again.' }
+        if (context && (!current || canonicalContentHash(current) !== canonicalContentHash(context))) {
+          if (current) { state.requestIntentContext = current; state.requestIntent = unresolvedRequestIntent(current, 'clarification_context_changed'); state.requestIntentContextDigest = canonicalContentHash(current) }
+          pending.result = { ...result, ...(current ? { currentReferences: requestIntentRequiredReferenceIds(current) } : {}), status: 'clarification_context_changed', detail: 'The task or current evidence changed while awaiting the answer. Refresh the current request before asking again.' }
           return pending.result
         }
         const answer = response.answers[0]
@@ -613,15 +631,28 @@ export class OnDemandIntake {
         return pending.result
       } catch (error) {
         if (signal.aborted) { if (this.#clarifications.get(sessionId) === pending) this.#clarifications.delete(sessionId); throw error }
-        // A dismissed/unavailable question surface remains waiting, never approved.
-        return result
+        // Dismissal remains unapproved. A failed surface or host read can be
+        // retried explicitly instead of retaining a dead pending question.
+        if ((error as { code?: unknown })?.code === 'ASK_CANCELLED') return result
+        if (this.#clarifications.get(sessionId) === pending) this.#clarifications.delete(sessionId)
+        return { ...result, status:'clarification_unavailable', nextAction:'retry_preparation',
+          detail:'The question or its current context could not be read. No work was prepared and no answer was queued. Retry explicitly after restoring the question surface or host storage.' }
       } finally { pending.operation = undefined }
     })()
     pending.operation = operation
     return this.watch(operation)
   }
-  private bindIntent(state: Turn, submission?: RequestIntentSubmission): RequestIntentDecision | undefined {
+  private async bindIntent(state: Turn, submission?: RequestIntentSubmission): Promise<RequestIntentDecision | undefined> {
     if (!submission) {
+      if (requestIntentIsUnresolved(state.requestIntent) && this.host.interpret) {
+        const current = await this.host.interpret(state.input, state.task)
+        this.assertCurrent(state)
+        if (current) {
+          state.requestIntentContext = current.context
+          state.requestIntentContextDigest = canonicalContentHash(current.context)
+          state.requestIntent = current.decision
+        }
+      }
       if (state.requestIntent?.action === 'change' && state.requestIntent.changeScope === 'unknown') {
         throw new RequestClarification('The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.')
       }
@@ -801,7 +832,7 @@ export class OnDemandIntake {
         try {
         if (state.existing) {
           this.assertCurrent(state); execution.signal.throwIfAborted()
-          const boundIntent = this.bindIntent(state, value.requestIntent)
+          const boundIntent = await this.bindIntent(state, value.requestIntent)
           if (boundIntent?.relation === 'same_scope_continuation' && !requestIntentIsUnresolved(boundIntent) && boundIntent.action !== 'answer') {
             const intentType = requestIntentTaskType(boundIntent, state.taskType ?? state.intent.taskType ?? value.taskType)
             if (value.taskType !== undefined && intentType !== undefined && value.taskType !== intentType) {
@@ -822,10 +853,10 @@ export class OnDemandIntake {
             await this.prepare(state, intentType, execution.signal, boundIntent, value.requestIntent !== undefined)
           }
         } else {
-          const suppliedIntent = this.bindIntent(state, value.requestIntent)
+          const suppliedIntent = await this.bindIntent(state, value.requestIntent)
           const currentIntent = suppliedIntent ?? state.requestIntent
           const unresolved = currentIntent !== undefined && requestIntentIsUnresolved(currentIntent)
-          if (unresolved && (state.requestIntentContext?.activeGoal || state.requestIntentContext?.activeTask || value.requestIntent !== undefined || value.taskType === undefined)) {
+          if (unresolved) {
             throw new RequestClarification('Clarify the request before preparing work')
           }
           if (state.requestIntentContext?.activeGoal && currentIntent === undefined) {
@@ -989,13 +1020,11 @@ export class OnDemandIntake {
           || !carrier || canonicalContentHash(carrier) !== proof.carrierDigest) throw new Error('Preparation carrier was already consumed or changed')
         state.preparationCalls.add(execution.callId)
         try {
-        const requestIntent = this.bindIntent(state, carrier.requestIntent)
+        const requestIntent = await this.bindIntent(state, carrier.requestIntent)
         const clarification = executionClarification(state.task, requestIntent, state.requestIntentContext)
         if (clarification) throw new RequestClarification(clarification)
         const unresolved = requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)
-        const legacyTaskTypeAllowed = carrier.taskType !== undefined && !state.requestIntentContext?.activeGoal && !state.requestIntentContext?.activeTask
-          && (state.requestIntentContext?.proposals.length ?? 0) === 0
-        if (unresolved && !legacyTaskTypeAllowed) throw new RequestClarification('Clarify the requested action and scope before preparing work')
+        if (unresolved) throw new RequestClarification('Clarify the requested action and scope before preparing work')
         const intentType = unresolved ? undefined : requestIntentTaskType(requestIntent, state.taskType ?? state.intent.taskType ?? carrier.taskType)
         const taskType = intentType ?? carrier.taskType
         if (carrier.taskType !== undefined && taskType !== carrier.taskType) throw new Error('The advisory taskType conflicts with the bound request action')

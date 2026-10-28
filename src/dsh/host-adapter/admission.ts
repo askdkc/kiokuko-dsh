@@ -1,3 +1,4 @@
+import { nativeRequestProposals } from '../request-proposals.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import { recordDiagnosticAdmission, observeDiagnostic } from '../decisions/diagnostics.js'
 import type { TaskType } from '../../akinator/types.js'
@@ -57,7 +58,6 @@ import { readCodingWorkflow } from '../coding-workflow/store.js'
 import { markCodingScopeChange } from '../coding-workflow/service.js'
 import { readExecutionFrame } from '../execution-frame.js'
 import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind } from '../memory-owner.js'
-import { findSecret } from '../../memory/secrets.js'
 import { executionClarification, isContinuationReference } from '../intake-clarification.js'
 import { authorizeTaskLease, bindTaskRepository, captureTaskLease, clearTaskUnresolved, findSessionTask, readTaskSnapshot, recordTaskUnresolved,
   taskCanExecute } from '../task-state.js'
@@ -117,6 +117,7 @@ interface AdmissionDependencies {
 interface AdmissionOwner {
   readonly gate: DshIntakeGate & { prepareRequestedWork(event: DshPreStepEvent): Promise<DshIntakeGateResult> }
   readonly mapPreStep: (payload: DshNativePreStepPayload, advisoryType?: TaskType, requestIntent?: RequestIntentDecision) => Promise<DshPreStepEvent>
+  readonly requestContext: (payload: DshNativePreStepPayload, task: string) => Promise<RequestIntentContext | undefined>
   readonly interpret: (payload: DshNativePreStepPayload) => Promise<RequestIntentInterpretation | undefined>
   readonly refreshMemoryOwner: (item: TurnRecord, signal: AbortSignal) => Promise<void>
   readonly clear: () => void
@@ -926,20 +927,7 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
       proposals = state.candidates
     }
     const eventSource = sessionEventSource(nativeSession)
-    const precedingAssistant = [...eventSource.snapshotEvents()].reverse().find(event => event.type === 'assistant/message'
-      && (eventTurn(event) ?? Number.MAX_SAFE_INTEGER) < input.turn)
-    if (precedingAssistant && proposals.length < 8) {
-      const data = objectRecord(precedingAssistant.data)
-      const message = objectRecord(data?.message) ?? data
-      const content = Array.isArray(message?.content) ? message.content : []
-      const text = content.filter((block: unknown) => objectRecord(block)?.type === 'text')
-        .map((block: unknown) => objectRecord(block)?.text).filter((value): value is string => typeof value === 'string').join('\n').trim()
-      const messageId = typeof message?.id === 'string' ? message.id : `seq:${precedingAssistant.seq}`
-      if (message?.role === 'assistant' && text && text.length <= 8192 && findSecret(text) === undefined) {
-        proposals = [...proposals, { id: `assistant-${canonicalContentHash([sessionId, messageId])}`, revision: null,
-          digest: canonicalContentHash(text), text }]
-      }
-    }
+    proposals = [...proposals, ...nativeRequestProposals(eventSource.snapshotEvents(), input.turn, sessionId)].slice(0, 8)
     return createRequestIntentContext({ task, messageRefs, ...(activeGoal ? { activeGoal } : {}),
       ...(activeTask ? { activeTask } : {}), proposals: proposals.slice(0, 8) })
   }
@@ -1083,6 +1071,13 @@ function continuesCodingScope(event: DshPreStepEvent): boolean {
   return {
     gate,
     mapPreStep,
+    requestContext: async (payload, task) => {
+      const session = payload.agent.session
+      if (!session) return undefined
+      const previous = currentForAgentEvent(payload.agent.id, session.id, payload.turn, session, payload.agent)
+        ?? currentForAgentEvent(payload.agent.id, session.id, undefined, session, payload.agent)
+      return requestIntentContextFor(payload, session.id, session, previous, task)
+    },
     interpret: async payload => {
       const event = await mapPreStep(payload, undefined, undefined, true)
       if (!event.requestIntentContext || !event.requestIntent) return undefined

@@ -1085,7 +1085,7 @@ test('an observed same-scope clarification answer is returned with fresh evidenc
   f.intake.finish(f.session,1);f.events.push(event('turn/end',1),event('turn/start',2))
   await f.capture(messages,2)
   const repeated=await f.execute(TASK_PREPARE_TOOL,args())
-  assert.equal(repeated.value.status,'clarification_answer_available')
+  assert.equal(repeated.value.status,'assessment_rejected')
   assert.equal(repeated.value.prepared,false);assert.equal(f.admissions.length,0)
   assert.equal(asks,1);assert.equal(followups.length,1)
   assert.ok(repeated.value.currentReferences.length>0)
@@ -1101,45 +1101,31 @@ test('an observed same-scope clarification answer is returned with fresh evidenc
 })
 
 
-test('KDSH-REVIEW-GATE-RECOVERY-001: advisory review exposes missing interpretation and a fresh bound request recovers without bypass',async t=>{
-  let context:RequestIntentContext|undefined,bodies=0,writes=0
-  const f=await fixture(t,{classify:async()=>({taskType:'review',deferInference:false}),interpret:async(input,task)=>{
-    context=createRequestIntentContext({task,messageRefs:requestIntentMessageRefs(input.messages,task)})!
-    return {context,decision:unresolvedRequestIntent(context,'decision_service_disabled')}
-  }})
-  t.after(f.ctx.tools.register({name:'bash',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{bodies++;return 'checked'}}))
-  t.after(f.ctx.tools.register({name:'write',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>{writes++;return 'written'}}))
-  t.after(f.ctx.tools.guard((execution:any)=>{
-    if(!['bash','write'].includes(execution.name))return undefined
-    const prepared=f.prepareRequests.at(-1)
-    try{executionRequestAction(prepared?.requestIntent,prepared?.context,execution.name);return undefined}catch(error){return (error as Error).message}
+test('KDSH-REVIEW-GATE-RECOVERY-001: unresolved preparation is not a receipt and a corrected current intent recovers in the same turn', async t => {
+  let context: RequestIntentContext | undefined, writes = 0
+  const f = await fixture(t, { interpret: async (input, task) => {
+    context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(input.messages, task) })!
+    return { context, decision: unresolvedRequestIntent(context, 'decision_service_disabled') }
+  } })
+  t.after(f.ctx.tools.register({ name: 'write', parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: () => { writes++; return 'written' } }))
+  t.after(f.ctx.tools.guard((execution: any) => {
+    if (execution.name !== 'write') return undefined
+    const prepared = f.prepareRequests.at(-1)
+    try { executionRequestAction(prepared?.requestIntent, prepared?.context, execution.name); return undefined }
+    catch (error) { return (error as Error).message }
   }))
-  await f.capture([human('review-original','Review src/parser.ts without changing files.')])
-  const prepared=await f.execute(TASK_PREPARE_TOOL,{taskType:'review'})
-  assert.equal(prepared.isError,false)
-  const failures=[]
-  for(let index=0;index<9;index++)failures.push(await f.execute('bash',{command:`inspect-${index}`}))
-  assert.equal(bodies,0)
-  for(const failure of failures){assert.equal(failure.isError,true);assert.match(JSON.stringify(failure.content),/current source-bound request interpretation/u)}
-  const message=failures[0].content.map((part:any)=>part.text??'').join('')
-  assert.match(message,/REQUEST_INTERPRETATION_REQUIRED/u)
-  const recovery=JSON.parse(message.slice(message.indexOf('\nRecovery: ')+11))
-  assert.equal(recovery.permissions,'unchanged_native_policy')
-  assert.equal(recovery.executed,false)
-  assert.deepEqual(recovery.currentReferences,requestIntentReferenceIds(context!))
-  assert.ok(recovery.evidenceTools.includes('read'))
-  assert.equal(prepared.value.requestInterpretation.state,'required')
-  const sameTurn=await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(context!)}})
-  assert.equal(sameTurn.isError,true,'prepared interpretation remains immutable')
-  assert.match(JSON.stringify(sameTurn.content),/fresh_native_turn/u)
-  f.intake.finish(f.session,1);f.events.push(event('turn/end',1),event('turn/start',2))
-  await f.capture([human('review-resubmitted','Review src/parser.ts without changing files.')],2)
-  assert.equal((await f.execute(TASK_PREPARE_TOOL,{requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(context!)}})).isError,false)
-  assert.equal((await f.execute('bash',{command:'inspect-approved-target'})).isError,false)
-  assert.equal((await f.execute('write',{file_path:'src/parser.ts',content:'not allowed'})).isError,true)
-  const deny=f.ctx.tools.guard(()=> 'Native policy denied')
-  assert.equal((await f.execute('bash',{command:'inspect-approved-target'})).isError,true);deny()
-  assert.equal(bodies,1);assert.equal(writes,0)
+  await f.capture([human('review-original', 'Review src/parser.ts without changing files.')])
+  const prepared = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(prepared.isError, false); assert.equal(prepared.value.prepared, false)
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute('write')).isError, true)
+  const corrected = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { relation: 'new', action: 'verify', evidenceRefs: requestIntentReferenceIds(context!) } })
+  assert.equal(corrected.isError, false); assert.equal(corrected.value.prepared, true)
+  assert.equal(f.admissions.length, 1)
+  assert.equal((await f.execute('write')).isError, true, 'verification still grants no artifact edits')
+  const deny = f.ctx.tools.guard(() => 'Native policy denied')
+  assert.equal((await f.execute('review_probe')).isError, true); deny()
+  assert.equal(writes, 0)
 })
 
 
@@ -1296,4 +1282,118 @@ test('native boundary task proof belongs to the exact captured session and turn'
   assert.deepEqual(f.intake.boundaryTask(f.session, 1)?.expected, { taskId: 'boundary-task', revision: 4, generation: 7 })
   assert.equal(f.intake.boundaryTask({ id: f.session.id }, 1), undefined)
   assert.equal(f.intake.boundaryTask(f.session, 2), undefined)
+})
+
+
+test('plan handoff keeps the same host context while accepting a native clarification answer', async t => {
+  const task = 'Implement the previously presented plan; preserve unrelated files.'
+  const message = human('implement-plan', task)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task), proposals: [
+    { id: 'native-plan', revision: null, digest: 'a'.repeat(64), text: '# PLAN.md\nImplement src/parser.ts. Preserve unrelated files.' },
+  ] })!
+  const intent = { context, decision: unresolvedRequestIntent(context, 'proposal_reference_uncertain') }
+  const followups: any[] = []
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned', requestContext: async () => context,
+    interpret: async () => intent,
+    assess: async () => ({ semantic: 'insufficient', semanticInputDigest: 'b'.repeat(64), detector: { state: 'unavailable', reason: 'artifact_unavailable', elapsedMs: 0 }, outcome: 'clarify' }),
+    questions: { async ask(r) { return { answers: [{ id: r.questions[0].id, selected: [], custom: 'Implement the presented src/parser.ts plan, keeping all other files unchanged.' }] } } },
+  } as Partial<Dependencies>)
+  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  await f.capture([message])
+  const result = await f.execute(TASK_PREPARE_TOOL, { requestIntent: {
+    relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(context),
+  } })
+  assert.equal(result.isError, false, JSON.stringify(result.content))
+  assert.equal(result.value.status, 'clarification_answer_queued')
+  assert.equal(followups.length, 1, 'the actual native answer must not be discarded as an artificial context change')
+  assert.equal(f.admissions.length, 0)
+})
+
+test('an unresolved legacy taskType cannot produce a prepared receipt over an existing proposal', async t => {
+  const task = 'Implement that plan', message = human('legacy-proposal', task)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task), proposals: [
+    { id: 'plan', revision: null, digest: 'c'.repeat(64), text: '# Plan\nThe target remains unclear.' },
+  ] })!
+  const f = await fixture(t, { interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'proposal_reference_uncertain') }) })
+  await f.capture([message])
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'build' })
+  assert.equal(result.value.prepared, false)
+  assert.equal(f.admissions.length, 0)
+})
+
+test('a rejected candidate after an answered clarification reports the conflict instead of requesting an identical resubmission', async t => {
+  const task = 'Only explain src/parser.ts; preserve the public API.', message = human('conflict-source', task)
+  let messages: any[] = [message], intent = activeIntent(messages, task, 'same_scope_continuation', 'change', 'implementation')
+  let asks = 0
+  const followups: any[] = []
+  const f = await fixture(t, { nativeOwnership:async()=>'unowned',requestContext:async()=>intent.context,interpret: async () => intent,
+    assess: async () => ({ semantic: 'contradicted', semanticInputDigest: 'd'.repeat(64), detector: { state: 'unavailable', reason: 'artifact_unavailable', elapsedMs: 0 }, outcome: 'clarify' }),
+    questions: { async ask(r) { asks++; return { answers: [{ id: r.questions[0].id, selected: [], custom: 'Explain it only. Do not change files.' }] } } },
+  })
+  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  const args = () => ({ requestIntent: { relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(intent.context) } })
+  await f.capture(messages)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, args())).value.status, 'clarification_answer_queued')
+  messages = [message, followups[0]]
+  intent = activeIntent(messages, task + '\n' + followups[0].content[0].text, 'same_scope_continuation', 'change', 'implementation')
+  f.intake.finish(f.session, 1); f.events.push(event('turn/end', 1), event('turn/start', 2))
+  await f.capture(messages, 2)
+  const rejected = await f.execute(TASK_PREPARE_TOOL, args())
+  assert.equal(rejected.value.status, 'assessment_rejected')
+  assert.equal(rejected.value.prepared, false)
+  assert.equal(f.intake.awaitingClarification(f.agent), false, 'a captured answer is no longer a pending question')
+  assert.equal(rejected.value.nextAction, 'revise_request_intent_or_report_conflict')
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, args())).value.status, 'assessment_rejected')
+  assert.equal(asks, 1)
+  assert.equal(f.admissions.length, 0)
+})
+
+
+test('ordinary chat coding status is observational without manufacturing a native task', async t => {
+  const { mountCodingWorkflow } = await import('../../../src/dsh/coding-workflow/host.js')
+  const f = await fixture(t)
+  t.after(mountCodingWorkflow(f.ctx, { runtime: { withDatabase: () => assert.fail('no owner means no task storage lookup') } as any,
+    resolve: () => undefined, lisp: () => undefined }))
+  await f.capture([human('ordinary-question', 'Explain this project; do not make changes.')])
+  const result = await f.execute('coding_workflow', { action: 'status' })
+  assert.equal(result.isError, false)
+  assert.equal(result.value.applicable, false)
+  assert.equal(result.value.reason, 'no_active_native_task')
+  assert.equal((await f.execute('coding_workflow', { action: 'next' })).isError, true)
+  assert.equal(f.admissions.length, 0)
+})
+
+test('an unavailable assessment can recover on the next explicit preparation without a new turn', async t => {
+  const task = 'Implement src/parser.ts; preserve other files.', message = human('retry-assessment', task)
+  const intent = activeIntent([message], task, 'same_scope_continuation', 'change', 'implementation')
+  let calls = 0
+  const f = await fixture(t, { interpret: async () => ({ ...intent, decision: unresolvedRequestIntent(intent.context, 'fixture') }),
+    assess: async () => ({ semantic: 'supported', semanticInputDigest: 'e'.repeat(64), detector: { state: 'unavailable', reason: 'timeout', elapsedMs: 0 },
+      outcome: ++calls === 1 ? 'unavailable' : 'consistent' }),
+  })
+  await f.capture([message])
+  const args = { requestIntent: { relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(intent.context) } }
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, args)).value.status, 'assessment_unavailable')
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, args)).value.prepared, true)
+  assert.equal(calls, 2); assert.equal(f.admissions.length, 1)
+})
+
+test('question transport failure is explicit and retryable, without a pending clarification lock', async t => {
+  const task = 'Inspect the requested artifact.', message = human('retry-question', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  let calls = 0
+  const followups: any[] = []
+  const f = await fixture(t, { interpret: async () => intent, questions: { async ask(request) {
+    if (++calls === 1) throw new Error('isolated network failure')
+    return { answers: [{ id: request.questions[0].id, selected: [], custom: 'Inspect src/parser.ts without changing files.' }] }
+  } } })
+  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  await f.capture([message])
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+  assert.equal(result.value.status, 'clarification_unavailable')
+  assert.equal(f.intake.awaitingClarification(f.agent), false)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })).value.status, 'clarification_answer_queued')
+  assert.equal(calls, 2); assert.equal(followups.length, 1); assert.equal(f.admissions.length, 0)
 })

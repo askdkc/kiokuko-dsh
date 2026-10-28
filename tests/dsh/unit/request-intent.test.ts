@@ -1,3 +1,4 @@
+import { requestIntentRequiredReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { bindMainModelRequestIntent, buildRequestIntentBatch, classifyRequestIntent, createRequestIntentContext,
@@ -66,7 +67,7 @@ test('binding diagnostics distinguish absent Goal from invalid evidence without 
   const current = createRequestIntentContext({ task, messageRefs: context.messageRefs, proposals: context.proposals })!
   const refs = requestIntentReferenceIds(current)
   for (const relation of ['scope_change'] as const) {
-    const submission = { relation, action: 'verify', evidenceRefs: refs }
+    const submission = { relation, action: 'verify', evidenceRefs: requestIntentRequiredReferenceIds(current) }
     assert.deepEqual(validateMainModelRequestIntent(submission, current), { ok: false, reason: 'no_active_goal' })
     assert.equal(bindMainModelRequestIntent(submission, current), undefined)
     assert.deepEqual(validateMainModelRequestIntent({ ...submission, evidenceRefs: [...refs, 'foreign'] }, current),

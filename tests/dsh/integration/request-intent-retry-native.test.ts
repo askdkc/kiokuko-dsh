@@ -91,7 +91,7 @@ for (const mode of ['native', 'ptc'] as const) for (const action of ['research',
         assert.deepEqual(intake!.snapshot(session.id), initial)
       }
       for (const relation of ['scope_change']) {
-        const rejected = await invoke(request(relation))
+        const rejected = await invoke(request(relation,refs.filter(ref=>!ref.startsWith('proposal:'))))
         assert.equal(rejected.isError, true)
         assert.match(text(rejected), new RegExp(`Request relation ${relation} cannot be used without an active Goal`))
         assert.match(text(rejected), /relation=new/)
@@ -164,8 +164,14 @@ test('KDSH-REVIEW-GATE-RECOVERY-001: actual PTC preparation carrier reports unre
     assert.equal(receipt.isError,false,text(receipt))
     assert.equal(receipt.value.result.programExecuted,false)
     assert.equal(receipt.value.result.requestInterpretation.state,'required')
-    assert.equal(receipt.value.result.requestInterpretation.nextAction,'fresh_native_turn')
+    assert.equal(receipt.value.result.requestInterpretation.nextAction,'submit_current_request_intent')
     assert.deepEqual(receipt.value.result.requestInterpretation.currentReferences,requestIntentReferenceIds(context))
+    assert.equal(receipt.value.result.prepared,false)
+    assert.equal(admissions,0)
+    const corrected=await executeNativeTool(ctx,packages,{name:'run_code',callId:'corrected',arguments:{description:'Prepare current verification only',code:`return await tools.prepare_requested_work(${JSON.stringify({requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(context)}})})`},agent,signal:signal()})
+    assert.equal(corrected.isError,false,text(corrected))
+    assert.equal(corrected.value.result.prepared,true)
+    assert.equal(corrected.value.result.programExecuted,false)
     assert.equal(admissions,1)
   }finally{await intake?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();await rm(root,{recursive:true,force:true})}
 })
