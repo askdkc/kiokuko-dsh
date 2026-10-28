@@ -61,6 +61,7 @@ class RequestClarification extends Error {
     message: string,
     readonly assessment = false,
     readonly interpretation = false,
+    readonly candidate?: RequestIntentDecision,
   ) {
     super(message)
   }
@@ -1067,6 +1068,8 @@ export class OnDemandIntake {
       throw new RequestClarification(
         'Independent source comparison or finite-domain verification requires clarification',
         true,
+        false,
+        resolved,
       )
     const activeTask = state.requestIntentContext?.activeTask
     if (
@@ -1226,7 +1229,7 @@ export class OnDemandIntake {
         status: 'request_interpretation_required',
         originalTask: state.task,
         requestInterpretation: requestInterpretationRecovery(
-          state.requestIntent,
+          reason.candidate ?? state.requestIntent,
           context,
         ),
         currentReferences: context
@@ -1258,6 +1261,30 @@ export class OnDemandIntake {
           'Preserve the request and report the unavailable assessment. Do not repeat clarification, claim preparation succeeded, or switch tools to bypass this preparation boundary.',
         detail:
           '原文照合または有限領域検査を利用できません。実行は準備されていません。',
+      }
+    }
+    // An inconclusive detector is not evidence that the human omitted a target.
+    // Return the submitted interpretation for repair; keep preparation denied.
+    if (
+      reason.assessment &&
+      state.assessment?.result.semantic === 'insufficient' &&
+      reason.candidate
+    ) {
+      return {
+        prepared: false,
+        status: 'assessment_rejected',
+        semantic: state.assessment.result.semantic,
+        semanticIssues: state.assessment.result.semanticIssues ?? [],
+        originalTask: state.task,
+        requestIntent: reason.candidate,
+        currentReferences: context
+          ? requestIntentRequiredReferenceIds(context)
+          : [],
+        availableReferences: context ? requestIntentReferenceIds(context) : [],
+        permissions: 'unchanged_native_policy',
+        nextAction: 'revise_request_intent_or_report_conflict',
+        detail:
+          'The independent comparison did not establish the submitted candidate. Re-read the captured request, answers, active task and same-session plan. Cite an existing proposal only when the request adopts it. Correct the candidate or report the specific unresolved comparison; do not repeat an identical submission or ask the human to supply internal classification fields. Ask a concrete question only if the source itself leaves an action or target ambiguous. No work is prepared.',
       }
     }
     const scope =
@@ -1615,7 +1642,10 @@ export class OnDemandIntake {
     const bound = result.decision
     if (bound.action === 'change' && bound.changeScope === 'unknown') {
       throw new RequestClarification(
-        'The requested change scope is unresolved. Specify implementation or document using the current request evidence before preparing work.',
+        'Determine requestIntent.changeScope from the captured request and plan in the main model. Ask a concrete human question only if the source itself leaves that choice unclear.',
+        false,
+        true,
+        bound,
       )
     }
     const prior = state.requestIntent

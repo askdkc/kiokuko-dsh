@@ -39,11 +39,11 @@ const plan =
 
 for (const mode of ['core', 'adapter'] as const)
   for (const presentation of ['native', 'ptc'] as const)
-    for (const legacy of [false, true])
+    for (const legacy of [false, true, 'assessment'] as const)
       test(
         `native plan review -> explicit implementation -> prepared write (${mode}, ${presentation}, legacy=${legacy})`,
         { skip: !available, timeout: 30_000 },
-        async () =>
+        async (t) =>
           withIsolatedSkillHome(async () => {
             const modules = await Promise.all(
               [
@@ -156,7 +156,17 @@ for (const mode of ['core', 'adapter'] as const)
               const settings = {
                 repositoryRoot: root,
                 databasePath: join(root, 'state.sqlite3'),
-                typedDecisions: { mode: 'off' },
+                typedDecisions:
+                  legacy === 'assessment'
+                    ? {
+                        provider: 'laya-coreml',
+                        'laya-coreml': {
+                          protocol: 'v1',
+                          model: 'laya-rl-agent',
+                          socketPath: join(root, 'unused-classifier.sock'),
+                        },
+                      }
+                    : { mode: 'off' },
                 answerReview: { mode: 'off' },
                 modelAutoMode: { mode: 'off' },
                 memoryReuse: { mode: 'off' },
@@ -169,6 +179,37 @@ for (const mode of ['core', 'adapter'] as const)
                     ).href
                   : new URL('../../../src/dsh/' + path + '.ts', import.meta.url)
                       .href
+              if (legacy === 'assessment') {
+                const provider = await import(moduleFor('decisions/laya-v1'))
+                t.mock.method(
+                  provider.LayaV1DecisionProvider.prototype,
+                  'evaluate',
+                  async (batch: any) => {
+                    const candidate = batch.state?.candidate
+                    const supported =
+                      candidate?.relation === 'scope_change' &&
+                      candidate?.evidence?.proposalRefs?.length === 1
+                    return {
+                      provider: 'laya-coreml',
+                      requestedModel: 'laya-rl-agent',
+                      policyVersion: 'logged-assessment-fixture',
+                      answers: batch.questions.map((q: any) =>
+                        q.id.startsWith('semantic-') && supported
+                          ? {
+                              id: q.id,
+                              status: 'selected',
+                              choiceId: 'supported',
+                            }
+                          : {
+                              id: q.id,
+                              status: 'abstained',
+                              reason: 'insufficient',
+                            },
+                      ),
+                    }
+                  },
+                )
+              }
               if (mode === 'core')
                 host = await (
                   await import(moduleFor('core/host'))
@@ -264,7 +305,8 @@ for (const mode of ['core', 'adapter'] as const)
                   ),
                 )
               }
-              if (legacy)
+              let repairedPreparation: any
+              if (legacy === true)
                 responses.push(
                   toolCall('unresolved-legacy', 'prepare_requested_work', {
                     taskType: 'build',
@@ -272,7 +314,7 @@ for (const mode of ['core', 'adapter'] as const)
                 )
               responses.push(
                 (request: any) => {
-                  if (legacy) {
+                  if (legacy === true) {
                     assert.equal(
                       preparationValue(resultFor(request, 'unresolved-legacy'))
                         .prepared,
@@ -295,7 +337,7 @@ for (const mode of ['core', 'adapter'] as const)
                   const proposal = bound.proposals.find(
                     (p: any) => p.text === plan,
                   )
-                  return toolCall('prepare-plan', 'prepare_requested_work', {
+                  repairedPreparation = {
                     requestIntent: {
                       relation: 'scope_change',
                       action: 'change',
@@ -305,8 +347,96 @@ for (const mode of ['core', 'adapter'] as const)
                         proposal.evidenceRef,
                       ],
                     },
-                  })
+                  }
+                  return legacy === 'assessment'
+                    ? toolCall('inconclusive-plan', 'prepare_requested_work', {
+                        requestIntent: {
+                          relation: 'same_scope_continuation',
+                          action: 'change',
+                          changeScope: 'implementation',
+                          evidenceRefs: bound.requiredReferences,
+                        },
+                      })
+                    : toolCall(
+                        'prepare-plan',
+                        'prepare_requested_work',
+                        repairedPreparation,
+                      )
                 },
+                ...(legacy === 'assessment'
+                  ? [
+                      (request: any) => {
+                        const inconclusive = preparationValue(
+                          resultFor(request, 'inconclusive-plan'),
+                        )
+                        assert.equal(inconclusive.prepared, false)
+                        assert.equal(inconclusive.status, 'assessment_rejected')
+                        assert.equal(
+                          inconclusive.requestIntent.action,
+                          'change',
+                        )
+                        assert.equal(
+                          existsSync(join(root, 'src/parser.ts')),
+                          false,
+                        )
+                        assert.equal(
+                          asked.filter((id) =>
+                            id.startsWith('request-clarification-'),
+                          ).length,
+                          0,
+                        )
+                        return toolCall(
+                          'missing-scope-plan',
+                          'prepare_requested_work',
+                          {
+                            requestIntent: {
+                              ...repairedPreparation.requestIntent,
+                              changeScope: 'unknown',
+                            },
+                          },
+                        )
+                      },
+                    ]
+                  : []),
+                ...(legacy === 'assessment'
+                  ? [
+                      (request: any) => {
+                        const rejected = nativeToolResults(
+                          request.messages,
+                        ).find(
+                          (result) =>
+                            result.toolCallId === 'missing-scope-plan',
+                        )
+                        assert.ok(rejected)
+                        assert.equal(rejected.isError, false)
+                        const interpretation = preparationValue(rejected)
+                        assert.equal(interpretation.prepared, false)
+                        assert.equal(
+                          interpretation.status,
+                          'request_interpretation_required',
+                        )
+                        assert.deepEqual(
+                          interpretation.requestInterpretation.missingFields,
+                          ['requestIntent.changeScope'],
+                        )
+                        assert.equal(
+                          existsSync(join(root, 'src/parser.ts')),
+                          false,
+                        )
+                        assert.equal(
+                          asked.filter((id) =>
+                            id.startsWith('request-clarification-'),
+                          ).length,
+                          0,
+                        )
+                        return toolCall(
+                          'prepare-plan',
+                          'prepare_requested_work',
+                          repairedPreparation,
+                        )
+                      },
+                    ]
+                  : []),
                 (request: any) => {
                   assert.equal(
                     preparationValue(resultFor(request, 'prepare-plan'))

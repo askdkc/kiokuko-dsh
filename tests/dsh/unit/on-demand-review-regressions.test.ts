@@ -1947,7 +1947,12 @@ for (const relation of [
       const result = await f.execute(TASK_PREPARE_TOOL, args)
       assert.equal(result.isError, false)
       assert.equal(result.value.prepared, false)
-      assert.equal(result.value.status, 'awaiting_clarification')
+      assert.equal(
+        result.value.status,
+        'requestIntent' in args
+          ? 'request_interpretation_required'
+          : 'awaiting_clarification',
+      )
     }
     assert.equal(ownerLookups, 0)
     assert.equal(f.admissions.length, 0)
@@ -2314,7 +2319,7 @@ test('a foreign question answer cannot become a source revision', async (t) => {
   const f = await fixture(t, {
     interpret: async () => intent,
     assess: async () => ({
-      semantic: 'insufficient',
+      semantic: 'contradicted',
       semanticInputDigest: 'c'.repeat(64),
       detector: {
         state: 'unavailable',
@@ -3059,7 +3064,7 @@ test('plan handoff keeps the same host context while accepting a native clarific
     requestContext: async () => context,
     interpret: async () => intent,
     assess: async () => ({
-      semantic: 'insufficient',
+      semantic: 'contradicted',
       semanticInputDigest: 'b'.repeat(64),
       detector: {
         state: 'unavailable',
@@ -3383,4 +3388,170 @@ test('legacy taskType returns the current interpretation contract to the model w
   assert.equal(prepared.isError, false)
   assert.equal(prepared.value.prepared, true)
   assert.equal(f.admissions.length, 1)
+})
+
+test('multinguin recurrence: inconclusive assessment returns the submitted candidate for model repair without reasking the human', async (t) => {
+  const message = human('finish-project', 'finish this project')
+  const context = createRequestIntentContext({
+    task: 'finish this project',
+    messageRefs: requestIntentMessageRefs([message], 'finish this project'),
+    activeGoal: {
+      runId: 'current-project',
+      target: 'PLAN.md implementation',
+      ideal: 'Finish the approved extension implementation',
+      outOfScope: ['store publication'],
+      constraints: ['Preserve native permissions'],
+    },
+    proposals: [
+      {
+        id: 'approved-plan',
+        revision: null,
+        digest: 'b'.repeat(64),
+        text: 'Implement the Chrome/Brave extension in the approved PLAN.md scope; do not publish.',
+      },
+    ],
+  })!
+  let asks = 0
+  const f = await fixture(t, {
+    interpret: async () => ({
+      context,
+      decision: unresolvedRequestIntent(
+        context,
+        'proposal_reference_uncertain',
+      ),
+    }),
+    assess: async (_input, _context, candidate) =>
+      ({
+        semantic: candidate.evidence.proposalRefs.length
+          ? 'supported'
+          : 'insufficient',
+        semanticIssues: candidate.evidence.proposalRefs.length
+          ? []
+          : ['reference'],
+        semanticInputDigest: 'c'.repeat(64),
+        detector: {
+          state: 'available',
+          result: {
+            status: candidate.evidence.proposalRefs.length
+              ? 'entailed'
+              : 'undetermined',
+            complete: true,
+          },
+          elapsedMs: 0,
+        },
+        outcome: candidate.evidence.proposalRefs.length
+          ? 'consistent'
+          : 'clarify',
+      }) as any,
+    questions: {
+      async ask(request) {
+        asks++
+        return {
+          answers: [
+            {
+              id: request.questions[0].id,
+              selected: [],
+              custom: 'PLAN.mdの内容を網羅',
+            },
+          ],
+        }
+      },
+    },
+  })
+  ;(f.agent as any).followup = () =>
+    assert.fail('An internal inference failure must not queue a human answer')
+  await f.capture([message])
+  const args = {
+    requestIntent: {
+      relation: 'same_scope_continuation',
+      action: 'change',
+      changeScope: 'implementation',
+      evidenceRefs: requestIntentReferenceIds(context).filter(
+        (ref) => !ref.startsWith('proposal:'),
+      ),
+    },
+  }
+  for (let i = 0; i < 2; i++) {
+    const result = await f.execute(TASK_PREPARE_TOOL, args)
+    assert.equal(result.value.status, 'assessment_rejected')
+    assert.equal(result.value.prepared, false)
+    assert.equal(result.value.requestIntent.action, 'change')
+    assert.equal(result.value.requestIntent.changeScope, 'implementation')
+    assert.equal(
+      result.value.nextAction,
+      'revise_request_intent_or_report_conflict',
+    )
+    assert.equal(f.admissions.length, 0)
+    assert.equal(f.intake.awaitingClarification(f.agent), false)
+  }
+  assert.equal(asks, 0)
+  const repaired = await f.execute(TASK_PREPARE_TOOL, {
+    requestIntent: {
+      ...args.requestIntent,
+      evidenceRefs: requestIntentReferenceIds(context),
+    },
+  })
+  assert.equal(repaired.value.prepared, true)
+  assert.equal(f.admissions.length, 1)
+  assert.equal(asks, 0)
+})
+
+test('a missing main-model artifact scope requires model interpretation, not an automatic human question', async (t) => {
+  const message = human(
+    'clear-implementation',
+    'Implement src/parser.ts; preserve the API and do not publish.',
+  )
+  const context = createRequestIntentContext({
+    task: message.content[0]!.text,
+    messageRefs: requestIntentMessageRefs([message], message.content[0]!.text),
+  })!
+  let asks = 0
+  const f = await fixture(t, {
+    interpret: async () => ({
+      context,
+      decision: unresolvedRequestIntent(
+        context,
+        'proposal_reference_uncertain',
+      ),
+    }),
+    questions: {
+      async ask(request) {
+        asks++
+        return {
+          answers: [
+            {
+              id: request.questions[0].id,
+              selected: [],
+              custom: 'Implement src/parser.ts',
+            },
+          ],
+        }
+      },
+    },
+  })
+  ;(f.agent as any).followup = () =>
+    assert.fail('Missing classifier fields must not become human input')
+  await f.capture([message])
+  const requestIntent = {
+    relation: 'new',
+    action: 'change',
+    changeScope: 'unknown',
+    evidenceRefs: requestIntentReferenceIds(context),
+  }
+  const unresolved = await f.execute(TASK_PREPARE_TOOL, { requestIntent })
+  assert.equal(unresolved.isError, false)
+  assert.equal(unresolved.value.status, 'request_interpretation_required')
+  assert.deepEqual(unresolved.value.requestInterpretation.missingFields, [
+    'requestIntent.changeScope',
+  ])
+  assert.equal(asks, 0)
+  assert.equal(f.admissions.length, 0)
+  assert.equal(f.intake.awaitingClarification(f.agent), false)
+  const repaired = await f.execute(TASK_PREPARE_TOOL, {
+    requestIntent: {
+      ...requestIntent,
+      changeScope: 'implementation',
+    },
+  })
+  assert.equal(repaired.value.prepared, true)
 })
