@@ -215,6 +215,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_lisp_hot_heads',
         'dsh_lisp_hot_versions',
         'dsh_lisp_operations',
+        'dsh_lisp_session_hosts',
         'dsh_lisp_sessions',
         'dsh_loop_guard_claims',
         'dsh_loop_guard_states',

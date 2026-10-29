@@ -89,6 +89,17 @@ starts a worker. Variables, definitions and references are lost on restart; the
 agent receives the new generation and must rebuild helpers without replaying
 completed effects. Crashes and explicit cancellation still require human recovery.
 
+Multiple host processes can share the same Kiokuko database and Lisp data directory.
+Each session has one host owner; other sessions and projects run independently,
+including when their agent and operation IDs are identical. `maxWorkers` applies
+per host. Compilers publish private builds atomically and verify a concurrent
+winner before reusing it. Starting or stopping a host does not recover another
+host's live operations. A session whose owner has exited is claimed on its next
+admission, and unfinished operations become `UNKNOWN` without replay. Concurrent
+protected workspace proposals for the same file still return `TARGET_LOCKED` to prevent overwrites.
+When upgrading from the older exclusive `host.lock` implementation, stop the old
+hosts before starting the updated hosts.
+
 Enter a normal implementation or debugging request in DSH, including dsh-cli. Clear unowned native implementation requests now offer Lisp before model generation, including native Bash. A manually enabled session uses the selected route. Ordinary development prefers Lisp for useful calculations and transformations but does not require a preliminary prototype or automatic Lisp-to-Bash fallback. An explicitly protected coding workflow still requires a fresh `lisp_eval` prototype (`prototype: true`) followed by complete saved-result inspection through `lisp_inspect` before implementation, with its two-failure retry budget. ON alone is not verification. Explicit cancellation, numeric cancel, submitted Skip and `ASK_CANCELLED` end the implementation attempt while preserving work; hiding a named card alone leaves its question pending. Cancellation never authorizes a different execution route. A new independent conversation/read does not inherit the ended question gate. Native permissions, Stop and read-only conversation/research remain independent.
 With `typedDecisions.mode: auto`, an accepted Jev/Laya `build` or `debug`
 classification reaches the existing Lisp question without repeating the task-category

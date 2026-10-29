@@ -62,6 +62,12 @@ const protocols = [
 ] as const
 async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   const h = await harness()
+  const handles: { dispose(): Promise<void> }[] = []
+  const createAgent = async (sessionId: any, agentOptions: any, meta: any) => {
+    const handle = await h.ctx.agents.create({ sessionId, agentOptions, meta })
+    handles.push(handle)
+    return handle.agent
+  }
   const pi = await import(modulePath('dsh-llm-pi-ai', 'packages/llm/llm-pi-ai'))
   const requests: { url: string; bodyText: string; body: Record<string, any> }[] = []
   const auxiliaryRequests: typeof requests = []
@@ -186,16 +192,22 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   } as const
   let fixtureTaskType: keyof typeof fixtureRequests = 'build'
   const preparedTurn = async (agent: any, executeExternal = false) => {
+    const auxiliaryBefore = auxiliaryRequests.length
     roundtrip = 'prepare'; afterPreparation = executeExternal ? 'tool-call' : 'capture'
     await turn(h, agent, fixtureRequests[fixtureTaskType])
     const events = agent.session.snapshotEvents()
     const call = events.flatMap((event: any) => event.type === 'assistant/message' ? event.data.message.content : []).find((block: any) => block.type === 'tool-call' && block.name === TASK_PREPARE_TOOL)
     const preparation = events.find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === call?.id)
-    assert.ok(preparation && !preparation.data.message.isError, 'public preparation must execute successfully before phase assertions')
+    assert.ok(preparation && !preparation.data.message.isError, `public preparation must execute successfully before phase assertions: ${JSON.stringify(events.filter((event: any) => event.type === 'turn/end').map((event: any) => event.data))}`)
     const result = JSON.parse(preparation.data.message.content.filter((block: any) => block.type === 'text').map((block: any) => block.text).join(''))
     assert.equal(result.prepared, true, `public preparation must admit this request before phase assertions: ${JSON.stringify(result)}`)
     assert.equal(result.taskType, fixtureTaskType)
     assert.equal(result.originalTask, fixtureRequests[fixtureTaskType])
+    if (protocol.name === 'deepseek') {
+      const deadline = Date.now() + 3000
+      while (auxiliaryRequests.length === auxiliaryBefore && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+      assert.equal(auxiliaryRequests.length, auxiliaryBefore + 1, 'observe reflection before disposing this fixture')
+    }
   }
   let questions: any, credentials: any, settings: any
   let wire: any, adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
@@ -220,6 +232,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       } finally {
         await composition?.dispose()
         composition = undefined
+        for (const handle of handles.splice(0)) await handle.dispose()
       }
     }
   }
@@ -276,43 +289,21 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       const names = (Array.isArray(body.tools) ? body.tools : []).map((tool: any) => typeof tool.name === 'string' ? tool.name : tool.function?.name).filter((name: unknown): name is string => typeof name === 'string')
       return [...DSH_MODEL_FACING_OPERATIONS].filter(name => names.includes(name)).sort()
     }
-    const fullAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-baseline'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+    const fullAgent = await createAgent(h.session.SessionId('tool-exposure-baseline'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
     await preparedTurn(fullAgent)
     const fullBody = requests[1]?.body
     assert.ok(fullBody)
     assert.deepEqual(modelFacingNames(fullBody), [...DSH_MODEL_FACING_OPERATIONS].sort())
     await mountFixture('phase')
-    const phaseAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-phase'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+    const phaseAgent = await createAgent(h.session.SessionId('tool-exposure-phase'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
     const phaseWarnings: string[] = []
     const previousWarn = console.warn
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
     try { await preparedTurn(phaseAgent) } finally { console.warn = previousWarn }
-    assert.equal(requests.length, 4)
+    assert.equal(requests.length, 4, JSON.stringify(phaseAgent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').map((event: any) => event.data)))
     if (protocol.name === 'deepseek') assert.equal(auxiliaryRequests.length, 2, 'each finished foreground turn attempts its independent reflection')
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
-    const currentExecutor = typeof (h.ctx as any).tools.setExecutor === 'function'
-    if (currentExecutor) {
-      // Executor schemas are fixed before the prompt waterfall. Unsupported
-      // presentation reduction must preserve the exact native provider output.
-      assert.deepEqual(phaseBody.tools, fullBody.tools)
-      assert.ok(phaseWarnings.some(line=>line.includes('unsupported_runtime')))
-      for (const mode of ['lean', 'auto'] as const) for (const taskType of Object.keys(fixtureRequests) as Array<keyof typeof fixtureRequests>) {
-        fixtureTaskType=taskType
-        await mountFixture(mode)
-        const agent=await h.ctx.agentLoop.create(h.session.SessionId(`current-${mode}-${taskType}`),{provider:protocol.provider,model:protocol.model},{cwd:h.root})
-        const before: number=requests.length, effects: number=toolCalls.length
-        await preparedTurn(agent,true)
-        assert.equal(requests.length,before+3)
-        for(const request of requests.slice(before)) assert.deepEqual(request.body.tools,fullBody.tools,'provider owns the admitted schemas, including external/protocol definitions')
-        assert.equal(toolCalls.length,effects+1,'the actual native tool batch executes once')
-        assert.deepEqual(toolCalls.at(-1),{message:'payload-1'})
-        assert.ok(completedSessions.has(agent.session.id))
-        assert.equal(finalAnswers.get(agent.session.id),'Tool result received.')
-      }
-      console.log(JSON.stringify({protocol:protocol.name,executorOwned:true,projection:'unavailable',nativeSchemasPreserved:true,externalRoundtrips:toolCalls.length}))
-      return
-    }
     assert.deepEqual(phaseNames, ['curator_check', 'memory_checkpoint'], `phase fallback diagnostics: ${phaseWarnings.join(' | ') || '(none)'}`)
     // Each native session owns different message identities. Normalize only the
     // host-bound reference values; all other serialized content must match.
@@ -381,9 +372,9 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     let leanSavings: { tools: number; body: number } | undefined
     if (nativeAvailable) {
       await mountFixture('lean')
-      const leanAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-lean'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+      const leanAgent = await createAgent(h.session.SessionId('tool-exposure-lean'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const registry = (h.ctx as any).get('tools')
-      const registeredSchemas = registry.schemas(leanAgent)
+      const registeredSchemas = registry.schemas()
       const diagnostics: string[] = []
       const previousInfo = console.info
       console.info = (...args: unknown[]) => { diagnostics.push(args.map(String).join(' ')); previousInfo(...args) }
@@ -400,7 +391,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       assert.equal(descriptionFor(toolFor(leanBody, 'fixture_external')), 'Fixture-owned tool description must stay intact.')
       assert.ok(diagnostics.join(' | ').includes('unownedSurfaceReductionCount'))
       assert.ok(diagnostics.join(' | ').includes('registration_provenance_unavailable'))
-      assert.deepEqual(registry.schemas(leanAgent), registeredSchemas, 'assembly projection must not mutate registered tool schemas')
+      assert.deepEqual(registry.schemas(), registeredSchemas, 'assembly projection must not mutate registered tool schemas')
       assert.equal(toolCalls.length, 1, JSON.stringify(leanAgent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message)))
       assert.deepEqual(toolCalls[0], { message: 'payload-1' })
       assertRoundtrip(leanAgent, leanBefore + 1, leanNames)
@@ -414,7 +405,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     if (nativeAvailable) {
       fixtureTaskType = 'research'
       await mountFixture('full')
-      const fullResearchAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-full-research'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+      const fullResearchAgent = await createAgent(h.session.SessionId('tool-exposure-full-research'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const fullResearchBefore = requests.length
       await preparedTurn(fullResearchAgent)
       assert.equal(requests.length, fullResearchBefore + 2)
@@ -428,10 +419,10 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
       ] as const) {
         fixtureTaskType = taskType
         await mountFixture()
-        const autoAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-auto-${taskType}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+        const autoAgent = await createAgent(h.session.SessionId(`tool-exposure-auto-${taskType}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
         const before: number = requests.length
         const registry = (h.ctx as any).get('tools')
-        const registeredSchemas = registry.schemas(autoAgent)
+        const registeredSchemas = registry.schemas()
         const diagnostics: string[] = []
         const previousInfo = console.info
         console.info = (...args: unknown[]) => { diagnostics.push(args.map(String).join(' ')); previousInfo(...args) }
@@ -443,7 +434,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           }
         } finally { console.info = previousInfo }
         assert.ok(diagnostics.some(line => line.includes(`"requestedMode":"auto","mode":"${effectiveMode}"`) && line.includes(`:${taskType}:`)), `observed task/mode must match ${taskType}/${effectiveMode}`)
-        assert.deepEqual(registry.schemas(autoAgent), registeredSchemas, 'auto must not mutate registered schemas')
+        assert.deepEqual(registry.schemas(), registeredSchemas, 'auto must not mutate registered schemas')
         assert.equal(requests.length, before + (taskType === 'research' ? 3 : 2), taskType)
         if (taskType === 'research') {
           assert.equal(toolCalls.length, 2)
@@ -462,7 +453,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     }
     if (nativeAvailable) {
       await mountFixture()
-      const chatAgent = await h.ctx.agentLoop.create(h.session.SessionId('tool-exposure-auto-chat'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+      const chatAgent = await createAgent(h.session.SessionId('tool-exposure-auto-chat'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
       const before = requests.length
       roundtrip = 'final-answer'
       await turn(h, chatAgent, 'Hello')
@@ -488,7 +479,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
         }
         try {
           for (let index = 0; index < 2; index++) {
-            const collisionAgent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-${mode}-collision-${index}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+            const collisionAgent = await createAgent(h.session.SessionId(`tool-exposure-${mode}-collision-${index}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
             const before: number = requests.length
             await preparedTurn(collisionAgent)
             assert.equal(requests.length, before + 2)
@@ -498,9 +489,20 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           assert.ok(warnings.every(line => !/model_route_unavailable|unsupported_route/.test(line)))
         } finally { registry.get = originalGet; console.warn = previousWarn }
       }
+      if (typeof h.ctx.tools.setExecutor === 'function') {
+        await mountFixture('phase')
+        const agent = await createAgent(h.session.SessionId('tool-exposure-provider-owned'), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+        const mutate = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => ({ ...await next(), tools: [{ name: 'injected_transport', parameters: {} }] }))
+        try {
+          const before = requests.length
+          await preparedTurn(agent, true)
+          assertRoundtrip(agent, before + 1, ['curator_check', 'memory_checkpoint'])
+          assert.ok(requests.slice(before).every(request => !JSON.stringify(request.body.tools).includes('injected_transport')), 'presentation listeners cannot replace provider-owned declarations')
+        } finally { mutate() }
+      } else {
       await mountFixture('lean')
       for (const failure of ['model_binding_unavailable', 'unsupported_schema', 'unsupported_runtime', 'ptc', 'both'] as const) {
-        const agent = await h.ctx.agentLoop.create(h.session.SessionId(`tool-exposure-fallback-${failure}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
+        const agent = await createAgent(h.session.SessionId(`tool-exposure-fallback-${failure}`), { provider: protocol.provider, model: protocol.model }, { cwd: h.root })
         let originalTools: unknown, observedTools: unknown
         const mutate = agent.ctx.on('system-prompt/assemble', async (_assembly: unknown, _context: unknown, next: () => Promise<any>) => {
           const result = await next()
@@ -527,6 +529,8 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
           assert.equal(warnings.filter(line => line.includes(`surface unchanged: lean:${reason}`)).length, failure === 'both' ? 0 : 1)
         } finally { mutate(); observe(); console.warn = previousWarn }
       }
+      }
+
     }
     const report = { runtime: runtimeVersion, protocol: protocol.name, presentation: 'native', cases: lean ? ['answer-first-request', 'prepared-request', 'tool-call-result-final-answer'] : ['answer-first-request', 'prepared-request'], requests: { full, phase, ...(lean ? { lean } : {}), ...(fullResearch ? { fullResearch } : {}), auto }, measurementFields: { system: protocol.name === 'responses' ? 'instructions' : protocol.name === 'chat-completions' ? 'system/developer messages' : 'system', messages: protocol.name === 'responses' ? 'input' : protocol.name === 'chat-completions' ? 'messages (including system/developer)' : 'messages' }, byteSavings: { phaseVsFull: { tools: full.toolsBytes - phase.toolsBytes, body: full.bodyBytes - phase.bodyBytes }, ...(lean && leanSavings ? { leanVsPhase: leanSavings, leanVsFull: { tools: full.toolsBytes - lean.toolsBytes, body: full.bodyBytes - lean.bodyBytes } } : {}) }, ...(lean ? { appObservation: { transformedDescriptionCount: 2, unownedSurfaceReductionCount: 0, unownedSurfaceReductionReason: 'registration_provenance_unavailable' }, providerUsage: 'not measured; requests were intercepted before the provider' } : { providerUsage: 'unavailable' }), skipReason: null }
     assert.deepEqual(unexpectedRequests, [], 'unexpected external requests must fail even when a host degradation catches the fetch error')

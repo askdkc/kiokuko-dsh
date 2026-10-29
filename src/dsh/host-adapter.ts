@@ -1,3 +1,4 @@
+import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
 import { nativeExecutionOwnership } from "./native-execution-ownership.js";
 import { NativeTaskAuthority } from "./native-task-authority.js";
@@ -454,7 +455,7 @@ async function capabilityCatalog(
   const nativeSkills = skillSnapshot.skills.filter(
     (skill) => skill.invocation?.modelInvocable !== false,
   );
-  const nativeTools = stableLispCapabilities(await tools.schemas(scope), scope);
+  const nativeTools = stableNativeToolCapabilities(stableLispCapabilities(await tools.schemas(scope), scope), scope);
   const mandatoryOrder = new Map<string, number>();
   STANDARD_SKILL_MANIFESTS.forEach((manifest, index) =>
     mandatoryOrder.set(manifest.name, index),

@@ -45,7 +45,7 @@ test('real SBCL returning 42 retains native process operation and a complete zer
   }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })
 
-test('actual manager restart recovers orphan native dispatch before permitting any further effect',async()=>{
+test('session admission after manager restart recovers orphan native dispatch before permitting any further effect',async()=>{
   const base=await realpath(await mkdtemp(join(tmpdir(),'managed-restart-'))),root=join(base,'work'),path=join(base,'db')
   await mkdir(root)
   let db=new NodeSqliteAdapter(path,new DatabaseSync(path))
@@ -61,8 +61,9 @@ test('actual manager restart recovers orphan native dispatch before permitting a
     await new LispStore(async fn=>fn(db)).enable(owner)
     await manager.dispose();db.close()
     db=new NodeSqliteAdapter(path,new DatabaseSync(path));manager=new LispManager(options());await manager.start()
+    assert.equal(new ManagedOperationJournal(db).readOperation(operation.operationId).state,'dispatching','host startup alone cannot recover an unclaimed session')
+    const status=await manager.prepare(owner) as any
     assert.equal(new ManagedOperationJournal(db).readOperation(operation.operationId).state,'unknown')
-    const status=await manager.status(owner) as any
     assert.equal(status.state,'RECONCILIATION_REQUIRED')
     assert.equal(status.managedOperations[0].id,operation.operationId)
     const recovered=await manager.recover(owner) as any

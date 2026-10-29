@@ -9,6 +9,7 @@ test('durable requests deduplicate by owner and digest; restart quarantines unfi
   db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(readFileSync(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   db.exec(readFileSync(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
+  db.exec(readFileSync(new URL('../../../../migrations/049_lisp_session_hosts.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root: '/workspace' }
   try {
     await store.enable(owner)
@@ -24,6 +25,7 @@ test('durable requests deduplicate by owner and digest; restart quarantines unfi
     assert.equal((await store.operationSummaries(owner.sessionId, 0)).operations[0]?.operation_id, 'id')
     await assert.rejects(store.reserve(owner, 'id', 'eval', 'other', 'generation', {}), /異なる内容/)
     assert.equal((await store.start()).length, 1)
+    await store.claimSession(owner, 'test-host')
     assert.equal((await store.get(owner, 'id'))?.state, 'UNKNOWN')
     await assert.rejects(store.transition(owner, 'id', ['RUNNING'], 'SUCCEEDED', {}), /状態が変わって/)
     assert.equal(await store.get({ ...owner, agentId: 'other' }, 'id'), undefined)
@@ -51,6 +53,30 @@ test('declining Lisp persists without enabling a worker and cannot undo an enabl
     await restarted.enable(owner)
     await assert.rejects(restarted.decline(owner), /状態が変わって/)
     assert.equal((await restarted.session(owner.sessionId))?.enabled, 1)
+  } finally { db.close() }
+})
+
+test('session claims distinguish hosts in the same process and never recover a live peer', async () => {
+  const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
+  for (const name of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql', '047_managed_operation_journal.sql', '049_lisp_session_hosts.sql'])
+    db.exec(readFileSync(new URL(`../../../../migrations/${name}`, import.meta.url), 'utf8'))
+  const store = new LispStore(async fn => fn(db)), peer = new LispStore(async fn => fn(db))
+  const owner = { sessionId: 'one', agentId: 'agent', root: '/one' }, other = { ...owner, sessionId: 'two', root: '/two' }
+  try {
+    await store.enable(owner); await store.enable(other)
+    await store.claimSession(owner, 'host-one')
+    await store.reserve(owner, 'live', 'lisp_eval', 'hash', 'generation', {})
+    await peer.start()
+    await assert.rejects(peer.claimSession(owner, 'host-two'), { code: 'SESSION_IN_USE' })
+    await assert.rejects(peer.claimSession({ ...owner, root: '/wrong' }, 'host-two'), { code: 'SCOPE_CONFLICT' })
+    await peer.claimSession(other, 'host-two')
+    await peer.releaseHost('host-two')
+    assert.equal((await store.get(owner, 'live'))!.state, 'RUNNING')
+    await assert.rejects(peer.claimSession(owner, 'host-two'), { code: 'SESSION_IN_USE' })
+    await store.claimSession(owner, 'host-one')
+    await store.releaseHost('host-one')
+    await peer.claimSession(owner, 'host-two')
+    assert.equal((await peer.get(owner, 'live'))!.state, 'UNKNOWN')
   } finally { db.close() }
 })
 

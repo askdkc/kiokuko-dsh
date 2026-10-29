@@ -1,3 +1,4 @@
+import { createNativeToolSurface } from '../native-tool-surface.js'
 import type { NativeWorkerRouting } from '../native-worker-routing.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
@@ -149,6 +150,116 @@ export function createRouting({
       else assemblyClaims.set(agent, { turn: event.turn, messages: [event.message] })
     })
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
+    let minimalSurface = false
+    const projectToolSurface = (assembly: import('../japanese-output-skill.js').PromptAssembly & { tools?: unknown }): any => {
+      minimalSurface = false
+      const exposureMode = getToolExposureConfig().mode
+      if (exposureMode !== 'full') {
+        let fallback: string | undefined
+        const surface = (assembly as { tools?: unknown }).tools
+        const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
+        if (!Array.isArray(surface) || surface.some(value => typeof value !== 'object' || value === null || Array.isArray(value)
+          || typeof value.name !== 'string' || value.description !== undefined && typeof value.description !== 'string')
+          || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
+        else if (surface.some(value => typeof value === 'object' && value !== null && !Array.isArray(value) && (value as { name?: unknown }).name === 'run_code')) fallback = 'unsupported_presentation'
+        else {
+          const session = agent.session
+          const item = session ? currentSession(session.id) : undefined
+          const selectionRecord = item ? getSelection(item.runId) : undefined
+          const selection = selectionRecord?.value
+          const state = item ? getPolicyState(item.runId) : undefined
+          const prepared = item?.prepared
+          const selectionOptional = exposureMode === 'auto' && !!prepared && !prepared.ennoOduno.applicable
+            && ['chat', 'research', 'analysis', 'writing'].includes(prepared.intake.profile.taskType ?? '')
+            && (prepared.intake.status === 'ready' || prepared.intake.status === 'exhausted')
+          const selectionReady = selection ? selection.status === 'ready' && !selection.discussion
+            && (selection.mode === 'normal' || selection.mode === 'enno') : selectionOptional
+          const unboundReason = !item ? 'turn_record_missing'
+            : !session ? 'native_session_missing'
+            : !selection && !selectionOptional ? 'selection_missing'
+            : !state ? 'policy_state_missing'
+            : !prepared ? 'prepared_state_missing'
+            : selection && selection.status !== 'ready' ? 'selection_not_ready'
+            : selection?.discussion ? 'discussion_pending'
+            : selection && selection.mode !== 'normal' && selection.mode !== 'enno' ? 'unsupported_selection_mode'
+            : item.closed ? 'session_closed'
+            : item.failed ? 'session_failed'
+            : prepared.run.status !== 'active' ? 'run_not_active'
+            : currentSession(item.sessionId) !== item ? 'stale_turn_record'
+            : item.nativeAgent !== agent ? 'agent_identity'
+            : item.nativeSession !== session ? 'session_identity'
+            : agents?.get(agent.id) !== agent ? 'agent_registry'
+            : sessions?.get(session.id) !== session ? 'session_registry'
+            : delegation.isChild(agent) ? 'delegated_agent'
+            : deepPlanning.executor.isChild(agent) ? 'deep_planning_agent'
+            : state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn ? 'policy_binding'
+            : !hasKnownDshToolPolicyState(state) ? 'unknown_policy_state'
+            : 'unbound'
+          if (!item || !session || !state || !prepared || !selectionReady
+            || item.closed || item.failed || prepared.run.status !== 'active'
+            || currentSession(item.sessionId) !== item || item.nativeAgent !== agent || item.nativeSession !== session
+            || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
+            || delegation.isChild(agent) || deepPlanning.executor.isChild(agent)
+            || state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId
+            || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn || !hasKnownDshToolPolicyState(state)) fallback = `unbound:${unboundReason}`
+          else {
+            const generation = item.prepareGeneration
+            const current = () => currentSession(item.sessionId) === item && !item.closed && !item.failed
+              && item.nativeAgent === agent && item.nativeSession === session && item.prepared === prepared
+              && item.prepareGeneration === generation && getSelection(item.runId) === selectionRecord
+              && getPolicyState(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
+              && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
+            let effectiveMode: import('../tool-exposure.js').ResolvedToolExposureMode = exposureMode === 'auto' ? 'full' : exposureMode
+            let decisionReason = 'explicit'
+            if (exposureMode === 'lean' || exposureMode === 'auto') {
+              const exposureRole = modelRoleForState(item.prepared.ennoOduno)
+              const selectedBinding = autoRoute?.runId === item.runId && autoRoute.sessionId === item.sessionId
+                ? autoRoute.binding
+                : selection?.mode === 'enno' && exposureRole ? selection.configuration?.roles[exposureRole] : undefined
+              const variables = (assembly as { variables?: Record<string, unknown> }).variables
+              const provider = variables?.provider
+              const model = variables?.model
+              const assemblyBinding = typeof provider === 'string' && typeof model === 'string' ? { provider, model } : undefined
+              if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'model_binding_unavailable'
+              else {
+                const decision = resolveToolExposureMode({ mode: exposureMode, taskType: prepared.intake.profile.taskType,
+                  selectionMode: selection?.mode === 'enno' ? 'enno' : 'normal', state })
+                effectiveMode = decision.mode
+                decisionReason = decision.reason
+                if (effectiveMode === 'full') fallback = decision.reason
+              }
+            }
+            if (fallback === undefined) {
+              const resolver = (name: string) => {
+                const definition = runtimeTools.get!.call(tools, name, agent)
+                return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
+                  ? definition as { execute: unknown } : undefined
+              }
+              const projection = effectiveMode === 'minimal'
+                ? projectToolsForMinimal(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
+                : effectiveMode === 'lean'
+                ? projectToolsForLean(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
+                : projectToolsForPhase(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
+              if (!current()) fallback = 'unbound:assembly_binding_changed'
+              else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state' || projection.reason === 'unsupported_schema') fallback = projection.reason
+              else {
+                if (projection.reason === 'projected') assembly = Object.assign({}, assembly, {
+                  tools: projection.tools,
+                  ...(effectiveMode === 'minimal' ? { sections: assembly.sections.map(section => section.name === 'kiokuko:soul'
+                    ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` }
+                    : section) } : {}),
+                })
+                if (effectiveMode === 'minimal' && projection.reason === 'projected') minimalSurface = true
+                if (effectiveMode === 'lean' || effectiveMode === 'minimal') reportToolExposureProjection(effectiveMode, `${decisionReason}:${prepared.intake.profile.taskType}:${projection.reason}`, projection.metrics)
+              }
+            }
+          }
+        }
+        if (fallback !== undefined) reportToolExposureFallback(fallback)
+      }
+      return assembly
+    }
+    const nativeToolSurface = agent.model && typeof agent.runMaintenance === 'function' ? createNativeToolSurface(agent, ownedModelToolDefinitions) : undefined
     const disposeRouting = installDshModelRouting(agent, async signal => {
       autoRoute = undefined
       nativeWorkers.clearRequest(agent)
@@ -237,6 +348,10 @@ export function createRouting({
       },
     }, {
       prompts: () => getSkillPrompts(),
+      beforeStep: async binding => {
+        minimalSurface = false
+        nativeToolSurface?.prepare(schemas => projectToolSurface({ sections: [], variables: { provider: binding?.provider, model: binding?.model }, tools: schemas }).tools, answerReview.reconsidering(agent as ReviewAgent))
+      },
       owner: () => agent.session ? currentSession(agent.session.id)?.runId : undefined,
       beforeRequest: async binding => {
         await nativeWorkers.assertRequest(agent, binding)
@@ -249,109 +364,8 @@ export function createRouting({
         semanticCompaction.recordRoute(agent as unknown as CompactionAgent, assembly.variables)
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = await lisp.project(agent, assembly)
-        const exposureMode = getToolExposureConfig().mode
-        if (exposureMode !== 'full') {
-          let fallback: string | undefined
-          const surface = (assembly as { tools?: unknown }).tools
-          const runtimeTools = tools as unknown as { get?: (name: string, scope?: unknown) => unknown; schemas?: (...args: unknown[]) => unknown } | undefined
-          if (!Array.isArray(surface) || surface.some(value => typeof value !== 'object' || value === null || Array.isArray(value)
-            || typeof value.name !== 'string' || value.description !== undefined && typeof value.description !== 'string')
-            || typeof runtimeTools?.get !== 'function' || typeof runtimeTools.schemas !== 'function') fallback = 'unsupported_runtime'
-          else if (surface.some(value => typeof value === 'object' && value !== null && !Array.isArray(value) && (value as { name?: unknown }).name === 'run_code')) fallback = 'unsupported_presentation'
-          else {
-            const session = agent.session
-            const item = session ? currentSession(session.id) : undefined
-            const selectionRecord = item ? getSelection(item.runId) : undefined
-            const selection = selectionRecord?.value
-            const state = item ? getPolicyState(item.runId) : undefined
-            const prepared = item?.prepared
-            const selectionOptional = exposureMode === 'auto' && !!prepared && !prepared.ennoOduno.applicable
-              && ['chat', 'research', 'analysis', 'writing'].includes(prepared.intake.profile.taskType ?? '')
-              && (prepared.intake.status === 'ready' || prepared.intake.status === 'exhausted')
-            const selectionReady = selection ? selection.status === 'ready' && !selection.discussion
-              && (selection.mode === 'normal' || selection.mode === 'enno') : selectionOptional
-            const unboundReason = !item ? 'turn_record_missing'
-              : !session ? 'native_session_missing'
-              : !selection && !selectionOptional ? 'selection_missing'
-              : !state ? 'policy_state_missing'
-              : !prepared ? 'prepared_state_missing'
-              : selection && selection.status !== 'ready' ? 'selection_not_ready'
-              : selection?.discussion ? 'discussion_pending'
-              : selection && selection.mode !== 'normal' && selection.mode !== 'enno' ? 'unsupported_selection_mode'
-              : item.closed ? 'session_closed'
-              : item.failed ? 'session_failed'
-              : prepared.run.status !== 'active' ? 'run_not_active'
-              : currentSession(item.sessionId) !== item ? 'stale_turn_record'
-              : item.nativeAgent !== agent ? 'agent_identity'
-              : item.nativeSession !== session ? 'session_identity'
-              : agents?.get(agent.id) !== agent ? 'agent_registry'
-              : sessions?.get(session.id) !== session ? 'session_registry'
-              : delegation.isChild(agent) ? 'delegated_agent'
-              : deepPlanning.executor.isChild(agent) ? 'deep_planning_agent'
-              : state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn ? 'policy_binding'
-              : !hasKnownDshToolPolicyState(state) ? 'unknown_policy_state'
-              : 'unbound'
-            if (!item || !session || !state || !prepared || !selectionReady
-              || item.closed || item.failed || prepared.run.status !== 'active'
-              || currentSession(item.sessionId) !== item || item.nativeAgent !== agent || item.nativeSession !== session
-              || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
-              || delegation.isChild(agent) || deepPlanning.executor.isChild(agent)
-              || state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId
-              || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn || !hasKnownDshToolPolicyState(state)) fallback = `unbound:${unboundReason}`
-            else {
-              const generation = item.prepareGeneration
-              const current = () => currentSession(item.sessionId) === item && !item.closed && !item.failed
-                && item.nativeAgent === agent && item.nativeSession === session && item.prepared === prepared
-                && item.prepareGeneration === generation && getSelection(item.runId) === selectionRecord
-                && getPolicyState(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
-                && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
-              let effectiveMode: import('../tool-exposure.js').ResolvedToolExposureMode = exposureMode === 'auto' ? 'full' : exposureMode
-              let decisionReason = 'explicit'
-              if (exposureMode === 'lean' || exposureMode === 'auto') {
-                const exposureRole = modelRoleForState(item.prepared.ennoOduno)
-                const selectedBinding = autoRoute?.runId === item.runId && autoRoute.sessionId === item.sessionId
-                  ? autoRoute.binding
-                  : selection?.mode === 'enno' && exposureRole ? selection.configuration?.roles[exposureRole] : undefined
-                const variables = (assembly as { variables?: Record<string, unknown> }).variables
-                const provider = variables?.provider
-                const model = variables?.model
-                const assemblyBinding = typeof provider === 'string' && typeof model === 'string' ? { provider, model } : undefined
-                if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'model_binding_unavailable'
-                else {
-                  const decision = resolveToolExposureMode({ mode: exposureMode, taskType: prepared.intake.profile.taskType,
-                    selectionMode: selection?.mode === 'enno' ? 'enno' : 'normal', state })
-                  effectiveMode = decision.mode
-                  decisionReason = decision.reason
-                  if (effectiveMode === 'full') fallback = decision.reason
-                }
-              }
-              if (fallback === undefined) {
-                const resolver = (name: string) => {
-                  const definition = runtimeTools.get!.call(tools, name, agent)
-                  return typeof definition === 'object' && definition !== null && typeof (definition as { execute?: unknown }).execute === 'function'
-                    ? definition as { execute: unknown } : undefined
-                }
-                const projection = effectiveMode === 'minimal'
-                  ? projectToolsForMinimal(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
-                  : effectiveMode === 'lean'
-                  ? projectToolsForLean(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
-                  : projectToolsForPhase(surface as readonly { name: string; description?: string; parameters?: unknown }[], state, ownedModelToolDefinitions, resolver)
-                if (!current()) fallback = 'unbound:assembly_binding_changed'
-                else if (projection.reason === 'ownership_unknown' || projection.reason === 'unknown_state' || projection.reason === 'unsupported_schema') fallback = projection.reason
-                else {
-                  if (projection.reason === 'projected') assembly = Object.assign({}, assembly, {
-                    tools: projection.tools,
-                    ...(effectiveMode === 'minimal' ? { sections: assembly.sections.map(section => section.name === 'kiokuko:soul'
-                      ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` }
-                      : section) } : {}),
-                  })
-                  if (effectiveMode === 'lean' || effectiveMode === 'minimal') reportToolExposureProjection(effectiveMode, `${decisionReason}:${prepared.intake.profile.taskType}:${projection.reason}`, projection.metrics)
-                }
-              }
-            }
-          }
-          if (fallback !== undefined) reportToolExposureFallback(fallback)
-        }
+        if (!nativeToolSurface) assembly = projectToolSurface(assembly)
+        else if (minimalSurface) assembly = { ...assembly, sections: assembly.sections.map(section => section.name === 'kiokuko:soul' ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` } : section) }
         // Automatic reconsideration uses existing originals only: no repeated tool effects.
         if (answerReview.reconsidering(agent as unknown as ReviewAgent)) assembly = Object.assign({}, assembly, { tools: [] })
         semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
@@ -398,7 +412,7 @@ export function createRouting({
         }
       }
     }, next))
-    routingDisposers.set(agent, () => { releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })
+    routingDisposers.set(agent, () => { nativeToolSurface?.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {
     delegation.created(event.agent)

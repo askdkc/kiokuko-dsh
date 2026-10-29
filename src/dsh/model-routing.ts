@@ -28,6 +28,7 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
   load(): ModelBinding | undefined
   save(binding: ModelBinding): Promise<void>
 }, guidance?: { prompts(): { require(name: string): Promise<string> }; assembled?(assembly: PromptAssembly): Promise<PromptAssembly | void>;
+  beforeStep?(binding: ModelBinding | undefined, signal: AbortSignal): Promise<void>;
   beforeRequest?(binding: ModelBinding | undefined): Promise<void>; owner?(): string | undefined }): () => void {
   if (!agent.ctx) return () => {}
   let assembled: ModelBinding | undefined
@@ -56,6 +57,9 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
     if (!nativeRouting || signal.aborted || disposed) return
     routingFailure = undefined
     await choose(signal)
+    signal.throwIfAborted()
+    if (disposed) return
+    await guidance?.beforeStep?.(assembled ?? agent.model!.current(), signal)
     signal.throwIfAborted()
     if (disposed || !assembled) return
     if (captureOrdinary) {

@@ -1,4 +1,5 @@
 import { workingLispTask } from '../../helpers/lisp-task.js'
+import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -40,6 +41,10 @@ test('crash-state journal between file receipts and parent commit remains inspec
     const before = (await stat(join(root, 'a.txt'))).mtimeMs
     await manager.dispose()
     reopened = new NodeSqliteAdapter(crashPath, new DatabaseSync(crashPath))
+    // The snapshot models a crashed host. Its original PID is this still-live
+    // test runner, so bind the saved claim to a process that has actually exited.
+    const exitedPid = Number(execFileSync(process.execPath, ['-p', 'process.pid'], { encoding: 'utf8' }).trim())
+    reopened.prepare('UPDATE dsh_lisp_session_hosts SET pid=?').run(exitedPid)
     const resumedStore = new LispStore(async fn => fn(reopened!))
     manager = new LispManager({ ...options, store: resumedStore }); await manager.start()
     assert.equal((await manager.status(owner) as any).state, 'RECOVERY_REQUIRED')

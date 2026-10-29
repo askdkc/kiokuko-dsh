@@ -5,7 +5,7 @@ import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { CODE_METHODS } from './code-intelligence-contracts.js'
 import type { ApprovalQuestions } from './approval.js'
-import { mkdir, mkdtemp, open, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -95,7 +95,9 @@ export class LispManager {
   readonly #taskTools: TaskToolCatalog
   readonly #hot: HotToolRuntime
   #closed = false
-  #lock = false
+  readonly #hostId = randomUUID()
+  readonly #claims = new Set<Promise<void>>()
+  #ownsSessions = false
   #artifactReserved = 0
   #admissionQueue: Promise<void> = Promise.resolve()
   readonly #inflight = new Map<string, string>()
@@ -124,31 +126,27 @@ export class LispManager {
   async start(): Promise<void> {
     await verifyLispVendor(this.#library)
     await mkdir(this.options.dataRoot, { recursive: true, mode: 0o700 })
-    const lockPath = join(this.options.dataRoot, 'host.lock')
+    // Older versions hold an exclusive lock and cannot safely coexist with this
+    // session-scoped protocol. Preserve their lock; never steal a live host.
     try {
-      const lock = await open(lockPath, 'wx', 0o600)
-      try { await lock.writeFile(JSON.stringify({ pid: process.pid })); await lock.sync(); this.#lock = true } finally { await lock.close() }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      const saved = JSON.parse(await readFile(lockPath, 'utf8')) as {pid: number}
+      const saved = JSON.parse(await readFile(join(this.options.dataRoot, 'host.lock'), 'utf8')) as {pid: number}
       if (!Number.isInteger(saved.pid) || saved.pid < 1) fail('HOST_LOCK', 'Lisp のホストロックが破損しています。')
-      try { process.kill(saved.pid, 0); fail('HOST_LOCK', '別のホストが Lisp の状態を使用中です。') }
+      try { process.kill(saved.pid, 0); fail('HOST_LOCK', '旧バージョンの Lisp ホストが使用中です。そのホストを終了してから再開してください。') }
       catch (check) { if ((check as NodeJS.ErrnoException).code !== 'ESRCH') throw check }
-      await unlink(lockPath)
-      const lock = await open(lockPath, 'wx', 0o600)
-      try { await lock.writeFile(JSON.stringify({ pid: process.pid })); await lock.sync(); this.#lock = true } finally { await lock.close() }
-    }
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    await this.#store.expireResults()
+    for (const session of await this.#store.start()) this.enabled.set(session.session_id, session.root_path)
+    await this.#hot.catalog.expire()
+  }
+  private async claimSession(owner: LispOwner): Promise<void> {
+    if (this.#closed) fail('HOST_STOPPED', 'プラグインが停止しています。')
+    const claim = this.#store.claimSession(owner, this.#hostId)
+    this.#claims.add(claim)
     try {
-      await this.#store.expireResults()
-      for (const session of await this.#store.start()) this.enabled.set(session.session_id, session.root_path)
-      await this.#hot.catalog.expire()
-      await this.#store.database(db => {
-        const journal = new ManagedOperationJournal(db)
-        for (const row of db.prepare(`SELECT scope_id FROM dsh_managed_scopes WHERE json_extract(scope_json,'$.runtimeIdentity') LIKE 'sbcl:%'`).all<{scope_id:string}>()) {
-          journal.recover(row.scope_id)
-        }
-      })
-    } catch (error) { await unlink(lockPath); this.#lock = false; throw error }
+      await claim
+      this.#ownsSessions = true
+      if (this.#closed) fail('HOST_STOPPED', 'プラグインが停止しています。')
+    } finally { this.#claims.delete(claim) }
   }
   private entry(owner: LispOwner): AgentState {
     const root = this.enabled.get(owner.sessionId)
@@ -163,9 +161,10 @@ export class LispManager {
     const workflow=await this.#store.database(db=>sessionCodingWorkflow(db,owner.sessionId))
     if(workflow?.protocol && this.#config.executionMode !== 'protected') fail('PROTOCOL_PROTECTED_REQUIRED','This bounded protocol requires protected Lisp computation. Disable the existing Lisp session before binding, then select protected mode; use owned file/test tools for effects.')
     const native = this.taskAuthority.current()?.nativeCommands
-    if (native && !workflow?.protocol) { native.assertCurrent(); return }
-    if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
+    if (native && !workflow?.protocol) native.assertCurrent()
+    else if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
       fail('CODING_CHOICE_PENDING','このタスクの Goal と条件を定め、Lisp の選択に回答してから実行してください。')
+    await this.claimSession(owner)
   }
   async enable(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
     await this.authorizeCodingTask(owner)
@@ -766,9 +765,14 @@ export class LispManager {
   }
   private async dispatch(owner: LispOwner, tool: LispTool, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     try {
-      if(!['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
+      if(!['lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
+      if (tool === 'lisp_cancel') await this.claimSession(owner)
+      if (tool === 'lisp_inspect') {
+        try { await this.claimSession(owner) }
+        catch (error) { if (!(error instanceof LispError) || error.code !== 'SESSION_IN_USE') throw error }
+      }
       if (tool === 'lisp_hot_status') return await this.#hot.status(owner, input)
       if (tool === 'lisp_describe' && typeof input.toolRef === 'string') {
         const { source: _source, ...manifest } = await this.#taskTools.get(owner, input.toolRef)
@@ -1181,6 +1185,7 @@ export class LispManager {
     })
   }
   private async recoverBound(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    await this.claimSession(owner)
     const managed = await this.managedUnresolved(owner)
     if (managed.unknownCount > 0) return {ok:false,code:'RECONCILIATION_REQUIRED',
       message:'External operation results remain unknown. Inspect the listed originals. Native results without a verifiable host receipt cannot be cleared by restarting Lisp; no command was retried.',managedOperations:managed.operations,managedOperationCount:managed.total,managedOperationsTruncated:managed.truncated}
@@ -1213,6 +1218,7 @@ export class LispManager {
     return this.status(owner)
   }
   async abandon(owner: LispOwner, id: string): Promise<unknown> {
+    await this.claimSession(owner)
     await this.stopTaskWorkers(owner.sessionId)
     const state = this.entry(owner); await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
@@ -1229,6 +1235,7 @@ export class LispManager {
     })
   }
   private async restoreBound(owner: LispOwner, id: string, signal: AbortSignal): Promise<unknown> {
+    await this.claimSession(owner)
     const state = this.entry(owner)
     await this.cancel(state)
     await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
@@ -1243,6 +1250,7 @@ export class LispManager {
     try { return await result } finally { this.#executions.delete(result); state.active.delete(abort) }
   }
   async disable(owner: LispOwner): Promise<unknown> {
+    await this.claimSession(owner)
     await this.stopTaskWorkers(owner.sessionId)
     if (await this.isTaskMode(owner)) {
       await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
@@ -1264,6 +1272,7 @@ export class LispManager {
     for (const sessionId of new Set([...this.#agents.values()].map(state => state.owner.sessionId))) await this.stopTaskWorkers(sessionId)
     await Promise.all([...this.#agents.values()].map(state => this.cancel(state)))
     await Promise.allSettled([...this.#executions.keys(), ...[...this.#agents.values()].map(state => state.admission)])
-    if (this.#lock) { await unlink(join(this.options.dataRoot, 'host.lock')); this.#lock = false }
+    await Promise.allSettled([...this.#claims])
+    if (this.#ownsSessions) { await this.#store.releaseHost(this.#hostId); this.#ownsSessions = false }
   }
 }

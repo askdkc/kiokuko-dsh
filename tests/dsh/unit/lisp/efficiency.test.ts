@@ -26,6 +26,7 @@ async function fixture(t: test.TestContext) {
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/049_lisp_session_hosts.sql', import.meta.url), 'utf8'))
   t.after(async () => { db.close(); await rm(base, { recursive: true, force: true }) })
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 's', agentId: 'a', root }
   await store.enable(owner)
@@ -296,7 +297,7 @@ test('startup quarantines incomplete legacy success without guessing an unlinked
       ...(id === 'complete' ? { changes: [{ id: 'p', path: 'a.txt', state: 'APPLIED' }] } : {}) })
   }
   await writeFile(join(f.root, 'a.txt'), 'written')
-  await f.store.start()
+  await f.store.claimSession(f.owner, 'legacy-recovery-host')
   assert.equal((await f.store.get(f.owner, 'legacy'))!.state, 'UNKNOWN')
   assert.equal((await f.store.get(f.owner, 'complete'))!.state, 'SUCCEEDED')
   const result = await inspectSavedResult(f.store, f.owner, { resultOperationId: 'legacy', section: 'changes' })

@@ -65,7 +65,7 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
   })
 }
 
-/** The manager's exclusive data-root lease owns publication and serializes builders. */
+/** Builders use private directories; publication races reuse the verified winner. */
 export class CompiledLispCache {
   #tail: Promise<unknown> = Promise.resolve()
   #stopFailure: LispError | undefined
@@ -126,7 +126,7 @@ export class CompiledLispCache {
       layout.protected=this.config.executionMode==='protected'
       const key = await this.identity(layout, signal), path = join(root, key)
       signal.throwIfAborted()
-      const reused = await this.existing(path, key)
+      let reused = await this.existing(path, key)
       if (!reused) {
         progress({ state: 'compiling', key })
         await runLispSetup(layout, this.config, 'compile.lisp', signal)
@@ -143,7 +143,12 @@ export class CompiledLispCache {
         try { await manifest.writeFile(JSON.stringify({ format: 1, key, ...info })); await manifest.sync() } finally { await manifest.close() }
         const publishedDirectory = await open(publish, 'r'); try { await publishedDirectory.sync() } finally { await publishedDirectory.close() }
         signal.throwIfAborted()
-        await rename(publish, path)
+        try { await rename(publish, path) }
+        catch (error) {
+          if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+          if (!await this.existing(path, key)) throw error
+          reused = true
+        }
         const directory = await open(root, 'r'); try { await directory.sync() } finally { await directory.close() }
       }
       const result = { key, path, reused, prepareMs: Math.round(performance.now() - start) }

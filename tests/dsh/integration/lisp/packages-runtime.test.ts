@@ -18,6 +18,7 @@ test('public Lisp package API routes approved host metadata once and journals re
   db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/049_lisp_session_hosts.sql', import.meta.url), 'utf8'))
   const store = new LispStore(async fn => fn(db)), owner = { sessionId: 'session', agentId: 'agent', root }
   let calls = 0
   const manager = new LispManager(Object.assign({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data') }, {

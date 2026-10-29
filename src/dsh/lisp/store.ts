@@ -1,6 +1,8 @@
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { randomUUID } from 'node:crypto'
 import { digest, fail, type LispOwner } from './contracts.js'
+import { withImmediateTransaction } from '../../db/transaction.js'
+import { ManagedOperationJournal } from '../managed-operation-journal.js'
 
 export interface LispDatabase { <T>(fn: (db: SqliteDatabase) => T): Promise<T> }
 export interface Operation extends Record<string, unknown> {
@@ -13,19 +15,49 @@ export interface Session extends Record<string, unknown> { session_id: string; r
 export class LispStore {
   constructor(readonly database: LispDatabase, readonly authorizePublication: (db: SqliteDatabase, owner: LispOwner) => void = () => {}) {}
   async start(): Promise<Session[]> {
+    // Starting another host must never quarantine somebody else's live work.
+    return this.database(db => db.prepare('SELECT * FROM dsh_lisp_sessions WHERE enabled=1').all<Session>())
+  }
+  /** Acquire only the requested session. Process death, never age, permits takeover. */
+  claimSession(owner: LispOwner, hostId: string): Promise<void> {
+    return this.database(db => withImmediateTransaction(db, () => {
+      const session = db.prepare('SELECT root_path FROM dsh_lisp_sessions WHERE session_id=?').get<{root_path:string}>(owner.sessionId)
+      if (session && session.root_path !== owner.root) fail('SCOPE_CONFLICT', 'セッションの作業場所が変わっています。')
+      const old = db.prepare('SELECT * FROM dsh_lisp_session_hosts WHERE session_id=?')
+        .get<{root_path:string;host_id:string;pid:number}>(owner.sessionId)
+      if (old?.host_id === hostId && old.pid === process.pid && old.root_path === owner.root) return
+      if (old) {
+        try { process.kill(old.pid, 0) }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+          db.prepare('DELETE FROM dsh_lisp_session_hosts WHERE session_id=? AND host_id=?').run(owner.sessionId, old.host_id)
+        } else throw error }
+        if (db.prepare('SELECT 1 FROM dsh_lisp_session_hosts WHERE session_id=?').get(owner.sessionId))
+          fail('SESSION_IN_USE', 'この Lisp セッションは別のホストで使用中です。別のセッションは並行して使えます。')
+      }
+      this.recoverSessionInDatabase(db, owner.sessionId)
+      db.prepare('INSERT INTO dsh_lisp_session_hosts VALUES(?,?,?,?)').run(owner.sessionId, owner.root, hostId, process.pid)
+    }))
+  }
+  releaseHost(hostId: string): Promise<void> {
     return this.database(db => {
-      db.prepare("UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=? WHERE state IN ('RUNNING','APPLYING','AWAITING_APPROVAL')").run(new Date().toISOString())
-      // Older hosts marked evaluation success before applying proposals. A parent
-      // without its final changes array is incomplete, not a successful receipt.
-      db.prepare(`UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=?
-        WHERE kind='lisp_eval' AND state='SUCCEEDED' AND json_array_length(result,'$.proposals')>0
-        AND json_type(result,'$.changes') IS NULL`).run(new Date().toISOString())
-      return db.prepare('SELECT * FROM dsh_lisp_sessions WHERE enabled=1').all<Session>()
+      db.prepare('DELETE FROM dsh_lisp_session_hosts WHERE host_id=? AND pid=?').run(hostId, process.pid)
     })
+  }
+  private recoverSessionInDatabase(db: SqliteDatabase, sessionId: string): void {
+    db.prepare("UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=? WHERE session_id=? AND state IN ('RUNNING','APPLYING','AWAITING_APPROVAL')").run(new Date().toISOString(), sessionId)
+    // Older hosts marked evaluation success before applying proposals. A parent
+    // without its final changes array is incomplete, not a successful receipt.
+    db.prepare(`UPDATE dsh_lisp_operations SET state='UNKNOWN',updated_at=?
+      WHERE session_id=? AND kind='lisp_eval' AND state='SUCCEEDED' AND json_array_length(result,'$.proposals')>0
+      AND json_type(result,'$.changes') IS NULL`).run(new Date().toISOString(), sessionId)
+    const journal = new ManagedOperationJournal(db)
+    for (const row of db.prepare(`SELECT scope_id FROM dsh_managed_scopes
+      WHERE json_extract(scope_json,'$.sessionId')=? AND json_extract(scope_json,'$.runtimeIdentity') LIKE 'sbcl:%'`).all<{scope_id:string}>(sessionId))
+      journal.recover(row.scope_id)
   }
   /** Host-issued identity; both transport retries and model logical IDs bind to it. */
   bind(owner: LispOwner, callId: string, logicalId: string, input: unknown): Promise<string> {
-    return this.database(db => {
+    return this.database(db => withImmediateTransaction(db, () => {
       const hash = digest(input), keys = [`call-${digest(callId)}`, `request-${digest(logicalId)}`]
       const read = db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?")
       const existing = keys.map(key => read.get<Operation>(owner.sessionId, owner.agentId, key))
@@ -38,7 +70,7 @@ export class LispStore {
       for (const [index, key] of keys.entries()) if (!existing[index]) db.prepare('INSERT INTO dsh_lisp_operations VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(owner.sessionId, owner.agentId, key, 'binding', hash, 'host', 'BOUND', JSON.stringify({ id }), null, new Date().toISOString())
       return id
-    })
+    }))
   }
   /** Keep identity/digest tombstones. Never expire file recovery or unknown outcomes. */
   expireResults(now = new Date()): Promise<void> {
@@ -75,23 +107,29 @@ export class LispStore {
     })
   }
   async enable(owner: LispOwner): Promise<void> {
-    await this.database(db => {
+    await this.database(db => withImmediateTransaction(db, () => {
       const old = db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(owner.sessionId)
       if (old && old.root_path !== owner.root) fail('SCOPE_CONFLICT', 'セッションの作業場所が変わっています。')
       db.prepare('INSERT INTO dsh_lisp_sessions(session_id,root_path,enabled,epoch,updated_at) VALUES(?,?,1,?,?) ON CONFLICT(session_id) DO UPDATE SET enabled=1,updated_at=excluded.updated_at')
         .run(owner.sessionId, owner.root, randomUUID(), new Date().toISOString())
-    })
+    }))
   }
   async disable(id: string): Promise<void> { await this.database(db => db.prepare('UPDATE dsh_lisp_sessions SET enabled=0,epoch=?,updated_at=? WHERE session_id=?').run(randomUUID(), new Date().toISOString(), id)) }
   get(owner: LispOwner, id: string): Promise<Operation | undefined> {
     return this.database(db => db.prepare('SELECT * FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?').get<Operation>(owner.sessionId, owner.agentId, id))
   }
   async reserve(owner: LispOwner, id: string, kind: string, hash: string, generation: string, payload: unknown): Promise<Operation | undefined> {
-    return this.database(db => {
+    return this.database(db => withImmediateTransaction(db, () => {
       const old = db.prepare('SELECT * FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?').get<Operation>(owner.sessionId, owner.agentId, id)
       if (old) {
         if (old.digest !== hash || old.kind !== kind) fail('ID_CONFLICT', '同じ操作 ID に異なる内容が指定されました。')
         return old
+      }
+      if (kind === 'proposal') {
+        const path = (payload as {before?:{path?:string}}).before?.path
+        if (path && db.prepare(`SELECT 1 FROM dsh_lisp_operations WHERE kind='proposal'
+          AND state IN ('RUNNING','AWAITING_APPROVAL','APPLYING','UNKNOWN') AND json_extract(payload,'$.before.path')=?`).get(path))
+          fail('TARGET_LOCKED', '対象に未確定の変更があります。新しい変更は適用していません。')
       }
       const usage = db.prepare('SELECT COUNT(*) AS count,COALESCE(SUM(length(payload)+COALESCE(length(result),0)),0) AS bytes FROM dsh_lisp_operations WHERE session_id=?').get<{count:number;bytes:number}>(owner.sessionId)!
       if (usage.count >= 10000 || usage.bytes + Buffer.byteLength(JSON.stringify(payload)) > 1024 ** 3) fail('JOURNAL_LIMIT', 'このセッションの Lisp 記録が上限です。記録を確認するまで新しい操作を停止します。')
@@ -100,10 +138,10 @@ export class LispStore {
       db.prepare('INSERT INTO dsh_lisp_operations VALUES(?,?,?,?,?,?,?,?,?,?)')
         .run(owner.sessionId, owner.agentId, id, kind, hash, generation, 'RUNNING', JSON.stringify(payload), null, new Date().toISOString())
       return undefined
-    })
+    }))
   }
   async transition(owner: LispOwner, id: string, expected: readonly string[], state: string, result: unknown, payload?: unknown): Promise<void> {
-    await this.database(db => {
+    await this.database(db => withImmediateTransaction(db, () => {
       const old = db.prepare('SELECT state FROM dsh_lisp_operations WHERE session_id=? AND agent_id=? AND operation_id=?').get<{state:string}>(owner.sessionId, owner.agentId, id)
       if (!old || !expected.includes(old.state)) fail('STATE_CONFLICT', '操作の状態が変わっています。再実行せず状態を確認してください。')
       if (state === 'SUCCEEDED' || state === 'APPLIED') this.authorizePublication(db, owner)
@@ -114,7 +152,7 @@ export class LispStore {
       if (usage + increase > 1024 ** 3 || total + increase > 4 * 1024 ** 3) fail('JOURNAL_LIMIT', '結果を安全に保存できる容量がありません。再実行せず状態を確認してください。')
       db.prepare('UPDATE dsh_lisp_operations SET state=?,result=?,payload=COALESCE(?,payload),updated_at=? WHERE session_id=? AND agent_id=? AND operation_id=?')
         .run(state, encoded, nextPayload, new Date().toISOString(), owner.sessionId, owner.agentId, id)
-    })
+    }))
   }
   operations(sessionId: string): Promise<Operation[]> {
     return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC").all<Operation>(sessionId))
