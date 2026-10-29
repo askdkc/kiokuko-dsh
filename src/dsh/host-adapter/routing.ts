@@ -267,6 +267,14 @@ export function createRouting({
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
       if (demand && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
+        // Maintenance runs before DSH resolves its step's immutable tool set.
+        // Capture the same queued input now, so an accepted Lisp choice is in
+        // that set rather than appearing only after prompt assembly begins.
+        if (!assemblyClaims.has(agent) && agent.status === 'idle' && agent.inbox && agent.session && agents?.turnBoundaryOf
+          && native.get(LISP_CODING_SERVICE, false)) {
+          const messages = [...agent.inbox.nextStep, ...agent.inbox.nextTurn.slice(0, 1)]
+          if (hasHumanInput(messages)) assemblyClaims.set(agent, { turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, messages })
+        }
         const claim = assemblyClaims.get(agent)
         if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
           assemblyClaims.delete(agent); return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }

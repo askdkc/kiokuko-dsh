@@ -96,6 +96,7 @@ function parsePreparationRequest(
 }
 
 export interface DemandAgent {
+  readonly status?: string
   readonly ctx?: unknown
   readonly id: string
   cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void
@@ -249,7 +250,7 @@ function automaticPreparationType(
   if (requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)) {
     // Gathering evidence grants no change/process authority. An active Goal
     // still requires its reference to be resolved before opening another run.
-    return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
+    return ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
       ? 'research'
       : undefined
   }
@@ -257,12 +258,13 @@ function automaticPreparationType(
   const interpreted = requestIntentTaskType(requestIntent, intent.taskType)
   if (interpreted && interpreted !== 'chat') return interpreted
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
-  return ['read', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
+  return ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
     ? 'research'
     : undefined
 }
 const NATIVE_EVIDENCE_READS = new Set([
   'read',
+  'read_image',
   'glob',
   'grep',
   'web_search',
@@ -271,6 +273,7 @@ const NATIVE_EVIDENCE_READS = new Set([
 const UNOWNED_NATIVE_TOOLS = new Set([
   'bash',
   'read',
+  'read_image',
   'glob',
   'grep',
   'web_search',
@@ -564,8 +567,15 @@ export class OnDemandIntake {
       )
         throw new Error('Stale on-demand intake identity')
       if (previous.input.turn === input.turn) {
-        if (previous.status === 'closed')
+        if (previous.status === 'closed') {
+          // A choice can be cancelled during pre-step maintenance, before the
+          // owning turn opens. Deliver that cancellation to this same turn.
+          if ((previous.captureError as { code?: unknown })?.code === 'ASK_CANCELLED') {
+            if (!input.signal.aborted) input.agent.cancel?.({ kind: 'user' }, { keepInbox: true })
+            throw previous.captureError
+          }
           throw new Error('On-demand turn is closed')
+        }
         const fresh = humanMessages(input.messages).filter(
           (message) =>
             previous.humanContents.get(humanId(message)) !==
@@ -881,7 +891,7 @@ export class OnDemandIntake {
         state.captureError = error
         // DSH classifies cancellation from its own turn signal, not error.code.
         // Abort only this current attempt and preserve unrelated queued input.
-        if (cancelled && !input.signal.aborted)
+        if (cancelled && !input.signal.aborted && input.agent.status !== 'idle')
           input.agent.cancel?.({ kind: 'user' }, { keepInbox: true })
       }
       throw error

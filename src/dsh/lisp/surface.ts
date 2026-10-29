@@ -56,7 +56,14 @@ interface Fence { sessions: Map<string, string>; controller?: LispManager; prepa
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const PROTOCOL_OWNED_TOOLS = ['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_exec', 'kioku_result'] as const
 const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'kioku_exec'])
-const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
+const LISP_READ_TOOLS = [
+  'read',
+  'read_image',
+  'glob',
+  'grep',
+  'skill',
+  'observation_read',
+] as const
 const NATIVE_SHELL_TOOLS = new Set(['bash', 'zsh', 'pwsh'])
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.

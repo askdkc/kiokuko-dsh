@@ -79,11 +79,41 @@ export function codingContinuation(task: string): boolean {
     || /^(?:この|同じ|現在の|前の)?(?:タスク|作業)(?:を)?(?:再開|続行|継続)(?:して|してください)[。！!]?$/u.test(task.trim())
 }
 
-const readers = new Set(['read', 'glob', 'grep', 'skill', 'web_search', 'web_fetch', 'kioku_read', 'kioku_result',
-  'correction_check', 'task_memory_review', 'task_completion', 'coding_workflow', 'prepare_requested_work', 'ask_user_question',
-  'coding_workflow_apply', 'coding_workflow_blocker',
-  'exit_plan_mode', 'lisp_status', 'lisp_hot_status', 'lisp_describe', 'lisp_inspect', 'lisp_cancel', 'observation_read', 'enno_work_report',
-  'enno_ideal_submit', 'enno_plan_submit', 'enno_plan_review', 'enno_finish', 'enno_meditation_submit', 'memory_checkpoint', 'curator_check', 'memory_explain'])
+const readers = new Set([
+  'read',
+  'read_image',
+  'glob',
+  'grep',
+  'skill',
+  'web_search',
+  'web_fetch',
+  'kioku_read',
+  'kioku_result',
+  'correction_check',
+  'task_memory_review',
+  'task_completion',
+  'coding_workflow',
+  'prepare_requested_work',
+  'ask_user_question',
+  'coding_workflow_apply',
+  'coding_workflow_blocker',
+  'exit_plan_mode',
+  'lisp_status',
+  'lisp_hot_status',
+  'lisp_describe',
+  'lisp_inspect',
+  'lisp_cancel',
+  'observation_read',
+  'enno_work_report',
+  'enno_ideal_submit',
+  'enno_plan_submit',
+  'enno_plan_review',
+  'enno_finish',
+  'enno_meditation_submit',
+  'memory_checkpoint',
+  'curator_check',
+  'memory_explain',
+])
 export function codingControlOrRead(name: string): boolean { return readers.has(name) }
 export function codingControlCarrier(name: string, arguments_: unknown): boolean {
   const tool = codingLiteralCarrier(name, arguments_)

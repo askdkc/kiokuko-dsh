@@ -33,6 +33,7 @@ export interface NativeAgent {
 export interface NativeAgents {
   get(id: string): NativeAgent | undefined
   list?(): readonly NativeAgent[]
+  turnBoundaryOf?(session: object): { readonly lastTurn: number }
 }
 export interface NativeAttachments {
   readImage(ref: DshImageAttachmentRef, signal?: AbortSignal): Promise<{

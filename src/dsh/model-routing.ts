@@ -18,6 +18,7 @@ export interface RoutableAgent {
   readonly ctx?: { on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void }
   readonly session?: DshNativeSession
   readonly status?: string
+  readonly inbox?: { readonly nextStep: readonly unknown[]; readonly nextTurn: readonly unknown[] }
   readonly model?: { current(): ModelBinding | undefined; select(binding: ModelBinding): void }
   runMaintenance?(task: (signal: AbortSignal) => Promise<void>): Promise<void>
 }

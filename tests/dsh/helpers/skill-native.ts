@@ -9,8 +9,8 @@ import { nativeMock } from './native-mock.js'
 import { mountNativeTools } from './native-tools.js'
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
-export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService }) {
-  const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', nativeAnswer, prompts, decisions } = options
+export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService }) {
+  const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', hostPlugin, nativeAnswer, prompts, decisions } = options
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
     ? pathToFileURL(join(packageRoot, 'dist/index.js')).href : '../../../src/dsh/index.js')
@@ -72,6 +72,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(loop.default,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}
   const responses: any[] = [], model = new mock.MockAdapter(responses)
   ctx.llm.registerAdapter(['mock'],model)
+  if (hostPlugin) fibers.push(await ctx.plugin(hostPlugin))
   if(explicit===true) {
     adapterOptions = {databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false},
       ...('typedDecisions' in extra ? {typedDecisions:subject.Config.parse(extra).typedDecisions} : {}), ...(decisions ? { decisions } : {}), ...(prompts ? {
