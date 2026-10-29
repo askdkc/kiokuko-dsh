@@ -1,7 +1,5 @@
 import { isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
-import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
-import { appendPluginRecord } from '@deepseek-ai/dsh-session'
 
 type Event = { type: string; seq: number; data: any }
 type Selection = { provider: string; model: string; reasoningEffort?: string }
@@ -128,6 +126,7 @@ export class SessionRecovery {
     try { return await operation } finally { if (this.queues.get(input.sessionId) === operation) this.queues.delete(input.sessionId) }
   }
   private async restart(input: RecoveryInput): Promise<RecoveryResult> {
+    const { appendPluginRecord } = await import('@deepseek-ai/dsh-session')
     const { session, agent } = await this.snapshot(input.sessionId)
     const events = session.snapshotEvents()
     const status = await this.inspect(input.sessionId)
@@ -151,7 +150,8 @@ export class SessionRecovery {
     const checkSource = () => {
       this.assertOpen()
       const current = this.agent(input.sessionId)
-      if (current && current.status !== 'disposed' && (current.status !== 'idle' || current.session.snapshotEvents().at(-1)?.seq !== input.expectedSeq)) throw new SessionRecoveryError('session_changed', '準備中にセッションが更新されました。状態を再確認してください。')
+      if (agent) this.assertCurrent(agent)
+      if (current && current.status !== 'disposed' && (current !== agent || current.status !== 'idle' || current.session.snapshotEvents().at(-1)?.seq !== input.expectedSeq)) throw new SessionRecoveryError('session_changed', '準備中にセッションが更新されました。状態を再確認してください。')
     }
     checkSource()
     const controller = this.host.get('sessionController', false)
@@ -174,16 +174,21 @@ export class SessionRecovery {
       }
       if (status.modelAvailable && targetAgent?.model) {
         const revision = targetAgent.session.snapshotEvents().at(-1)?.seq
-        try {
-          await this.host.get('llm', false).resolveCallConfig(status.model, this.lifetime.signal)
-          if (this.lifetime.signal.aborted || this.agent(target) !== targetAgent || targetAgent.status !== 'idle' || targetAgent.session.snapshotEvents().at(-1)?.seq !== revision) throw new Error('Target changed')
-          targetAgent.model.select(status.model!)
-        } catch { status.warnings.push('元のモデルを新しい会話へ設定できませんでした。送信前にモデルを選び直してください。') }
+        let modelReady = true
+        try { await this.host.get('llm', false).resolveCallConfig(status.model, this.lifetime.signal) }
+        catch { modelReady = false; status.warnings.push('元のモデルを新しい会話へ設定できませんでした。送信前にモデルを選び直してください。') }
+        this.assertCurrent(targetAgent)
+        if (targetAgent.session.snapshotEvents().at(-1)?.seq !== revision) throw new SessionRecoveryError('target_changed', '準備中に作成先の会話が更新されました。内容を確認してください。')
+        if (modelReady) targetAgent.model.select(status.model!)
       }
     }
-    if (stored && workspace?.attachSession) await workspace.attachSession(target)
     this.assertOpen()
     if (!targetAgent || targetAgent.session.header.cwd !== session.header.cwd) throw new SessionRecoveryError('target_identity', '新しい会話の作業場所を確認できません。')
+    this.assertCurrent(targetAgent)
+    if (stored && workspace?.attachSession) {
+      await workspace.attachSession(target)
+      this.assertCurrent(targetAgent)
+    }
     const receipt = { version: 1 as const, ...input, sourceSessionId: input.sessionId, targetSessionId: target, state: 'accepted' as const }
     appendPluginRecord(targetAgent.session as never, RECORD, receipt)
     await this.host.get('sessions', false)?.flush?.(targetAgent.session)
@@ -193,6 +198,11 @@ export class SessionRecovery {
 
   private async perform(input: RecoveryInput): Promise<RecoveryResult> {
     if (input.action === 'new') return this.restart(input)
+    // The public plugin can load without optional native model peers. Resolve
+    // this dependency only for continuation, before capturing mutable state.
+    const [{ createUserMessage, MessageId }, { appendPluginRecord }] = await Promise.all([
+      import('@deepseek-ai/dsh-llm'), import('@deepseek-ai/dsh-session'),
+    ])
     const agent = await this.activate(input.sessionId)
     const events = agent.session.snapshotEvents()
     const receipts = events.filter(event => event.type === RECORD && event.data?.operationId === input.operationId)

@@ -310,24 +310,6 @@ export async function mountCore(
     sessions = get('sessions'),
     agents = get('agents'),
     systemPrompt = get('systemPrompt')
-  const modelScope =
-    get('profileContext') && typeof ctx.inject === 'function'
-      ? ctx.inject(['connection', 'llm', 'commands'], (scope) => {
-          if (
-            scope.get('profileContext', false) &&
-            (scope.get('connection', false) as any)?.fetch
-          ) {
-            scope.effect(
-              async () =>
-                (await import('../models/surface.js')).mountKiokukoModels(
-                  scope,
-                ),
-              'kiokuko models',
-            )
-          }
-        })
-      : undefined
-  if (modelScope) disposers.push(() => modelScope.dispose())
   const capabilityNames = [
     ...new Set([
       'skills',

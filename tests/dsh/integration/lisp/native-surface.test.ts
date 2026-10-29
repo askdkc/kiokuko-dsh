@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
+import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
@@ -21,9 +22,7 @@ test('recover on a disabled session leaves native tools available without requir
     .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-disabled-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
+  migrateDatabase(db)
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
   const agent: any = { id: 'disabled-session', session: { id: 'disabled-session', header: { cwd: base } } }
@@ -62,9 +61,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
     .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'ls-enable-')))
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
-  db.exec(await readFile(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
-  db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
+  migrateDatabase(db)
   db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,1,?,?)').run('saved', base, 'epoch', new Date().toISOString())
   if (scenario === 'scope-conflict') db.prepare('INSERT INTO dsh_lisp_sessions VALUES(?,?,0,?,?)').run('new', join(base, 'old-root'), 'epoch', new Date().toISOString())
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime

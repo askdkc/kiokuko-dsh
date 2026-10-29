@@ -78,7 +78,11 @@
       "default": "./dist/dsh/modules/lisp.js"
     },
     "./package.json": "./package.json",
-    "./locale/*.json": "./dist/locale/*.json"
+    "./locale/*.json": "./dist/locale/*.json",
+    "./models": {
+      "types": "./dist/dsh/models/index.d.ts",
+      "default": "./dist/dsh/models/index.js"
+    }
   },
   "dsh": {
     "displayName": "Kiokuko DSH",

@@ -106,20 +106,6 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
     ctx.get?.("profileContext", false) as { name?: string } | undefined
   )?.name;
   const tuiProfile = profileName === "dsh-cli" || profileName === "dsh-tui";
-  if (profileName && !tuiProfile && typeof ctx.inject === "function") {
-    ctx.inject(["connection", "llm", "commands"], (scope) => {
-      if (
-        scope.get("profileContext", false) &&
-        (scope.get("connection", false) as any)?.fetch
-      ) {
-        scope.effect(
-          async () =>
-            (await import("./models/surface.js")).mountKiokukoModels(scope),
-          "kiokuko models",
-        );
-      }
-    });
-  }
   const skillPrompts = new DshSkillPrompts(resolvedConfig.skillPrompts);
 
   console.info("[kiokuko-dsh] [info] plugin loaded");

@@ -170,6 +170,7 @@ const requiredFiles = [
   'README.ko.md',
   'PERMISSIONS.md',
   'dsh/cordis.patch.yml',
+  'dist/dsh/models/index.js',
   'THIRD_PARTY_NOTICES.md',
   'dist/plugin-runtime.js',
   'dist/dsh/startup-recovery.js',
@@ -540,7 +541,7 @@ try {
     }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
+  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

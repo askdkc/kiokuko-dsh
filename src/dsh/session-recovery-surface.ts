@@ -30,6 +30,7 @@ export async function sessionRecoveryResponse(service: SessionRecovery, request:
 
 /** Install a host-owned recovery entry without starting or stopping any Session. */
 export function mountSessionRecovery(ctx: Context): () => Promise<void> {
+  if (typeof ctx.get !== 'function') return async () => {}
   const get = (name: string): any => ctx.get(name as never, false)
   if (!get('agents') || !get('sessions')) return async () => {}
   const service = new SessionRecovery({ get } as RecoveryHost)
@@ -45,7 +46,7 @@ export function mountSessionRecovery(ctx: Context): () => Promise<void> {
         const status = await service.inspect(invocation.agent.id)
         if (action === 'status') return { kind: 'success', text: JSON.stringify(status) }
         const result = await service.act({ sessionId: invocation.agent.id, action: action as 'continue' | 'new', operationId: randomUUID(), expectedSeq: status.seq })
-        return { kind: 'success', text: result.action === 'continue' ? '保存された履歴を使って続行します。結果不明の処理は自動再実行していません。' : `新しい空の会話を作成しました。元の履歴は残っています。\n/resume ${result.sessionId}\n\n引き継ぐ依頼文（まだ送信していません）:\n${result.draft}\n\n${result.warnings.join('\n')}` }
+        return { kind: 'success', text: result.action === 'continue' ? '保存された履歴を使って続行します。結果不明の処理は自動再実行していません。' : `/resume ${result.sessionId}\n新しい空の会話を作成しました。元の履歴は残っています。\n\n引き継ぐ依頼文（まだ送信していません）:\n${result.draft}\n\n${result.warnings.join('\n')}` }
       } catch (error) { return { kind: 'error', text: error instanceof SessionRecoveryError ? error.message : '復旧処理に失敗しました。元の履歴は保持されています。' } }
     },
   }))

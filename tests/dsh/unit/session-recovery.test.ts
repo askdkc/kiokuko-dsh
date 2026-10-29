@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { Session, SessionId, appendPluginRecord } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, appendPluginRecord, pluginRecordOf } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionRecovery, SessionRecoveryError } from '../../../src/dsh/session-recovery.js'
 import { sessionRecoveryResponse } from '../../../src/dsh/session-recovery-surface.js'
@@ -191,5 +191,29 @@ test('an ungrouped source gets a usable native workspace for its fresh draft', a
     assert.equal(f.created[0].workspaceId, 'restored-workspace')
     assert.equal(f.created[0].cwd, undefined)
     assert.equal(f.sent.length, 0)
+  } finally { await f.service.dispose() }
+})
+
+test('fresh recovery rejects a source replaced during workspace preparation at the same revision', async () => {
+  const f = fixture(), registry = f.host.get('workspaceRegistry')
+  registry.list = () => []
+  registry.create = async () => {
+    f.agents.set(f.source.id, { ...f.source })
+    return { id: 'restored-workspace' }
+  }
+  try {
+    await assert.rejects(f.service.act(f.input('new')), (error: any) => error.code === 'session_changed')
+    assert.equal(f.created.length, 0)
+    assert.equal(f.sent.length, 0)
+  } finally { await f.service.dispose() }
+})
+
+test('fresh recovery cannot acknowledge a target replaced during model preparation', async () => {
+  const f = fixture()
+  f.resolveWith(async () => { f.make(f.created.at(-1).sessionId) })
+  try {
+    await assert.rejects(f.service.act(f.input('new')), (error: any) => error.code === 'session_changed')
+    assert.equal(f.sent.length, 0)
+    assert.equal(f.source.session.snapshotEvents().some(event => pluginRecordOf(event)?.type === 'plugin:kiokuko-dsh/session-recovery'), false)
   } finally { await f.service.dispose() }
 })

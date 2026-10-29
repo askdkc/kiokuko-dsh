@@ -14,11 +14,11 @@ Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. P
 
 
 
-Persistent mode: coding choice or /kioku-lisp enable. Task mode uses /kioku-lisp enable-task with fresh workers per definition/call. While enabled, Lisp is the selected execution route: use Lisp for computation, data processing and orchestration. Direct native Bash/zsh/PowerShell calls are rejected, including read-only commands. Run external programs (Git, gh, builds and tests included) with kioku.process:run / start-job inside Lisp. For example, `(kioku.process:run "git" '("status" "--short"))`. Read/search/Skill and owned file tools remain available. Startup or worker failure requires recovery or an explicit user route change; never silently fall back to Bash. /kioku-lisp disable restores the ordinary shell route. Never spoof host-bound session/agent/directory/generation.
+Persistent: coding choice or /kioku-lisp enable. Task: /kioku-lisp enable-task, fresh workers per call. ON selects Lisp computation/orchestration; direct Bash/zsh/PowerShell is rejected, even reads. Run Git/gh/builds/tests through kioku.process:run / start-job. Read/search/Skill and owned file tools remain available. Failure requires recovery or explicit /kioku-lisp disable; no silent shell fallback. Never spoof host-bound session/agent/directory/generation.
 
-Use kioku_read, kioku_write, kioku_edit, kioku_remove, kioku_exec and kioku_result for observed development. PATH commands, bash/zsh, builds/tests, coding-needed external investigation and project edits need no routine confirmation. Source/data deletion and existing durable user database mutation need a concrete review; generated/temp/disposable artifacts are ordinary development. Memory organization waits until task completion and user permission; saving requires approval of the exact shown content. Declare destructiveTargets when executing commands with destructive intent. The host does not attempt to classify every side effect of arbitrary code.
+Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Source/data deletion and durable user DB mutation require concrete review; declare destructiveTargets. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
 
-Foreground kioku.process:run uses native Bash sandbox/approval/Stop without a memory task/Goal. Selected coding requires prototype/result inspection. Admitted workflows, owned tools, async jobs and protected mode keep task/protocol authority. Use kioku.tools:call-tool/broker receipts; direct Lisp/FFI or generated passed fields prove no verification. Bind task_completion conditions/source paths (subdirs too) before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Admitted Plan allows read/search/status until human implementation/approval exits at the next boundary. Conversation: native policy.
+Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts; direct Lisp/FFI or generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
 
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
@@ -345,7 +345,7 @@ Project edits, verification, helper compilation/registration and ordinary Kioku 
 
 <!-- /kiokuko:documentation -->
 <!-- kiokuko:runtime approval-policy -->
-Routine development and helper registration are authorized. Concrete destructive review remains required. Lisp failure does not block ordinary tools. Report execution, verification and saving separately; retry saving without replaying effects.
+Routine development and helper registration are authorized. Concrete destructive review remains required. Lisp failure retains the selected shell route. Report execution, verification and saving separately; retry saving without replaying effects.
 <!-- /kiokuko:runtime -->
 
 

@@ -177,7 +177,18 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       assert.equal(toolCalls,newRequest?2:1,'only independently requested work executes tools: '+JSON.stringify(agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result').map((event:any)=>event.data)))
       if(scenario==='finding' || scenario==='tool-evidence') assert.match(JSON.stringify(model.requests.at(-1).messages),/unverified suggestions/)
       if(newRequest) for(const request of model.requests.slice(3)) assert.doesNotMatch(JSON.stringify(request.messages),/unverified suggestions/)
-      if(paired) { assert.equal(toolCalls,1); if(scenario==='paired-candidate') assert.ok(model.requests.at(-1).tools.some((tool:any)=>tool.name==='verify_sum'), 'provider owns the fixed native schema; the host execution fence denies effects') }
+      if(paired) {
+        assert.equal(toolCalls,1)
+        if(scenario==='paired-candidate') {
+          assert.ok(model.requests.some((request:any)=>request.tools?.some((tool:any)=>tool.name==='verify_sum')), 'the original work exposes its verifier')
+          // Full composition releases the closed task's admitted tool surface;
+          // core retains native schemas. Both must reject the attempted extra
+          // call above before the verifier runs again.
+          const finalTools = model.requests.at(-1).tools ?? []
+          if(host==='full') assert.equal(finalTools.length,0,'closed full tasks expose no tools during correction')
+          else assert.ok(finalTools.some((tool:any)=>tool.name==='verify_sum'),'core retains native declarations while its execution fence denies effects')
+        }
+      }
       if(scenario!=='off') assert.equal(reviewInputs[0].task,originalRequest,'review retains the original tool-backed request')
       if(newRequest) assert.equal(reviewInputs[1].task,followupRequest,'superseding work gets its own review scope')
       if(scenario==='tool-evidence') assert.match(JSON.stringify(reviewInputs[0].evidence),/Verified sum: four/)

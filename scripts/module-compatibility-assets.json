@@ -47,7 +47,8 @@
     "migrations/045_correction_classification.sql",
     "migrations/046_curator_classification.sql",
     "migrations/047_managed_operation_journal.sql",
-    "migrations/048_repository_learning.sql"
+    "migrations/048_repository_learning.sql",
+    "migrations/049_lisp_session_hosts.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

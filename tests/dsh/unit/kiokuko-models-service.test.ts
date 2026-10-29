@@ -983,3 +983,45 @@ test("model listing with no credential stays empty and a stored key enables the 
     assert.doesNotMatch(JSON.stringify(await f.service.list()), /fixture-key/);
   } finally { await f.close(); }
 });
+
+test('a saved provider is restored on CLI startup without a Web connection or credential mutation', async () => {
+  const f = await fixture(), c = connection('http://127.0.0.1:8123', 'custom', 'kiokuko-saved-cli')
+  let close: (() => Promise<void>) | undefined
+  try {
+    await f.service.save(c, 0)
+    await f.service.close()
+    const before = await readFile(f.config.path, 'utf8')
+    const ctx = { get: (name: string) => (({profileContext:{name:'dsh-cli',dir:f.dir},llm:f.llm} as Record<string, unknown>)[name]), on:()=>()=>{} } as any
+    // Use the normal profile filename written by Kiokuko Models.
+    await new ModelsConfigStore(join(f.dir, 'kiokuko-models.json')).write(JSON.parse(before), 0)
+    close = await mountKiokukoModels(ctx)
+    assert.ok(f.routes().includes(c.id), 'saved native provider must exist before resuming the CLI conversation')
+    await f.llm.resolveCallConfig({provider:c.id,model:model.id})
+    assert.equal(await readFile(f.config.path, 'utf8'), before)
+    assert.deepEqual(await f.store.list(), [])
+  } finally { await close?.(); await f.close() }
+})
+
+test('the bundle gives saved model registration an independent lifecycle from Kiokuko execution', async () => {
+  const { parse } = await import('yaml')
+  const rows = parse(await readFile(new URL('../../../dsh/cordis.patch.yml', import.meta.url), 'utf8')).flatMap((row:any)=>row.insert??[])
+  assert.ok(rows.some((row:any)=>row.id==='kiokuko-models'&&row.name==='kiokuko-dsh/models'), 'a failed execution plugin must not remove the model provider used by saved conversations')
+})
+
+test('saved provider registration survives a sibling execution plugin startup failure', async () => {
+  const f = await fixture(), c = connection('http://127.0.0.1:8123', 'custom', 'kiokuko-saved-after-failure')
+  const { Context } = await import('@deepseek-ai/cordis')
+  const models = await import('../../../src/dsh/models/index.js')
+  const ctx = new Context()
+  try {
+    await f.service.save(c, 0); await f.service.close()
+    await new ModelsConfigStore(join(f.dir, 'kiokuko-models.json')).write(await f.config.read(), 0)
+    ctx.provide('profileContext', {name:'dsh-cli',dir:f.dir} as never)
+    ctx.provide('llm', f.llm as never)
+    ctx.provide('commands', {} as never)
+    await ctx.plugin(models)
+    await assert.rejects(async () => { await ctx.plugin({name:'failed-execution-fixture',async apply(){throw new Error('synthetic execution startup failure')}}) }, /synthetic execution startup failure/)
+    assert.ok(f.routes().includes(c.id))
+    await f.llm.resolveCallConfig({provider:c.id,model:model.id})
+  } finally { await ctx.fiber.dispose(); await f.close() }
+})

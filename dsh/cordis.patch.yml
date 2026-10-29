@@ -4,6 +4,10 @@
 - id: session-log-download
   disabled: true
 - insert:
+    # Saved model providers must survive a failure of the execution plugin.
+    - id: kiokuko-models
+      name: 'kiokuko-dsh/models'
+      inject: [llm, commands]
     - id: kiokuko-dsh
       name: 'kiokuko-dsh'
       inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, sessionPersistence, llm, agents, attachments, subagents, subprocess]

@@ -93,7 +93,7 @@ export async function modelsResponse(
     return Response.json({ error: safe }, { status: 400, headers });
   }
 }
-/** Web-only management; the TUI's /auth remains owned by its existing plugin. */
+/** Restore saved providers on every host; expose management only on Web. */
 export async function mountKiokukoModels(
   ctx: Context,
 ): Promise<() => Promise<void>> {
@@ -101,17 +101,11 @@ export async function mountKiokukoModels(
     profile = get("profileContext"),
     connection = get("connection"),
     llm = get("llm");
-  if (
-    !profile ||
-    ["dsh-cli", "dsh-tui"].includes(profile.name) ||
-    !connection?.fetch ||
-    !llm
-  )
-    return async () => {};
+  if (!profile || !llm) return async () => {};
   if (mounted.has(llm)) return async () => {};
-  const agents = get("agents"),
-    sessions = get("sessions"),
-    defaults = get("agentDefaultModel");
+  const web = !["dsh-cli", "dsh-tui"].includes(profile.name);
+  const agents = { get: (id: string) => get("agents")?.get(id) };
+  const sessions = { get: (id: string) => get("sessions")?.get(id) };
   const selections = new Map<
     any,
     {
@@ -163,6 +157,7 @@ export async function mountKiokukoModels(
       selection.current = binding;
     },
     saveDefault: async (binding) => {
+      const defaults = get("agentDefaultModel");
       if (!defaults) throw new Error("Saving the default is unavailable");
       await defaults.saveSelection(binding);
     },
@@ -187,16 +182,20 @@ export async function mountKiokukoModels(
         { prepend: true },
       ),
     );
-    releases.push(
-      connection.fetch.register({
-        path: MODELS_PATH,
-        methods: ["GET", "POST"],
-        requestBody: "buffered",
-        fetch: (r: Request) => modelsResponse(service, r),
-      }),
-    );
+    const mountWeb = (scope: Context) => {
+      const transport = scope.get("connection", false) as any;
+      if (transport?.fetch) releases.push(transport.fetch.register({
+        path: MODELS_PATH, methods: ["GET", "POST"], requestBody: "buffered",
+        fetch: (request: Request) => modelsResponse(service, request),
+      }));
+    };
+    if (web && connection?.fetch) mountWeb(ctx);
+    else if (web && typeof ctx.inject === "function") {
+      const scope = ctx.inject(["connection"], mountWeb);
+      releases.push(() => scope.dispose());
+    }
     const commands = get("commands");
-    if (commands)
+    if (web && commands)
       releases.push(
         commands.register({
           name: "kiokuko",

@@ -42,7 +42,7 @@ test('a configured request-intent decision arms the early Lisp offer for convers
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('lisp-early-')){asked++;assert.equal(f.model.requests.length,0);return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}throw new Error('unexpected question')}})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
 })
-test('manual ON permits ordinary native implementation without a mandatory prototype; optional prototype inspection and OFF work',{timeout:120000},async()=>{
+test('manual ON routes implementation through Lisp without a mandatory prototype; optional inspection and OFF work',{timeout:120000},async()=>{
  let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]
  const command=async(action:string)=>{const r=(await f.ctx.commands.execute(f.agent,`/kioku-lisp ${action}`,[],new AbortController().signal)).result;assert.equal(r.kind,'success',r.text);return r}
  const js='require("fs").writeFileSync("implemented.txt","42")',shell=`${process.execPath} -e '${js}'`
@@ -50,7 +50,35 @@ test('manual ON permits ordinary native implementation without a mandatory proto
  for(const name of ['dsh-subprocess-local','dsh-bash-local','dsh-shell-env','dsh-tool-bash']){const p=await import(pathToFileURL(join(packages,'@deepseek-ai',name,'lib/index.js')).href);fibers.push(await f.ctx.plugin(p.default??p,name==='dsh-bash-local'?{cwd:f.dir}:name==='dsh-shell-env'?{dshHome:f.dir}:{}))}
  await command('enable')
  let saved:string=''
- f.responses.push(f.mock.toolCallResponse('premature','bash',{command:shell,description:'Implement requested fixture'}),(q:any)=>{assert.equal(result(q,'premature').isError,false,JSON.stringify(result(q,'premature')));return f.mock.toolCallResponse('prototype','lisp_eval',{operationId:'prototype-case',prototype:true,code:'(progn (assert (= (+ 40 2) 42)) (assert (/= (+ 40 1) 42)) (+ 40 2))'})},(q:any)=>{const r=result(q,'prototype');assert.equal(r.isError,false,JSON.stringify(r));const body=r.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('');saved=JSON.parse(body).operationId;assert.ok(saved);return f.mock.toolCallResponse('still-premature','bash',{command:shell,description:'Must inspect first'})},(q:any)=>{assert.equal(result(q,'still-premature').isError,false,JSON.stringify(result(q,'still-premature')));return f.mock.toolCallResponse('inspect-prototype','lisp_inspect',{operationId:'read-prototype',resultOperationId:saved,section:'result'})},(q:any)=>{assert.equal(result(q,'inspect-prototype').isError,false);return f.mock.toolCallResponse('implementation','bash',{command:shell,description:'Implement after observed prototype'})},(q:any)=>{assert.equal(result(q,'implementation').isError,false,JSON.stringify(result(q,'implementation')));return f.mock.textResponse('Prototype inspected and implementation ran; final tests remain separate.')})
+ const processCode = `(kioku.process:run ${JSON.stringify(process.execPath)} (list "-e" ${JSON.stringify(js)}))`
+ const denied = (q:any, id:string) => {
+   const r = result(q,id)
+   assert.equal(r.isError,true,JSON.stringify(r)); assert.match(JSON.stringify(r),/LISP_ROUTE_REQUIRED/)
+ }
+ const succeeded = (q:any,id:string) => {
+   const r = result(q,id); assert.equal(r.isError,false,JSON.stringify(r))
+   const value = JSON.parse(r.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join(''))
+   assert.equal(value.ok,true,JSON.stringify(value)); assert.equal(value.value.json.code,0)
+ }
+ f.responses.push(
+   f.mock.toolCallResponse('premature','bash',{command:shell,description:'Attempt direct shell while Lisp is selected'}),
+   async (q:any)=>{
+     denied(q,'premature'); await assert.rejects(readFile(join(f.dir,'implemented.txt')),{code:'ENOENT'})
+     return f.mock.toolCallResponse('before-prototype','lisp_eval',{operationId:'before-prototype',code:processCode})
+   },
+   (q:any)=>{
+     succeeded(q,'before-prototype')
+     return f.mock.toolCallResponse('prototype','lisp_eval',{operationId:'prototype-case',prototype:true,code:'(progn (assert (= (+ 40 2) 42)) (assert (/= (+ 40 1) 42)) (+ 40 2))'})
+   },
+   (q:any)=>{
+     const r=result(q,'prototype'); assert.equal(r.isError,false,JSON.stringify(r))
+     saved=JSON.parse(r.content.filter((b:any)=>b.type==='text').map((b:any)=>b.text).join('')).operationId; assert.ok(saved)
+     return f.mock.toolCallResponse('still-premature','bash',{command:shell,description:'Attempt shell after prototype'})
+   },
+   (q:any)=>{denied(q,'still-premature');return f.mock.toolCallResponse('inspect-prototype','lisp_inspect',{operationId:'read-prototype',resultOperationId:saved,section:'result'})},
+   (q:any)=>{assert.equal(result(q,'inspect-prototype').isError,false);return f.mock.toolCallResponse('implementation','lisp_eval',{operationId:'after-prototype',code:processCode})},
+   (q:any)=>{succeeded(q,'implementation');return f.mock.textResponse('Prototype inspected and implementation ran; final tests remain separate.')}
+ )
  await f.turn('implemented.txt を作成して、42 を保存して。');assert.equal(await readFile(join(f.dir,'implemented.txt'),'utf8'),'42');assert.equal(asked,0)
  const status=JSON.parse((await command('status --json')).text);assert.equal(status.codingPreparation.verified,true)
  await command('disable');f.responses.push((q:any)=>{assert.ok(!q.tools.some((t:any)=>t.name==='lisp_eval'));return f.mock.textResponse('Lisp disabled.')});await f.turn('設定状態を説明して。');assert.equal(asked,0)

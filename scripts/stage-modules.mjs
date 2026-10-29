@@ -15,7 +15,7 @@ const sharedAssets = compatibility.runtimeAssets
 const builtin = new Set(builtinModules.flatMap(name => [name, `node:${name}`]))
 const packageName = name => name.startsWith('@') ? name.split('/').slice(0, 2).join('/') : name.split('/')[0]
 async function graph(entry, feature) {
-  const analysis = await build({ absWorkingDir: root, entryPoints: [entry], bundle: true, packages: 'external', platform: 'node', format: 'esm', write: false, metafile: true,
+  const analysis = await build({ absWorkingDir: root, entryPoints: feature === 'core' ? [entry, 'dist/dsh/models/index.js'] : [entry], bundle: true, packages: 'external', platform: 'node', format: 'esm', outdir: 'dist/.module-analysis', write: false, metafile: true,
     plugins: feature === 'enno' ? [{ name: 'explicit-optional-lisp-mount', setup(build) {
       build.onResolve({ filter: /^\.\/lisp\/surface\.js$/ }, args => args.kind === 'dynamic-import' && args.importer.endsWith('/dsh/composition.js') ? { path: args.path, external: true } : undefined)
     } }] : [] })

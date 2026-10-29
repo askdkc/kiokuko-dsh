@@ -43,7 +43,9 @@ test('crash-state journal between file receipts and parent commit remains inspec
     reopened = new NodeSqliteAdapter(crashPath, new DatabaseSync(crashPath))
     // The snapshot models a crashed host. Its original PID is this still-live
     // test runner, so bind the saved claim to a process that has actually exited.
-    const exitedPid = Number(execFileSync(process.execPath, ['-p', 'process.pid'], { encoding: 'utf8' }).trim())
+    // `node -p` colors numbers under FORCE_COLOR, which becomes NaN/SQL NULL.
+    const exitedPid = Number(execFileSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).trim())
+    assert.ok(Number.isSafeInteger(exitedPid) && exitedPid > 0)
     reopened.prepare('UPDATE dsh_lisp_session_hosts SET pid=?').run(exitedPid)
     const resumedStore = new LispStore(async fn => fn(reopened!))
     manager = new LispManager({ ...options, store: resumedStore }); await manager.start()

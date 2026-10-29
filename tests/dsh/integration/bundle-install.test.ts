@@ -51,7 +51,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   }
   assert.equal(packageManifest.name, 'kiokuko-dsh')
   assert.equal(packageManifest.scripts?.prepare, 'npm run build')
-  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json'])
+  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
   assert.equal(packageManifest.exports?.['./package.json'], './package.json')
   assert.equal(packageManifest.exports?.['./locale/*.json'], './dist/locale/*.json')
   assert.deepEqual(packageManifest.exports?.['.'], {
@@ -92,16 +92,18 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(patch.length, 2)
   assert.equal(patch[0]?.id, 'session-log-download')
   assert.equal(patch[0]?.disabled, true)
-  assert.equal(patch[1]?.insert?.length, 1)
-  assert.equal(patch[1]?.insert?.[0]?.id, 'kiokuko-dsh')
-  assert.equal(patch[1]?.insert?.[0]?.name, 'kiokuko-dsh')
-  assert.ok(!patch[1]?.insert?.[0]?.inject?.includes('connection'), 'Web connection must not gate TUI core startup')
-  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('attachments'))
-  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('sessionPersistence'))
-  assert.ok(patch[1]?.insert?.[0]?.inject?.includes('subagents'))
+  assert.equal(patch[1]?.insert?.length, 2)
+  const modelRow = patch[1]?.insert?.[0], executionRow = patch[1]?.insert?.[1]
+  assert.deepEqual(modelRow, { id: 'kiokuko-models', name: 'kiokuko-dsh/models', inject: ['llm', 'commands'] })
+  assert.equal(executionRow?.id, 'kiokuko-dsh')
+  assert.equal(executionRow?.name, 'kiokuko-dsh')
+  assert.ok(!executionRow?.inject?.includes('connection'), 'Web connection must not gate TUI core startup')
+  assert.ok(executionRow?.inject?.includes('attachments'))
+  assert.ok(executionRow?.inject?.includes('sessionPersistence'))
+  assert.ok(executionRow?.inject?.includes('subagents'))
   assert.equal(Config.parse({}).enabled, true)
   assert.equal(Config.parse({}).agenticReplay.enabled, true)
-  const bundledConfig = patch[1]?.insert?.[0]?.config
+  const bundledConfig = executionRow?.config
   assert.equal(bundledConfig?.agenticReplay?.enabled, true)
   assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
 
@@ -127,8 +129,9 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
     const installedPatch = YAML.parse((await run('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
-    assert.ok(installedPatch[1]?.insert?.[0]?.inject?.includes('subagents'))
-    assert.equal(installedPatch[1]?.insert?.[0]?.config?.agenticReplay?.enabled, true)
+    assert.deepEqual(installedPatch, patch, 'the installed bundle retains both independent provider and execution rows')
+    assert.ok(installedPatch[1]?.insert?.[1]?.inject?.includes('subagents'))
+    assert.equal(installedPatch[1]?.insert?.[1]?.config?.agenticReplay?.enabled, true)
   } finally {
     await Promise.all([
       rm(packageOutput, { recursive: true, force: true }),
@@ -172,6 +175,7 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
       '--profile', 'web', '--dump-config',
     ], env)
     const installedRows = YAML.parseDocument(dumped.stdout).toJS() as Array<Record<string, unknown>>
+    assert.equal(installedRows.filter(row => row.id === 'kiokuko-models' && row.name === 'kiokuko-dsh/models' && row.disabled !== true).length, 1)
     assert.equal(installedRows.filter(row => row.id === 'kiokuko-dsh' && row.name === 'kiokuko-dsh' && row.disabled !== true).length, 1)
     assert.equal(installedRows.filter(row => row.id === 'session-log-download'
       && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled === true).length, 1)
@@ -185,6 +189,7 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
       '--profile', 'web', '--dump-config',
     ], env)
     const removedRows = YAML.parseDocument(afterRemove.stdout).toJS() as Array<Record<string, unknown>>
+    assert.equal(removedRows.filter(row => row.id === 'kiokuko-models' || row.name === 'kiokuko-dsh/models').length, 0)
     assert.equal(removedRows.filter(row => row.id === 'kiokuko-dsh' || row.name === 'kiokuko-dsh').length, 0)
     assert.equal(removedRows.filter(row => row.id === 'session-log-download'
       && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled !== true).length, 1)
