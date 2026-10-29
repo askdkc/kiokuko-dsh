@@ -1,3 +1,4 @@
+import { mountSessionRecovery } from './session-recovery-surface.js'
 import { hasHumanInput } from './answer-review/contracts.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
 import type { DshTaskWorkflow } from './task-state-host.js'
@@ -237,6 +238,7 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   const drainLisp = () => lispDrain ??= lispSurface?.dispose() ?? Promise.resolve()
   const ingressDisposers: DshDisposer[] = []
   const cleanupDisposers: DshDisposer[] = []
+  cleanupDisposers.push(mountSessionRecovery(ctx))
   const setupResourceDisposers: DshDisposer[] = []
   const stopErrors: unknown[] = []
   let ingressStopped = false

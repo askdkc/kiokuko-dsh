@@ -69,6 +69,12 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    assert.ok(projected.tools.some((t:any)=>t.name==='lisp_eval'),'optional Goal metadata cannot remove the native model-facing Lisp surface')
   }
   let call=0;const execute=(name:string,args:object)=>executeNativeTool(ctx,packages,{name,arguments:args,agent,callId:`conversation-${++call}`,signal:controller.signal})
+  if (!deferredOnly && !controlled) {
+   const directShell=await execute('bash',{command:'node --version',description:'Attempt direct shell while Lisp is selected'})
+   assert.equal(directShell.isError,true,JSON.stringify(directShell));assert.match(JSON.stringify(directShell),/LISP_ROUTE_REQUIRED/)
+   assert.equal(bodies,0,'route rejection must happen before the native shell body')
+   assert.equal(approvals,0,'a rejected route must not ask for native command approval')
+  }
   const result=await execute('lisp_eval',{operationId:'pure',code:'(+ 20 22)'})
   if(deferredOnly){assert.equal(result.isError,true,JSON.stringify(result));assert.match(JSON.stringify(result),/prepare_requested_work/);assert.equal(preparations,0);return}
   if(controlled){assert.equal(result.value.ok,false);assert.match(JSON.stringify(result),/CODING_CHOICE_PENDING|Goal/);return}

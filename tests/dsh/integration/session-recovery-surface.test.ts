@@ -10,7 +10,7 @@ test('an interrupted native chat exposes a real recovery command without replayi
   const events = [
     { type: 'turn/start', seq: 0, data: { turn: 1 } },
     { type: 'user/message', seq: 1, data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Inspect the local package' }] } },
-    { type: 'tool/call', seq: 2, data: { callId: 'lost-call', name: 'bash' } },
+    { type: 'tool/call', seq: 2, data: { turn: 1, callId: 'lost-call', name: 'bash' } },
     { type: 'turn/end', seq: 3, data: { turn: 1, reason: { kind: 'interrupted' } } },
   ]
   let followups = 0
@@ -19,7 +19,7 @@ test('an interrupted native chat exposes a real recovery command without replayi
   ctx.provide('commands', commands as never)
   ctx.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined } as never)
   ctx.provide('sessions', { get: (id: string) => id === session.id ? session : undefined } as never)
-  ctx.provide('llm', { resolveCallConfig: async (selection: unknown) => selection } as never)
+  ctx.provide('llm', { listProviders: () => [{ id: 'fixture' }], resolveCallConfig: async (selection: unknown) => selection } as never)
   const composition = await mountDshComposition(ctx, { commands } as never)
   try {
     assert.ok(definitions.has('kioku-recover'), 'interrupted chats need a discoverable native recovery action')

@@ -57,6 +57,7 @@ const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const PROTOCOL_OWNED_TOOLS = ['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_exec', 'kioku_result'] as const
 const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'kioku_exec'])
 const LISP_READ_TOOLS = ['read', 'glob', 'grep', 'skill', 'observation_read'] as const
+const NATIVE_SHELL_TOOLS = new Set(['bash', 'zsh', 'pwsh'])
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
 // Pin its implementation just like reads; its own run/session checks still apply.
 const LISP_NATIVE_TOOLS = [...LISP_READ_TOOLS, TASK_PREPARE_TOOL, 'correction_check', 'task_memory_review', 'task_completion', 'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'ask_user_question', 'exit_plan_mode'] as const
@@ -260,7 +261,16 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const agent = execution.agent as Agent | undefined
       const scope = scopeSession(agent, persistent)
       if (!scope) return hostFences || LISP_TOOLS.includes(execution.name) ? 'このセッションでは Lisp が無効または起動中です。' : undefined
-      if (persistent.executionMode==='development' && !LISP_TOOLS.includes(execution.name)) return undefined
+      if (persistent.executionMode === 'development' && !LISP_TOOLS.includes(execution.name)) {
+        if (!NATIVE_SHELL_TOOLS.has(execution.name)) return undefined
+        // Selecting Lisp changes the model's execution route, not the native
+        // command's permissions. Only the exact host-minted process bridge may
+        // use Bash; a nested call or a claimed parent alone is not sufficient.
+        if (!persistent.stopped && persistent.controller && agent && agent.session.id === scope
+          && agents.get(agent.id) === agent && sessions.get(scope) === agent.session
+          && isLispNativeCommand(execution, tools.get(execution.name, agent)?.execute)) return undefined
+        return 'LISP_ROUTE_REQUIRED: Lisp is enabled for this session. Use lisp_eval for computation and kioku.process:run / start-job inside Lisp for external commands. Direct Bash/zsh/PowerShell calls are disabled. Read/search/Skill tools remain available. Recover Lisp on failure; do not silently change routes. The user can explicitly disable Lisp with /kioku-lisp disable.'
+      }
       if (persistent.executionMode === 'protected' && execution.name === 'run_code') return 'Protected Lisp requires the native DSH tool executor. Select native execution in the DSH profile, or disable protected Lisp; the PTC program was not executed.'
       if (persistent.stopped || !persistent.controller) return persistent.executionMode==='development' ? 'Lisp は停止中です。通常ツールは利用できます。' : 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
@@ -286,6 +296,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     else {
       root[fenceKey] = fence
       tools.guard(check)
+      // Reject a route mismatch before native approval UI, then recheck in the
+      // monotonic guard so later middleware cannot grant direct shell access.
+      root.on('tools/pre-execute' as never, (async (execution: any, next: () => Promise<unknown>) => {
+        if (persistent.executionMode === 'development' && NATIVE_SHELL_TOOLS.has(execution.name)) {
+          const reason = check(execution)
+          if (reason) return { kind: 'deny', reason }
+        }
+        return next()
+      }) as never, { prepend: true, global: true })
       root.on('agent/pre-step' as never, (async (payload: { agent: Agent }, next: () => Promise<unknown>) =>
         await prepare(payload.agent) ? next() : { kind: 'reject' }) as never, { prepend: true, global: true })
     }
@@ -327,7 +346,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const approvalText = () => `Lisp execution mode: ${config.executionMode}; approval mode: ${approvalPolicy.mode()} (entire profile). ` + (!development
     ? 'Explicit protected compatibility mode uses its existing sandbox and approval policy. Native development tools remain independently available. '+(approvalPolicy.mode()==='auto'?'Do not ask permission to submit, resubmit, run verification or apply changes already covered by auto policy.':'') : approvalPolicy.mode() === 'auto'
     ? 'Routine Lisp/project development is authorized. Source/data deletion and durable user DB mutation still require concrete confirmation. Cancellation, refusal and unknown outcomes remain authoritative.'
-    : 'Routine Lisp/project development and verification are authorized without a dialog. Source/data deletion and durable user DB mutation require concrete confirmation. This legacy setting does not restrict ordinary tools.')
+    : 'Routine Lisp/project development and verification are authorized without a dialog. Source/data deletion and durable user DB mutation require concrete confirmation. Native permissions remain unchanged; the selected Lisp execution route still applies.')
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   // Native DSH assembles prompts BEFORE agent/pre-step. Register a live provider
   // now so activation, restored sessions and the next step see the current mode.
@@ -339,6 +358,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   // process recovery is granted by this prompt provider.
   if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp', order: -90000,
     text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id) ? guide : '' }))
+  if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp-route', order: 90000,
+    text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id)
+      ? 'Lisp is ON. Execute computations and orchestration in Lisp. For external commands, including read-only git/gh commands and builds/tests, use kioku.process:run or start-job inside Lisp, not direct Bash/zsh/PowerShell tool calls. Direct shell calls are rejected. Read/search/Skill and owned file tools remain available. Do not fall back to a direct shell after Lisp failure; recover the selected route or wait for the user to disable it.' : '' }))
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
   const boundAgents = new Map<string, Agent>()

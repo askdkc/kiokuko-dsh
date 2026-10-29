@@ -1,4 +1,4 @@
-For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. Lisp coexists with normal tools; routine development is authorized and destructive changes retain concrete review.
+For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. Enabled Lisp owns computation and shell orchestration; read/search and owned file tools remain available. Routine development is authorized and destructive changes retain concrete review.
 
 # Common Lisp tools
 
@@ -119,6 +119,13 @@ Normal/Enno execution mode and Lisp choice are separate. The task question remai
 ```
 
 This enables the Lisp tools and supplies the bundled `kiokuko-lisp` Skill.
+While enabled, use Lisp for computation and orchestration. Direct native
+Bash/zsh/PowerShell calls are rejected, including read-only commands. Run external
+programs through `kioku.process:run` / `start-job` inside Lisp; the native command
+bridge retains the host's permissions, approvals and Stop handling. Read/search,
+Skill loading and owned file tools remain available. Worker failure or plugin
+reload does not silently restore the direct shell route; recover Lisp or explicitly
+use `/kioku-lisp disable`.
 Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
 session permissions, so project files and applicable Skills can be inspected.
 File changes can use owned native tools or Lisp proposals. Ordinary writes/edits do not request approval; destructive source/data deletion retains a concrete review. For a coding task with a saved yes, recover Lisp or explicitly choose another task route before continuing implementation.
