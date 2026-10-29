@@ -110,6 +110,14 @@ for (const entry of [
         assert.equal(state.state, 'READY')
         f.responses.push(
           (q: any) => {
+            const section = q.messages
+              .flatMap((message: any) => message.source?.sections ?? [])
+              .find((value: any) => value.name === 'on-demand-intake')
+            assert.match(
+              section?.text ?? '',
+              /Current request references and same-session work/,
+              'An existing native task must retain source-bound host evidence',
+            )
             assert.ok(
               q.tools.some((t: any) => t.name === 'lisp_eval'),
               'ON must publish the actual Lisp tool',
@@ -215,6 +223,22 @@ for (const entry of [
         }
         f.responses.push(
           (q: any) => {
+            const section = q.messages
+              .flatMap((message: any) => message.source?.sections ?? [])
+              .find((value: any) => value.name === 'on-demand-intake')
+            assert.match(
+              section?.text ?? '',
+              /Current request references and same-session work/,
+              'The first ON request must retain current host evidence after its actual turn starts',
+            )
+            const starts = f.agent.session
+              .snapshotEvents()
+              .filter((event: any) => event.type === 'turn/start')
+            assert.equal(
+              starts.length,
+              1,
+              'Evidence must follow exactly one real turn/start',
+            )
             assert.ok(
               q.tools.some((t: any) => t.name === 'lisp_eval'),
               'First ON request must expose executable Lisp, not only shell tools',

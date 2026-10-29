@@ -96,7 +96,6 @@ function parsePreparationRequest(
 }
 
 export interface DemandAgent {
-  readonly status?: string
   readonly ctx?: unknown
   readonly id: string
   cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void
@@ -542,6 +541,32 @@ export class OnDemandIntake {
     })
   }
 
+  /** Availability only: never capture a turn or publish execution intent before turn/start. */
+  async prepareNativeCapabilities(input: DemandInput): Promise<void> {
+    if (this.options.onlyWhenDeferred || !this.host.prepareNativeCoding) return
+    input = {
+      ...input,
+      signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
+    }
+    input.signal.throwIfAborted()
+    const task = humanTask(input.messages)
+    if (!task) return
+    // These are genuine queued-message references, used only for the advisory
+    // Lisp choice. capture() later obtains the current source-bound context.
+    const context = createRequestIntentContext({
+      task,
+      messageRefs: requestIntentMessageRefs(input.messages, task),
+    })
+    try {
+      await this.host.prepareNativeCoding(input, task, context)
+    } catch (error) {
+      input.signal.throwIfAborted()
+      // The Lisp choice retains cancellation. The actual turn consumes it
+      // through capture(), so Stop closes that turn and keeps unrelated input.
+      if ((error as { code?: unknown })?.code !== 'ASK_CANCELLED') throw error
+    }
+  }
+
   /** True means ordinary text may continue; false leaves an existing execution on its original path. */
   async capture(input: DemandInput): Promise<boolean> {
     input.signal.throwIfAborted()
@@ -567,15 +592,8 @@ export class OnDemandIntake {
       )
         throw new Error('Stale on-demand intake identity')
       if (previous.input.turn === input.turn) {
-        if (previous.status === 'closed') {
-          // A choice can be cancelled during pre-step maintenance, before the
-          // owning turn opens. Deliver that cancellation to this same turn.
-          if ((previous.captureError as { code?: unknown })?.code === 'ASK_CANCELLED') {
-            if (!input.signal.aborted) input.agent.cancel?.({ kind: 'user' }, { keepInbox: true })
-            throw previous.captureError
-          }
+        if (previous.status === 'closed')
           throw new Error('On-demand turn is closed')
-        }
         const fresh = humanMessages(input.messages).filter(
           (message) =>
             previous.humanContents.get(humanId(message)) !==
@@ -891,7 +909,7 @@ export class OnDemandIntake {
         state.captureError = error
         // DSH classifies cancellation from its own turn signal, not error.code.
         // Abort only this current attempt and preserve unrelated queued input.
-        if (cancelled && !input.signal.aborted && input.agent.status !== 'idle')
+        if (cancelled && !input.signal.aborted)
           input.agent.cancel?.({ kind: 'user' }, { keepInbox: true })
       }
       throw error
