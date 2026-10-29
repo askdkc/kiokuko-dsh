@@ -1,3 +1,4 @@
+import { assertRelativeClosure } from './package-relative-closure.mjs'
 import { consumerInstallEnvironment } from './pack-install-environment.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { resolveGuardrail } from './guardrail-artifacts.mjs'
@@ -5,7 +6,7 @@ import { completeVerification } from './verification-completion.mjs';
 import { observeProcess, processDiagnostic } from './verification-diagnostics.mjs'
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, extname, join, relative, resolve } from 'node:path'
+import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Script } from 'node:vm'
@@ -224,45 +225,7 @@ function parsePackJson(stdout) {
   return JSON.parse(stdout.slice(start))
 }
 
-function relativeModuleSpecifiers(source) {
-  const specs = []
-  const pattern = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s*|\bexport\s+(?:\*|\{[^}]*\})\s+from\s*)['"]([^'"]+)['"]/g
-  for (const match of source.matchAll(pattern)) {
-    const specifier = match[1]
-    if (specifier?.startsWith('.')) specs.push(specifier)
-  }
-  return specs
-}
 
-async function assertRelativeClosure(packageRoot, files) {
-  const sourceFiles = files
-    .map((entry) => entry.path)
-    .filter((file) => file.startsWith('dist/') && /\.(?:[cm]?js|d\.ts)$/.test(file))
-  const missing = []
-  for (const file of sourceFiles) {
-    const absolute = join(packageRoot, file)
-    const source = await readFile(absolute, 'utf8')
-    for (const specifier of relativeModuleSpecifiers(source)) {
-      const target = resolve(dirname(absolute), specifier)
-      const candidates = [target]
-      if (extname(target) === '') {
-        candidates.push(`${target}.js`, `${target}.mjs`, `${target}.cjs`, `${target}.json`, join(target, 'index.js'))
-      }
-      let found = false
-      for (const candidate of candidates) {
-        try {
-          await access(candidate)
-          found = true
-          break
-        } catch {
-          // Try the next Node/TypeScript output representation.
-        }
-      }
-      if (!found) missing.push({ file, specifier })
-    }
-  }
-  if (missing.length > 0) throw new Error(JSON.stringify({ missingRelativeImports: missing }, null, 2))
-}
 
 async function assertDshClientArtifact(packageRoot) {
   const source = await readFile(join(packageRoot, 'dist/client.cjs'), 'utf8')

@@ -1,7 +1,7 @@
 import { submitReviewedPlan } from "../../helpers/reviewed-plan.js";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -40,7 +40,7 @@ async function fixture(
   git = true,
   tapSkip = false,
 ) {
-  const root = await mkdtemp(join(tmpdir(), "kiokuko-final-evidence-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "kiokuko-final-evidence-")));
   const repository = join(root, "repo");
   await mkdir(repository);
   await writeFile(join(repository, "source.txt"), "original");
