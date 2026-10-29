@@ -35,16 +35,20 @@ test('coding routine is bundled, selected by coding policy and delivered to the 
     assert.ok(codingSkills.resources?.some(resource => resource.name === name))
     const definition = await provider.get(candidate, {})
     assert.ok(definition)
-    const task = 'Implement a function in the source code.'
-    const resolution = resolveCapabilities({ task,
-      profile: { taskType: 'build', target: 'source code', expected: 'working function', constraints: null },
-      recommendedTags: [], memoryUse: 'none', capabilities: candidates.map(skill => ({ kind: 'skill', name: skill.name })),
-    })
-    const routes = resolution.recommendations.filter(skill => skill.source === 'akinator_policy' && skill.availability === 'available').map(skill => skill.name)
-    assert.ok(routes.includes(name), 'coding policy must select the routine without similarity matching')
-    const messages = await buildDshMessageSources({ task, intakeStatus: 'ready', nextAction: 'proceed', context: null,
-      memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false }, routeSkillNames: routes })
-    assert.equal(messages.find(message => message.name === name)?.text, definition.content)
+    assert.match(candidate.description ?? '', /コードを書く、変更するすべての依頼/)
+    for (const coding of [
+      { task: 'Implement a function in the source code.', profile: { taskType: 'build' as const, target: 'source code', expected: 'working function', constraints: null } },
+      { task: 'Fix the parser bug in the source code.', profile: { taskType: 'debug' as const, target: 'parser', expected: 'bug fixed', constraints: null } },
+    ]) {
+      const resolution = resolveCapabilities({ ...coding,
+        recommendedTags: [], memoryUse: 'none', capabilities: candidates.map(skill => ({ kind: 'skill', name: skill.name })),
+      })
+      const routes = resolution.recommendations.filter(skill => skill.source === 'akinator_policy' && skill.availability === 'available').map(skill => skill.name)
+      assert.ok(routes.includes(name), `${coding.profile.taskType} policy must select the routine without similarity matching`)
+      const messages = await buildDshMessageSources({ task: coding.task, intakeStatus: 'ready', nextAction: 'proceed', context: null,
+        memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false }, routeSkillNames: routes })
+      assert.equal(messages.find(message => message.name === name)?.text, definition.content)
+    }
     const unrelated = resolveCapabilities({ task: 'Explain a poem.',
       profile: { taskType: 'writing', target: 'poem', expected: 'explanation', constraints: null },
       recommendedTags: [], memoryUse: 'none', capabilities: candidates.map(skill => ({ kind: 'skill', name: skill.name })),
