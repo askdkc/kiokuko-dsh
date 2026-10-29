@@ -506,6 +506,33 @@ test(
       )
       assert.equal(receipt.value.result.prepared, false)
       assert.equal(admissions, 0)
+      const answer = await executeNativeTool(ctx, packages, {
+        name: 'run_code',
+        callId: 'answer-carrier',
+        arguments: {
+          description: 'Answer the captured request using current evidence',
+          code: `return await tools.prepare_requested_work(${JSON.stringify({ taskType: 'research', requestIntent: { relation: 'new', action: 'answer', evidenceRefs: requestIntentReferenceIds(context) } })})`,
+        },
+        agent,
+        signal: signal(),
+      })
+      assert.equal(answer.isError, false, text(answer))
+      assert.equal(answer.value.result.prepared, false)
+      assert.equal(answer.value.result.status, 'answer_directly')
+      assert.equal(answer.value.result.programExecuted, false)
+      assert.equal(admissions, 0)
+      const effect = await executeNativeTool(ctx, packages, {
+        name: 'run_code',
+        callId: 'answer-cannot-run-code',
+        arguments: {
+          description: 'No effect authority from an answer',
+          code: 'return 42',
+        },
+        agent,
+        signal: signal(),
+      })
+      assert.equal(effect.isError, true)
+      assert.equal(admissions, 0)
       const corrected = await executeNativeTool(ctx, packages, {
         name: 'run_code',
         callId: 'corrected',

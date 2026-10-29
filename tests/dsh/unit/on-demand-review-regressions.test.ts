@@ -3559,19 +3559,27 @@ test('a missing main-model artifact scope requires model interpretation, not an 
   assert.equal(repaired.value.prepared, true)
 })
 
-for (const source of ['main-model', 'provider_abstained_or_uncertain', 'decision_service_unavailable'] as const) {
+for (const source of [
+  'main-model',
+  'provider_abstained_or_uncertain',
+  'decision_service_unavailable',
+] as const) {
   test(`internal request classification recovers without a continuation question (${source})`, async (t) => {
-    const task = 'Verify src/parser.ts against the current parser task; preserve all files.'
+    const task =
+      'Verify src/parser.ts against the current parser task; preserve all files.'
     const message = human('clear-continuation', task)
     const intent = activeIntent([message], task, 'unknown', 'verify')
-    if (source !== 'main-model') intent.decision = unresolvedRequestIntent(intent.context, source)
+    if (source !== 'main-model')
+      intent.decision = unresolvedRequestIntent(intent.context, source)
     let asks = 0
     const f = await fixture(t, {
       interpret: async () => intent,
-      questions: { async ask(request) {
-        asks++
-        return { answers: [{ id: request.questions[0].id, selected: [] }] }
-      } },
+      questions: {
+        async ask(request) {
+          asks++
+          return { answers: [{ id: request.questions[0].id, selected: [] }] }
+        },
+      },
     })
     await f.capture([message])
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -3586,10 +3594,13 @@ for (const source of ['main-model', 'provider_abstained_or_uncertain', 'decision
       assert.equal(f.admissions.length, 0)
       assert.equal(f.bodies(), 0)
     }
-    const repaired = await f.execute(TASK_PREPARE_TOOL, { requestIntent: {
-      relation: 'same_scope_continuation', action: 'verify',
-      evidenceRefs: requestIntentReferenceIds(intent.context),
-    } })
+    const repaired = await f.execute(TASK_PREPARE_TOOL, {
+      requestIntent: {
+        relation: 'same_scope_continuation',
+        action: 'verify',
+        evidenceRefs: requestIntentReferenceIds(intent.context),
+      },
+    })
     assert.equal(repaired.isError, false, JSON.stringify(repaired))
     assert.equal(repaired.value.prepared, true)
     assert.equal(f.admissions.length, 1)
@@ -3598,3 +3609,152 @@ for (const source of ['main-model', 'provider_abstained_or_uncertain', 'decision
     assert.equal(f.bodies(), 1)
   })
 }
+
+test('an answer action never becomes a clarification question about the target', async (t) => {
+  const task = 'How does the Lisp route gate work?'
+  const message = human('answer-source', task)
+  let messages: any[] = [message]
+  let asks = 0
+  const followups: any[] = []
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    requestContext: async () => intent.context,
+    questions: {
+      async ask(request) {
+        asks++
+        return { answers: [{ id: request.questions[0].id, selected: [] }] }
+      },
+    },
+  })
+  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  let intent = activeIntent(messages, task, 'new', 'answer')
+  await f.capture(messages)
+  const result = await f.execute(TASK_PREPARE_TOOL, {
+    requestIntent: {
+      relation: 'new',
+      action: 'answer',
+      evidenceRefs: requestIntentReferenceIds(intent.context),
+    },
+  })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.notEqual(
+    result.value.status,
+    'awaiting_clarification',
+    'an explicitly understood answer must not be turned back into a target question',
+  )
+  assert.equal(
+    asks,
+    0,
+    'the user is not asked what they want when the action is already known',
+  )
+  assert.equal(followups.length, 0)
+  assert.equal(f.admissions.length, 0, 'an answer prepares no execution')
+})
+
+for (const owned of [false, true])
+  test(`explicit answer preparation preserves ${owned ? 'prepared owner' : 'unowned read-only'} state`, async (t) => {
+    const task = 'Explain src/parser.ts without editing any file.',
+      message = human('explicit-answer', task)
+    const intent = activeIntent(
+      [message],
+      task,
+      'same_scope_continuation',
+      owned ? 'verify' : 'answer',
+    )
+    let asks = 0
+    const f = await fixture(t, {
+      interpret: async () => intent,
+      existing: async () => owned,
+      questions: {
+        async ask() {
+          asks++
+          throw new Error('No clarification is needed for an explicit answer')
+        },
+      },
+    })
+    if (owned) f.ready(1)
+    await f.capture([message])
+    const before = f.intake.snapshot(f.session.id)
+    for (let i = 0; i < 2; i++) {
+      const result = await f.execute(TASK_PREPARE_TOOL, {
+        taskType: 'research',
+        requestIntent: {
+          relation: 'same_scope_continuation',
+          action: 'answer',
+          evidenceRefs: requestIntentReferenceIds(intent.context),
+        },
+      })
+      assert.equal(result.isError, false, JSON.stringify(result.content))
+      assert.equal(result.value.prepared, false)
+      assert.equal(result.value.status, 'answer_directly')
+      assert.equal(result.value.requestIntent.action, 'answer')
+      assert.equal(f.admissions.length, 0)
+      assert.equal(asks, 0)
+      if (owned)
+        assert.deepEqual(
+          f.intake.snapshot(f.session.id),
+          before,
+          'answer must not replace prepared intent or owner state',
+        )
+    }
+    if (!owned) {
+      const effect = await f.execute()
+      assert.equal(effect.isError, true)
+      assert.equal(f.bodies(), 0)
+      assert.equal(f.admissions.length, 0)
+    }
+  })
+
+for (const failure of [
+  'missing-reference',
+  'foreign-reference',
+  'provider-conflict',
+] as const)
+  test(`answer preparation still rejects ${failure}`, async (t) => {
+    const task = 'Explain src/parser.ts without changing it.',
+      message = human('answer-authority', task)
+    const intent = activeIntent(
+      [message],
+      task,
+      'same_scope_continuation',
+      'verify',
+    )
+    const decision =
+      failure === 'provider-conflict'
+        ? {
+            ...intent.decision,
+            source: 'decision-provider' as const,
+            action: 'verify' as const,
+          }
+        : unresolvedRequestIntent(intent.context, 'decision_service_disabled')
+    let asks = 0
+    const f = await fixture(t, {
+      interpret: async () => ({ context: intent.context, decision }),
+      questions: {
+        async ask() {
+          asks++
+          throw new Error('Invalid evidence is not a human clarification')
+        },
+      },
+    })
+    await f.capture([message])
+    const before = f.intake.snapshot(f.session.id)
+    const refs = requestIntentReferenceIds(intent.context)
+    const evidenceRefs =
+      failure === 'missing-reference'
+        ? refs.slice(1)
+        : failure === 'foreign-reference'
+          ? [...refs, 'proposal:another-session']
+          : refs
+    const rejected = await f.execute(TASK_PREPARE_TOOL, {
+      requestIntent: {
+        relation: 'same_scope_continuation',
+        action: 'answer',
+        evidenceRefs,
+      },
+    })
+    assert.equal(rejected.isError, true)
+    assert.equal(asks, 0)
+    assert.equal(f.admissions.length, 0)
+    assert.deepEqual(f.intake.snapshot(f.session.id), before)
+  })

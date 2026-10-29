@@ -1223,15 +1223,34 @@ export class OnDemandIntake {
     ])
     const context = state.requestIntentContext
     const sessionId = state.input.agent.session!.id
+    // Compose from the decision the caller actually bound. Falling back to
+    // state.requestIntent alone can read a stale 'unknown' action after an
+    // explicit action was supplied, fabricating a target nobody omitted.
+    const decision = reason.candidate ?? state.requestIntent
+    // An established answer already states the requested action. Converting it
+    // into a question asks the human to restate what they just said, and the
+    // queued reply changes the dedupe key, so the same question repeats.
+    if (decision?.action === 'answer' && !requestIntentIsUnresolved(decision)) {
+      if (state.status === 'answer' && !state.existing)
+        state.requestIntent = decision
+      return {
+        prepared: false,
+        status: 'answer_directly',
+        originalTask: state.task,
+        requestIntent: decision,
+        currentReferences: context
+          ? requestIntentRequiredReferenceIds(context)
+          : [],
+        permissions: 'unchanged_native_policy',
+        nextAction: 'answer_directly',
+        detail:
+          'No execution workflow is prepared for this answer. Answer from the captured request and current evidence. Native read/search tools remain available under their existing permissions; use the selected Lisp route where required. Collect missing evidence without asking the human to repeat an established action or target. This result grants no change or command authority.',
+      }
+    }
     const scope =
-      (state.requestIntent?.action === 'change' &&
-        state.requestIntent.changeScope === 'unknown') ||
+      (decision?.action === 'change' && decision.changeScope === 'unknown') ||
       reason.message.startsWith('The requested change scope')
-    const target = !!executionClarification(
-      state.task,
-      state.requestIntent,
-      context,
-    )
+    const target = !!executionClarification(state.task, decision, context)
     const transition =
       context?.activeTask && !taskCanExecute(context.activeTask)
     const question = reason.assessment
@@ -1242,7 +1261,7 @@ export class OnDemandIntake {
           ? 'どの具体的なファイル・項目・相手・操作を対象にしますか？'
           : scope
             ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
-            : state.requestIntent?.action === 'unknown'
+            : decision?.action === 'unknown'
               ? 'その対象に、具体的に何をしてほしいですか？'
               : null
     // Internal relationship classification belongs to the model. An unresolved
@@ -2077,13 +2096,24 @@ export class OnDemandIntake {
           throw new Error('Task preparation was already consumed for this turn')
         state.preparationCalls.add(execution.callId)
         try {
-          if (state.existing) {
-            this.assertCurrent(state)
-            execution.signal.throwIfAborted()
-            const boundIntent = await this.bindIntent(
-              state,
-              value.requestIntent,
+          this.assertCurrent(state)
+          execution.signal.throwIfAborted()
+          const suppliedIntent = await this.bindIntent(
+            state,
+            value.requestIntent,
+          )
+          if (
+            suppliedIntent?.action === 'answer' &&
+            !requestIntentIsUnresolved(suppliedIntent)
+          )
+            throw new RequestClarification(
+              'Answer the captured request without execution preparation',
+              false,
+              false,
+              suppliedIntent,
             )
+          if (state.existing) {
+            const boundIntent = suppliedIntent
             if (
               boundIntent?.relation === 'same_scope_continuation' &&
               !requestIntentIsUnresolved(boundIntent) &&
@@ -2138,10 +2168,6 @@ export class OnDemandIntake {
               )
             }
           } else {
-            const suppliedIntent = await this.bindIntent(
-              state,
-              value.requestIntent,
-            )
             const currentIntent = suppliedIntent ?? state.requestIntent
             const unresolved =
               currentIntent !== undefined &&
@@ -2182,6 +2208,9 @@ export class OnDemandIntake {
             )
               throw new RequestClarification(
                 'Answer ordinary questions directly; clarify unknown actions before preparing work',
+                false,
+                false,
+                currentIntent,
               )
             state.memoryOwner = memoryOwnerKind(currentIntent, taskType)
             await this.prepare(
@@ -2578,6 +2607,16 @@ export class OnDemandIntake {
               state,
               carrier.requestIntent,
             )
+            if (
+              requestIntent?.action === 'answer' &&
+              !requestIntentIsUnresolved(requestIntent)
+            )
+              throw new RequestClarification(
+                'Answer the captured request without execution preparation',
+                false,
+                false,
+                requestIntent,
+              )
             const clarification = executionClarification(
               state.task,
               requestIntent,
@@ -2605,6 +2644,9 @@ export class OnDemandIntake {
             if (!taskType || taskType === 'chat') {
               throw new RequestClarification(
                 'Clarify the requested action and scope before preparing work',
+                false,
+                false,
+                requestIntent,
               )
             }
             state.memoryOwner = memoryOwnerKind(requestIntent, taskType)
