@@ -20,6 +20,7 @@
 
 
 - **AgenticReplay** — モデル・ツールの動作を記録し、HTML に出力できます。[設定とコマンド](docs/agenticreplay-recording.md)
+- **セッション復旧** — 途中で停止した会話の履歴から続行、または依頼文を引き継いだ空の会話を作成できます。[使い方と制限](docs/session-recovery.md)
 - **Diff レビュー** — DSH の右ペインで、選択した差分と Kiokuko の文脈を根拠付きで確認できます。分析は明示操作です。[使い方と制限](docs/diff-review.ja.md)
 - **日本語出力** — 対応モデルへ自然な日本語を書く同梱 Skill を渡します。[詳細](docs/japanese-output.md)
 

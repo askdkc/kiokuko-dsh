@@ -452,8 +452,12 @@ for (const scenario of [
               assert.equal(JSON.parse(resultText(unknown)).prepared, false)
               assert.equal(
                 JSON.parse(resultText(unknown)).status,
-                'awaiting_clarification',
+                semanticUnresolved ? 'awaiting_clarification' : 'request_interpretation_required',
               )
+              if (!semanticUnresolved) {
+                assert.equal(JSON.parse(resultText(unknown)).nextAction, 'submit_current_request_intent')
+                assert.equal(intake.awaitingClarification(agent), false)
+              }
               await assertUnchangedAuthority()
               return mock.toolCallResponse(
                 'missing-scope-preparation',

@@ -12,7 +12,7 @@ test('a real process crash after an effect resumes without re-executing that unk
   const child = spawnSync(process.execPath, [fileURLToPath(helper), '--crash', root], { encoding: 'utf8', timeout: 15000 })
   assert.equal(child.status, 73, child.stdout + child.stderr)
   assert.equal(readFileSync(join(root, 'effect-count.txt'), 'utf8'), '1')
-  const { recoveryRuntime } = await import('../helpers/session-recovery-runtime.mjs')
+  const { recoveryRuntime } = await import(helper.href)
   const { SessionRecovery } = await import('../../../src/dsh/session-recovery.js')
   const h = await recoveryRuntime(root)
   const recovery = new SessionRecovery(h.ctx)

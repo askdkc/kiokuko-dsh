@@ -256,14 +256,17 @@ function activeIntent(
   })!
   const decision = bindMainModelRequestIntent(
     {
-      relation,
-      action,
+      relation: relation === 'unknown' ? 'new' : relation,
+      action: action === 'unknown' ? 'verify' : action,
       changeScope,
       evidenceRefs: requestIntentReferenceIds(context),
     },
     context,
   )!
-  return { context, decision }
+  // Bind valid evidence before injecting an uncertain classifier result. The
+  // submission binder rejects unknown fields and must not silently yield undefined.
+  assert.ok(decision)
+  return { context, decision: { ...decision, relation, action } }
 }
 
 test('native evidence read leaves intent uncommitted; explicit preparation stays immutable', async (t) => {
@@ -3555,3 +3558,43 @@ test('a missing main-model artifact scope requires model interpretation, not an 
   })
   assert.equal(repaired.value.prepared, true)
 })
+
+for (const source of ['main-model', 'provider_abstained_or_uncertain', 'decision_service_unavailable'] as const) {
+  test(`internal request classification recovers without a continuation question (${source})`, async (t) => {
+    const task = 'Verify src/parser.ts against the current parser task; preserve all files.'
+    const message = human('clear-continuation', task)
+    const intent = activeIntent([message], task, 'unknown', 'verify')
+    if (source !== 'main-model') intent.decision = unresolvedRequestIntent(intent.context, source)
+    let asks = 0
+    const f = await fixture(t, {
+      interpret: async () => intent,
+      questions: { async ask(request) {
+        asks++
+        return { answers: [{ id: request.questions[0].id, selected: [] }] }
+      } },
+    })
+    await f.capture([message])
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'review' })
+      assert.equal(result.isError, false, JSON.stringify(result))
+      assert.equal(result.value.status, 'request_interpretation_required')
+      assert.equal(result.value.prepared, false)
+      assert.equal(result.value.nextAction, 'submit_current_request_intent')
+      assert.equal(result.value.originalTask, task)
+      assert.equal(asks, 0)
+      assert.equal(f.intake.awaitingClarification(f.agent), false)
+      assert.equal(f.admissions.length, 0)
+      assert.equal(f.bodies(), 0)
+    }
+    const repaired = await f.execute(TASK_PREPARE_TOOL, { requestIntent: {
+      relation: 'same_scope_continuation', action: 'verify',
+      evidenceRefs: requestIntentReferenceIds(intent.context),
+    } })
+    assert.equal(repaired.isError, false, JSON.stringify(repaired))
+    assert.equal(repaired.value.prepared, true)
+    assert.equal(f.admissions.length, 1)
+    assert.equal(asks, 0)
+    assert.equal((await f.execute('review_probe')).isError, false)
+    assert.equal(f.bodies(), 1)
+  })
+}

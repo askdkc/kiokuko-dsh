@@ -96,7 +96,6 @@ function RecoveryAction(props: Record<string, unknown>): unknown {
       error ? jsx('p', { role: 'alert', children: error }) : null,
       status ? jsxs('div', { children: [
         jsx('p', { children: `${t('model')}: ${status.model ? `${status.model.provider}/${status.model.model}` : '—'}` }),
-        !status.modelAvailable ? jsx('p', { role: 'status', children: t('missing') }) : null,
         status.busy ? jsx('p', { role: 'status', children: t('running') }) : null,
         !status.interrupted ? jsx('p', { children: t('healthy') }) : null,
         ...status.warnings.map((warning, index) => jsx('p', { children: warning }, `warning-${index}`)),
@@ -106,7 +105,7 @@ function RecoveryAction(props: Record<string, unknown>): unknown {
         status.lastRestart && !result ? button(t('previous'), () => openTarget(status.lastRestart!.sessionId, status.lastRestart!.draft)) : null,
       ] }) : null,
       result?.action === 'continue' ? jsx('p', { role: 'status', children: t('continued') }) : null,
-      result?.action === 'new' ? jsxs('div', { children: [jsx('p', { role: 'status', children: t('created') }), ...result.warnings.map((warning, index) => jsx('p', { children: warning }, `result-warning-${index}`)), jsx('label', { children: jsxs(Fragment, { children: [t('draft'), jsx('textarea', { rows: 7, value: draft, onChange: (event: { target: { value: string } }) => setDraft(event.target.value) })] }) }), button(t('openNew'), () => openTarget(result.sessionId, draft))] }) : null,
+      result?.action === 'new' ? jsxs('div', { children: [jsx('p', { role: 'status', children: t('created') }), ...result.warnings.filter(warning => !status?.warnings.includes(warning)).map((warning, index) => jsx('p', { children: warning }, `result-warning-${index}`)), jsx('label', { children: jsxs(Fragment, { children: [t('draft'), jsx('textarea', { rows: 7, value: draft, onChange: (event: { target: { value: string } }) => setDraft(event.target.value) })] }) }), button(t('openNew'), () => openTarget(result.sessionId, draft))] }) : null,
       jsxs('div', { className: 'kiokuko-recovery-actions', children: [button(t('refresh'), () => void load()), button(t('close'), () => setOpen(false))] }),
     ] }),
   ] })

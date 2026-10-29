@@ -26,6 +26,7 @@ const patch = join(root, 'probe.patch.yml')
 writeFileSync(patch, YAML.stringify([
   { id: 'kiokuko-dsh', config: { enabled: true, typedDecisions: { mode: 'off' }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, agenticReplay: { enabled: false }, lisp: { enabled: false } } },
   { id: 'llm-deepseek-api-key', disabled: true },
+  { id: 'agent-default-model', config: { provider: 'recovery-fixture', model: 'fixture' } },
   { insert: [{ id: 'session-recovery-fixture', name: fileURLToPath(new URL('./session-recovery-web-fixture.mjs', import.meta.url)) }] },
 ]))
 const child = spawn(process.execPath, [dsh, '--profile', 'web', '--patch', patch, '--port', String(port), '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'] })

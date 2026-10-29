@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createUserMessage, MessageId } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord } from '@deepseek-ai/dsh-session'
@@ -53,12 +54,14 @@ export class SessionRecovery {
   private readonly handles: { dispose(): Promise<void> }[] = []
   private readonly lifetime = new AbortController()
   constructor(private readonly host: RecoveryHost) {}
+  private assertOpen(): void { if (this.lifetime.signal.aborted) throw new SessionRecoveryError('host_stopped', '復旧機能は停止しました。元の履歴は保持されています。', 503) }
   private agent(id: string): Agent | undefined { return this.host.get('agents', false)?.get(id) }
   private assertCurrent(agent: Agent, idle = true): void {
     if (this.lifetime.signal.aborted || this.agent(agent.id) !== agent || this.host.get('sessions', false)?.get(agent.session.id) !== agent.session) throw new SessionRecoveryError('session_changed', 'セッションの接続が変わりました。状態を再確認してください。')
     if (idle && agent.status !== 'idle') throw new SessionRecoveryError('session_busy', '実行中のセッションは復旧操作できません。現在の処理が終わってから再確認してください。')
   }
   private async snapshot(id: string): Promise<{ session: Session; agent?: Agent }> {
+    this.assertOpen()
     const agent = this.agent(id)
     if (agent && agent.status !== 'disposed') {
       if (agent.id !== id || agent.session.id !== id || this.host.get('sessions', false)?.get(id) !== agent.session) throw new SessionRecoveryError('session_identity', 'セッションの識別情報が一致しません。')
@@ -92,14 +95,16 @@ export class SessionRecovery {
     const archived = this.host.get('workspaceRegistry', false)?.archivedSessionIds?.includes(id) === true
     const busy = agent?.status === 'running'
     const root = session.header.origin !== 'subagent' && !archived
+    const hasDirectory = typeof session.header.cwd === 'string' && isAbsolute(session.header.cwd)
     const request = requestOf(events)
     const warnings = interrupted ? [CAUTION] : []
+    if (!hasDirectory) warnings.push('元の作業場所が不明です。通常の新規会話から作業場所を選択してください。')
     if (request.text.length > 131072) warnings.push('元の依頼が長いため自動転記できません。必要な部分を元の会話からコピーしてください。')
     if (!modelAvailable) warnings.push('保存されたモデル接続が利用できません。接続を復旧するかモデルを選び直してください。新規会話は作成できます。')
     if (request.attachments) warnings.push('新しい会話では、元の添付ファイルを再添付してください。')
     const restarted = [...events].reverse().find(event => event.type === RECORD && event.data?.action === 'new' && event.data?.version === 1 && event.data?.sourceSessionId === id && typeof event.data.operationId === 'string' && event.data.targetSessionId === targetId(id, event.data.operationId))?.data
     const lastRestart = restarted && (this.agent(restarted.targetSessionId) || await this.host.get('sessionPersistence', false)?.stat?.(restarted.targetSessionId)) ? { sessionId: restarted.targetSessionId, draft: this.draft(requestOf(events.filter(event => event.seq <= restarted.expectedSeq)).text) } : undefined
-    return { sessionId: id, seq: events.at(-1)?.seq ?? -1, interrupted, busy, canContinue: root && interrupted && !busy && modelAvailable, canRestart: root && !busy && !!(this.host.get('sessionController', false)?.create || this.host.get('agents', false)?.create), model, modelAvailable, originalRequest: request.text.length > 131072 ? '' : request.text, ...(lastRestart ? { lastRestart } : {}), attachments: request.attachments, unknownCalls: [...calls.values()], warnings }
+    return { sessionId: id, seq: events.at(-1)?.seq ?? -1, interrupted, busy, canContinue: root && interrupted && !busy && modelAvailable, canRestart: root && !busy && hasDirectory && !!(this.host.get('sessionController', false)?.create || this.host.get('agents', false)?.create), model, modelAvailable, originalRequest: request.text.length > 131072 ? '' : request.text, ...(lastRestart ? { lastRestart } : {}), attachments: request.attachments, unknownCalls: [...calls.values()], warnings }
   }
   private draft(text: string): string { return text.length > 131072 ? '' : `${text}\n\n【中断後のやり直し】\n${CAUTION}` }
   private async activate(id: string): Promise<Agent> {
@@ -116,12 +121,78 @@ export class SessionRecovery {
     return agent
   }
   async act(input: RecoveryInput): Promise<RecoveryResult> {
+    input = { ...input }
     const previous = this.queues.get(input.sessionId) ?? Promise.resolve()
     const operation = previous.catch(() => {}).then(() => this.perform(input))
     this.queues.set(input.sessionId, operation)
     try { return await operation } finally { if (this.queues.get(input.sessionId) === operation) this.queues.delete(input.sessionId) }
   }
+  private async restart(input: RecoveryInput): Promise<RecoveryResult> {
+    const { session, agent } = await this.snapshot(input.sessionId)
+    const events = session.snapshotEvents()
+    const status = await this.inspect(input.sessionId)
+    const target = targetId(input.sessionId, input.operationId)
+    const original = requestOf(events.filter(event => event.seq <= input.expectedSeq))
+    const result = (): RecoveryResult => ({ sessionId: target, sourceSessionId: input.sessionId, action: 'new', draft: this.draft(original.text), warnings: status.warnings })
+    const check = (value: any): void => {
+      if (value && (value.version !== 1 || value.action !== 'new' || value.expectedSeq !== input.expectedSeq || value.sourceSessionId !== input.sessionId || value.targetSessionId !== target)) throw new SessionRecoveryError('operation_conflict', '同じ復旧操作 ID が別の操作に使われています。')
+    }
+    const sourceReceipt = events.find(event => event.type === RECORD && event.data?.operationId === input.operationId)?.data
+    check(sourceReceipt)
+    let targetAgent = this.agent(target)
+    const stored = targetAgent ? { session: targetAgent.session } : await this.host.get('sessionPersistence', false)?.stat?.(target) ? await this.snapshot(target) : undefined
+    const targetReceipt = stored?.session.snapshotEvents().find(event => event.type === RECORD && event.data?.operationId === input.operationId)?.data
+    check(targetReceipt)
+    if (sourceReceipt?.state === 'accepted' || targetReceipt?.state === 'accepted') return result()
+    if (status.busy) throw new SessionRecoveryError('session_busy', '実行中の会話を中断せず、処理が終わってから操作してください。')
+    if (!status.canRestart) throw new SessionRecoveryError('restart_unavailable', 'このホストでは新しい会話を作成できません。')
+    if (status.seq !== input.expectedSeq) throw new SessionRecoveryError('session_changed', 'セッションが更新されました。状態を再確認してください。')
+    this.assertOpen()
+    const checkSource = () => {
+      this.assertOpen()
+      const current = this.agent(input.sessionId)
+      if (current && current.status !== 'disposed' && (current.status !== 'idle' || current.session.snapshotEvents().at(-1)?.seq !== input.expectedSeq)) throw new SessionRecoveryError('session_changed', '準備中にセッションが更新されました。状態を再確認してください。')
+    }
+    checkSource()
+    const controller = this.host.get('sessionController', false)
+    const registry = this.host.get('workspaceRegistry', false)
+    let workspace = registry?.list?.().find((item: { sessionIds: string[]; path?: string }) => item.sessionIds.includes(input.sessionId) || item.path === session.header.cwd)
+    if (controller?.create && !workspace && registry?.create) workspace = await registry.create(session.header.cwd)
+    checkSource()
+    if (stored) {
+      if (stored.session.header.cwd !== session.header.cwd || stored.session.snapshotEvents().some(event => event.type === 'turn/start' || event.type === 'tool/call' || event.type === 'user/message' && event.data?.source?.kind === 'user')) throw new SessionRecoveryError('target_changed', '作成先の会話は既に使われています。元の履歴と作成済みの会話を確認してください。')
+      if (!targetAgent) targetAgent = await this.activate(target)
+    } else {
+      if (controller?.create) {
+        const created = await controller.create({ sessionId: target, ...(workspace ? { workspaceId: workspace.id } : { cwd: session.header.cwd }), ...(session.header.agentPreset ? { agentPreset: session.header.agentPreset } : {}) })
+        if (created.sessionId !== target) throw new SessionRecoveryError('target_changed', '作成先が変わりました。新しい会話の一覧を確認してください。')
+        targetAgent = this.agent(target)
+      } else {
+        const presets = this.host.get('agentPresets', false), preset = session.header.agentPreset
+        const handle = await this.host.get('agents', false).create({ sessionId: target, meta: { cwd: session.header.cwd, ...(preset ? { agentPreset: preset } : {}) }, ...(status.modelAvailable ? { agentOptions: status.model } : {}), ...(preset && presets?.mount ? { setup: async (context: unknown) => { await presets.mount(context, preset) } } : {}) })
+        this.handles.push(handle); targetAgent = handle.agent
+      }
+      if (status.modelAvailable && targetAgent?.model) {
+        const revision = targetAgent.session.snapshotEvents().at(-1)?.seq
+        try {
+          await this.host.get('llm', false).resolveCallConfig(status.model, this.lifetime.signal)
+          if (this.lifetime.signal.aborted || this.agent(target) !== targetAgent || targetAgent.status !== 'idle' || targetAgent.session.snapshotEvents().at(-1)?.seq !== revision) throw new Error('Target changed')
+          targetAgent.model.select(status.model!)
+        } catch { status.warnings.push('元のモデルを新しい会話へ設定できませんでした。送信前にモデルを選び直してください。') }
+      }
+    }
+    if (stored && workspace?.attachSession) await workspace.attachSession(target)
+    this.assertOpen()
+    if (!targetAgent || targetAgent.session.header.cwd !== session.header.cwd) throw new SessionRecoveryError('target_identity', '新しい会話の作業場所を確認できません。')
+    const receipt = { version: 1 as const, ...input, sourceSessionId: input.sessionId, targetSessionId: target, state: 'accepted' as const }
+    appendPluginRecord(targetAgent.session as never, RECORD, receipt)
+    await this.host.get('sessions', false)?.flush?.(targetAgent.session)
+    if (agent && this.agent(agent.id) === agent && agent.status === 'idle' && agent.session.snapshotEvents().at(-1)?.seq === status.seq) appendPluginRecord(agent.session as never, RECORD, receipt)
+    return result()
+  }
+
   private async perform(input: RecoveryInput): Promise<RecoveryResult> {
+    if (input.action === 'new') return this.restart(input)
     const agent = await this.activate(input.sessionId)
     const events = agent.session.snapshotEvents()
     const receipts = events.filter(event => event.type === RECORD && event.data?.operationId === input.operationId)
@@ -130,57 +201,26 @@ export class SessionRecovery {
     if (receipt && (receipt.action !== input.action || receipt.expectedSeq !== input.expectedSeq || receipt.sourceSessionId !== input.sessionId)) throw new SessionRecoveryError('operation_conflict', '同じ復旧操作 ID が別の操作に使われています。')
     const status = await this.inspect(input.sessionId)
     this.assertCurrent(agent, false)
-    const boundRequest = requestOf(events.filter(event => event.seq <= input.expectedSeq))
     const messageId = `kiokuko-recovery:${input.operationId}`
-    const result = (sessionId: string): RecoveryResult => ({ sessionId, sourceSessionId: input.sessionId, action: input.action, ...(input.action === 'new' ? { draft: this.draft(boundRequest.text) } : {}), warnings: status.warnings })
-    if (receipt?.state === 'accepted' || events.some(event => event.type === 'user/message' && event.data?.id === messageId) || [...agent.inbox?.nextStep ?? [], ...agent.inbox?.nextTurn ?? []].some(message => message.id === messageId)) return result(input.action === 'new' ? targetId(input.sessionId, input.operationId) : input.sessionId)
+    const result = (sessionId: string): RecoveryResult => ({ sessionId, sourceSessionId: input.sessionId, action: 'continue', warnings: status.warnings })
+    if (receipt?.state === 'accepted' || events.some(event => event.type === 'user/message' && event.data?.id === messageId) || [...agent.inbox?.nextStep ?? [], ...agent.inbox?.nextTurn ?? []].some(message => message.id === messageId)) return result(input.sessionId)
     this.assertCurrent(agent)
     if (status.seq !== (receipt ? receipts.at(-1)!.seq : input.expectedSeq)) throw new SessionRecoveryError('session_changed', 'セッションが更新されました。内容を再確認してから操作してください。')
     if (input.action === 'continue' && !status.canContinue) throw new SessionRecoveryError('model_unavailable', '続行できません。モデル接続とセッションの状態を確認してください。')
-    if (input.action === 'new' && !status.canRestart) throw new SessionRecoveryError('restart_unavailable', 'このホストでは新しい会話を作成できません。')
     if (input.action === 'continue') {
       try { await this.host.get('llm', false).resolveCallConfig(status.model, this.lifetime.signal) }
       catch { throw new SessionRecoveryError('model_unavailable', '保存されたモデル接続を準備できません。接続を復旧するかモデルを選び直してください。') }
       this.assertCurrent(agent)
       if (agent.session.snapshotEvents().at(-1)?.seq !== status.seq) throw new SessionRecoveryError('session_changed', 'セッションが更新されました。再確認してください。')
     }
-    const target = input.action === 'new' ? targetId(input.sessionId, input.operationId) : input.sessionId
+    const target = input.sessionId
     const record = (state: 'planned' | 'accepted') => appendPluginRecord(agent.session as never, RECORD, { version: 1, ...input, sourceSessionId: input.sessionId, targetSessionId: target, state })
     if (!receipt) record('planned')
     const intentSeq = agent.session.snapshotEvents().at(-1)?.seq
     await this.host.get('sessions', false)?.flush?.(agent.session)
     this.assertCurrent(agent)
     if (agent.session.snapshotEvents().at(-1)?.seq !== intentSeq) throw new SessionRecoveryError('session_changed', '復旧の準備中にセッションが更新されました。再確認してください。')
-    if (input.action === 'continue') {
-      agent.followup({ ...createUserMessage({ content: [{ type: 'text', text: `中断した作業を、保存された履歴を確認して続けてください。\n${CAUTION}` }], source: { kind: 'user' } }), id: MessageId(messageId) })
-    } else {
-      let targetAgent = this.agent(target)
-      if (!targetAgent && await this.host.get('sessionPersistence', false)?.stat?.(target)) targetAgent = await this.activate(target)
-      if (!targetAgent) {
-        const controller = this.host.get('sessionController', false)
-        if (controller?.create) {
-          const workspace = this.host.get('workspaceRegistry', false)?.list?.().find((item: { sessionIds: string[] }) => item.sessionIds.includes(input.sessionId))
-          const created = await controller.create({ sessionId: target, ...(workspace ? { workspaceId: workspace.id } : { cwd: agent.session.header.cwd }), ...(agent.session.header.agentPreset ? { agentPreset: agent.session.header.agentPreset } : {}) })
-          if (created.sessionId !== target) throw new SessionRecoveryError('target_changed', '作成先の識別情報が変わりました。新しい会話の一覧を確認してください。')
-          targetAgent = this.agent(target)
-        } else {
-          const presets = this.host.get('agentPresets', false)
-          const preset = agent.session.header.agentPreset
-          const handle = await this.host.get('agents', false).create({ sessionId: target, meta: { cwd: agent.session.header.cwd, ...(preset ? { agentPreset: preset } : {}) }, ...(status.modelAvailable ? { agentOptions: status.model } : {}), ...(preset && presets?.mount ? { setup: async (context: unknown) => { await presets.mount(context, preset) } } : {}) })
-          this.handles.push(handle); targetAgent = handle.agent
-        }
-        if (status.modelAvailable && targetAgent?.model) {
-          const targetSeq = targetAgent.session.snapshotEvents().at(-1)?.seq
-          try {
-            await this.host.get('llm', false).resolveCallConfig(status.model, this.lifetime.signal)
-            if (this.lifetime.signal.aborted || this.agent(target) !== targetAgent || targetAgent.status !== 'idle' || targetAgent.session.snapshotEvents().at(-1)?.seq !== targetSeq) throw new Error('Target changed')
-            targetAgent.model.select(status.model!)
-          }
-          catch { status.warnings.push('元のモデルを新しい会話へ設定できませんでした。送信前にモデルを選び直してください。') }
-        }
-      }
-      if (!targetAgent || targetAgent.session.header.cwd !== agent.session.header.cwd) throw new SessionRecoveryError('target_identity', '新しい会話の作業場所を確認できません。')
-    }
+    agent.followup({ ...createUserMessage({ content: [{ type: 'text', text: `中断した作業を、保存された履歴を確認して続けてください。\n${CAUTION}` }], source: { kind: 'user' } }), id: MessageId(messageId) })
     if (this.agent(agent.id) === agent) record('accepted')
     return result(target)
   }

@@ -3,7 +3,7 @@ import { ManagedDispatchDenied } from '../managed-operation-runner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { rememberLispImplementation, isLispConversation, rootLispAdmission, withLispNativeCommand, isLispNativeCommand, type LispNativeCommands } from '../lisp-tool-identity.js'
+import { rememberLispImplementation, isLispConversation, rootLispAdmission, withLispNativeCommand, isLispNativeCommand, isLispNativeCommandFence, type LispNativeCommands } from '../lisp-tool-identity.js'
 import { assertProtocolRoute } from '../guardrail/service.js'
 import { isOwnedExecutionCall } from '../owned-execution.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -268,7 +268,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         // use Bash; a nested call or a claimed parent alone is not sufficient.
         if (!persistent.stopped && persistent.controller && agent && agent.session.id === scope
           && agents.get(agent.id) === agent && sessions.get(scope) === agent.session
-          && isLispNativeCommand(execution, tools.get(execution.name, agent)?.execute)) return undefined
+          && (hostFences ? isLispNativeCommandFence : isLispNativeCommand)(execution, tools.get(execution.name, agent)?.execute)) return undefined
         return 'LISP_ROUTE_REQUIRED: Lisp is enabled for this session. Use lisp_eval for computation and kioku.process:run / start-job inside Lisp for external commands. Direct Bash/zsh/PowerShell calls are disabled. Read/search/Skill tools remain available. Recover Lisp on failure; do not silently change routes. The user can explicitly disable Lisp with /kioku-lisp disable.'
       }
       if (persistent.executionMode === 'protected' && execution.name === 'run_code') return 'Protected Lisp requires the native DSH tool executor. Select native execution in the DSH profile, or disable protected Lisp; the PTC program was not executed.'
@@ -738,7 +738,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Evaluate Common Lisp. Prefer Lisp for useful calculations and transformations; ordinary development does not require a preliminary prototype. Explicitly protected coding workflows require prototype:true and saved-result inspection before implementation. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+  return ({ lisp_eval: 'Evaluate Common Lisp, the selected route for computation and command orchestration while Lisp is ON. Use kioku.process:run / start-job for external programs including git, gh, builds and tests; direct native shell calls are rejected. Ordinary development does not require a preliminary prototype. Explicitly protected coding workflows require prototype:true and saved-result inspection before implementation. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
     lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. Requires enable-task.',
     lisp_hot_install: 'Validate a candidate against the current approved contract in workers using the selected execution mode, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
     lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',

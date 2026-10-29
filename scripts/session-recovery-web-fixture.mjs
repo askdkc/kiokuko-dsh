@@ -1,7 +1,7 @@
 import { LlmAdapter, createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { writeFile } from 'node:fs/promises'
 
-export const inject = ['llm', 'agents', 'sessions', 'agentDefaultModel', 'agentPresets']
+export const inject = ['llm', 'agents', 'sessions', 'agentDefaultModel', 'agentPresets', 'agentLoop']
 export async function apply(ctx) {
   let requests = 0
   const registration = ctx.llm.registerAdapter(['recovery-fixture'], new class extends LlmAdapter {
@@ -17,7 +17,7 @@ export async function apply(ctx) {
     }
   }())
   ctx.effect(() => registration)
-  await ctx.agentDefaultModel.saveSelection({ provider: 'recovery-fixture', model: 'fixture' })
+  const seed = async () => {
   const seeds = []
   for (const [sessionId, title, provider] of [
     ['interrupted-recovery-ui', 'Interrupted recovery fixture', 'recovery-fixture'],
@@ -42,4 +42,7 @@ export async function apply(ctx) {
     seeds.push({ sessionId, title })
   }
   await writeFile(process.env.KIOKUKO_RECOVERY_READY, JSON.stringify({ seeds }))
+  }
+  const timer = setTimeout(() => { void seed().catch(error => console.error('[recovery-fixture]', error)) }, 0)
+  ctx.effect(() => () => clearTimeout(timer))
 }

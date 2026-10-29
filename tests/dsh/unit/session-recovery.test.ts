@@ -14,7 +14,7 @@ function fixture() {
     const session = Session.create(SessionId(id), [], { ...base.header, cwd, agentPreset: preset })
     let selection: any = { provider: 'fixture', model: 'fixture', reasoningEffort: 'high' }
     const agent = { id, session, status: 'idle', inbox: { nextStep: [] as any[], nextTurn: [] as any[] },
-      model: { current: () => selection, select: (value: any) => { selection = { ...value }; session.append('model/selection', value) } },
+      model: { current: () => selection, select: (value: any) => { selection = { ...value }; (session as any).append('model/selection', value) } },
       followup(message: any) { sent.push(message); agent.inbox.nextTurn.push(message); agent.status = 'running' },
     }
     agents.set(id, agent); sessions.set(id, session)
@@ -25,6 +25,7 @@ function fixture() {
   source.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Inspect package.json' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
   source.session.append('tool/call', { turn: 1, step: 1, callId: 'lost-call' as never, name: 'bash', arguments: '{}' })
   source.session.append('turn/end', { turn: 1, reason: { kind: 'interrupted' } })
+  const workspaceRegistry: any = { list: () => [{ id: 'workspace-a', sessionIds: [source.id] }], archivedSessionIds: [] }
   const host: any = { get(name: string) { return ({
     agents: { get: (id: string) => agents.get(id), create: async (options: any) => { created.push(options); return { agent: make(options.sessionId, options.meta.cwd), async dispose() {} } } },
     sessions: { get: (id: string) => sessions.get(id), flush: () => flush() },
@@ -33,7 +34,7 @@ function fixture() {
       async create(options: any) { created.push(options); if (createFailure) { createFailure = false; throw new Error('Creation unavailable') }; make(options.sessionId); return { sessionId: options.sessionId } },
       async *follow(request: any) { activations++; agents.set(request.sessionId, { ...source, status: 'idle' }); yield { type: 'snapshot' } },
     },
-    workspaceRegistry: { list: () => [{ id: 'workspace-a', sessionIds: [source.id] }], archivedSessionIds: [] },
+    workspaceRegistry,
     sessionPersistence: {
       stat: async (id: string) => sessions.has(id) ? { header: sessions.get(id)!.header } : undefined,
       async open(id: string) { const session = sessions.get(id)!; return { header: session.header, read: async () => ({ meta: session.header, events: session.snapshotEvents() }), close: async () => { readCloses++ } } },
@@ -125,7 +126,8 @@ test('a partial creation can retry its durable plan after the recovery service r
   } finally { await f.service.dispose() }
 })
 test('a source replacement while model preparation waits cannot enqueue recovery', async () => {
-  const f = fixture(), gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+  const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
+  const f = fixture(), gate = deferred(), entered = deferred()
   f.resolveWith(async () => { entered.resolve(); await gate.promise })
   const pending = f.service.act(f.input('continue'))
   await entered.promise
@@ -174,6 +176,20 @@ test('an unusable cold source can start fresh without trying to activate its bro
     assert.notEqual(result.sessionId, f.source.id)
     assert.equal(activationAttempts, 0)
     assert.equal(f.created.length, 1)
+    assert.equal(f.sent.length, 0)
+  } finally { await f.service.dispose() }
+})
+
+test('an ungrouped source gets a usable native workspace for its fresh draft', async () => {
+  const f = fixture(), directories: string[] = []
+  const registry = f.host.get('workspaceRegistry')
+  registry.list = () => []
+  registry.create = async (cwd: string) => { directories.push(cwd); return { id: 'restored-workspace', path: cwd, sessionIds: [] } }
+  try {
+    await f.service.act(f.input('new'))
+    assert.deepEqual(directories, ['/tmp'])
+    assert.equal(f.created[0].workspaceId, 'restored-workspace')
+    assert.equal(f.created[0].cwd, undefined)
     assert.equal(f.sent.length, 0)
   } finally { await f.service.dispose() }
 })

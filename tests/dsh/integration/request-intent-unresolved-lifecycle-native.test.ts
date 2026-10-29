@@ -29,10 +29,11 @@ const authority = (task: TaskSnapshot) => ({ taskId: task.taskId, runId: task.ru
   repositoryRoot: task.repositoryRoot, state: task.state, runStatus: task.runStatus, revision: task.revision, generation: task.generation })
 
 for (const uncertain of ['change-scope', 'whole-intent'] as const) {
-test(`direct Core queued ${uncertain} uncertainty preserves current authority while awaiting clarification`,
+test(`direct Core queued ${uncertain} uncertainty preserves current authority during interpretation recovery`,
   { skip: !available, timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
   const providerModule = await import(packageRoot
     ? pathToFileURL(join(packageRoot, 'dist/dsh/decisions/laya-v1.js')).href : '../../../src/dsh/decisions/laya-v1.js')
+  let clarificationQuestions = 0
   const providerCalls: Array<{ task: string; question: string }> = []
   // Patch only the provider inference boundary: actual DecisionService splitting,
   // result validation, classifier and direct Core host lifecycle remain active.
@@ -70,6 +71,7 @@ test(`direct Core queued ${uncertain} uncertainty preserves current authority wh
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
     fibers.push(await ctx.plugin({ name: 'unresolved-lifecycle-questions', apply(context: any) {
       return context.provide('userQuestions', { async ask(request: any) {
+        clarificationQuestions += request.questions.filter((question: any) => question.id.startsWith('request-clarification-')).length
         return { answers: request.questions.map((question: any) => ({ id: question.id,
           selected: question.id.startsWith('request-clarification-') ? [] : [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'
             : question.id === 'expected' ? 'A concise explanation' : question.id === 'enno-execution-mode' ? '通常実行' : 'No unrelated changes'] })) }
@@ -134,10 +136,17 @@ test(`direct Core queued ${uncertain} uncertainty preserves current authority wh
         const result = resultFor(request, 'uncertain-next-prepare')
         assert.equal(result.isError, false, text(result))
         assert.equal(JSON.parse(text(result)).prepared, false)
-        assert.equal(JSON.parse(text(result)).status, 'awaiting_clarification')
+        assert.equal(JSON.parse(text(result)).status,
+          uncertain === 'whole-intent' ? 'request_interpretation_required' : 'awaiting_clarification')
+        if (uncertain === 'whole-intent') {
+          assert.equal(JSON.parse(text(result)).nextAction, 'submit_current_request_intent')
+          assert.equal(clarificationQuestions, 0)
+        } else assert.equal(clarificationQuestions, 1)
         assert.deepEqual(authority(readCurrent()), authority(working!))
         rejected = true
-        return f.mock.textResponse('Clarify the new artifact scope before changing the active work.')
+        return f.mock.textResponse(uncertain === 'whole-intent'
+          ? 'Interpret the captured request without asking the human to classify it.'
+          : 'Clarify the new artifact scope before changing the active work.')
       })
     await f.turn(firstRequest)
     console.info(`Core ${uncertain} immediate idle:`, JSON.stringify(authority(readCurrent())))

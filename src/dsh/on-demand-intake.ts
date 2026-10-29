@@ -1223,7 +1223,31 @@ export class OnDemandIntake {
     ])
     const context = state.requestIntentContext
     const sessionId = state.input.agent.session!.id
-    if (reason.interpretation)
+    const scope =
+      (state.requestIntent?.action === 'change' &&
+        state.requestIntent.changeScope === 'unknown') ||
+      reason.message.startsWith('The requested change scope')
+    const target = !!executionClarification(
+      state.task,
+      state.requestIntent,
+      context,
+    )
+    const transition =
+      context?.activeTask && !taskCanExecute(context.activeTask)
+    const question = reason.assessment
+      ? '現在の依頼と実行候補の対象・操作・制約を照合できませんでした。今回の対象と希望する操作、以前の指示を変更する範囲を教えてください。'
+      : transition
+        ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
+        : target
+          ? 'どの具体的なファイル・項目・相手・操作を対象にしますか？'
+          : scope
+            ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
+            : state.requestIntent?.action === 'unknown'
+              ? 'その対象に、具体的に何をしてほしいですか？'
+              : null
+    // Internal relationship classification belongs to the model. An unresolved
+    // classifier is not evidence that the human omitted an action or target.
+    if (reason.interpretation || question === null)
       return {
         prepared: false,
         status: 'request_interpretation_required',
@@ -1287,28 +1311,6 @@ export class OnDemandIntake {
           'The independent comparison did not establish the submitted candidate. Re-read the captured request, answers, active task and same-session plan. Cite an existing proposal only when the request adopts it. Correct the candidate or report the specific unresolved comparison; do not repeat an identical submission or ask the human to supply internal classification fields. Ask a concrete question only if the source itself leaves an action or target ambiguous. No work is prepared.',
       }
     }
-    const scope =
-      (state.requestIntent?.action === 'change' &&
-        state.requestIntent.changeScope === 'unknown') ||
-      reason.message.startsWith('The requested change scope')
-    const target = !!executionClarification(
-      state.task,
-      state.requestIntent,
-      context,
-    )
-    const transition =
-      context?.activeTask && !taskCanExecute(context.activeTask)
-    const question = reason.assessment
-      ? '現在の依頼と実行候補の対象・操作・制約を照合できませんでした。今回の対象と希望する操作、以前の指示を変更する範囲を教えてください。'
-      : transition
-        ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
-        : target
-          ? 'どの具体的なファイル・項目・相手・操作を対象にしますか？'
-          : scope
-            ? '変更するのは文章だけですか、それともコード・テスト・設定も含みますか？'
-            : state.requestIntent?.action === 'unknown'
-              ? 'その対象に、具体的に何をしてほしいですか？'
-              : '今回の依頼は現在の作業の続きですか、それとも別の作業ですか？'
     const replies =
       this.#clarificationContexts.get(state.input.agent) ??
       new Map<string, ClarificationContext>()
@@ -1573,8 +1575,10 @@ export class OnDemandIntake {
         requestIntentIsUnresolved(state.requestIntent) &&
         state.requestIntentContext &&
         state.requestIntent?.source === 'unresolved' &&
-        state.requestIntent.unresolvedReason !==
-          'provider_abstained_or_uncertain' &&
+        (state.requestIntent.relation === 'unknown' ||
+          state.requestIntent.action === 'unknown' ||
+          state.requestIntent.unresolvedReason !==
+            'provider_abstained_or_uncertain') &&
         !this.#clarifications.has(state.input.agent.session!.id)
       ) {
         throw new RequestClarification(

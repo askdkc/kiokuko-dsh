@@ -37,6 +37,17 @@ export function isLispNativeCommand(execution: CommandExecution, execute: unknow
     && execution.parent === expected.parent && scope.execute === execute && scope.digest === canonicalContentHash(execution.arguments)
 }
 
+/** CLI denial fences receive only a frozen name/arguments/agent projection.
+ * This is route selection, never an execution grant: the native dispatcher and
+ * intake still validate the full exact-call capability independently.
+ */
+export function isLispNativeCommandFence(execution: Pick<CommandExecution, 'name' | 'arguments' | 'agent'>, execute: unknown): boolean {
+  const expected = commands.getStore()?.execution
+  return !!expected && isLispNativeCommand(expected, execute)
+    && execution.name === expected.name && execution.agent === expected.agent
+    && canonicalContentHash(execution.arguments) === canonicalContentHash(expected.arguments)
+}
+
 /** A capability created by the Lisp surface from the admitted root execution. */
 export interface LispNativeCommands {
   assertCurrent(): void
