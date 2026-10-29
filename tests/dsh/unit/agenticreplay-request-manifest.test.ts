@@ -50,3 +50,65 @@ test('incident-size 239-message request fits the default bounded capture budget'
   assert.equal((event.payload as any).messages.length, 239)
   assert.equal((event.payload as any).messages[238].content[0].text.length, 2960)
 })
+
+test('request recording retains per-message origin identities without copying private source fields or altering input', () => {
+  const messages = [
+    {
+      id: 'human-1',
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: 'Repeated human request' }],
+    },
+    {
+      id: 'human-2',
+      role: 'user',
+      source: { kind: 'user' },
+      content: [{ type: 'text', text: 'Repeated human request' }],
+    },
+    { id: 'context-1', ...snapshot('on-demand-intake', 'Automatic context') },
+    {
+      id: 'result-1',
+      role: 'tool',
+      source: {
+        kind: 'tool',
+        callId: 'call-1',
+        replayState: 'DO_NOT_CAPTURE_PRIVATE_SOURCE',
+      },
+      toolCallId: 'call-1',
+      isError: true,
+      content: [{ type: 'text', text: 'Denied' }],
+    },
+    {
+      role: 'user',
+      content: [{ type: 'text', text: 'Unknown legacy origin' }],
+    },
+  ]
+  const before = structuredClone(messages)
+  for (const content of ['redacted', 'metadata'] as const) {
+    const payload = modelRequest(
+      { messages },
+      'origins',
+      AgenticReplayConfig.parse({ capture: { content } }),
+    ).payload as any
+    assert.deepEqual(
+      payload.origins.map((x: any) => x.id),
+      ['human-1', 'human-2', 'context-1', 'result-1', undefined],
+    )
+    assert.deepEqual(
+      payload.origins.map((x: any) => x.producer),
+      ['user', 'user', 'plugin:kiokuko-dsh', 'tool', undefined],
+    )
+    assert.deepEqual(payload.origins[2].sections, ['on-demand-intake'])
+    assert.equal(payload.origins[3].toolCallId, 'call-1')
+    assert.doesNotMatch(
+      JSON.stringify(payload),
+      /DO_NOT_CAPTURE_PRIVATE_SOURCE/,
+    )
+    if (content === 'metadata')
+      assert.doesNotMatch(
+        JSON.stringify(payload),
+        /Repeated human request|Automatic context|Unknown legacy origin/,
+      )
+  }
+  assert.deepEqual(messages, before)
+})

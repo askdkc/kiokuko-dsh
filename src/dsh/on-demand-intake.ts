@@ -23,10 +23,11 @@ import type { DshAnswerContext } from './answer-context.js'
 import { executionClarification } from './intake-clarification.js'
 import type { DshLogEvent } from './session-memory-finalizer.js'
 import { randomUUID } from 'node:crypto'
+import { retainedEvents } from './context-projection.js'
 import { z } from 'zod'
 import { TASK_TYPES, type TaskType } from '../akinator/types.js'
 import { canonicalContentHash } from '../serialization/validate.js'
-import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
+import { KIOKUKO_DSH_SOURCE_KIND, isKiokukoDshSource } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
 import {
   taskAllowedOperations,
@@ -198,6 +199,7 @@ interface Turn {
   requestIntentContext?: RequestIntentContext
   requestIntentContextDigest?: string
   preparedIntentDigest?: string
+  guidance?: { readonly id: string; readonly text: string }
   assessment?: { digest: string; result: IntentAssessment }
   memoryOwner: MemoryOwnerKind
   taskType?: TaskType
@@ -249,7 +251,17 @@ function automaticPreparationType(
   if (requestIntent !== undefined && requestIntentIsUnresolved(requestIntent)) {
     // Gathering evidence grants no change/process authority. An active Goal
     // still requires its reference to be resolved before opening another run.
-    return ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
+    return [
+      'read',
+      'read_image',
+      'glob',
+      'grep',
+      'web_search',
+      'web_fetch',
+      'job_output',
+      'job_list',
+      'list_subagent_models',
+    ].includes(name)
       ? 'research'
       : undefined
   }
@@ -257,10 +269,21 @@ function automaticPreparationType(
   const interpreted = requestIntentTaskType(requestIntent, intent.taskType)
   if (interpreted && interpreted !== 'chat') return interpreted
   if (intent.taskType && intent.taskType !== 'chat') return intent.taskType
-  return ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch'].includes(name)
+  return [
+    'read',
+    'read_image',
+    'glob',
+    'grep',
+    'web_search',
+    'web_fetch',
+    'job_output',
+    'job_list',
+    'list_subagent_models',
+  ].includes(name)
     ? 'research'
     : undefined
 }
+// Native inspection and session-local planning carry no project mutation authority.
 const NATIVE_EVIDENCE_READS = new Set([
   'read',
   'read_image',
@@ -268,6 +291,10 @@ const NATIVE_EVIDENCE_READS = new Set([
   'grep',
   'web_search',
   'web_fetch',
+  'job_output',
+  'job_list',
+  'list_subagent_models',
+  'todo_write',
 ])
 const UNOWNED_NATIVE_TOOLS = new Set([
   'bash',
@@ -277,6 +304,10 @@ const UNOWNED_NATIVE_TOOLS = new Set([
   'grep',
   'web_search',
   'web_fetch',
+  'job_output',
+  'job_list',
+  'list_subagent_models',
+  'todo_write',
   'skill',
 ])
 function denied(reason: string): { kind: 'deny'; reason: string } {
@@ -1818,20 +1849,41 @@ export class OnDemandIntake {
       (context && !context.activeGoal && !context.activeTask
         ? `\n${NO_ACTIVE_GOAL_GUIDANCE}`
         : '')
-    return [
-      ...messages,
-      {
-        id: randomUUID(),
-        role: 'user',
-        content: [{ type: 'text', text }],
-        source: {
-          kind: KIOKUKO_DSH_SOURCE_KIND,
-          form: 'snapshot',
-          sections: [{ name: 'on-demand-intake', text }],
-        },
+    // Retry the same host-owned snapshot with the same identity. A changed
+    // snapshot or a new captured turn receives a fresh origin.
+    const origin =
+      state?.guidance?.text === text
+        ? state.guidance
+        : { id: randomUUID(), text }
+    if (state) state.guidance = origin
+    const message = {
+      id: origin.id,
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: {
+        kind: KIOKUKO_DSH_SOURCE_KIND,
+        form: 'snapshot',
+        sections: [{ name: 'on-demand-intake', text }],
       },
-    ]
+    }
+    const digest = canonicalContentHash(message)
+    const sameOrigin = (value: any): boolean =>
+      value?.role === 'user' &&
+      value.id === origin.id &&
+      isKiokukoDshSource(value.source) &&
+      canonicalContentHash(value) === digest
+    let delivered = retainedEvents(state?.input.agent.session ?? {}).some(
+      (event) => event.type === 'user/message' && sameOrigin(event.data),
+    )
+    const projected = messages.filter((value) => {
+      if (!sameOrigin(value)) return true
+      if (delivered) return false
+      delivered = true
+      return true
+    })
+    return delivered ? projected : [...projected, message]
   }
+
   snapshot(sessionId: string):
     | {
         task: string

@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { OnDemandIntake } from '../../../src/dsh/on-demand-intake.js'
+import { createRequestIntentContext } from '../../../src/dsh/decisions/request-intent.js'
 import { injectDshContext, type DshModelMessage } from '../../../src/dsh/context-injection.js'
 import { projectDshContext } from '../../../src/dsh/context-projection.js'
 import type { DshLogEvent } from '../../../src/dsh/session-memory-finalizer.js'
@@ -109,4 +111,78 @@ test('22 continuations do not copy the native request and preserve additional in
   const repeatedBatch = [repeat, ...projectDshContext(fixed, live, [repeat])]
   assert.equal(repeatedBatch[0], repeat, 'an intentional second human submission is preserved')
   assert.equal(repeatedBatch.length, 1)
+})
+
+// Identity, not matching prose, controls retries of the host's own current injection.
+test('on-demand retries keep one owned origin while preserving human resends, foreign sources and tool state', () => {
+  const live = session()
+  const turn: any = {
+    input: {
+      agent: {
+        session: { id: 'origin-session', snapshotEvents: live.snapshotEvents },
+      },
+      turn: 1,
+    },
+  }
+  const intake = new OnDemandIntake({} as any)
+  const first = intake.guidance([], turn)[0] as any
+  assert.equal(
+    (intake.guidance([], turn)[0] as any).id,
+    first.id,
+    'An uncommitted retry keeps the same origin',
+  )
+  const human = { ...first, id: 'human-1', source: { kind: 'user' } }
+  const resend = { ...human, id: 'human-2' }
+  const foreign = {
+    ...first,
+    source: { ...first.source, kind: 'plugin:other' },
+  }
+  const changed = {
+    ...first,
+    content: [{ type: 'text', text: 'Different approval state' }],
+  }
+  const tool = {
+    ...first,
+    role: 'tool',
+    source: { kind: 'tool', callId: 'tool-result' },
+    toolCallId: 'tool-result',
+    isError: true,
+  }
+  const batch = intake.guidance(
+    [first, first, human, resend, foreign, changed, tool],
+    turn,
+  )
+  assert.deepEqual(batch, [first, human, resend, foreign, changed, tool])
+  live.append([first])
+  assert.deepEqual(intake.guidance([first, human, resend], turn), [
+    human,
+    resend,
+  ])
+  const nextTurn: any = { input: { ...turn.input, turn: 2 } }
+  const next = intake.guidance([], nextTurn)[0] as any
+  assert.notEqual(next.id, first.id, 'A different turn has a different origin')
+  turn.requestIntentContext = createRequestIntentContext({
+    task: 'Inspect parser.ts without editing it',
+    messageRefs: [{ id: 'current', digest: 'a'.repeat(64) }],
+  })
+  const update = intake.guidance([], turn)[0] as any
+  assert.notEqual(
+    update.id,
+    first.id,
+    'A changed current instruction is delivered',
+  )
+  live.append([update])
+  delete turn.requestIntentContext
+  const restored = intake.guidance([], turn)[0] as any
+  assert.notEqual(
+    restored.id,
+    first.id,
+    'A to B to A is a new update, not an old retry',
+  )
+  assert.equal(restored.content[0].text, first.content[0].text)
+  assert.equal(
+    live.events.length,
+    2,
+    'Projection never rewrites retained history',
+  )
 })

@@ -83,8 +83,32 @@ export function modelRequest(options: Record<string, any>, id: string, config: A
     messages: messages.length, purpose: options.purpose === undefined ? 'conversation' : label(options.purpose) }
   try {
     if (messages.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
-    const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources } : {
-      format: 'dsh.llm.request.v1', system: options.system, sources,
+    // Native message IDs and producer labels survive history/retry boundaries.
+    // Do not serialize source objects: they can carry private adapter replay state.
+    const origins = messages.map((value, index) => {
+      const message = record(value),
+        source = record(message.source)
+      return {
+        index,
+        role: label(message.role),
+        ...(typeof message.id === 'string' ? { id: label(message.id) } : {}),
+        ...(typeof source.kind === 'string'
+          ? { producer: label(source.kind) }
+          : {}),
+        ...(source.kind === 'plugin' && typeof source.plugin === 'string'
+          ? { plugin: label(source.plugin) }
+          : {}),
+        ...(typeof source.form === 'string' ? { form: label(source.form) } : {}),
+        ...(Array.isArray(source.sections)
+          ? { sections: source.sections.map((value) => label(record(value).name)) }
+          : {}),
+        ...(message.role === 'tool' && typeof message.toolCallId === 'string'
+          ? { toolCallId: label(message.toolCallId) }
+          : {}),
+      }
+    })
+    const payload = config.capture.content === 'metadata' ? { format: 'dsh.llm.request.v1', sources, origins } : {
+      format: 'dsh.llm.request.v1', system: options.system, sources, origins,
       messages: messages.map(item => ({ role: label(record(item).role), content: projectBlocks(record(item).content, config) })),
       tools: Array.isArray(options.tools) ? options.tools.map(item => ({ name: label(record(item).name) })) : [],
     }
@@ -93,7 +117,7 @@ export function modelRequest(options: Record<string, any>, id: string, config: A
   } catch (error) {
     if (!(error instanceof AgenticReplayError) || error.code !== 'queue_limit') throw error
     return { type: 'model.request', actor: 'harness', attrs: { ...attrs, content_omitted: true, omission_reason: 'payload_limit' },
-      payload: { format: 'dsh.llm.request.v1', sources, content_omitted: true, omission_reason: 'payload_limit' } }
+      payload: { format: 'dsh.llm.request.v1', sources, origins_omitted: true, content_omitted: true, omission_reason: 'payload_limit' } }
   }
 }
 /** DSH uses a replacement usage snapshot, with disjoint cache counters. */

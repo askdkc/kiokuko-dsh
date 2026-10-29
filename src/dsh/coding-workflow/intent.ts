@@ -82,6 +82,10 @@ export function codingContinuation(task: string): boolean {
 const readers = new Set([
   'read',
   'read_image',
+  'job_output',
+  'job_list',
+  'list_subagent_models',
+  'todo_write',
   'glob',
   'grep',
   'skill',
