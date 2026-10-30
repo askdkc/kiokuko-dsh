@@ -79,20 +79,34 @@ lisp:
   sbclPath: sbcl
 ```
 
-Workers idle for five minutes stop automatically. Configure `idleTimeoutMs`
-(1000–3600000, default 300000) to change this interval. When `maxWorkers`
-(default 4) is reached, the longest-idle eligible worker stops before a new one
-starts. Active agent turns, evaluations, approvals and running jobs are excluded.
+Workers preserve their state by default (`idleTimeoutMs: 0`). An explicit
+`idleTimeoutMs` of 1000–3600000 opts into idle suspension. When `maxWorkers`
+(default 4) is reached, admission returns `WORKER_LIMIT`; existing workers remain.
+Active agent turns, evaluations, approvals and running jobs cannot idle-suspend.
 Session disposal also stops its workers. Normal suspension appears as `SUSPENDED`,
 retains protection and resumes automatically on the next use; status polling never
 starts a worker. Variables, definitions and references are lost on restart; the
 agent receives the new generation and must rebuild helpers without replaying
 completed effects. Crashes and explicit cancellation still require human recovery.
 
+One canonical repository has one runtime owner and one persistent supervisor/SBCL,
+including across separate DSH databases and sessions. Git subdirectories and symlink
+aliases resolve to the same repository; separate worktrees retain their own root.
+The existing supervisor holds an OS-backed SQLite lease under the current user's
+private `/tmp/kiokuko-lisp-owners-<uid>` directory. A duplicate returns
+`REPOSITORY_IN_USE`; it never disconnects or kills the existing owner. A crash leaves
+runtime birth-identity evidence, so PID reuse is not mistaken for a live owner and
+a still-live orphan cannot silently donate its lease. Unsupported/unknown process
+identity remains conservative. No daemon, Rust wrapper, OS service or credential is added.
+
 Multiple host processes can share the same Kiokuko database and Lisp data directory.
 Each session has one host owner; other sessions and projects run independently,
 including when their agent and operation IDs are identical. `maxWorkers` applies
-per host. Compilers publish private builds atomically and verify a concurrent
+per host. Capacity pressure returns `WORKER_LIMIT` and preserves other repository
+workers and their definitions; it does not evict them. `lisp_status` reports the
+canonical repository, owning session/agent, host PID, supervisor PID and runtime PID.
+For protected execution the runtime PID may belong to the sandbox launcher.
+Compilers publish private builds atomically and verify a concurrent
 winner before reusing it. Starting or stopping a host does not recover another
 host's live operations. A session whose owner has exited is claimed on its next
 admission, and unfinished operations become `UNKNOWN` without replay. Concurrent

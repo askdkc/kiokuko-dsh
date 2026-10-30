@@ -184,7 +184,7 @@ export async function assessRequestIntent(
   context: RequestIntentContext,
   candidate: RequestIntentDecision,
   signal: AbortSignal,
-  options: Parameters<typeof runMicroJudge>[3] = {},
+  options: Parameters<typeof runMicroJudge>[3] & {recoveryAttempt?:number} = {},
 ): Promise<IntentAssessment | undefined> {
   // Explicitly disabled typed decisions retain the existing native authority path; no assessment is claimed.
   if (service && (await service.bind(requestId, signal)).mode === 'off')
@@ -201,7 +201,7 @@ export async function assessRequestIntent(
         requestId,
         batch,
         signal,
-        INTENT_ASSESSMENT_POLICY,
+        options.recoveryAttempt?canonicalContentHash([INTENT_ASSESSMENT_POLICY,'idle-recheck',options.recoveryAttempt]):INTENT_ASSESSMENT_POLICY,
         undefined,
         {
           onEvaluation: (o) => {

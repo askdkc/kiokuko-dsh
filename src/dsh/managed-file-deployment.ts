@@ -1,4 +1,4 @@
-import { link, lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { readRegularFile, type RegularFileSnapshot } from '../config/read-regular-file.js'
 import { KiokukoError } from '../errors.js'
@@ -45,6 +45,7 @@ export async function publishFile(home: string, file: DeploymentFile): Promise<'
   try {
     const staged = path.join(temporary, 'content')
     await writeFile(staged, file.content, { flag: 'wx', mode: file.previous?.mode ?? 0o600 })
+    if (file.previous) await chmod(staged, file.previous.mode)
     await deploymentParent(home, file.target, false)
     const current = await readRegularFile(file.target, { containmentRoot: home })
     if (current?.content === file.content) return 'unchanged'

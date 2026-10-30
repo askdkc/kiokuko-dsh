@@ -22,6 +22,8 @@ import { layaV1Reply, serveLaya } from '../helpers/laya.js'
 import type { DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
 import { createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
+import { TASK_STARTUP_OPTIONS } from '../../../src/dsh/task-startup.js'
+import { canonicalContentHash } from '../../../src/serialization/validate.js'
 
 // Module lifecycle tests explicitly disable optional inference; native request-intent
 // suites exercise the enabled independent assessment and its unavailable boundary.
@@ -46,7 +48,7 @@ function scopedHooks() {
   } }
 }
 
-async function fixture(questions?: { ask(request: any): Promise<any> }) {
+async function fixture(questions?: { ask(request: any): Promise<any> }, startupChoice = TASK_STARTUP_OPTIONS[3] as string) {
   const directory = await mkdtemp(join(tmpdir(), 'kiokuko-core-')), root = realpathSync(directory)
   const listeners = new Map<string, Function>(), tools: any[] = [], providers: any[] = [], sections: any[] = []
   const events: any[] = [], guards: Function[] = []
@@ -61,7 +63,9 @@ async function fixture(questions?: { ask(request: any): Promise<any> }) {
       guard(guard: Function) { guards.push(guard); return () => { guards.splice(guards.indexOf(guard), 1) } },
       schemas: () => tools.map(({ name, description }) => ({ name, description })), register(tool: any) { tools.push(tool); return () => { tools.splice(tools.indexOf(tool), 1) } } },
     systemPrompt: { section(section: any) { sections.push(section); return () => { sections.splice(sections.indexOf(section), 1) } } },
-    ...(questions ? { userQuestions: questions } : {}),
+    ...(questions ? { userQuestions: { ask: async (request: any) => request.questions[0].id.startsWith('task-startup:')
+      ? { answers: [{ id: request.questions[0].id, selected: [startupChoice] }] }
+      : questions.ask(request) } } : {}),
   }
   const ctx = { get: (name: string) => services[name],
     provide(name: string, service: unknown) { services[name] = service; return () => { if (services[name] === service) delete services[name] } },
@@ -221,7 +225,7 @@ test('core native path handles conversation, research, writing and project memor
 
 test('mounted core answers a first factual question through Laya without execution intake', { skip: process.platform === 'win32' }, async t => {
   const asked: string[] = [], requests: any[] = []
-  const f = await fixture({ async ask(request) { asked.push(request.questions[0].id); throw new Error('simple question must not prompt') } })
+  const f = await fixture({ async ask(request) { asked.push(request.questions[0].id); throw new Error('simple question must not prompt') } }, TASK_STARTUP_OPTIONS[1])
   const socket = await serveLaya(t, request => {
     if (request.questions?.['task-type']) requests.push(request)
     return layaV1Reply(request, (id, choices) => id === 'task-type' ? 'chat' : choices.includes('none') ? 'none' : 'no')
@@ -815,4 +819,38 @@ test('default optional memory lookup needs no task and a same-name replacement i
   try{await assert.rejects(f.execute('memory_context',{cwd:f.root,query:'Parser'}));assert.equal(effects,0)}finally{definition.execute=original}
   const db=openConnection(join(f.root,'memory.sqlite3'));try{assert.equal(db.prepare('SELECT count(*) n FROM ledger_runs').get()?.n,0)}finally{db.close()}
  }finally{await handle.dispose();await f.cleanup()}
+})
+
+test('session restart retains an unverified Goal and its source-bound continuation reaches the same run',async()=>{
+  const f=await fixture({ask:async r=>({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})})
+  const databasePath=join(f.root,'memory.sqlite3')
+  let handle=await mountFixtureCore(f.ctx,{repositoryRoot:f.root,databasePath})
+  try {
+    const messages=[{id:'original',role:'user',content:'Implement code migration expectations'}]
+    await f.listeners.get('agent/pre-step')!({agent:f.agent,messages,turn:1,step:0,signal:new AbortController().signal},async()=>({kind:'enter',messages}))
+    await f.prepare('build')
+    const status=await f.execute('coding_workflow',{action:'status'})
+    await f.execute('coding_workflow',{action:'propose',expectedRevision:status.revision,definition:fixtureDefinition()})
+    await handle.dispose()
+    const db=openConnection(databasePath)
+    const run=db.prepare("SELECT run_id,workspace,json_extract(metadata_json,'$.requestId') AS requestId FROM ledger_runs WHERE status='active'").get<any>()!
+    assert.ok(run)
+    const answer='Implementation still needs verification.'
+    f.events.splice(0,f.events.length,{seq:0,type:'turn/start',data:{turn:1}},
+      {seq:1,type:'assistant/message',data:{turn:1,message:{role:'assistant',content:[{type:'text',text:answer}]}}},
+      {seq:2,type:'turn/end',data:{turn:1,reason:{kind:'completed'}}})
+    db.prepare(`INSERT INTO dsh_answer_reviews(run_id,request_id,workspace,dsh_session_id,native_turn,answer_seq,end_seq,answer_digest,input_digest,catalog_digest,model_json,policy_version,status,created_at,updated_at)
+      VALUES(?,?,?,?,1,1,2,?,?,?,'{}','fixture','closed','2026-10-30','2026-10-30')`).run(run.run_id,run.requestId,run.workspace,f.session.id,canonicalContentHash(answer),'b'.repeat(64),'c'.repeat(64))
+    db.close()
+    handle=await mountFixtureCore(f.ctx,{repositoryRoot:f.root,databasePath})
+    await f.listeners.get('agent/session-start')!({agent:f.agent})
+    const continued=[{id:'continue',role:'user',content:'Continue implementation of the same Goal.'}]
+    await f.listeners.get('agent/pre-step')!({agent:f.agent,messages:continued,turn:2,step:0,signal:new AbortController().signal},async()=>({kind:'enter',messages:continued}))
+    const recovery=await f.execute(TASK_PREPARE_TOOL,{taskType:'build'})
+    if(!recovery.prepared){assert.equal(recovery.status,'request_interpretation_required');const prepared=await f.execute(TASK_PREPARE_TOOL,{taskType:'build',requestIntent:{relation:'same_scope_continuation',action:'change',changeScope:'implementation',evidenceRefs:recovery.currentReferences}});assert.equal(prepared.prepared,true,JSON.stringify(prepared))}
+    const final=openConnection(databasePath)
+    assert.equal(final.prepare("SELECT run_id FROM ledger_runs WHERE status='active'").get()?.run_id,run.run_id)
+    assert.equal(final.prepare('SELECT reason FROM dsh_answer_reviews WHERE run_id=?').get(run.run_id)?.reason,'restart_no_retry')
+    final.close()
+  } finally {await handle.dispose();await f.cleanup()}
 })

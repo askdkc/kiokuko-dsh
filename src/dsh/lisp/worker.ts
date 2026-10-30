@@ -1,5 +1,7 @@
 import { managedAdmissionDenied } from '../managed-operation-runner.js'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { detectRepositoryRoot } from '../../repository/detect-root.js'
+import { sameProcess } from '../../../lisp/process-identity.mjs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -12,7 +14,7 @@ const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.stri
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
 export interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
-interface Pending { id: string; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
+interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
 export class LispWorker {
   readonly generation = randomUUID()
@@ -41,17 +43,40 @@ export class LispWorker {
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
   get jobsIdle(): boolean { return this.#jobLaunches === 0 && !this.hasRunningJobs }
-  get stopped(): boolean { return (!this.#child || this.#stopped) && !this.hasRunningJobs }
+  get stopped(): boolean { return (!this.#child || this.#stopped) && (!this.runtimePid || !sameProcess(this.runtimePid,this.runtimeIdentity)) && !this.hasRunningJobs }
   output(): unknown { return { stdout: Buffer.concat(this.#stdout).toString('utf8'), stderr: Buffer.concat(this.#stderr).toString('utf8'), bytes: this.#bytes, truncated: this.#bytes > this.config.maxOutputBytes } }
   jobStatus(): unknown[] { return [...this.jobs].map(([id, job]) => ({ id, state: job.error ? 'FAILED' : job.result ? 'FINISHED' : 'RUNNING', code: job.result?.code ?? null, error: job.error ?? null })) }
   get supervisorPid(): number | null { return this.#child?.pid ?? null }
+  runtimePid: number | null = null
+  private runtimeIdentity: string | undefined
+  repositoryRoot: string | null = null
   async start(): Promise<void> {
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
     // stop() can run while executable/sandbox preparation is awaiting I/O.
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
-    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: true })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe'] })
+    this.repositoryRoot = this.layout.workspace ? detectRepositoryRoot({cwd:this.layout.workspace,allowDirectory:true}).root : null
+    let ownershipReady!:()=>void
+    const ownership=this.repositoryRoot?new Promise<void>(resolve=>{ownershipReady=resolve}):Promise.resolve()
+    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: true, repositoryRoot:this.repositoryRoot })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] })
+    let control = '',reported=false
+    ;(child.stdio[4] as Duplex).on('data',(chunk:Buffer)=>{
+      if(reported)return
+      control+=chunk.toString()
+      if(control.length>1024){this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
+      const end=control.indexOf('\n');if(end<0)return
+      let value:unknown
+      try{value=JSON.parse(control.slice(0,end))}catch{this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
+      const parsed=z.discriminatedUnion('type',[
+        z.object({type:z.literal('runtime'),pid:z.number().int().positive(),identity:z.string().regex(/^[a-f0-9]{64}$/).nullable()}).strict(),
+        z.object({type:z.literal('error'),code:z.enum(['REPOSITORY_IN_USE','REPOSITORY_LOCK_FAILED'])}).strict(),
+      ]).safeParse(value)
+      if(!parsed.success){this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
+      reported=true
+      if(parsed.data.type==='runtime'){this.runtimePid=parsed.data.pid;this.runtimeIdentity=parsed.data.identity??undefined;ownershipReady()}
+      else this.break(new LispError(parsed.data.code,'このリポジトリの Lisp owner を確認してください。別リポジトリは停止しません。'))
+    })
     this.#exit = new Promise(resolve => {
       child.once('error', error => { this.#stopped = true; this.break(error); resolve() })
       child.once('exit', () => { this.#stopped = true; this.break(new LispError('WORKER_EXITED', 'Lisp が終了しました。')); resolve() })
@@ -70,7 +95,7 @@ export class LispWorker {
       if (this.#bytes > this.config.maxOutputBytes) this.break(new LispError('OUTPUT_LIMIT', 'Lisp の出力量が上限を超えました。'))
     })
     const timer = setTimeout(() => this.break(new LispError('STARTUP_TIMEOUT', 'Lisp の起動が時間内に完了しませんでした。')), this.config.startupTimeoutMs)
-    try { await ready } catch (error) { await this.stop(); throw new LispError('STARTUP_FAILED', `${failure(error).message}\n${diagnostics}`) }
+    try { await Promise.all([ready,ownership]) } catch (error) { await this.stop(); if(error instanceof LispError&&['REPOSITORY_IN_USE','REPOSITORY_LOCK_FAILED'].includes(error.code))throw error;throw new LispError('STARTUP_FAILED', `${failure(error).message}\n${diagnostics}`) }
     finally { clearTimeout(timer); this.#startupReject = undefined }
   }
   private break(error: Error): void {
@@ -114,13 +139,13 @@ export class LispWorker {
     if (this.#closed || this.#fatal) throw this.#fatal ?? new Error('Worker closed')
     this.#wire!.write(frame)
   }
-  async request(method: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<WorkerResult> {
+  async request(method: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal, allowRpc = true): Promise<WorkerResult> {
     if (this.#pending) throw new LispError('BUSY', 'この Lisp は別の評価を実行中です。')
     if (signal?.aborted) throw new LispError('CANCELLED', '評価を取り消しました。')
     this.#bytes = 0; this.#stdout = []; this.#stderr = []
     const id = randomUUID()
     const evaluation = new AbortController()
-    const promise = new Promise<WorkerResult>((resolve, reject) => { this.#pending = { id, abort: evaluation, resolve, reject } })
+    const promise = new Promise<WorkerResult>((resolve, reject) => { this.#pending = { id, allowRpc, abort: evaluation, resolve, reject } })
     const abort = () => this.break(new LispError('CANCELLED', '評価を取り消しました。'))
     const timer = setTimeout(() => this.break(new LispError('TIMEOUT', 'Lisp の評価時間が上限を超えました。')), timeoutMs)
     signal?.addEventListener('abort', abort, { once: true })
@@ -136,7 +161,7 @@ export class LispWorker {
   private async rpc(rpc: z.infer<typeof Rpc>): Promise<void> {
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
-      if (!this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
+      if (!this.#pending.allowRpc || !this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
       let value: unknown
       if ([...CODE_METHODS, 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
@@ -205,6 +230,8 @@ export class LispWorker {
         timer = setTimeout(() => reject(new LispError('STOP_UNCONFIRMED', 'Lisp の停止を確認できません。再開せずプロセスを確認してください。')), 5000)
       })])
       if (this.#child && !this.#stopped) throw new LispError('STOP_UNCONFIRMED', 'Lisp の終了を確認できません。')
+      if(this.runtimePid&&sameProcess(this.runtimePid,this.runtimeIdentity))throw new LispError('STOP_UNCONFIRMED','supervisor は終了しましたが Lisp runtime は生存しています。新しい worker は起動しません。')
+      this.#wire?.destroy()
     } finally { clearTimeout(timer) }
   }
 }

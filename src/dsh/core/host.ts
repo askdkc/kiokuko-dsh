@@ -1,5 +1,6 @@
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
+import { TaskStartup } from '../task-startup.js'
 import { nativeExecutionOwnership } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
@@ -554,10 +555,13 @@ export async function mountCore(
     await persistRequestIntent(requestId, context, decision)
     return decision ? { context, decision } : undefined
   }
+  const taskStartup = new TaskStartup({ decisions, ...(questions ? { questions } : {}), root: () => root,
+    lisp: () => get(LISP_CODING_SERVICE) as LispCodingService | undefined })
   const demand = new OnDemandIntake(
     {
       diagnostic: createIntakeDiagnosticSink(runtime),
-      assess: (input, context, decision) =>
+      recovery: runtime.auxiliaryRecovery,
+      assess: (input, context, decision, recoveryAttempt) =>
         assessRequestIntent(
           decisions,
           dshTurnRequestId({
@@ -567,6 +571,7 @@ export async function mountCore(
           context,
           decision,
           input.signal,
+          {...(recoveryAttempt===undefined?{}:{recoveryAttempt})},
         ),
       ...(questions ? { questions } : {}),
       answerContext: new DshAnswerContext(runtime, {
@@ -584,7 +589,9 @@ export async function mountCore(
       prepareNativeCoding: async (input, task, requestIntentContext) => {
         const lisp = get(LISP_CODING_SERVICE) as LispCodingService | undefined
         const sessionId = input.agent.session?.id
-        if (!lisp?.prepareNative || !sessionId) return
+        if (!sessionId) return
+        await taskStartup.prepare({ ...input, sessionId, task, taskType: null })
+        if (!lisp?.prepareNative) return
         const requestIntent = requestIntentContext
           ? await classifyRequestIntent(
               decisions,
@@ -1180,7 +1187,7 @@ export async function mountCore(
           payload.agent as ReviewAgent,
           async (row) => {
             await sessions.flush(payload.agent.session)
-            await tasks.finish({ ...row, admitted: true }, row.status)
+            await tasks.finishRecovered({ ...row, admitted: true }, row.status)
           },
         )
       const previous = active.get(payload.agent.session.id)
@@ -1928,6 +1935,12 @@ export async function mountCore(
             const selected = answerReview.model(agent as ReviewAgent)
             if (selected) return selected
             const currentClaim = claims.get(agent)
+            if (!currentClaim && (agent as any).status === 'idle' && (agent as any).inbox && agents.turnBoundaryOf) {
+              const inbox = (agent as any).inbox
+              const messages = [...inbox.nextStep, ...inbox.nextTurn.slice(0, 1)]
+              if (hasHumanInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
+                turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, step: 0, signal })
+            }
             if (currentClaim) claims.delete(agent)
             if (
               demand &&
@@ -2288,7 +2301,7 @@ export async function mountCore(
                 payload.agent as ReviewAgent,
                 async (row) => {
                   await sessions.flush(payload.agent.session)
-                  await tasks.finish({ ...row, admitted: true }, row.status)
+                  await tasks.finishRecovered({ ...row, admitted: true }, row.status)
                 },
               )
             const previous = active.get(payload.agent.session.id)
@@ -2383,7 +2396,7 @@ export async function mountCore(
           answerReview.recover(agent as ReviewAgent, async (row) => {
             bind(agent)
             await sessions.flush(agent.session)
-            await tasks.finish({ ...row, admitted: true }, row.status)
+            await tasks.finishRecovered({ ...row, admitted: true }, row.status)
           }),
         ),
       )

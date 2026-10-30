@@ -22,7 +22,7 @@ export class LispCodingPreparation {
     selected?(agent:Agent):Promise<boolean>
     deactivate?(agent:Agent):Promise<void>
     choose(input:LispCodingInput):Promise<LispCodingQuestionResult>
-    activate(agent:Agent):Promise<void>
+    activate(agent:Agent, signal?:AbortSignal):Promise<void>
   }) {}
   private current(agent:Agent):Preparation|undefined {
     const state=this.states.get(agent)
@@ -32,6 +32,7 @@ export class LispCodingPreparation {
   }
   async prepare(input:LispCodingInput):Promise<void> {
     const previous=this.current(input.agent)
+    if (previous?.task === input.task && previous.choice && ['selected','declined','reviewed','prototype_required'].includes(previous.phase)) { await previous.pending; return }
     // A resolved provider decision is a positive signal only. Negative, unresolved or
     // unavailable decisions keep the deterministic detector and never replace the request intent.
     const semanticCoding = input.requestIntent?.action === 'change' && input.requestIntent.changeScope === 'implementation'
@@ -56,10 +57,26 @@ export class LispCodingPreparation {
       if(selected.status==='unavailable') { state.phase='unavailable'; state.reason=selected.reason; throw new Error(selected.reason) }
       state.choice=selected.choice;state.answerRef=selected.answerRef
       state.phase=selected.choice==='yes'?'selected':'declined'
-      if(selected.choice==='yes')await this.host.activate(input.agent)
+      if(selected.choice==='yes')await this.host.activate(input.agent,input.signal)
       else await this.host.deactivate?.(input.agent)
     })()
     try{await state.pending}catch(error){if(this.current(input.agent)===state && state.key===key && state.phase==='choice_pending'){state.phase=input.signal.aborted?'cancelled':'unavailable';state.reason=error instanceof Error?error.message:String(error)}throw error}finally{delete state.pending}
+  }
+  async selectTask(input:LispCodingInput, choice:'yes'|'no', answerRef:string):Promise<void> {
+    input.signal.throwIfAborted()
+    const identity=this.host.identity(input.agent)
+    const previous=this.current(input.agent)
+    if(previous?.task===input.task && previous.answerRef===answerRef && previous.choice===choice
+      && (choice==='no' || this.host.enabled(input.agent))) return
+    const key=createHash('sha256').update(JSON.stringify([identity,input.task,answerRef])).digest('hex')
+    const state:Preparation={agent:input.agent,...identity,task:input.task,key,choice,answerRef,protectedWorkflow:false,
+      phase:choice==='yes'?'selected':'declined',attempts:0,failures:0}
+    this.states.set(input.agent,state)
+    try {
+      if(choice==='yes')await this.host.activate(input.agent,input.signal)
+      else await this.host.deactivate?.(input.agent)
+    } catch(error) { state.phase='unavailable'; state.reason=error instanceof Error?error.message:String(error); throw error }
+    input.signal.throwIfAborted()
   }
   choiceFor(agent:Agent,task:string):{choice:'yes'|'no';answerRef:string}|undefined {
     const state=this.current(agent)

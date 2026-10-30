@@ -1,4 +1,4 @@
-import { executionRequestAction } from '../../../src/dsh/coding-workflow/intent.js'
+import { executionRequestAction, codingToolEffect } from '../../../src/dsh/coding-workflow/intent.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
@@ -9,6 +9,16 @@ import { nativeMock } from '../helpers/native-mock.js'
 import { mountNativeTools, executeNativeTool } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
+import { openConnection } from '../../../src/db/connection.js'
+import { migrateDatabase } from '../../../src/db/migrate.js'
+import type { DshDatabaseOperation } from '../../../src/dsh/core-runtime.js'
+import { DshAnswerContext } from '../../../src/dsh/answer-context.js'
+import { AuxiliaryRecovery } from '../../../src/dsh/auxiliary-recovery.js'
+import { MemoryRetrievalConfig } from '../../../src/memory/retrieval-contracts.js'
+import { KIOKUKO_DSH_SOURCE_KIND } from '../../../src/dsh/plugin-source.js'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import nativeTest, { type TestContext } from 'node:test'
@@ -47,6 +57,41 @@ const [cordis, nativeTools, nativeScope] = nativeAvailable
   ? await Promise.all([load('cordis'), load('dsh-tools'), load('dsh-scope')])
   : [undefined, undefined, undefined]
 const signal = () => new AbortController().signal
+for (const unowned of [false, true]) for (const name of ['cordis_inspect_list','cordis_inspect_query','kioku_read'])
+  test(`read-only inspection: ${name}, unowned=${unowned}, unresolved intent`, async t => {
+    const task = 'Inspect the current plugin without changing files.'
+    const messages = [human('inspection-source', task)]
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages,task) })!
+    const f = await fixture(t, { nativeOwnership: async () => unowned ? 'unowned' : 'owned',
+      requestContext: async () => context, interpret: async () => ({ context, decision: unresolvedRequestIntent(context,'fixture_unavailable') }) })
+    let bodies = 0
+    const release = f.ctx.tools.register({ name, parameters:{type:'object'}, output:{schema:{type:'integer'},render:()=>[]}, execute:async()=>++bodies })
+    t.after(release)
+    await f.capture(messages)
+    assert.equal((await f.execute(name)).isError,false,'read-only evidence must remain usable without preparation')
+    assert.equal(bodies,1);assert.equal(f.admissions.length,0)
+    const unknown = await f.execute('review_probe')
+    assert.equal(unknown.isError,true,'unknown tool must still require preparation')
+    assert.equal(f.bodies(),0)
+  })
+
+for (const policy of ['deny','cancel'] as const) test(`read-only inspection: native ${policy} remains authoritative`, async t => {
+  const f = await fixture(t), name = 'cordis_inspect_list'
+  let bodies = 0, policies = 0
+  t.after(f.ctx.tools.register({name,parameters:{type:'object'},output:{schema:{type:'integer'},render:()=>[]},execute:async()=>++bodies}))
+  f.ctx.on('tools/pre-execute',async (execution:any,next:()=>Promise<unknown>)=>{
+    if(execution.name!==name)return next()
+    policies++;return{kind:policy,reason:'fixture native policy'}
+  })
+  await f.capture()
+  assert.equal((await f.execute(name)).isError,true)
+  assert.equal(bodies,0);assert.equal(policies,1);assert.equal(f.admissions.length,0)
+})
+
+test('read-only inspection: name classification remains exact', async () => {
+  for(const name of ['cordis_inspect_list','cordis_inspect_query','kioku_read']) assert.equal(codingToolEffect(name),'read')
+  for(const name of ['cordis_inspect_write','cordis_call','kioku_write','unknown_tool']) assert.notEqual(codingToolEffect(name),'read')
+})
 function deferred() {
   let resolve!: () => void
   const promise = new Promise<void>((done) => {
@@ -3758,3 +3803,82 @@ for (const failure of [
     assert.equal(f.admissions.length, 0)
     assert.deepEqual(f.intake.snapshot(f.session.id), before)
   })
+
+
+for(const terminal of ['completed','cancelled'] as const)test(`memory quarantine: native scoped idle after ${terminal} preserves work and validates only the current source`,async t=>{
+  const root=await mkdtemp(join(tmpdir(),'native-memory-recovery-'));execFileSync('git',['init','-q',root])
+  const db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
+  const runtime={withDatabase:async <T>(fn:DshDatabaseOperation<T>)=>fn(db,undefined as never)}
+  const recovery=new AuxiliaryRecovery(runtime,join(root,'quarantine'),{budgetMs:2000,retryMs:10000})
+  let preparations=0
+  const answerContext=new DshAnswerContext(runtime,{root,projectOnly:true,memoryRetrieval:MemoryRetrievalConfig.parse({}),
+    instructions:async()=>{preparations++;if(preparations===1)throw Error('auxiliary network unavailable');return []}})
+  const f=await fixture(t,{answerContext,recovery},'agent')
+  t.after(async()=>{await recovery.close();db.close();await rm(root,{recursive:true,force:true})})
+  let reads=0
+  t.after(f.ctx.tools.register({name:'cordis_inspect_query',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>++reads}))
+  const original=human('memory-source','Inspect the plugin without changing files.')
+  await f.capture([original]);assert.equal(preparations,1)
+  assert.equal((await f.execute('cordis_inspect_query')).isError,false);assert.equal(reads,1)
+  assert.equal((await f.execute('review_probe')).isError,true,'quarantine never grants an unknown effect')
+  const unverified={id:'unverified-memory',role:'user',content:[{type:'text',text:'unverified private memory'}],
+    source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name:'memory:memory:unverified',text:'unverified private memory'}]}}
+  const projected=await f.intake.answerMessages({agent:f.agent,turn:1,step:1,messages:[original],signal:signal()},[original,unverified])
+  assert.ok(!projected.includes(unverified));assert.ok(JSON.stringify(projected).includes('quarantined'))
+  assert.equal(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state,'pending')
+  // Native permissions remain authoritative while optional memory is unavailable.
+  t.after(f.ctx.tools.guard((e:any)=>e.name==='cordis_inspect_query'?'native permission denied':undefined))
+  assert.equal((await f.execute('cordis_inspect_query')).isError,true);assert.equal(reads,1)
+  f.events.push({...event('turn/end',1),data:{turn:1,reason:{kind:terminal}}} as any)
+  f.intake.finish(f.session,1)
+  await (f.agent as any).ctx.emit('agent/idle',f.agent)
+  const deadline=Date.now()+3000
+  while(['pending','running'].includes(String(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state))){
+    assert.ok(Date.now()<deadline,'actual scoped native idle did not process the quarantine');await new Promise(r=>setTimeout(r,5))
+  }
+  assert.equal(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state,terminal==='completed'?'verified':'stale')
+  assert.equal(preparations,terminal==='completed'?2:1)
+  assert.equal((f.intake.snapshot(f.session.id)!.auxiliary![0] as any).memoryAdopted,false)
+})
+
+test('memory quarantine: a nonresponsive auxiliary preparation reaches a native read within its deadline',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'native-memory-timeout-')),db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
+  const recovery=new AuxiliaryRecovery({withDatabase:async fn=>fn(db)},join(root,'quarantine'))
+  const answerContext={prepare:async()=>new Promise<void>(()=>{}),retire(){}} as unknown as DshAnswerContext
+  const f=await fixture(t,{answerContext,recovery})
+  t.after(async()=>{await recovery.close();db.close();await rm(root,{recursive:true,force:true})})
+  const keepalive=setTimeout(()=>{},3000),started=performance.now();let reads=0
+  t.after(f.ctx.tools.register({name:'cordis_inspect_list',parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>++reads}))
+  try{await f.capture();assert.ok(performance.now()-started<2500);assert.equal((await f.execute('cordis_inspect_list')).isError,false);assert.equal(reads,1)}
+  finally{clearTimeout(keepalive)}
+})
+
+for(const verdict of ['supported','contradicted','insufficient'] as const)test(`semantic idle reevaluation: ${verdict} preserves exact source, bounded attempts and native authority`,async t=>{
+  const root=await mkdtemp(join(tmpdir(),'native-semantic-recovery-')),db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
+  let now=1000
+  const recovery=new AuxiliaryRecovery({withDatabase:async fn=>fn(db)},join(root,'quarantine'),{budgetMs:1000,retryMs:10000,now:()=>now})
+  t.after(async()=>{await recovery.close();db.close();await rm(root,{recursive:true,force:true})})
+  const task='Implement the change in src/parser.ts.',message=human('semantic-recovery-source',task)
+  const intent=activeIntent([message],task,'same_scope_continuation','change','implementation')
+  const calls:Array<{attempt:number|undefined;context:unknown;decision:unknown}>=[]
+  const f=await fixture(t,{recovery,interpret:async()=>intent,assess:async(_input,context,decision,attempt)=>{
+    calls.push({attempt,context,decision})
+    return {semantic:attempt===undefined?'insufficient':verdict,semanticInputDigest:'a'.repeat(64),
+      detector:{state:'unavailable',reason:'artifact_unavailable',elapsedMs:0},
+      outcome:attempt!==undefined&&verdict==='supported'?'consistent':'clarify'}
+  }},'agent')
+  await f.capture([message]);assert.equal(calls.length,1);assert.equal(f.admissions.length,0)
+  assert.equal((await f.execute('review_probe')).isError,true)
+  await (f.agent as any).ctx.emit('agent/idle',f.agent)
+  const until=async(expected:string)=>{const end=Date.now()+2000;while(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state!==expected){assert.ok(Date.now()<end);await new Promise(r=>setTimeout(r,5))}}
+  await until(verdict==='supported'?'verified':verdict==='contradicted'?'rejected':'retry_wait')
+  if(verdict==='insufficient'){
+    for(let i=0;i<2;i++){now+=20000;await recovery.idle(f.session.id)}
+    await until('rejected');assert.equal(calls.length,4)
+  }else assert.equal(calls.length,2)
+  assert.deepEqual(calls[1]!.context,calls[0]!.context);assert.deepEqual(calls[1]!.decision,calls[0]!.decision)
+  assert.equal(calls[1]!.attempt,1);assert.equal(f.admissions.length,0,'advisory reevaluation cannot itself admit an effect')
+  assert.equal(f.bodies(),0)
+  t.after(f.ctx.tools.guard((e:any)=>e.name===TASK_PREPARE_TOOL?'native permission denied':undefined))
+  assert.equal((await f.prepare()).isError,true);assert.equal(f.admissions.length,0)
+})

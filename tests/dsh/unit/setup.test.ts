@@ -31,6 +31,7 @@ async function fixture(t: test.TestContext) {
 test('read-only check detects missing Japanese output and stale instructions; setup repairs both and stays idempotent', async t => {
   const options = await fixture(t)
   await writeFile(options.agents, `prefix\n${legacy}\nsuffix`, { mode: 0o640 })
+  await chmod(options.agents, 0o640) // Establish the preservation fixture independently of the host umask.
   const check = await setupDsh({ ...options, check: true })
   assert.equal(check.current, false)
   assert.equal(check.skills.created, 43)

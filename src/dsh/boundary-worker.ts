@@ -233,7 +233,7 @@ export class DshBoundaryWorker {
 export function abortable<T>(value: T | PromiseLike<T>, signal: AbortSignal): Promise<T> {
   return new Promise((resolve, reject) => {
     const aborted = () => reject(signal.reason)
-    if (signal.aborted) { reject(signal.reason); return }
+    if (signal.aborted) { void Promise.resolve(value).catch(() => {}); reject(signal.reason); return }
     signal.addEventListener('abort', aborted, { once: true })
     Promise.resolve(value).then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted))
   })

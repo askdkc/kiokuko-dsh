@@ -12,6 +12,7 @@ import { createEmbeddingWorker, type EmbeddingWorker } from '../embedding/worker
 import { WriteQueue } from './write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { resolveProjectWorkspace } from '../memory/workspaces.js'
+import { AuxiliaryRecovery } from './auxiliary-recovery.js'
 
 export interface DshRuntimeOptions extends DshPathEnvironment {
   readonly repositoryRoot: string
@@ -95,6 +96,7 @@ async function closeResources(resources: {
 
 /** Own the Kiokuko resources for one dsh process and its agent turns. */
 export class DshCoreRuntime {
+  readonly auxiliaryRecovery: AuxiliaryRecovery
   readonly #options: DshRuntimeOptions
   readonly #agents = new DshAgentStateRegistry()
   #initialization: Promise<RuntimeResources> | undefined
@@ -108,6 +110,7 @@ export class DshCoreRuntime {
 
   constructor(options: DshRuntimeOptions) {
     this.#options = options
+    this.auxiliaryRecovery = new AuxiliaryRecovery(this,join(this.executionJournalDirectory,'auxiliary-recovery'))
   }
 
   get executionJournalDirectory():string {
@@ -213,6 +216,7 @@ export class DshCoreRuntime {
     this.#closing = true
     this.#agents.closeAll()
     this.#closePromise = (async () => {
+      await this.auxiliaryRecovery.close()
       if (this.#activeDatabaseOperations > 0) {
         this.#activeDatabaseDrain = new Promise<void>((resolve) => { this.#resolveActiveDatabaseDrain = resolve })
         await this.#activeDatabaseDrain

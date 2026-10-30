@@ -1,4 +1,5 @@
 import { realpathSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +14,7 @@ import { initialDeepState } from '../../../src/deep-thinker/initial-state.js'
 
 export async function deepFixture(budget: Partial<DeepBudget> = {}, overrides: Partial<DeepConfiguration> = {}, migrationsDirectory = join(process.cwd(), 'migrations')) {
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'deep-fixture-')))
+  execFileSync('git',['init','-q',root])
   const dbPath = join(root, 'state.sqlite3'), db = openConnection(dbPath)
   migrateDatabase(db, migrationsDirectory)
   registerRepositoryAndLocation(db, { repositoryId: 'deep-fixture', workspace: 'deep-fixture', displayName: 'Deep fixture', canonicalRoot: root, remoteFingerprint: null, bindingSchemaVersion: 1, agentTemplateVersion: 1 })

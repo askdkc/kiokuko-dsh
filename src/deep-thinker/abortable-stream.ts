@@ -1,4 +1,5 @@
 export function withDeepAbort<T>(promise: PromiseLike<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) void Promise.resolve(promise).catch(() => {})
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
     const cleanup = () => signal.removeEventListener('abort', abort)

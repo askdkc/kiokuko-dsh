@@ -606,7 +606,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     identity: candidate => { const binding = owner(candidate); return { sessionId: binding.owner.sessionId, root: binding.owner.root } },
     enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
     selected: candidate => manualMode(candidate),
-    activate: async candidate => { await enable(owner(candidate), true) },
+    activate: async (candidate, signal) => { const binding=owner(candidate); await enable({ ...binding, signal: signal ? AbortSignal.any([binding.signal,signal]) : binding.signal }, true) },
     deactivate: async candidate => { const binding=owner(candidate); if(manager.enabled.has(binding.owner.sessionId))await manager.disable(binding.owner);else await store.decline(binding.owner);unregister(binding.agent);hostFence?.release(binding.owner.sessionId) },
     choose: async input => {
       const binding = owner(input.agent), questionId = `lisp-early-${dshTurnRequestId({dshSessionId: binding.owner.sessionId, turn: input.turn})}-${canonicalContentHash(input.task).slice(0,16)}`
@@ -622,6 +622,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     return next()
   }, {global:true, prepend:true}))
   if (config.enabled) disposers.push((ctx as any).provide(LISP_CODING_SERVICE, { ...createLispCodingChoice({ optional:development,
+    taskChoice: (agent, task) => preparation.choiceFor(agent, task) !== undefined,
     ...(questions ? { questions } : {}),
     enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
     decided: async candidate => {
@@ -634,7 +635,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const result = await enable(owner(candidate)) as { state?: string }
       if (!['READY', 'EVALUATING', 'TASK_READY'].includes(result.state ?? '')) fail('RECOVERY_REQUIRED', 'Lisp の起動・復旧が必要です。/kioku-lisp status で状態を確認してください。')
     },
-  }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
+  }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
   const requestSurface: LispAssemblyService = {

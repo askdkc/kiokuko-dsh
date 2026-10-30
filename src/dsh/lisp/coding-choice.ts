@@ -16,6 +16,7 @@ export interface LispCodingInput {
 }
 export interface LispCodingResult { taskType: TaskType; clarification?: string }
 export interface LispCodingService {
+  selectTask?(input: LispCodingInput, choice: 'yes'|'no', answerRef: string): Promise<void>
   prepare(input: LispCodingInput): Promise<LispCodingResult>
   prepareNative?(input: LispCodingInput): Promise<void>
   cancelled?(agent: DshUserQuestionAgent, task: string): void
@@ -33,6 +34,7 @@ export interface LispCodingService {
 export function createLispCodingChoice(input: {
   optional?:boolean
   questions?: DshUserQuestions
+  taskChoice?(agent: DshUserQuestionAgent, task: string): boolean
   enabled(agent: DshUserQuestionAgent): boolean
   decided(agent: DshUserQuestionAgent): Promise<boolean>
   decline(agent: DshUserQuestionAgent): Promise<void>
@@ -56,6 +58,7 @@ export function createLispCodingChoice(input: {
     else conversations.delete(request.agent)
     if (taskType !== 'build' && taskType !== 'debug') return { taskType }
     if (!codingIntent(request.task)) return { taskType: 'chat' }
+    if (input.taskChoice?.(request.agent, request.task)) return { taskType }
     if (taskChoices.get(request.agent) === request.task && input.enabled(request.agent)) {
       try { await input.enable(request.agent) } catch(error) { if(!input.optional)throw error }
       request.signal.throwIfAborted()

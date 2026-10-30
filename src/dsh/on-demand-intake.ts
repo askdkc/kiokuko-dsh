@@ -11,6 +11,8 @@ import {
   type ClarificationContext,
 } from './clarification-context.js'
 import { abortable } from './boundary-worker.js'
+import type { AuxiliaryRecovery } from './auxiliary-recovery.js'
+import { filterRequestMemory } from './request-memory.js'
 import type { DshUserQuestions } from './intake-questions.js'
 import {
   isLispImplementation,
@@ -137,6 +139,7 @@ interface Dependencies {
     input: DemandInput,
     context: RequestIntentContext,
     decision: RequestIntentDecision,
+    recoveryAttempt?: number,
   ) => Promise<IntentAssessment | undefined>
   readonly diagnostic?: (
     input: DemandInput,
@@ -145,6 +148,7 @@ interface Dependencies {
   readonly questions?: DshUserQuestions
 
   readonly answerContext?: DshAnswerContext | undefined
+  readonly recovery?: AuxiliaryRecovery
   readonly nativeChild?: (agent: DemandAgent) => boolean
   readonly validate: (input: DemandInput) => Promise<void>
   /** Positive host authority lookup; unavailable storage must reject, never mean absent. */
@@ -191,6 +195,8 @@ interface Dependencies {
 }
 interface Turn {
   readonly input: DemandInput
+  readonly session: NonNullable<DemandAgent['session']>
+  readonly nativeSignal: AbortSignal
   readonly task: string
   readonly humanContents: ReadonlyMap<string, string>
   status: 'capturing' | 'answer' | 'preparing' | 'prepared' | 'closed' | 'stale'
@@ -212,6 +218,9 @@ interface Turn {
   nativeUnowned?: boolean
   /** Only project context actually produced for this exact captured turn. */
   answerContextReady?: boolean
+  memoryDeferred?: boolean
+  auxiliaryReceipt?: unknown
+  recoveryAfterFinish?: boolean
   readonly preparationCalls: Set<string>
   readonly controller: AbortController
 }
@@ -258,6 +267,9 @@ function automaticPreparationType(
       'grep',
       'web_search',
       'web_fetch',
+      'cordis_inspect_list',
+      'cordis_inspect_query',
+      'kioku_read',
       'job_output',
       'job_list',
       'list_subagent_models',
@@ -276,6 +288,9 @@ function automaticPreparationType(
     'grep',
     'web_search',
     'web_fetch',
+    'cordis_inspect_list',
+    'cordis_inspect_query',
+    'kioku_read',
     'job_output',
     'job_list',
     'list_subagent_models',
@@ -285,6 +300,9 @@ function automaticPreparationType(
 }
 // Native inspection and session-local planning carry no project mutation authority.
 const NATIVE_EVIDENCE_READS = new Set([
+  'cordis_inspect_list',
+  'cordis_inspect_query',
+  'kioku_read',
   'read',
   'read_image',
   'glob',
@@ -297,6 +315,9 @@ const NATIVE_EVIDENCE_READS = new Set([
   'todo_write',
 ])
 const UNOWNED_NATIVE_TOOLS = new Set([
+  'cordis_inspect_list',
+  'cordis_inspect_query',
+  'kioku_read',
   'bash',
   'read',
   'read_image',
@@ -433,6 +454,50 @@ export class OnDemandIntake {
     private readonly host: Dependencies,
     private readonly options: { onlyWhenDeferred?: boolean } = {},
   ) {}
+  private recoveryCurrent(state:Turn):boolean {
+    return !this.#stopped && !state.nativeSignal.aborted && state.input.agent.session===state.session
+      && (!state.input.signal.aborted || state.recoveryAfterFinish===true)
+      && this.#turns.get(state.input.agent.session?.id??'')===state && state.status!=='stale'
+      && (state.status!=='closed'||state.recoveryAfterFinish===true)
+  }
+  private memoryCheck<T>(state:Turn,operation:(input:DemandInput)=>Promise<T>):Promise<T> {
+    const signal=AbortSignal.any([state.input.signal,AbortSignal.timeout(1000)])
+    return abortable(operation({...state.input,signal}),signal)
+  }
+  private async deferMemory(state:Turn):Promise<void> {
+    this.assertCurrent(state)
+    await this.host.validate(state.input)
+    state.memoryDeferred=true;state.answerContextReady=false
+    this.host.answerContext?.retire(state.input.agent)
+    const source={sessionId:state.input.agent.session!.id,turn:state.input.turn,origin:'answer-context' as const,
+      sourceDigest:canonicalContentHash(state.task),contextDigest:canonicalContentHash(state.input.messages)}
+    state.auxiliaryReceipt=await this.host.recovery?.defer({source,current:()=>this.recoveryCurrent(state),
+      check:async signal=>{
+        await this.host.validate({...state.input,signal})
+        await this.host.answerContext?.prepare({...state.input,signal},state.task,state.intent.taskType??null,state.memoryOwner)
+        signal.throwIfAborted()
+        return {state:'verified',reason:'memory_rechecked'}
+      },verified:()=>{if(this.recoveryCurrent(state)){state.memoryDeferred=false;state.answerContextReady=this.host.answerContext!==undefined}}
+    },'memory_unavailable')??{storage:'unavailable',state:'pending',workMayContinue:true,memoryAdopted:false}
+  }
+  private async deferAssessment(state:Turn,context:RequestIntentContext,decision:RequestIntentDecision,digest:string):Promise<void> {
+    let verified:IntentAssessment|undefined
+    state.auxiliaryReceipt=await this.host.recovery?.defer({source:{sessionId:state.input.agent.session!.id,turn:state.input.turn,
+      origin:'intent-assessment',sourceDigest:canonicalContentHash(state.task),contextDigest:digest},
+      current:()=>this.recoveryCurrent(state)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest,
+      check:async(signal,attempt)=>{
+        await this.host.validate({...state.input,signal})
+        const result=await this.host.assess?.({...state.input,signal},context,decision,attempt)
+        signal.throwIfAborted()
+        if(!result)return {state:'rejected',reason:'assessment_disabled'}
+        if(result.outcome==='consistent'){verified=result;return {state:'verified',reason:'semantic_rechecked'}}
+        return {state:result.semantic==='contradicted'?'rejected':'retry_wait',reason:result.semantic==='contradicted'?'semantic_contradicted':'assessment_unresolved'}
+      },verified:async()=>{
+        if(verified&&this.recoveryCurrent(state)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest){
+          state.assessment={digest,result:verified};await this.diagnose(state,{kind:'assessment',assessment:verified})
+        }
+      }},'assessment_unresolved')??{storage:'unavailable',state:'pending',workMayContinue:true,memoryAdopted:false}
+  }
   /** Exact host-owned implementations, never a name-only execution bypass. */
   registerControlTool(definition: Definition): () => void {
     this.#controlTools.set(definition.name, definition.execute)
@@ -574,7 +639,7 @@ export class OnDemandIntake {
 
   /** Availability only: never capture a turn or publish execution intent before turn/start. */
   async prepareNativeCapabilities(input: DemandInput): Promise<void> {
-    if (this.options.onlyWhenDeferred || !this.host.prepareNativeCoding) return
+    if (!this.host.prepareNativeCoding) return
     input = {
       ...input,
       signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
@@ -614,6 +679,7 @@ export class OnDemandIntake {
       signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
     }
     const sessionId = input.agent.session!.id
+    this.host.recovery?.active(sessionId)
     const previous = this.#turns.get(sessionId)
     if (previous) {
       if (
@@ -687,6 +753,7 @@ export class OnDemandIntake {
     // Install the pending state synchronously, before any host or classifier awaits.
     const controller = new AbortController()
     const state: Turn = {
+      session: input.agent.session!, nativeSignal: input.signal,
       input: {
         ...input,
         signal: AbortSignal.any([input.signal, controller.signal]),
@@ -774,6 +841,13 @@ export class OnDemandIntake {
         await this.diagnose(state, { kind: 'native_unowned' })
         await this.diagnose(state, { kind: 'resume' })
         return true
+      }
+      if(this.host.prepareNativeCoding){
+        const context=await this.host.requestContext?.(state.input,state.task)
+          ?? createRequestIntentContext({task:state.task,messageRefs:requestIntentMessageRefs(state.input.messages,state.task)})
+        this.assertCurrent(state)
+        await this.host.prepareNativeCoding(state.input,state.task,context)
+        this.assertCurrent(state)
       }
       try {
         state.intent = await this.host.classify(input, state.task)
@@ -917,13 +991,14 @@ export class OnDemandIntake {
       // The current request is on the conversational path until actual admission.
       // Provisional intent cannot select a different run's memory validator.
       state.memoryOwner = 'conversation'
-      await this.host.answerContext?.prepare(
-        state.input,
+      try { await this.memoryCheck(state, input=>this.host.answerContext?.prepare(
+        input,
         state.task,
         state.intent.taskType ?? null,
         state.memoryOwner,
-      )
+      )??Promise.resolve())
       state.answerContextReady = this.host.answerContext !== undefined
+      } catch {state.input.signal.throwIfAborted();await this.deferMemory(state)}
       this.assertCurrent(state)
       state.status = 'answer'
       return true
@@ -1069,9 +1144,14 @@ export class OnDemandIntake {
       digest = canonicalContentHash([context, decision])
     if (
       state.assessment?.digest !== digest ||
-      state.assessment.result.outcome === 'unavailable'
+      (state.assessment.result.outcome === 'unavailable' && !this.host.recovery)
     ) {
-      const result = await this.host.assess(state.input, context, decision)
+      let result:IntentAssessment|undefined
+      const started=performance.now(),deadline=AbortSignal.timeout(1500)
+      const signal=AbortSignal.any([state.input.signal,deadline])
+      try {result=await abortable(this.host.assess({...state.input,signal},context,decision),signal)}
+      catch {state.input.signal.throwIfAborted();result={semantic:'unavailable',semanticInputDigest:canonicalContentHash([context,decision]),
+        detector:{state:'unavailable',reason:deadline.aborted?'timeout':'process_failed',elapsedMs:Math.ceil(performance.now()-started)},outcome:'unavailable'}}
       this.assertCurrent(state)
       if (!result) {
         await this.diagnose(state, { kind: 'assessment_disabled' })
@@ -1083,6 +1163,7 @@ export class OnDemandIntake {
         throw new Error('Assessment source changed')
       state.assessment = { digest, result }
       await this.diagnose(state, { kind: 'assessment', assessment: result })
+      if(result.outcome!=='consistent')await this.deferAssessment(state,context,decision,digest)
     }
     return state.assessment!.result.outcome === 'consistent'
   }
@@ -1754,18 +1835,19 @@ export class OnDemandIntake {
     // Project the immutable human batch captured before that waterfall.
     if (state?.input.turn === input.turn && state.input.agent !== input.agent)
       throw new Error('Answer projection native agent changed')
-    const projected =
+    let projected =
       state?.input.turn === input.turn &&
       !state.nativeUnowned &&
       state.answerContextReady &&
       !state.confirmationResume &&
       this.host.answerContext
-        ? await this.host.answerContext.project(
-            state.input,
+        ? await this.memoryCheck(state,input=>this.host.answerContext!.project(
+            input,
             messages,
             this.ownerIdentity(state),
-          )
+          )).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state);return filterRequestMemory(messages,new Map())})
         : messages
+    if(state?.memoryDeferred)projected=filterRequestMemory(projected,new Map())
     return this.guidance(
       projected,
       state?.input.turn === input.turn ? state : undefined,
@@ -1781,10 +1863,10 @@ export class OnDemandIntake {
       state.status === 'answer' &&
       this.pending(agent)
     ) {
-      await this.host.answerContext?.beforeRequest(
-        state.input,
+      await this.memoryCheck(state,input=>this.host.answerContext?.beforeRequest(
+        input,
         this.ownerIdentity(state),
-      )
+      )??Promise.resolve()).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state)})
     }
   }
   async fence(
@@ -1796,6 +1878,7 @@ export class OnDemandIntake {
     },
   ): Promise<void> {
     const state = agent.session && this.#turns.get(agent.session.id)
+    if(state?.input.agent===agent&&state.memoryDeferred&&Array.isArray(request.messages))request.messages=filterRequestMemory(request.messages,new Map())
     if (
       state &&
       !state.nativeUnowned &&
@@ -1804,11 +1887,11 @@ export class OnDemandIntake {
       state.status === 'answer' &&
       this.pending(agent)
     ) {
-      await this.host.answerContext?.fence(
-        state.input,
+      await this.memoryCheck(state,input=>this.host.answerContext?.fence(
+        input,
         request,
         this.ownerIdentity(state),
-      )
+      )??Promise.resolve()).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state);if(Array.isArray(request.messages))request.messages=filterRequestMemory(request.messages,new Map())})
     }
   }
   guidance(messages: readonly unknown[], state?: Turn): readonly unknown[] {
@@ -1846,6 +1929,7 @@ export class OnDemandIntake {
     const text =
       ON_DEMAND_GUIDANCE +
       intentText +
+      (state?.memoryDeferred?`\nOptional memory is quarantined and excluded from this request. Native permissions still apply. Deferred checks: ${JSON.stringify(this.host.recovery?.status(state.session.id)??[state.auxiliaryReceipt])}`:'')+
       (context && !context.activeGoal && !context.activeTask
         ? `\n${NO_ACTIVE_GOAL_GUIDANCE}`
         : '')
@@ -1892,6 +1976,7 @@ export class OnDemandIntake {
         turn: number
         requestIntent?: RequestIntentDecision
         memoryOwner: MemoryOwnerKind
+        auxiliary?: readonly unknown[]
       }
     | undefined {
     const state = this.#turns.get(sessionId)
@@ -1905,6 +1990,7 @@ export class OnDemandIntake {
           ? { requestIntent: structuredClone(state.requestIntent) }
           : {}),
         memoryOwner: state.memoryOwner,
+        ...(state.auxiliaryReceipt?{auxiliary:this.host.recovery?.status(sessionId)??[state.auxiliaryReceipt]}:{}),
       }
     )
   }
@@ -2103,6 +2189,8 @@ export class OnDemandIntake {
   finish(session: object & { id: string }, turn: number): void {
     const state = this.#turns.get(session.id)
     if (state?.input.agent.session === session && state.input.turn === turn) {
+      const boundary=[...(state.input.agent.session.snapshotEvents?.()??[])].reverse().find(e=>e.type==='turn/end'&&(e.data as any)?.turn===turn)
+      state.recoveryAfterFinish=(boundary?.data as any)?.reason?.kind==='completed'
       state.status = 'closed'
       state.controller.abort(new Error('Native turn ended'))
       this.host.answerContext?.retire(state.input.agent)
@@ -2114,7 +2202,7 @@ export class OnDemandIntake {
       on(
         name: string,
         listener: (...args: any[]) => any,
-        options?: { prepend: boolean },
+        options?: { prepend?: boolean; global?: boolean },
       ): () => void
     },
     tools: NativeTools,
@@ -2125,6 +2213,11 @@ export class OnDemandIntake {
         'On-demand intake requires native tool identity and monotonic guards',
       )
     this.#tools = tools
+    if(this.host.recovery)this.#disposers.push(context.on('agent/idle',(payload:DemandAgent|{agent:DemandAgent})=>{
+      const agent='agent' in payload?payload.agent:payload
+      const state=agent.session&&this.#turns.get(agent.session.id)
+      if(state?.input.agent===agent&&state.session===agent.session)void this.host.recovery!.idle(agent.session!.id)
+    },{global:true}))
     // Preserve an already installed reader across replacement before capture.
     // When absent, capture binds the validated agent's installed preset reader.
     this.#startupSkillReader = tools.get('skill')?.execute

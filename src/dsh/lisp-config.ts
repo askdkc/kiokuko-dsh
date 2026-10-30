@@ -8,7 +8,7 @@ export const LispConfig = z.object({
   timeoutMs: z.number().int().min(100).max(600_000).default(120_000),
   startupTimeoutMs: z.number().int().min(100).max(60_000).default(30_000),
   maxWorkers: z.number().int().min(1).max(32).default(4),
-  idleTimeoutMs: z.number().int().min(1000).max(3_600_000).default(300_000),
+  idleTimeoutMs: z.number().int().max(3_600_000).refine(n=>n===0||n>=1000).default(0),
   maxOutputBytes: z.number().int().min(1024).max(8_388_608).default(8_388_608),
 }).strict()
 export type LispConfiguration = z.infer<typeof LispConfig>

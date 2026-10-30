@@ -10,6 +10,7 @@ import { getDshSessionCachePath, type DshPathEnvironment } from './paths.js'
 import type { DshLogEvent, DshSessionEventSource, DshSessionLogSnapshot, DshSessionQuery } from './session-memory-finalizer.js'
 import type { DshRuntime } from './runtime.js'
 import type { DshPromptCacheLayout } from './prompt-cache.js'
+import { redactSessionExport } from './session-export-analysis.js'
 
 export type DshSessionCacheHealth = 'healthy' | 'catching_up' | 'degraded' | 'blocked_legacy' | 'archive_unsafe'
 
@@ -816,7 +817,7 @@ export class DshSessionLogMirror implements DshSessionQuery {
   }
 
   /** Stream canonical JSONL without constructing the whole session string. */
-  async *exportJsonl(sessionIdValue: string): AsyncIterable<Uint8Array> {
+  async *exportJsonl(sessionIdValue: string, observe?: (event: DshLogEvent) => void): AsyncIterable<Uint8Array> {
     const sessionId = validSessionId(sessionIdValue)
     await this.start()
     await this.#tail
@@ -830,7 +831,9 @@ export class DshSessionLogMirror implements DshSessionQuery {
       `).all<EventRow>(sessionId, after)
       if (rows.length === 0) return
       for (const row of rows) {
-        const bytes = Buffer.from(`${row.eventJson}\n`, 'utf8')
+        const event = redactSessionExport(JSON.parse(row.eventJson)) as DshLogEvent
+        observe?.(event)
+        const bytes = Buffer.from(`${JSON.stringify(event)}\n`, 'utf8')
         for (let offset = 0; offset < bytes.length; offset += 1024 * 1024) {
           yield bytes.subarray(offset, Math.min(offset + 1024 * 1024, bytes.length))
         }

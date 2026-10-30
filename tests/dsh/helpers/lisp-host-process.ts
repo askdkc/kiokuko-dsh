@@ -8,7 +8,8 @@ const base = process.argv[2]!
 const db = openConnection(join(base, 'state.sqlite3'))
 const store = new LispStore(async fn => fn(db))
 const manager = new LispManager({ store, dataRoot: join(base, 'data'),
-  config: LispConfig.parse({ enabled: true, executionMode: 'development', startupTimeoutMs: 60000 }) })
+  config: LispConfig.parse({ enabled: true, executionMode: 'development', startupTimeoutMs: 60000,
+    sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',...(process.argv[3]?JSON.parse(process.argv[3]):{}) }) })
 process.on('message', async ({ id, method, owner, input }: any) => {
   try {
     const value = method === 'start' ? await manager.start()
@@ -19,5 +20,5 @@ process.on('message', async ({ id, method, owner, input }: any) => {
       : await manager.execute(owner, method, input ?? {})
     process.send!({ id, value })
     if (method === 'dispose') { db.close(); process.disconnect() }
-  } catch (error) { process.send!({ id, error: { code: (error as any).code, message: String(error) } }) }
+  } catch (error) { process.send!({ id, error: { code: (error as any).code, message: `${method}/${owner?.sessionId??'host'}: ${String(error)}` } }) }
 })

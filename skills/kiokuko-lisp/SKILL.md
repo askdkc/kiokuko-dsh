@@ -145,8 +145,10 @@ Clear native implementation requests offer Lisp before model generation. A task 
 ## Project-shared functions
 
 Project-shared functions work in both Lisp modes without a mode switch after the
-coding choice. They execute in separate workers under the selected execution mode, preserving the persistent
-worker's APIs and heap. `lisp_hot_contract` applies the profile approval policy to
+coding choice. The exact session/agent/repo owner reuses its resident worker, preserving
+PID, generation and definitions. Each call uses a fresh package, object table and result scratch;
+this is not heap security isolation. Use pure functions with explicit dependencies. Other owners
+cannot borrow that worker. Without a resident worker, task mode uses disposable workers. `lisp_hot_contract` applies the profile approval policy to
 schemas and 1–32 finite input/expected cases. Only the host grants approval. `lisp_hot_install` validates against that immutable contract and replaces
 the active version only at the expected revision. Dependency code is snapshotted.
 `lisp_hot_call` pins the active version by name; input/result refs stay owner-local.
@@ -154,7 +156,7 @@ the active version only at the expected revision. Dependency code is snapshotted
 uses the same profile approval policy. Approving new conditions preserves the old active
 version until a candidate passes; old conditions cannot authorize a new install.
 Finite cases are not a proof for every input. Active code/dependencies do not
-expire; retired versions may be collected after 30 days. No shared heap or RPC.
+expire; retired versions may be collected after 30 days. Resident shared-function requests deny host RPC.
 Use `/kioku-lisp hot [NAME]` for human inspection. Never rerun UNKNOWN operations.
 
 ## Task-mode API details

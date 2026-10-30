@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {CodeIntelligenceAdapterV1} from '../../../../src/dsh/lisp/code-intelligence.js'
-import {codeOutcome,type CodeResponseV1,type CodeIntelligenceServiceV1,type CodeRequestV1} from '../../../../src/dsh/lisp/code-intelligence-contracts.js'
+import {codeOutcome,validateCodeResponse,type CodeResponseV1,type CodeIntelligenceServiceV1,type CodeRequestV1} from '../../../../src/dsh/lisp/code-intelligence-contracts.js'
 import {renderResult} from '../../../../src/dsh/lisp/model-result.js'
 const signal=new AbortController().signal
+function catalog(size:number):CodeResponseV1 {
+  const languages=Array.from({length:size},(_,i)=>`language-${i}`)
+  return {...codeOutcome('ok','catalog'),freshness:'current',data:{version:1,capabilities:['snapshots','structure','semantic'],languages,queryIds:['declarations','calls','imports'],semanticReady:false,sourceKinds:['disk'],
+    languageCapabilities:languages.map(language=>({language,structure:true,semantic:[],semanticReady:false})),
+    limits:{documentBytes:2097152,captureItems:200,outlineItems:100,spanChars:8000,responseBytes:32768,files:100,inputBytes:16777216,outputBytes:65536,calls:100,batchMs:30000,structureMs:2000,semanticMs:10000}}}
+}
+test('provider catalogs with 23 languages survive the actual adapter and retain bounded schema checks',async()=>{
+  for(const count of [20,21,23,64])assert.equal(validateCodeResponse({method:'capabilities'},catalog(count)).status,'ok')
+  assert.throws(()=>validateCodeResponse({method:'capabilities'},catalog(65)))
+  const f=fixture(async()=>catalog(23))
+  const result=await f.adapter.request('code-capabilities',{},signal)
+  assert.equal(result.status,'ok');assert.equal((result.data as any).languages.length,23);await f.adapter.dispose()
+})
 const opened:CodeResponseV1={...codeOutcome('ok','opened'),freshness:'current',snapshotVersion:'version-1',inputBytes:10,data:{handle:'snapshot',path:'index.ts',language:'typescript',parseErrors:false}}
 function fixture(handler:(request:CodeRequestV1,signal:AbortSignal)=>Promise<CodeResponseV1>=async()=>opened) {
  let valid=true,disposed=0,calls=0

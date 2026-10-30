@@ -1,5 +1,6 @@
 import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
+import { TaskStartup } from "./task-startup.js";
 import { nativeExecutionOwnership } from "./native-execution-ownership.js";
 import { NativeTaskAuthority } from "./native-task-authority.js";
 import { readOwnedIdentity } from "./owned-read-owner.js";
@@ -758,6 +759,7 @@ export function createDshHostAdapter(
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const { finalizationQuery, sessionExport } = createSessionAccess({
+    runtime,
     native,
     sessions,
     sessionQuery,
@@ -974,12 +976,15 @@ export function createDshHostAdapter(
       throw new Error("On-demand native identity mismatch");
     return realpathSync(session.header.cwd);
   };
+  const taskStartup = new TaskStartup({ decisions, ...(userQuestions ? { questions: userQuestions } : {}),
+    root: agent => answerCwd(agent as any), lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined });
   const demand =
     hasDemandTools && agents && sessions
       ? new OnDemandIntake(
           {
             diagnostic: createIntakeDiagnosticSink(runtime),
-            assess: (input, context, decision) =>
+            recovery: runtime.auxiliaryRecovery,
+            assess: (input, context, decision, recoveryAttempt) =>
               assessRequestIntent(
                 decisions,
                 dshTurnRequestId({
@@ -989,6 +994,7 @@ export function createDshHostAdapter(
                 context,
                 decision,
                 input.signal,
+                {...(recoveryAttempt===undefined?{}:{recoveryAttempt})},
               ),
             ...(userQuestions ? { questions: userQuestions } : {}),
             answerContext: new DshAnswerContext(runtime, {
@@ -1008,7 +1014,9 @@ export function createDshHostAdapter(
               const lisp = native.get(LISP_CODING_SERVICE, false) as
                 LispCodingService | undefined;
               const sessionId = input.agent.session?.id;
-              if (!lisp?.prepareNative || !sessionId) return;
+              if (!sessionId) return;
+              await taskStartup.prepare({ ...input, sessionId, task, taskType: null });
+              if (!lisp?.prepareNative) return;
               const requestIntent = requestIntentContext
                 ? await classifyRequestIntent(
                     decisions,

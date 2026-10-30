@@ -17,6 +17,7 @@ import { createDiagnosticAttempt,appendDiagnosticEvent,diagnosticId,diagnosticEv
   bestEffortDiagnostic,reviewDiagnosticStop,createIntakeDiagnosticSink,recordDiagnosticAdmission,recordDiagnosticTurn } from '../../../src/dsh/decisions/diagnostics.js'
 import { DecisionService,databaseDecisionStore } from '../../../src/dsh/decisions/service.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
+import { TypeSafeDecisionProvider } from '../../../src/dsh/decisions/providers.js'
 import { mountDecisionCommand } from '../../../src/dsh/decisions/host.js'
 import { enqueueUnsubmittedTurn } from '../../../src/dsh/turn-process.js'
 import { classifyRequestIntent,createRequestIntentContext,rebindRequestIntentDecision } from '../../../src/dsh/decisions/request-intent.js'
@@ -38,6 +39,22 @@ function fixture(t: import('node:test').TestContext) {
   return {root,path,identity,task,attempt,get db(){return db},reopen(){db.close();db=openConnection(path)},runtime:{withDatabase:async<T>(f:(db:ReturnType<typeof openConnection>)=>T)=>f(db)}}
 }
 const event=(id:string,key:string)=>diagnosticEventId(id,key)
+test('four semantic insufficiencies retain safe criterion/verdict and backend correlation without source text', async t => {
+  const f=fixture(t), config=TypedDecisionsConfig.parse({})
+  const criteria=['action','reference','constraints','latest-answer']
+  const batch={purpose:'intent-semantic-match',state:'SOURCE_BODY_SECRET',questions:criteria.map(name=>({id:`semantic-${name}`,instructions:'Compare source evidence',
+    choices:[{id:'supported',description:'Supported'},{id:'contradicted',description:'Contradicted'},{id:'insufficient',description:'Insufficient'}],abstainId:'insufficient'}))}
+  const service=new DecisionService(config,(_config,observer)=>new TypeSafeDecisionProvider(config.typesafe,async()=>'fixture-key',async()=>Response.json({model:'jev-latest',
+    answers:Object.fromEntries(criteria.map(name=>[`semantic-${name}`,{type:'choice',choice:'insufficient',confidence:1,probabilities:{supported:0,contradicted:0,insufficient:1}}]))}),observer),databaseDecisionStore(f.runtime))
+  const outcome=await service.evaluate('opaque-semantic-request',batch,new AbortController().signal)
+  assert.equal(outcome.status,'completed')
+  if(outcome.status==='completed')assert.ok(outcome.result.answers.every(a=>a.status==='abstained'))
+  const events=f.db.prepare('SELECT document_json FROM dsh_diagnostic_events').all().map(row=>JSON.parse(String(row.document_json)))
+  assert.deepEqual(events.filter(e=>e.kind==='choice').map(e=>e.choice.semantic),criteria.map(criterion=>({criterion,verdict:'insufficient'})))
+  const dispatched=events.find(e=>e.kind==='provider');assert.equal(dispatched.provider,'typesafe');assert.equal(dispatched.providerDispatched,true)
+  assert.equal(dispatched.abstained,4);assert.equal(dispatched.selected,0);assert.ok(Number.isInteger(dispatched.elapsedMs))
+  assert.doesNotMatch(JSON.stringify(events),/SOURCE_BODY_SECRET|fixture-key/)
+})
 const question={kind:'question' as const,status:'waiting' as const,reason:'clarification_required' as const,referenceDigest:hash('host-question')}
 
 test('migration adds decision attempts and causal events without changing existing decision results', () => {
@@ -280,4 +297,27 @@ test('resume links the accepted answer to a fresh same-session source attempt an
   assert.throws(()=>appendDiagnosticEvent(f.db,old,event(old,'stale'),{...resume,nextDecisionId:stale}))
   appendDiagnosticEvent(f.db,old,event(old,'resume'),{...resume,nextDecisionId:fresh})
   assert.equal(readDecisionDiagnostics(f.db,'native-session',old).attempts[0]!.events.at(-1)!.nextDecisionId,fresh)
+})
+
+test('idle semantic retry bypasses only the cached assessment and preserves the bound request and original source',async t=>{
+  const f=fixture(t),config=TypedDecisionsConfig.parse({}),states:unknown[]=[]
+  const {assessRequestIntent}=await import('../../../src/dsh/decisions/intent-assessment.js')
+  const {bindMainModelRequestIntent,requestIntentReferenceIds}=await import('../../../src/dsh/decisions/request-intent.js')
+  const context=createRequestIntentContext({task:'Implement src/example.ts.',messageRefs:[{id:'original-user',digest:hash('original-user')}]})!
+  const candidate=bindMainModelRequestIntent({relation:'new',action:'change',changeScope:'implementation',evidenceRefs:requestIntentReferenceIds(context)},context)!
+  assert.ok(candidate)
+  const service=new DecisionService(config,(_config,observer)=>new TypeSafeDecisionProvider(config.typesafe,async()=>'fixture-key',async(_url,init)=>{
+    const body=JSON.parse(String(init?.body));states.push(body.state)
+    const choice=states.length===1?'insufficient':'supported'
+    return Response.json({model:'jev-latest',answers:Object.fromEntries(Object.keys(body.questions).map(id=>[id,{type:'choice',choice,confidence:1,probabilities:{supported:choice==='supported'?1:0,contradicted:0,insufficient:choice==='insufficient'?1:0}}]))})
+  },observer),databaseDecisionStore(f.runtime))
+  const request='same-native-request',signal=new AbortController().signal
+  assert.equal((await assessRequestIntent(service,request,context,candidate,signal))!.semantic,'insufficient')
+  assert.equal((await assessRequestIntent(service,request,context,candidate,signal))!.semantic,'insufficient')
+  assert.equal(states.length,1,'normal duplicate evaluation remains cached')
+  assert.equal((await assessRequestIntent(service,request,context,candidate,signal,{recoveryAttempt:1}))!.semantic,'supported')
+  assert.equal(states.length,2);assert.deepEqual(states[1],states[0])
+  assert.equal((await assessRequestIntent(service,request,context,candidate,signal,{recoveryAttempt:1}))!.semantic,'supported')
+  assert.equal(states.length,2,'replayed recovery attempt is idempotent')
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_decision_bindings WHERE request_id=?').get(request)!.n,1)
 })

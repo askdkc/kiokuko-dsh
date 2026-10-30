@@ -33,6 +33,7 @@ Switch backends in DSH without a restart:
 ```text
 /kioku-decisions use jev
 /kioku-decisions use laya
+/kioku-decisions use openai
 /kioku-decisions use nimble
 /kioku-decisions use default
 ```
@@ -49,6 +50,35 @@ host; restart it to load the latest choice. Changing the base configuration uses
 that configuration's selection, with the YAML provider as the default.
 
 Configure `typedDecisions` on the full plugin or modular core:
+
+OpenAI uses the distinct official [Decisions API](https://developers.openai.com/api/docs/guides/decisions),
+`POST https://api.openai.com/v1/decisions`, rather than Responses JSON output.
+It maps Choice, Noul (predicate) and Score to the native API and validates ordered
+named answers, distributions, rubric levels and individual refusals. The default
+model is `gpt-6-luna`; probability ≥ 0.9 and margin ≥ 0.2 are required for Choice.
+Set `OPENAI_API_KEY` through DSH credentials (or the environment when no credentials
+service exists). TypeSafe credentials are never substituted. No redirects,
+automatic retries, or provider fallback are added. `use openai` probes before
+persisting; missing credentials, failed probes and cancellation leave selection unchanged.
+Existing Jev/Laya stored configuration digests retain their original shape.
+Current token records retain input/output totals; cached-token breakdown is not recorded.
+
+The normal startup card offers the four decision/Lisp ON/OFF combinations and Cancel
+in one question before model tool assembly. It uses the currently selected backend,
+shown in the card; selection does not prove authentication or successful inference.
+Immutable existing decision bindings also retain the task choice, without granting
+tool or file authority. The same request and explicit continuation reuse the choice;
+an unrelated new request asks again. Cancel/Skip starts no task. Headless operation
+keeps the configured decision mode and explicit manual Lisp preference; an explicit
+`typedDecisions.startup: { decision: true, lisp: true }` config selects both.
+Runtime failures retain the choice and permit explicit recovery without a new question.
+
+Semantic-comparison diagnostics retain only the known criterion names
+(`action`, `reference`, `constraints`, `latest-answer`) and finite verdicts, with
+backend, elapsed time, gate outcome and existing request/decision correlation.
+They contain no source text, credentials or private reasoning. `providerDispatched`
+means the provider adapter was invoked; it does not prove a successful HTTP exchange.
+These diagnostic fields never change acceptance or native permissions.
 
 ```yaml
 typedDecisions:

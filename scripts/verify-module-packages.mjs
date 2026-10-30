@@ -95,7 +95,8 @@ try {
     assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
   }
   for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
-  assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('lisp/')).map(file => file.path), ['lisp/supervisor.mjs'], 'core includes only the shared native process supervisor, never the Lisp runtime')
+  assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('lisp/')).map(file => file.path), ['lisp/process-identity.mjs', 'lisp/repository-owner.mjs', 'lisp/supervisor.mjs'], 'core includes the shared supervisor ownership closure, never the Lisp runtime')
+  await command(process.execPath,[join(packed.core.directory,'lisp/supervisor.mjs'),JSON.stringify({command:process.execPath,args:['-e','process.exit(0)'],cwd:packed.core.directory,env:{PATH:process.env.PATH}})],packed.core.directory)
   assert.ok(!packed.core.files.some(file => /^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
   assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name === 'agenticreplay' || name.startsWith('@agenticreplay/')))
   assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('migrations/')).map(file => file.path).sort(), report.sharedCompatibilityAssets.map(asset => asset.path).sort())
@@ -105,6 +106,7 @@ try {
     const manifest = await composeModules(Object.fromEntries(['core', ...configuration].map(name => [name, packed[name].directory])), consumer)
     assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('Laya-CoreML Unix socket')))
     const composed = await pack(consumer, join(work, `configured-${combination}`))
+    await command(process.execPath,[join(composed.directory,'lisp/supervisor.mjs'),JSON.stringify({command:process.execPath,args:['-e','process.exit(0)'],cwd:composed.directory,env:{PATH:process.env.PATH}})],composed.directory)
     const microJudge=await verifyMicroJudge(composed.directory)
     if (configuration.includes('lisp')) {
       assert.ok(manifest.peerDependencies?.['@deepseek-ai/dsh-tools'],'Lisp artifact must declare its lazy host tool peer')

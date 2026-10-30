@@ -13,6 +13,10 @@ export const LAYA_SOCKET = '~/Library/Caches/laya-coreml/worker.sock'
 const model = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/)
 const timeout = z.number().int().min(1).max(600000).default(5000)
 const probability = z.number().min(0).max(1)
+const openAISettings = z.object({ model: model.default('gpt-6-luna'), timeoutMs: timeout,
+  acceptance: z.object({ minProbability: probability.default(0.9), minMargin: probability.default(0.2) }).strict().prefault({}),
+}).strict()
+export const OPENAI_DECISION_DEFAULTS = openAISettings.parse({})
 export function decisionEndpoint(value: string): string {
   const url = new URL(value)
   if (url.username || url.password || url.hash || url.search
@@ -23,7 +27,11 @@ const endpoint = z.string().max(4096).transform((value, ctx) => {
   try { return decisionEndpoint(value) } catch { ctx.addIssue({ code: 'custom', message: 'Invalid decision endpoint' }); return z.NEVER }
 })
 export const TypedDecisionsConfig = z.object({
-  mode: z.enum(['auto', 'off']).default('auto'), provider: z.enum(['typesafe', 'nimble', 'laya-coreml']).default('typesafe'),
+  mode: z.enum(['auto', 'off']).default('auto'), provider: z.enum(['typesafe', 'nimble', 'laya-coreml', 'openai']).default('typesafe'),
+  // Optional preserves canonical digests of pre-existing Jev/Laya bindings.
+  openai: openAISettings.optional(),
+  /** Explicit headless settings / host-owned task receipt; never grants tool authority. */
+  startup: z.object({ decision: z.boolean(), lisp: z.boolean(), cancelled: z.literal(true).optional() }).strict().optional(),
   curatorClassification: z.object({mode:z.enum(['off','auto']).default('off')}).strict().optional(),
   correctionClassification: z.object({mode:z.enum(['off','shadow','auto']).default('shadow')}).strict().optional(),
   groundingReview: z.discriminatedUnion('mode', [
@@ -78,7 +86,7 @@ export function layaCompactionStatus(config: DecisionConfiguration): { mode: 'of
   return { mode, state: 'shadow', reason: 'shadow_no_commit' }
 }
 
-export function selectedDecisionSettings(config: DecisionConfiguration) { return config[config.provider] }
+export function selectedDecisionSettings(config: DecisionConfiguration) { return config.provider === 'openai' ? config.openai ?? OPENAI_DECISION_DEFAULTS : config[config.provider] }
 export function decisionConfigurationIssue(config: DecisionConfiguration): string | undefined {
   if (config.mode === 'off') return 'mode_off'
   if (config.provider === 'nimble' && (!config.nimble.endpoint || !config.nimble.model)) return 'missing_endpoint_or_model'
@@ -91,6 +99,8 @@ export function decisionConfigurationIssue(config: DecisionConfiguration): strin
 }
 /** Resolve new settings once, before binding. Parsing stored settings never consults cwd/home. */
 export function resolveDecisionConfiguration(config: DecisionConfiguration, repositoryRoot: string): DecisionConfiguration {
+  config = structuredClone(config)
+  if (config.provider === 'openai') config.openai ??= structuredClone(OPENAI_DECISION_DEFAULTS)
   const laya = config['laya-coreml']
   if (!laya) return structuredClone(config)
   const path = laya.socketPath.startsWith('~/') ? resolve(homedir(), laya.socketPath.slice(2)) : resolve(repositoryRoot, laya.socketPath)

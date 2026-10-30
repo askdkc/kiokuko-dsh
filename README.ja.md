@@ -148,11 +148,16 @@ Jevが既定です。DSHのコマンド入力欄で切り替えられます。�
 ```text
 /kioku-decisions use jev
 /kioku-decisions use laya
+/kioku-decisions use openai
 /kioku-decisions use nimble
 /kioku-decisions use default
 ```
 
 Layaは`start-laya`で起動済みのworkerへ直接接続します。workerの差し替えやfingerprint設定は不要です。JevにはTypeSafeキー、Nimbleには接続先・モデルの事前設定が必要です。probeが成功してから選択をプロジェクト単位で保存し、次のリクエストへ適用します。再起動後も保持し、進行中のリクエストは変更しません。`use default`でプラグイン設定へ戻せます。
+
+OpenAIは公式 Decisions API (`POST /v1/decisions`、既定モデル `gpt-6-luna`) を使います。DSH credentials の `OPENAI_API_KEY`、credentialsサービスがない構成では同名環境変数が必要です。Jevのキーは使いません。切替時のprobeはAPI呼出しを伴い、失敗・取消時は切替を保存しません。
+
+通常の作業開始時に、decision／Lisp の4通りのON/OFFを一つのカードで選べます。取消・Skipでは開始しません。選択は依頼に保存し、同じ依頼の再処理・再起動・明示的な「続けて」では再利用します。別の依頼では確認し直します。LispがONでも既存の権限・承認・Stopは維持します。ヘッドレスでは既存設定と明示的なLispセッション設定を保ち、`typedDecisions.startup: {decision: true, lisp: true}` でも明示できます。ONは利用成功の証明ではなく、認証不足や判断失敗は記録して主モデルへ戻します。
 
 APIキーは DSH の `~/.dsh/.credentials.yaml`（`DSH_HOME` を設定している場合は `$DSH_HOME/.credentials.yaml`）に書くか、`/kioku-typesafe-key YOUR_KEY` で保存します。既存の項目は残してください。
 

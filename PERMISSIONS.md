@@ -221,7 +221,10 @@ See [Common Lisp setup and recovery](docs/lisp.md) for commands and limits.
 With `typedDecisions.mode: auto` (default), the host may send the current request,
 installed Skill descriptions, sanitized candidate plan or explicitly selected Lisp
 evidence to the configured adapter. TypeSafe uses its fixed HTTPS endpoint and
-DSH-managed TYPESAFE_API_KEY. Nimble requires an explicit complete HTTPS or loopback
+DSH-managed TYPESAFE_API_KEY. Explicit OpenAI selection uses the fixed
+`https://api.openai.com/v1/decisions` endpoint and separate `OPENAI_API_KEY` through
+DSH credentials, or the inherited environment only when no credentials service exists.
+It never receives a TypeSafe key. Nimble requires an explicit complete HTTPS or loopback
 HTTP endpoint and model; an optional separate bearer reference is resolved through
 DSH. Laya-CoreML uses an explicitly configured owner-access Unix socket (default
 `~/Library/Caches/laya-coreml/worker.sock`) from the host, with bounded v1
@@ -252,7 +255,7 @@ events remain available. They never grant execution authority or change stored L
 values. Set `semanticCompaction.mode: off` to disable this use independently.
 See [semantic compaction](docs/semantic-compaction.md) for protection and failure behavior.
 
-`/kioku-decisions use jev|laya|nimble` performs a bounded synthetic probe and
+`/kioku-decisions use jev|laya|openai|nimble` performs a bounded synthetic probe and
 saves the selected configuration in Kiokuko SQLite for the repository and base
 plugin configuration. Laya health discovery selects the supported protocol from the local
 worker. `/kioku-decisions install-laya` reuses a running worker through the same
@@ -260,6 +263,12 @@ selection flow or shows setup instructions; it does not install or replace files
 No credential value is stored in this selection. Existing request
 bindings remain immutable; the command does not edit DSH profile files or restart
 DSH or the worker. `use default` restores the plugin configuration.
+
+The combined startup question stores decision/Lisp route preferences in existing
+immutable decision bindings. These are not file/process approvals. Cancel/Skip
+does not start work; disabled decisions make no auxiliary inference call for the
+bound request. Diagnostic semantic criteria/verdicts are finite labels only;
+source prose, private reasoning and credentials are excluded.
 
 <!-- kiokuko:runtime approval-policy -->
 ## Profile-wide Lisp approval policy

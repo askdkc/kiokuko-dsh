@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { digest, fail, type LispOwner } from './contracts.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { ManagedOperationJournal } from '../managed-operation-journal.js'
+import { sameProcess } from '../../../lisp/process-identity.mjs'
 
 export interface LispDatabase { <T>(fn: (db: SqliteDatabase) => T): Promise<T> }
 export interface Operation extends Record<string, unknown> {
@@ -27,12 +28,13 @@ export class LispStore {
         .get<{root_path:string;host_id:string;pid:number}>(owner.sessionId)
       if (old?.host_id === hostId && old.pid === process.pid && old.root_path === owner.root) return
       if (old) {
-        try { process.kill(old.pid, 0) }
-        catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        const identity=old.host_id.match(/^([a-f0-9]{64}):/u)?.[1]
+        if (!sameProcess(old.pid,identity)) {
           db.prepare('DELETE FROM dsh_lisp_session_hosts WHERE session_id=? AND host_id=?').run(owner.sessionId, old.host_id)
-        } else throw error }
+        }
         if (db.prepare('SELECT 1 FROM dsh_lisp_session_hosts WHERE session_id=?').get(owner.sessionId))
-          fail('SESSION_IN_USE', 'この Lisp セッションは別のホストで使用中です。別のセッションは並行して使えます。')
+          fail('SESSION_IN_USE', identity ? 'この Lisp セッションは別のホストで使用中です。別のセッションは並行して使えます。'
+            : '旧形式の Lisp claim の所有者は PID だけでは確認できません。稼働物を照合してください。claim は自動削除しません。')
       }
       this.recoverSessionInDatabase(db, owner.sessionId)
       db.prepare('INSERT INTO dsh_lisp_session_hosts VALUES(?,?,?,?)').run(owner.sessionId, owner.root, hostId, process.pid)

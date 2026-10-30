@@ -48,10 +48,13 @@
     "migrations/046_curator_classification.sql",
     "migrations/047_managed_operation_journal.sql",
     "migrations/048_repository_learning.sql",
-    "migrations/049_lisp_session_hosts.sql"
+    "migrations/049_lisp_session_hosts.sql",
+    "migrations/050_auxiliary_recovery.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",
+    "lisp/repository-owner.mjs",
+    "lisp/process-identity.mjs",
     "dist/dsh/models/vendor/THIRD_PARTY_NOTICES.txt",
     "dist/models-client.cjs",
     "dist/models-client.d.ts",

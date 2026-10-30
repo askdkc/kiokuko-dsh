@@ -20,6 +20,7 @@
 (defvar *generation* (uiop:getenv "KIOKU_GENERATION"))
 (defvar *counter* 0)
 (defvar *request* nil)
+(defvar *task-scratch* nil)
 (defun object (&rest pairs)
   (let ((h (make-hash-table :test 'equal)))
     (loop for (key value) on pairs by #'cddr do (setf (gethash key h) value)) h))
@@ -68,7 +69,7 @@
                           (if (< (length (sb-ext:string-to-octets json :external-format :utf-8)) 524288) (kioku.data:parse-json json) nil))
                       (error () nil)))))
 (defun compile-task (code)
-  (let ((*package* (find-package :kioku.user)) (*read-eval* nil))
+  (let ((*read-eval* nil))
     (let ((form (with-input-from-string (stream code)
                   (let ((value (read stream nil stream)))
                     (when (or (eq value stream) (not (eq (read stream nil stream) stream)))
@@ -78,7 +79,7 @@
       (compile nil form))))
 (defun evaluate-task (code input-path)
   "Run one generated function with JSON data; leave the full result in scratch."
-  (let ((*package* (find-package :kioku.user)) (*read-eval* nil))
+  (let ((*read-eval* nil))
       (let* ((function (compile-task code))
              (input (kioku.data:parse-json (uiop:read-file-string input-path)))
              (result (funcall function input))
@@ -88,6 +89,18 @@
           (error "TASK_RESULT_LIMIT"))
         (kioku.files:write-text path json)
         (object "path" "task-result.json" "bytes" (length (sb-ext:string-to-octets json :external-format :utf-8))))))
+(defun task-request (request)
+  ;; Fresh unqualified symbols and object refs; the same owner's process remains.
+  ;; Arbitrary Common Lisp is not a heap security boundary.
+  (let* ((*package* (make-package (symbol-name (gensym "KIOKU.TASK.")) :use '(:cl)))
+         (*objects* (make-hash-table :test 'equal))
+         (*task-scratch* (let ((scratch (gethash "scratch" request)))
+                          (when scratch (uiop:ensure-directory-pathname scratch)))))
+    (unwind-protect
+        (if (equal "task-compile" (gethash "method" request))
+            (progn (compile-task (gethash "code" request)) (object "compiled" yason:true))
+            (evaluate-task (gethash "code" request) (gethash "input" request)))
+      (delete-package *package*))))
 (defun serve ()
   (setf *wire* (sb-sys:make-fd-stream 3 :input t :output t :element-type 'character :external-format :utf-8 :buffering :line))
   (emit (object "version" 1 "type" "ready"))
@@ -95,8 +108,7 @@
     (let ((*request* (gethash "id" request)) (*proposals* nil) (*inputs* (gethash "inputs" request #())))
       (handler-case
           (let ((value (cond ((equal "eval" (gethash "method" request)) (evaluate-code (gethash "code" request)))
-                             ((equal "task" (gethash "method" request)) (evaluate-task (gethash "code" request) (gethash "input" request)))
-                             ((equal "task-compile" (gethash "method" request)) (progn (compile-task (gethash "code" request)) (object "compiled" yason:true)))
+                             ((member (gethash "method" request) '("task" "task-compile") :test #'equal) (task-request request))
                              ((equal "describe" (gethash "method" request)) (kioku.tools:describe-symbol (gethash "symbol" request "")))
                              ((equal "inspect" (gethash "method" request)) (kioku.objects:inspect-ref (gethash "ref" request)))
                              (t (error "UNKNOWN_METHOD")))))
@@ -129,7 +141,7 @@
 (defun regex-matches (pattern text) (cl-ppcre:all-matches-as-strings pattern text))
 (defun regex-replace (pattern text replacement) (cl-ppcre:regex-replace-all pattern text replacement))
 (in-package :kioku.files)
-(defun scratch () (pathname (uiop:getenv "KIOKU_SCRATCH")))
+(defun scratch () (or kioku.internal::*task-scratch* (pathname (uiop:getenv "KIOKU_SCRATCH"))))
 (defun %scratch-path (name &key must-exist)
   "Resolve NAME below scratch without accepting absolute paths, traversal, or links."
   (let* ((root (truename (scratch)))

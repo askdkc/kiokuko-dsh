@@ -86,10 +86,10 @@ function decode(value: unknown, batch: DecisionBatch, provider: string, model: s
   return parseDecisionResult({ answers, provider, requestedModel: model, ...(response.model ? { returnedModel: response.model } : {}), policyVersion: POLICY_VERSION,
     ...(response.usage ? { usage: response.usage } : {}) }, batch)
 }
-interface HttpSettings { endpoint: string; model: string; credential: () => Promise<string | undefined>; request?: typeof fetch }
-async function evaluateHttp(settings: HttpSettings, batch: DecisionBatch, signal: AbortSignal, mapStatus: (status: number) => DecisionError): Promise<unknown> {
+interface HttpSettings { endpoint: string; model: string; credential: () => Promise<string | undefined>; request?: typeof fetch; serialize?: (batch: DecisionBatch, model: string) => string }
+export async function evaluateHttp(settings: HttpSettings, batch: DecisionBatch, signal: AbortSignal, mapStatus: (status: number) => DecisionError): Promise<unknown> {
   const parsed = parseDecisionBatch(batch)
-  const body = parsed.contractVersion ? typedBody(parsed, settings.model) : choiceBody(parsed, settings.model)
+  const body = settings.serialize ? settings.serialize(parsed, settings.model) : parsed.contractVersion ? typedBody(parsed, settings.model) : choiceBody(parsed, settings.model)
   if (Buffer.byteLength(body) > DECISION_BYTES) throw new DecisionError('TOO_LARGE')
   try {
     signal.throwIfAborted()

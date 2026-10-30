@@ -1,5 +1,7 @@
 import { KiokukoError } from '../errors.js'
 import type { DshMirroredAttachment, DshSessionLogMirror } from './session-log-mirror.js'
+import { redactSessionExport, SessionExportAnalysis } from './session-export-analysis.js'
+import { abortable } from './http-json.js'
 
 const MAX_ZIP32_BYTES = 0xffff_ffff
 const MAX_ZIP_ENTRIES = 32_768
@@ -31,6 +33,7 @@ export interface DshSessionExport {
 }
 
 export interface DshSessionLogExportOptions {
+  readonly analysis?: (sessionId: string) => Promise<unknown>
   /**
    * If this is a live DSH session, flush its native log and mirror the flushed
    * snapshot before export readiness is evaluated. Cold sessions simply no-op.
@@ -181,20 +184,29 @@ export class DshSessionLogExportService {
     if (inspection.unresolvedAttachmentCount > 0) {
       throw new DshSessionExportError(409, 'mirror_catching_up', 'session attachments are still being mirrored')
     }
-    if (inspection.attachmentCount + 2 > MAX_ZIP_ENTRIES) {
+    if (inspection.attachmentCount + 3 > MAX_ZIP_ENTRIES) {
       throw new DshSessionExportError(413, 'export_too_large', 'session export has too many attachment entries')
     }
     const conservativeSize = BigInt(inspection.eventBytes)
       + BigInt(inspection.attachmentBytes)
       + BigInt(inspection.attachmentCount) * 8192n
       + BigInt(MAX_CENTRAL_DIRECTORY_BYTES)
+      + 1024n * 1024n
     if (conservativeSize > BigInt(MAX_ZIP32_BYTES)) {
       throw new DshSessionExportError(413, 'export_too_large', 'session export exceeds bounded ZIP32 size')
     }
     const downloadName = `dsh-session-${encodeURIComponent(sessionId)}.zip`
     const mirror = this.mirror
+    const analysis = new SessionExportAnalysis(sessionId)
+    let database: unknown = {status:'not_recorded'}
+    try { if(this.options.analysis) database = await abortable(this.options.analysis(sessionId),AbortSignal.timeout(250)) }
+    catch { database = {status:'unavailable',reason:'analysis_read_failed'} }
     const entries = (async function* (): AsyncIterable<ZipInputEntry> {
-      yield { filename: `dsh-session-${encodeURIComponent(sessionId)}.jsonl`, source: mirror.exportJsonl(sessionId) }
+      yield { filename: `dsh-session-${encodeURIComponent(sessionId)}.jsonl`, source: mirror.exportJsonl(sessionId,event=>analysis.observe(event)) }
+      yield { filename: 'kiokuko-analysis.json', source: (async function*(){
+        const text=JSON.stringify(redactSessionExport(analysis.finish(database)))
+        yield Buffer.from(Buffer.byteLength(text)<=1024*1024?text:JSON.stringify({format:'kiokuko.export-analysis.v1',status:'omitted',reason:'analysis_size_limit'}))
+      })() }
       yield { filename: 'attachments/manifest.jsonl', source: attachmentManifest(mirror.streamAttachments(sessionId)) }
       for await (const attachment of mirror.streamAttachments(sessionId)) {
         yield { filename: attachment.archivePath, source: attachment.source }

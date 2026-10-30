@@ -5,6 +5,7 @@ import test from 'node:test'
 import { readFile, writeFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { answerTaskStartup, type StartupFixtureChoice } from '../helpers/task-startup-fixture.js'
 import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
 import { deepSeekFixtureResponse, wireText } from '../helpers/deepseek-wire.js'
@@ -39,8 +40,8 @@ function requireBody(request: any, name: string, detail = '') {
   assert.ok(textOf(request).includes(content(name)), `${name}: compiled body absent at adapter boundary${detail ? ` (${detail})` : ''}; sections=${JSON.stringify(sections)}; tools=${JSON.stringify(tools)}`)
 }
 
-function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>) {
-  return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra:{typedDecisions:{mode:'off'},...extra}, ...(nativeAnswer ? { nativeAnswer } : {}) })
+function fixture(explicit: boolean|'prompt-only', mode: 'full'|'compiled' = 'compiled', extra: object = {}, nativeAnswer?: (request: any) => Promise<any>, startupChoice: StartupFixtureChoice = 'decision OFF / Lisp ON') {
+  return nativeSkillFixture({ packages: packages!, ...(packageRoot ? { packageRoot } : {}), explicit, mode, extra:{typedDecisions:{mode:'off'},...extra}, startupChoice, ...(nativeAnswer ? { nativeAnswer } : {}) })
 }
 
 async function enableLisp(f: Awaited<ReturnType<typeof fixture>>, command: string, point: string): Promise<void> {
@@ -234,6 +235,7 @@ test('Lisp selected during initial admission executes shared functions without s
   const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     asked.push(q.id)
+    if (q.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp ON')
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['debug'] }] }
     if (q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) return { answers: [{ id: q.id, selected: ['使う'] }] }
     if (q.id === 'execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
@@ -289,7 +291,8 @@ test('Lisp selected during initial admission executes shared functions without s
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
     assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
-    assert.equal(asked.filter(id => id.startsWith('coding-lisp-') || id.startsWith('lisp-early-')).length, 1)
+    assert.equal(asked.filter(id => id.startsWith('task-startup:')).length, 1)
+    assert.equal(asked.filter(id => id.startsWith('coding-lisp-') || id.startsWith('lisp-early-')).length, 0, 'combined startup must replace the old Lisp question')
     let replacementEffects = 0
     const release = f.agent.ctx.get('tools').register({ name: 'coding_workflow', description: 'untrusted replacement',
       parameters: { type: 'object' }, output: { schema: {}, render: () => [] }, execute: async () => ++replacementEffects })
@@ -309,6 +312,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
   let approvals = 0, observedDetail = ''
   const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
+    if (q.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp ON')
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
     if (q.id === 'enno-execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
@@ -448,7 +452,7 @@ for (const provider of ['jev', 'laya-strict', 'laya-v1'] as const) test(`decisio
     answerReview: { mode: 'off' }, modelAutoMode: { mode: 'off' },
     memoryReuse: { mode: 'off' }, semanticCompaction: { mode: 'off' },
     lisp: { executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 },
-  })
+  }, undefined, 'decision ON / Lisp ON')
   const credentials = await f.ctx.plugin({ name: 'family-fixture-credentials', apply(ctx: any) {
     return ctx.provide('credentials', { resolve: async (ref: string) => {
       assert.equal(ref, 'TYPESAFE_API_KEY'); return { value: 'fixture-family-key', source: 'env' }

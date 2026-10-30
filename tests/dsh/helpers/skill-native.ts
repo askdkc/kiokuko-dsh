@@ -7,9 +7,10 @@ import type { DshSkillPrompts } from '../../../src/dsh/skill-prompts.js'
 import type { DecisionService } from '../../../src/dsh/decisions/service.js'
 import { nativeMock } from './native-mock.js'
 import { mountNativeTools } from './native-tools.js'
+import { answerTaskStartup, type StartupFixtureChoice } from './task-startup-fixture.js'
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
-export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService }) {
+export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService; startupChoice?: StartupFixtureChoice; startupChoices?: readonly StartupFixtureChoice[] }) {
   const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', hostPlugin, nativeAnswer, prompts, decisions } = options
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
@@ -20,6 +21,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const dir = await realpath(await mkdtemp(join(tmpdir(),'skill-delivery-'))), previousData = process.env.KIOKUKO_DATA_DIR
   process.env.KIOKUKO_DATA_DIR = dir
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
+  const startupQuestions: Array<{ id: string; selected: StartupFixtureChoice }> = []
   let adapter: ReturnType<typeof subject.createDshHostAdapter> | undefined
   let plugin: { dispose(): Promise<unknown> } | undefined
   let hostFiber: any
@@ -60,6 +62,13 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
       const questions = await import(pathToFileURL(join(packages!, '@deepseek-ai/dsh-user-questions/lib/index.js')).href)
       fibers.push(await ctx.plugin(questions.default, {}))
     } else fibers.push(await ctx.plugin({name:'delivery-intent-answer',apply(c:any){return c.provide('userQuestions',{ask:async(r:any)=>({answers:r.questions.map((q:any)=>{
+      if (q.id.startsWith('task-startup:')) {
+        const selected = options.startupChoices ? options.startupChoices[startupQuestions.length] : options.startupChoice ?? 'decision OFF / Lisp OFF'
+        const response = answerTaskStartup(r, selected!)
+        assert.ok(!startupQuestions.some(previous => previous.id === q.id), 'same startup question must not repeat')
+        startupQuestions.push({ id: q.id, selected: selected! })
+        return response.answers[0]
+      }
       assert.ok((['taskType','enno-execution-mode'].includes(q.id) || q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')),JSON.stringify(q))
       return{id:q.id,selected:[(q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) ? '使わない' : q.id==='taskType'?'chat':'通常実行']}
     })})})}}))
@@ -102,7 +111,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   const errors: unknown[]=[]
   off=ctx.on('agent/error',(e:any)=>errors.push(e.error))
   const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}
-  return {ctx,agent,model,responses,mock,turn,adapter,dir:workspace,llm,
+  return {ctx,agent,model,responses,mock,turn,adapter,dir:workspace,llm,startupQuestions,
     async reload(nextMode: 'full'|'compiled') { if (prompts) throw new Error('Snapshot fixtures cannot change representation'); await plugin!.dispose(); plugin=await mountPlugin(nextMode) },
     async reloadHost(nextMode: 'full'|'compiled') {
       if (explicit!==true || prompts || !adapterOptions) throw new Error('Full host reload requires the explicit native host fixture')

@@ -28,6 +28,7 @@ export interface DecisionObservation { purpose: DecisionBatch['purpose']; questi
   returnedRevision?: string; choiceDiagnostics?: ChoiceDiagnostic[];
   memoryCandidates?: { policy: string; attempted: number; applicable: number; excluded: number; uncertain: number; unassessed: number } }
 export interface DecisionStore {
+  startupBefore?(prefix: string, before: string): Promise<{ id: string; config: DecisionConfiguration }[]>
   binding?(id: string): Promise<DecisionConfiguration | undefined>
   bind(id: string, config: DecisionConfiguration): Promise<DecisionConfiguration>
   read(id: string, digest: string): Promise<DecisionOutcome | undefined>
@@ -48,21 +49,25 @@ function recent<K, V>(cache: Map<K, V>, key: K, limit: number | undefined): V | 
   return value
 }
 /** Store only bounded results and configuration; request evidence is represented by a digest. */
+function storedConfiguration(row: Record<string, unknown>): DecisionConfiguration {
+  const config = TypedDecisionsConfig.parse(JSON.parse(String(row.config_json)))
+  if (canonicalContentHash(config) !== row.config_digest) throw new Error('Decision configuration integrity mismatch')
+  return config
+}
 export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db: SqliteDatabase) => T): Promise<T> }): DecisionStore {
   return {
+    startupBefore: (prefix, before) => runtime.withDatabase(db => db.prepare(
+      'SELECT request_id,config_json,config_digest FROM dsh_decision_bindings WHERE request_id GLOB ? AND request_id < ? ORDER BY request_id DESC LIMIT 2',
+    ).all<{request_id:string;config_json:string;config_digest:string}>(`${prefix}*`, before).map(row => ({ id: row.request_id, config: storedConfiguration(row) }))),
     binding: id => runtime.withDatabase(db => {
       const row = db.prepare('SELECT config_json,config_digest FROM dsh_decision_bindings WHERE request_id=?').get(id)
       if (!row) return undefined
-      const config = TypedDecisionsConfig.parse(JSON.parse(String(row.config_json)))
-      if (canonicalContentHash(config) !== row.config_digest) throw new Error('Decision configuration integrity mismatch')
-      return config
+      return storedConfiguration(row)
     }),
     bind: (id, config) => runtime.withDatabase(db => {
       db.prepare('INSERT OR IGNORE INTO dsh_decision_bindings VALUES (?,?,?)').run(id, JSON.stringify(config), canonicalContentHash(config))
       const row = db.prepare('SELECT config_json,config_digest FROM dsh_decision_bindings WHERE request_id=?').get(id)!
-      const stored = TypedDecisionsConfig.parse(JSON.parse(String(row.config_json)))
-      if (canonicalContentHash(stored) !== row.config_digest) throw new Error('Decision configuration integrity mismatch')
-      return stored
+      return storedConfiguration(row)
     }),
     read: (id, digest) => runtime.withDatabase(db => {
       const row = db.prepare('SELECT result_json FROM dsh_decision_results WHERE request_id=? AND input_digest=?').get(id, digest)
@@ -78,14 +83,19 @@ export function databaseDecisionStore(runtime: { withDatabase<T>(operation: (db:
       const resultExists=db.prepare('SELECT 1 FROM dsh_decision_results WHERE request_id=? AND input_digest=?').get(requestId,inputDigest)
       appendDiagnosticEvent(db,decisionId,diagnosticEventId(decisionId,'provider'),{kind:'provider',status:'observed',
         reason:fallback==='provider_failed'?'evaluation_failed':fallback==='DECISION_CANCELLED'?'provider_cancelled':fallback?'provider_fallback':'provider_completed',
-        ...(['typesafe','nimble','laya-coreml'].includes(observation.provider)?{provider:observation.provider as 'typesafe'|'nimble'|'laya-coreml'}:{}),
+        ...(['typesafe','nimble','laya-coreml','openai'].includes(observation.provider)?{provider:observation.provider as 'typesafe'|'nimble'|'laya-coreml'|'openai'}:{}),
         modelRef:canonicalContentHash([observation.requestedModel,observation.returnedModel]),policyRef:canonicalContentHash(observation.policyVersion),
         ...(observation.returnedRevision ? {providerRevisionRef:canonicalContentHash(observation.returnedRevision)} : {}),
         elapsedMs:observation.elapsedMs,cacheHit:observation.cacheHit,providerDispatched:observation.providerDispatched ?? false,selected:observation.selected,abstained:observation.abstained,measured:observation.measured,
         ...(fallback ? {fallback:allowed.includes(fallback as typeof allowed[number])?fallback as typeof allowed[number]:'other' as const}:{}),
         ...(resultExists?{resultRef:{requestId,inputDigest}}:{})})
       for(const [index,choice] of (observation.choiceDiagnostics ?? []).entries()) {
+        const criterion = choice.questionId.startsWith('semantic-') ? choice.questionId.slice('semantic-'.length) : ''
+        const semantic = observation.purpose === 'intent-semantic-match' && ['action','reference','constraints','latest-answer'].includes(criterion)
+          && ['supported','contradicted','insufficient'].includes(choice.choice)
+          ? { criterion: criterion as 'action'|'reference'|'constraints'|'latest-answer', verdict: choice.choice as 'supported'|'contradicted'|'insufficient' } : undefined
         appendDiagnosticEvent(db,decisionId,diagnosticEventId(decisionId,['choice',index]),{kind:'choice',status:'observed',reason:'observed',choice:{
+          ...(semantic ? {semantic} : {}),
           questionRef:canonicalContentHash(choice.questionId),choiceRef:canonicalContentHash(choice.choice),topProbability:choice.topProbability,
           runnerUpProbability:choice.runnerUpProbability,margin:choice.margin,confidence:choice.confidence,gate:choice.gate,
           acceptance:choice.acceptance,status:choice.status,failedChecks:choice.failedChecks}})
@@ -155,7 +165,7 @@ export class DecisionService {
     })()
   }
   private async resolved(config: DecisionConfiguration, signal: AbortSignal): Promise<DecisionConfiguration> {
-    if (config.provider !== 'laya-coreml' || !decisionConfigurationIssue(config)) return structuredClone(config)
+    if (config.provider !== 'laya-coreml' || !decisionConfigurationIssue(config)) return resolveDecisionConfiguration(config, this.options.repositoryRoot ?? process.cwd())
     return this.options.resolveConfiguration ? abortable(this.options.resolveConfiguration(config, signal), signal) : structuredClone(config)
   }
   async probe(signal: AbortSignal, force = false) {
@@ -175,15 +185,37 @@ export class DecisionService {
   /** Probe the configuration already bound to this logical request. */
   async probeBound(requestId: string, signal: AbortSignal) {
     const config = await this.bind(requestId, signal)
-    if (config.mode !== 'auto' || !['typesafe', 'laya-coreml'].includes(config.provider))
+    if (config.mode !== 'auto' || !['typesafe', 'laya-coreml', 'openai'].includes(config.provider))
       return { state: 'unconfigured' as const, reason: 'decision_off', checkedAt: null }
     return this.readiness.probe(config, signal)
   }
   async modelRoutingAvailable(requestId: string, signal: AbortSignal): Promise<boolean> {
     const config = await this.bind(requestId, signal)
-    return config.mode === 'auto' && (config.provider === 'typesafe' || config.provider === 'laya-coreml')
+    return config.mode === 'auto' && ['typesafe', 'laya-coreml', 'openai'].includes(config.provider)
   }
   async inspectStatus(signal: AbortSignal) { await this.initialize(); await this.readiness.inspect(this.config, signal); return this.status() }
+  async startupConfiguration(): Promise<DecisionConfiguration> { await this.initialize(); return structuredClone(this.config) }
+  async readStartup(id: string): Promise<DecisionConfiguration | undefined> {
+    const pending = this.bindings.get(id) ?? this.bindingPending.get(id)
+    return pending ? structuredClone(await pending) : this.store?.binding?.(id)
+  }
+  async startupBefore(prefix: string, before: string) { return this.store?.startupBefore?.(prefix, before) ?? [] }
+  /** A human route choice must be bound before auxiliary inference. Existing bindings are immutable. */
+  async bindStartup(id: string, choice: NonNullable<DecisionConfiguration['startup']>, signal: AbortSignal, snapshot?: DecisionConfiguration): Promise<DecisionConfiguration> {
+    await this.initialize(); signal.throwIfAborted()
+    let pending = this.bindings.get(id) ?? this.bindingPending.get(id)
+    if (!pending) pending = this.startBinding(id, async () => {
+      const existing = await this.store?.binding?.(id)
+      if (existing) return existing
+      const config = { ...structuredClone(snapshot ?? this.config), mode: choice.decision ? 'auto' as const : 'off' as const, startup: structuredClone(choice) }
+      signal.throwIfAborted()
+      return this.store ? this.store.bind(id, config) : config
+    })
+    const config = structuredClone(await abortable(pending, signal))
+    if (config.startup && canonicalContentHash(config.startup) !== canonicalContentHash(choice) || config.mode !== (choice.decision ? 'auto' : 'off'))
+      throw new DecisionError('INVALID_INPUT')
+    return config
+  }
   /** Verify before publishing the new selection. Existing request snapshots are never rewritten. */
   async selectProvider(provider: DecisionConfiguration['provider'] | 'default', signal: AbortSignal): Promise<void> {
     if (this.switching) throw new DecisionError('UNAVAILABLE')
@@ -315,12 +347,12 @@ export class DecisionService {
     return { mode: this.config.mode, provider: this.config.provider, model: selected?.model ?? null, timeoutMs: selected?.timeoutMs ?? null,
       configurationReady: !decisionConfigurationIssue(this.config),
       ...(this.config.provider === 'laya-coreml' ? { protocol: this.config['laya-coreml']?.protocol ?? (this.config['laya-coreml']?.runtimeFingerprint ? 'strict-v1' : null), runtimeFingerprint: this.config['laya-coreml']?.runtimeFingerprint ?? null, skillAcceptance: this.config['laya-coreml']?.skillAcceptance ?? null, layaCompaction: layaCompactionStatus(this.config) } : {}),
-      limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : POLICY_VERSION, lastFallback: this.lastFallback,
+      limits: this.provider(this.config).capabilities, acceptance: selected?.acceptance ?? null, policyVersion: this.config.provider === 'laya-coreml' ? LAYA_POLICY_VERSION : this.config.provider === 'openai' ? 'openai-decisions-v1' : POLICY_VERSION, lastFallback: this.lastFallback,
       observationPack: this.observationStatus,
       answerReview: this.answerReviewStatus,
       modelHandoff: { ...this.modelHandoffStatus, active: this.modelHandoffStatus.mode === 'auto' && this.modelHandoffStatus.supported
         && this.config.mode !== 'off' && (this.config.provider === 'laya-coreml'
-          || this.config.provider === 'typesafe' && this.readiness.status(this.config).state === 'ready') },
+          || ['typesafe', 'openai'].includes(this.config.provider) && this.readiness.status(this.config).state === 'ready') },
       semanticCompaction: { ...this.semanticCompaction, ...this.compactionStatus, metrics: this.compactionMetrics, lastPreemptive: this.lastPreemptive, preemptiveActive: semanticActive && this.semanticCompaction.preemptive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready', active: semanticActive && this.semanticCompaction.mode === 'auto' && this.compactionStatus.supported && this.compactionStatus.nativeAuto && this.config.mode !== 'off' && this.readiness.status(this.config).state === 'ready' },
       readiness: this.readiness.status(this.config), memoryReuse: { ...this.memoryReuse, active: this.memoryReuse.mode === 'auto' && this.readiness.status(this.config).state === 'ready' },
       decisionObservations: structuredClone(this.decisionObservations) }

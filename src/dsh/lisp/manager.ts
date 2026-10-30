@@ -32,6 +32,7 @@ import { CallInput, DefineInput, TaskToolCatalog, selectFields, validateValue } 
 import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult, compareCandidates, loadCandidate, loadVerification, materializeCandidate, stageCandidate } from './candidate.js'
 import { LispTaskAuthority, type LispTaskExecution } from './task-authority.js'
 import type { TaskLease } from '../task-state.js'
+import { processIdentity } from '../../../lisp/process-identity.mjs'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   execution?: LispTaskExecution | undefined;
@@ -95,7 +96,7 @@ export class LispManager {
   readonly #taskTools: TaskToolCatalog
   readonly #hot: HotToolRuntime
   #closed = false
-  readonly #hostId = randomUUID()
+  readonly #hostId = `${processIdentity(process.pid) ?? 'unknown'}:${randomUUID()}`
   readonly #claims = new Set<Promise<void>>()
   #ownsSessions = false
   #artifactReserved = 0
@@ -117,7 +118,7 @@ export class LispManager {
       authorize: async owner => {
         const state = this.entry(owner)
         if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のホストまたはセッションが停止しています。')
-        // Shared functions run in isolated workers in either admitted Lisp mode.
+        // A resident worker is reusable only by its exact session/agent owner.
       },
       run: (owner, source, input, signal, mode) => this.runTask(owner, source, input, signal, mode),
       input: (owner, ref) => this.taskResult(owner, ref),
@@ -131,7 +132,7 @@ export class LispManager {
     try {
       const saved = JSON.parse(await readFile(join(this.options.dataRoot, 'host.lock'), 'utf8')) as {pid: number}
       if (!Number.isInteger(saved.pid) || saved.pid < 1) fail('HOST_LOCK', 'Lisp のホストロックが破損しています。')
-      try { process.kill(saved.pid, 0); fail('HOST_LOCK', '旧バージョンの Lisp ホストが使用中です。そのホストを終了してから再開してください。') }
+      try { process.kill(saved.pid, 0); fail('HOST_LOCK', '旧形式の Lisp ロックの所有者は PID だけでは確認できません。稼働物とロックを照合してから再開してください。ロックは自動削除しません。') }
       catch (check) { if ((check as NodeJS.ErrnoException).code !== 'ESRCH') throw check }
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     await this.#store.expireResults()
@@ -231,6 +232,13 @@ export class LispManager {
   /** A managed call uses the same admission queue and OS sandbox as legacy Lisp. */
   private async runTask(owner: LispOwner, code: string, input: unknown, signal?: AbortSignal, mode: 'call' | 'compile' | 'eval' = 'call'): Promise<{ value: unknown; output: unknown; generation: string }> {
     await this.authorizeCodingTask(owner)
+    const repositoryRoot=detectRepositoryRoot({cwd:owner.root,allowDirectory:true}).root
+    const resident=[...this.#agents.values()].find(s=>s.worker&&!s.worker.stopped&&s.worker.repositoryRoot===repositoryRoot)
+    if(resident){
+      if(mode==='eval'||resident!==this.#agents.get(JSON.stringify([owner.sessionId,owner.agentId]))||resident.owner.root!==owner.root)
+        fail('REPOSITORY_IN_USE','このリポジトリの Lisp は別の owner が使用中です。状態は保持し、別 SBCL を起動しません。')
+      return this.runResidentTask(resident,code,input,signal,mode)
+    }
     if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED'))
       fail('STOP_UNCONFIRMED', '停止未確認の Lisp worker があります。新しい実行を開始できません。')
     const abort = new AbortController()
@@ -311,6 +319,52 @@ export class LispManager {
       }
     }
   }
+  /** Reuse the exact owner's evaluation slot, never another owner's process or heap. */
+  private async runResidentTask(state: AgentState, code: string, input: unknown, signal: AbortSignal | undefined, mode: 'call' | 'compile'): Promise<{ value: unknown; output: unknown; generation: string }> {
+    const worker=state.worker!
+    if(state.state!=='READY'||!worker.healthy||worker.busy)
+      fail(state.state==='EVALUATING'?'BUSY':'RECOVERY_REQUIRED','常駐 Lisp の状態を確認してください。新しい worker は起動しません。')
+    signal?.throwIfAborted()
+    clearTimeout(state.idleTimer)
+    state.state='EVALUATING' // Reserve before awaiting scratch or input I/O.
+    state.execution=this.taskAuthority.current()
+    const abort=new AbortController();state.active.add(abort)
+    const combined=signal?AbortSignal.any([signal,abort.signal]):abort.signal
+    const current=()=>{
+      combined.throwIfAborted()
+      if(this.#closed||state.disposed||state.state!=='EVALUATING'||!worker.healthy||state.worker!==worker)
+        fail('CANCELLED','常駐 Lisp の実行は取り消されています。')
+    }
+    try{
+      current()
+      if(mode==='compile'){
+        const checked=await this.journalRequest(state,worker,'task-compile',{code},this.#config.timeoutMs,combined,false)
+        current()
+        if(!checked.ok||checked.proposals.length)fail('TASK_COMPILE_FAILED',String(checked.value).slice(0,1000))
+        return{value:null,output:worker.output(),generation:worker.generation}
+      }
+      const encoded=JSON.stringify(input)
+      if(!encoded||Buffer.byteLength(encoded)>64*1024*1024)fail('TASK_INPUT_LIMIT','Task input is too large.')
+      const scratch=await mkdtemp(join(worker.layout.scratch,'hot-'))
+      const inputPath=join(worker.layout.inputs,randomUUID())
+      await writeFile(inputPath,encoded,{flag:'wx',mode:0o400})
+      current()
+      const response=await this.journalRequest(state,worker,'task',{code,input:inputPath,scratch},this.#config.timeoutMs,combined,false)
+      current()
+      if(!response.ok||response.proposals.length)fail('TASK_EXECUTION_FAILED',String(response.value).slice(0,1000))
+      const result=await snapshot(scratch,'task-result.json',[])
+      if(!result.exists)fail('TASK_RESULT_MISSING','Task result was not saved.')
+      const bytes=await checkedBytes(result)
+      current()
+      return{value:JSON.parse(bytes.toString('utf8')) as unknown,output:worker.output(),generation:worker.generation}
+    }catch(error){
+      if(!worker.healthy)this.halted(state,error)
+      throw error
+    }finally{
+      state.active.delete(abort)
+      if(state.state==='EVALUATING'&&worker.healthy)state.state='READY'
+    }
+  }
   private async startWorker(state: AgentState): Promise<LispWorker> {
     await this.authorizeCodingTask(state.owner)
     if (state.admission) return state.admission
@@ -362,14 +416,7 @@ export class LispManager {
     const allocation = this.#admissionQueue.then(async () => {
       if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
       const occupied = () => [...this.#agents.values()].filter(a => a.slotReserved || (a.worker && !a.worker.stopped)).length
-      if (occupied() >= this.#config.maxWorkers) {
-        const candidates = [...this.#agents.values()].filter(a => a !== state && this.canSuspend(a)).sort((a, b) => (a.idleSince ?? 0) - (b.idleSince ?? 0))
-        for (const candidate of candidates) {
-          await this.suspend(candidate)
-          if (occupied() < this.#config.maxWorkers) break
-        }
-      }
-      if (occupied() >= this.#config.maxWorkers) throw new LispError('WORKER_LIMIT', 'Lisp の起動枠はすべて使用中です。待機中の Lisp は自動で停止します。', '実行中の処理が終わってから、もう一度依頼してください。')
+      if (occupied() >= this.#config.maxWorkers) throw new LispError('WORKER_LIMIT', 'Lisp の起動枠はすべて使用中です。既存リポジトリの worker と状態は保持します。', '使い終わったセッションを明示的に disable するか、maxWorkers の設定を確認して再試行してください。')
       if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
       state.slotReserved = true
     })
@@ -384,6 +431,7 @@ export class LispManager {
     clearTimeout(state.idleTimer)
     if (this.#closed || state.disposed || state.state !== 'READY' || state.hostBusy || state.admission || state.active.size) return
     state.idleSince = Date.now()
+    if(this.#config.idleTimeoutMs===0)return
     state.idleTimer = setTimeout(() => {
       void this.suspend(state).then(() => {
         // A background job can outlive the last evaluation. Recheck after it ends.
@@ -719,7 +767,10 @@ export class LispManager {
     const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
     return { approval, enabled: true, managedOperations, managedOperationCount:managed.total, managedOperationsTruncated:managed.truncated, managedReconciliationRequired:managedReconciliation, state: managedReconciliation ? 'RECONCILIATION_REQUIRED' : unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
-      generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null, error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
+      generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null,
+      runtimePid: state.worker?.runtimePid ?? null, repositoryRoot:state.worker?.repositoryRoot ?? null,
+      owner:{hostPid:process.pid,sessionId:owner.sessionId,agentId:owner.agentId},
+      error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
       jobs: [...(state.worker?.jobStatus() ?? []),...[...state.ownedJobs??[]].map(operationId=>({operationId,owner:'kiokuko-execution'}))],
       executionMode:this.#config.executionMode,
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
@@ -798,7 +849,7 @@ export class LispManager {
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
-          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. They run in separate workers in the selected execution mode without access to this worker heap. No mode switch is needed. lisp_hot_status reads active versions.',
+          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. The exact owner reuses this worker with a fresh package, private result scratch and no host RPC. Other owners cannot borrow it. This is not heap security isolation; write pure functions with explicit dependencies. No mode switch is needed. lisp_hot_status reads active versions.',
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a project-relative directory in development mode (scratch-relative in protected mode). Check final receipts and result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',

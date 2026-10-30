@@ -4,12 +4,15 @@ import type { DshSessionLogMirror, DshMirrorEventSession } from '../session-log-
 import type { DshSessionQuery } from '../session-memory-finalizer.js'
 import { readHistoricalDshSession } from '../session-history-lookup.js'
 import { KiokukoError } from '../../errors.js'
+import type { DshCoreRuntime } from '../core-runtime.js'
+import { sessionDatabaseAnalysis } from '../session-export-analysis.js'
 
 interface SessionAccessDependencies {
   readonly native: AdapterContext
   readonly sessions: NativeSessions | undefined
   readonly sessionQuery: DshSessionQuery | undefined
   readonly sessionMirror: DshSessionLogMirror
+  readonly runtime?: Pick<DshCoreRuntime, 'withDatabase'>
 }
 
 export function createSessionAccess(deps: SessionAccessDependencies) {
@@ -60,6 +63,7 @@ export function createSessionAccess(deps: SessionAccessDependencies) {
     },
   }
   const sessionExport = new DshSessionLogExportService(sessionMirror, {
+    ...(deps.runtime ? {analysis:(sessionId:string)=>deps.runtime!.withDatabase(db=>sessionDatabaseAnalysis(db,sessionId))} : {}),
     ensureNativeDurable: async (sessionId) => {
       const liveSession = sessions?.get(sessionId)
       if (liveSession !== undefined) {

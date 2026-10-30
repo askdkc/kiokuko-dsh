@@ -87,7 +87,7 @@ export async function composeModules(sources, destination) {
   const permissionLists = ['readPaths', 'writePaths', 'commands', 'externalServices', 'credentials', 'failureBoundaries', 'lifecycleEvidence']
   manifest.dsh.permissions = { ...inheritedPermissions, ...manifest.dsh.permissions,
     ...Object.fromEntries(permissionLists.filter(key => inheritedPermissions[key] || manifest.dsh.permissions[key]).map(key => [key, [...new Set([...(inheritedPermissions[key] ?? []), ...(manifest.dsh.permissions[key] ?? [])])]])) }
-  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(hasMicroJudge ? ['micro-judge/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(hasMicroJudge ? ['micro-judge/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs', 'lisp/repository-owner.mjs', 'lisp/process-identity.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
   await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   return manifest
 }

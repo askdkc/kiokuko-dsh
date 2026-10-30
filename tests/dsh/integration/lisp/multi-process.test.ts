@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { fork } from 'node:child_process'
+import { fork, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, realpath, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openConnection } from '../../../../src/db/connection.js'
@@ -43,6 +43,7 @@ async function fixture() {
   const owners: LispOwner[] = []
   for (let i = 0; i < 6; i++) {
     const root = join(base, `project-${i}`); await mkdir(root)
+    execFileSync('git',['init','-q',root])
     const owner = { sessionId: `session-${i}`, agentId: 'same-agent', root }
     workingLispTask(db, owner); owners.push(owner)
   }
@@ -97,6 +98,7 @@ test('six projects in separate hosts: cold cache, isolated state, cancellation, 
     await Promise.all(hosts.map(h => h.call('start')))
     const statuses = await Promise.all(hosts.map((h, i) => h.call('enable', f.owners[i])))
     assert.ok(statuses.every(status => status.state === 'READY'))
+    assert.deepEqual(statuses.map(status=>status.repositoryRoot),f.owners.map(owner=>owner.root))
     assert.equal(new Set(statuses.map(status => status.compilation.key)).size, 1)
     assert.deepEqual(await readdir(join(f.base, 'data', 'compiled')), [statuses[0].compilation.key])
     const values = await Promise.all(hosts.map((h, i) => h.call('lisp_eval', f.owners[i], { operationId: 'same-id', code: `(defparameter *project* ${i})` })))
@@ -118,6 +120,18 @@ test('six projects in separate hosts: cold cache, isolated state, cancellation, 
     const crashed = hosts[4]!.call('lisp_eval', f.owners[4], { operationId: 'crash', code: '(sleep 30)' }).catch(() => undefined)
     await until(async () => (await f.store.get(f.owners[4]!, 'crash'))?.state === 'RUNNING')
     await hosts[4]!.stop(); await crashed
+    await until(async()=>{
+      try{
+        for(const pid of [statuses[4].runtimePid,statuses[4].supervisorPid]){
+          try{process.kill(pid,0)
+            if(process.platform!=='linux')return false
+            const stat=await readFile(`/proc/${pid}/stat`,'utf8')
+            if(!/^[ZX] /.test(stat.slice(stat.lastIndexOf(')')+2)))return false
+          }catch(error){if(!['ESRCH','ENOENT'].includes((error as NodeJS.ErrnoException).code??''))throw error}
+        }
+        return true
+      }catch(error){return ['ESRCH','ENOENT'].includes((error as NodeJS.ErrnoException).code??'')}
+    })
     await competitor.call('enable', f.owners[4])
     assert.equal((await f.store.get(f.owners[4]!, 'crash'))?.state, 'UNKNOWN')
     const replay = await competitor.call('lisp_eval', f.owners[4], { operationId: 'crash', code: '(sleep 30)' })

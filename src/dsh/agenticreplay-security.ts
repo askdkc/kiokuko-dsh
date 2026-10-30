@@ -7,7 +7,7 @@ import { AgenticReplayError } from './agenticreplay-types.js'
 
 export const AGENTICREPLAY_RUN_ID = /^run_[0-9a-f]{6,32}$/u
 export const workspaceKey = (root: string): string => createHash('sha256').update(root).digest('hex')
-function isCredentialName(name: string): boolean {
+export function isCredentialName(name: string): boolean {
   const normalized = name.replace(/([a-z])([A-Z])/gu, '$1_$2').replace(/[- \t]+/gu, '_').toLowerCase()
     .replace(/(^|_)apikey$/u, '$1api_key').replace(/(^|_)accesstoken$/u, '$1access_token')
   // Display Slot rawText and provider signatures are private model fields,

@@ -336,6 +336,14 @@ export class CoreTasks {
     if (!task.admitted && outcome === 'completed') throw new Error('Task is not admitted')
     await this.runtime.withDatabase(db => finishCoreTask(db, task, outcome))
   }
+  /** A saved answer boundary cannot finish a Goal whose host checks are still missing. */
+  async finishRecovered(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
+    await this.runtime.withDatabase(db => withImmediateTransaction(db,()=>{
+      const {run}=assertCoreTaskIdentity(db,task,'recovery')
+      if (run.status==='active' && taskCompletionBlocksClose(assessTaskCompletion(db,task.runId))) return
+      finishCoreTask(db,task,outcome)
+    }))
+  }
 }
 
 function retrievalRuntimeForRequest(config: MemoryRetrievalConfiguration, task: string, anchorTimeMs: number, structuredConstraint?: MemoryTimeConstraint) {

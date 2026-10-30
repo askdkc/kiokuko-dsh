@@ -226,7 +226,8 @@ test('the actual Python capability delegates FD4, terminal errors and cleanup to
   const root=mkdtempSync(path.join(tmpdir(),'verification-filter-fixture-'));mkdirSync(path.join(root,'scripts'));mkdirSync(path.join(root,'lisp'));mkdirSync(path.join(root,'dist/dsh/lisp'),{recursive:true});
   writeFileSync(path.join(root,'package.json'),'{"type":"module"}');
   cpSync(new URL('verify-protected-python-capability.mjs',import.meta.url),path.join(root,'scripts/probe.mjs'));
-  cpSync(new URL('../lisp/supervisor.mjs',import.meta.url),path.join(root,'lisp/supervisor.mjs'));
+  for(const file of ['supervisor.mjs','repository-owner.mjs','process-identity.mjs'])
+   cpSync(new URL('../lisp/'+file,import.meta.url),path.join(root,'lisp',file));
   const expected='exact seccomp fixture bytes';
   const childCode="const fs=require('node:fs');require('node:assert/strict').equal(fs.readFileSync(4,'utf8'),"+JSON.stringify(expected)+");"+(kind==='nonzero'?"process.exit(7)":kind==='output-limit'?"process.stdout.write('x'.repeat(32768))":"console.log('protected-python:3')");
   writeFileSync(path.join(root,'dist/dsh/lisp/sandbox.js'),`

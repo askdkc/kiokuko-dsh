@@ -91,6 +91,8 @@ const readers = new Set([
   'skill',
   'web_search',
   'web_fetch',
+  'cordis_inspect_list',
+  'cordis_inspect_query',
   'kioku_read',
   'kioku_result',
   'correction_check',

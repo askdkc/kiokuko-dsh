@@ -75,6 +75,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
   const writes: any[] = [], runtimeRuns: any[] = [], questionPhases: any[] = [], publicRoutes: string[] = []
   const backgroundRequests: any[] = []
   const requests: any[] = [], questions: any[] = [], dispatches: any[] = [], errors: string[] = [], bodies: any[] = []
+  const startupQuestions: any[] = []
   let answerMemory: { workspace: string; entryId: string; body: string } | undefined
   let spoofedResult: any
   let handle: any, core: any, adapter: any, composition: any
@@ -113,6 +114,10 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       if (publicProfile) context.provide('profileContext', { name: publicProfile })
       if (mode === 'public' && !publicProfile) context.provide('connection', { fetch: { register(route: any) { publicRoutes.push(route.path); return () => {} } }, rpc: { intercept: () => () => {} } })
       return context.provide('userQuestions', { async ask(request: any) {
+        if (request.questions[0].id.startsWith('task-startup:')) {
+          startupQuestions.push({ questions: request.questions, modelRequests: requests.length })
+          return { answers: [{ id: request.questions[0].id, selected: [actualLaya ? 'decision ON / Lisp OFF' : 'decision OFF / Lisp OFF'] }] }
+        }
         questions.push(request.questions)
         questionPhases.push({ modelRequests: requests.length, dispatched: dispatches.map(call => call.name) })
         if (scenario === 'unknown-action') return { answers: request.questions.map((question: any) => ({ id: question.id, selected: [] })) }
@@ -196,8 +201,9 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
         requests.push(row)
         if (options.sessionId === handle?.agent.session.id && requests.length === 1) {
           const earlyQuestions = questions.flat()
-          assert.equal(earlyQuestions.length, lispEnabled && isCoding ? 1 : 0, 'only an enabled coding Lisp offer may precede the first model request')
-          assert.ok(earlyQuestions.every((question:any)=>question.id.startsWith('lisp-early-')), 'no purpose or execution selection may precede the first model request')
+          assert.equal(startupQuestions.length, 1, 'one combined startup choice must precede the first model request')
+          assert.equal(startupQuestions[0].modelRequests, 0)
+          assert.equal(earlyQuestions.length, 0, 'the startup choice must not reopen purpose or Lisp dialogs')
           assert.equal(databaseState().runs.length, 0, 'answer-only assembly must not open a task run')
           if (scenario !== 'text' && scenario !== 'clarify' && scenario !== 'scope-spoof' && scenario !== 'answer-memory') assert.ok(row.toolNames.includes(presentation !== 'native' ? 'run_code' : TASK_PREPARE_TOOL), 'model must see the explicit preparation contract')
         }
@@ -293,7 +299,7 @@ async function runNative(mode: Mode, scenario: Scenario, task: string, taskType 
       assert.equal(state.lispOperationCount, 0, 'answer or declined Lisp choice must never start Lisp work')
       assert.ok(!state.lispSessions?.some((entry: any) => entry.enabled === 1), 'fixture must never enable Lisp')
       assert.equal(questions.flat().filter((question: any) => question.id === 'taskType').length, 0, 'Lisp must not reopen the old purpose modal')
-      assert.equal(questions.flat().filter((question: any) => question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')).length, scenario === 'build-write' ? 1 : 0)
+      assert.equal(questions.flat().filter((question: any) => question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')).length, 0)
       assert.ok(questionPhases.every((phase,index) => questions[index]?.some((q:any)=>q.id.startsWith('lisp-early-')) ? phase.modelRequests === 0 : phase.modelRequests >= 1), 'Lisp offers precede generation; later Goal preparation reuses the same human answer')
     }
     assert.ok(events.some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data.message).includes(answerText)), 'native model text must reach session')

@@ -270,8 +270,7 @@ export function createRouting({
         // Maintenance runs before DSH resolves its step's immutable tool set.
         // Only prepare Lisp availability here. Source-bound interpretation
         // must wait for the real turn/start and its claimed input.
-        if (!assemblyClaims.has(agent) && agent.status === 'idle' && agent.inbox && agent.session && agents?.turnBoundaryOf
-          && native.get(LISP_CODING_SERVICE, false)) {
+        if (!assemblyClaims.has(agent) && agent.status === 'idle' && agent.inbox && agent.session && agents?.turnBoundaryOf) {
           const messages = [...agent.inbox.nextStep, ...agent.inbox.nextTurn.slice(0, 1)]
           if (hasHumanInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
             turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, step: 0, signal })

@@ -28,7 +28,7 @@ export class ModelAutoCoordinator {
     const session = await this.store.session(sessionId)
     const decision = this.decisions.status() as { mode?: string; provider?: string; readiness?: { state?: string } }
     const effective = session.mode === 'off' ? 'disabled' : session.pin ? 'manual_pin'
-      : decision.mode !== 'auto' || !['typesafe', 'laya-coreml'].includes(decision.provider ?? '') ? 'decision_off'
+      : decision.mode !== 'auto' || !['typesafe', 'laya-coreml', 'openai'].includes(decision.provider ?? '') ? 'decision_off'
         : decision.readiness?.state === 'ready' ? 'ready' : 'unverified'
     return { configured: this.config.mode, mode: session.mode, revision: session.revision,
       effective, preset: this.config.preset, budgetMs: this.config.budgetMs,
