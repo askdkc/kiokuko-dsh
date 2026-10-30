@@ -97,8 +97,9 @@ test('fresh concurrent SQLite admissions elect one owner, including before runti
       catch(error){process.send({state:'rejected',reason:error.message},error=>process.exit(error?1:0))}})
     process.send('waiting')`)
   let next=0,completed=0
-  // Independent repositories permit two bounded pairs. Keep all 24 cold-process
-  // elections and the original 30s test deadline without adding serial lock waits.
+  // Four independent pairs keep all 24 cold-process elections inside the
+  // original 30s deadline even with the observed 3.3s CI round duration.
+  // Each pair still has its own 5s deadline and supervised cleanup.
   const run=async()=>{
     while(next<24){
       signal.throwIfAborted();const round=next++,root=mkdtempSync(join(base,'repo-')),roundStarted=performance.now()
@@ -112,7 +113,7 @@ test('fresh concurrent SQLite admissions elect one owner, including before runti
       t.diagnostic(JSON.stringify({round,phase:'complete',durationMs:Math.round(performance.now()-roundStarted),completed}))
     }
   }
-  const workers=[run(),run()]
+  const workers=[run(),run(),run(),run()]
   try{await Promise.all(workers);assert.equal(completed,24)}
   finally{
     controller.abort();await Promise.allSettled(workers)
