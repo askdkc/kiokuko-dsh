@@ -10,7 +10,10 @@ export const workspaceKey = (root: string): string => createHash('sha256').updat
 function isCredentialName(name: string): boolean {
   const normalized = name.replace(/([a-z])([A-Z])/gu, '$1_$2').replace(/[- \t]+/gu, '_').toLowerCase()
     .replace(/(^|_)apikey$/u, '$1api_key').replace(/(^|_)accesstoken$/u, '$1access_token')
-  return /(?:^|_)(?:api_key|access_key_id|secret_access_key|password|access_token|token|secret|authorization|cookie|set_cookie)$/u.test(normalized)
+  // Display Slot rawText and provider signatures are private model fields,
+  // including when a tool or extension embeds them in serialized JSON text.
+  return /^(?:raw_?text|signature)$/u.test(normalized)
+    || /(?:^|_)(?:api_key|access_key_id|secret_access_key|password|access_token|token|secret|authorization|cookie|set_cookie)$/u.test(normalized)
 }
 /** Return the closing quote or line boundary; escaped delimiters are part of the value. */
 function quotedValueEnd(text: string, start: number, escaped = false): number {

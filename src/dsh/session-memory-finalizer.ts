@@ -310,7 +310,7 @@ function genericText(value: unknown, maximumStrings = 256): string {
     const object = record(item)
     if (object === undefined) return
     for (const [key, child] of Object.entries(object)) {
-      if (/^(?:reasoning|rawOutput|replayState)$/u.test(key)) continue
+      if (/^(?:reasoning|rawOutput|rawText|signature|replayState)$/u.test(key)) continue
       visit(child, depth + 1)
     }
   }

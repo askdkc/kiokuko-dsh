@@ -22,6 +22,7 @@ interface AnswerContext {
   readonly project: ResolvedProjectWorkspace
   readonly context: ScopedContextResult | null
   readonly instructions: readonly string[]
+  readonly instructionId: string
   readonly owner: ReturnType<typeof createMemoryOwner>
   readonly taskType: TaskType | null
   readonly rebuildAttempts: number
@@ -73,7 +74,9 @@ export class DshAnswerContext {
       const previous = this.#contexts.get(session.id)
       const sameOwner = previous?.agent === input.agent && previous.turn === input.turn
         && previous.owner.kind === owner.kind && previous.owner.requestDigest === owner.requestDigest
-      return { agent: input.agent, cwd, turn: input.turn, task, project, context, instructions, owner, taskType,
+      return { agent: input.agent, cwd, turn: input.turn, task, project, context, instructions,
+        instructionId: previous && sameOwner && canonicalContentHash(previous.instructions) === canonicalContentHash(instructions) ? previous.instructionId : randomUUID(),
+        owner, taskType,
         rebuildAttempts: sameOwner ? previous.rebuildAttempts : 0 }
     })
     input.signal.throwIfAborted()
@@ -119,7 +122,13 @@ export class DshAnswerContext {
       && Array.isArray(message.source.sections) ? message.source.sections.map((section: any) => section.name) : []))
     const withoutOldInstructions = retained.filter((message: any) => !(message?.source?.kind === KIOKUKO_DSH_SOURCE_KIND
       && message.source.form === 'instructions' && message.source.name === 'answer-skills'))
-    const selectedInstructions = state.instructions.length ? [{ id: randomUUID(), role: 'user', content: [{ type: 'text', text: state.instructions.join('\n\n') }],
+    const instructionText = state.instructions.join('\n\n')
+    // A claimed batch may be empty even though the native surface retains the Skill.
+    // Only this exact host-owned delivery suppresses another insertion.
+    const deliveredInstructions = history.some((message: any) => message?.role === 'user' && message.id === state.instructionId
+      && message.source?.kind === KIOKUKO_DSH_SOURCE_KIND && message.source.form === 'instructions' && message.source.name === 'answer-skills'
+      && Array.isArray(message.content) && message.content.length === 1 && message.content[0]?.type === 'text' && message.content[0].text === instructionText)
+    const selectedInstructions = state.instructions.length && !deliveredInstructions ? [{ id: state.instructionId, role: 'user', content: [{ type: 'text', text: instructionText }],
       source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions', name: 'answer-skills' } }] : []
     const snapshots = [...allowed].filter(([name]) => !names.has(name)).map(([name, text]) => ({
       id: randomUUID(), role: 'user', content: [{ type: 'text', text }],

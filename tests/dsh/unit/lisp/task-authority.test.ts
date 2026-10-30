@@ -137,7 +137,7 @@ test('successful effect receipt is CAS checked inside its database write, while 
 
 const approved: DshUserQuestions = { ask: async request => ({ answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.intent!.approve!] }] }) }
 
-for (const boundary of ['missing', 'working', 'approval-revoked'] as const) test(`standalone manager proposal apply: ${boundary}`, async t => {
+for (const native of [false, true]) for (const boundary of ['missing', 'working', 'approval-revoked'] as const) test(`standalone manager proposal apply: ${boundary}, native=${native}`, async t => {
   const f = await fixture(t, boundary !== 'missing')
   await writeFile(join(f.root, 'value.txt'), 'before')
   const target = await snapshot(f.root, 'value.txt', [])
@@ -147,7 +147,7 @@ for (const boundary of ['missing', 'working', 'approval-revoked'] as const) test
   const manager = new LispManager({ store: f.store, dataRoot: join(f.base, 'runtime'), config: LispConfig.parse({ enabled: true, executionMode: 'protected' }),
     questions: { ask: async request => { questions++; if (boundary === 'approval-revoked') wait(f); return approved.ask(request) } } })
   await manager.enableTask(f.owner)
-  const result = await manager.execute(f.owner, 'lisp_apply', { operationId: 'apply', candidateRef: candidate.candidateRef }) as any
+  const result = await manager.execute(f.owner, 'lisp_apply', { operationId: 'apply', candidateRef: candidate.candidateRef }, undefined, native ? nativeCommands as any : undefined) as any
   assert.equal(result.ok, boundary === 'working', JSON.stringify(result))
   assert.equal(await readFile(join(f.root, 'value.txt'), 'utf8'), boundary === 'working' ? 'after' : 'before')
   if (boundary === 'missing') assert.equal(questions, 0)
@@ -172,4 +172,64 @@ test('restore and HTTP recover deny unavailable task state; HTTP status/cancel r
     else assert.equal(body.ok, true)
   }
   await manager.dispose()
+})
+
+const nativeCommands = {
+  assertCurrent() {},
+  async run() {
+    throw new Error('No external command in this authority test')
+  },
+}
+test('native-command capability retains an inherited task lease and cannot refresh it after Stop', async (t) => {
+  const f = await fixture(t),
+    lease = captureTaskLease(f.db, f.task!)
+  await withTaskAuthority(lease, () =>
+    f.authority.run(
+      f.owner,
+      async () => {
+        assert.deepEqual(f.authority.current()!.lease, lease)
+        await f.authority.authorizeEffect(f.owner)
+        resume(f, wait(f))
+        await assert.rejects(f.authority.authorizeEffect(f.owner), {
+          code: 'TASK_STATE_CONFLICT',
+        })
+      },
+      nativeCommands as any,
+    ),
+  )
+})
+test('native-command capability binds the current Working task but respects explicit no-task authority', async (t) => {
+  const f = await fixture(t)
+  await f.authority.run(
+    f.owner,
+    async () => {
+      assert.equal(
+        (await f.authority.authorizeEffect(f.owner)).taskId,
+        f.task!.taskId,
+      )
+    },
+    nativeCommands as any,
+  )
+  await withNoTaskAuthority(() =>
+    f.authority.run(
+      f.owner,
+      async () => {
+        assert.equal(f.authority.current()!.lease, undefined)
+        await assert.rejects(f.authority.authorizeEffect(f.owner), {
+          code: 'TASK_REQUIRED',
+        })
+      },
+      nativeCommands as any,
+    ),
+  )
+})
+test('native-command capability cannot import a foreign session lease', async (t) => {
+  const f = await fixture(t),
+    lease = captureTaskLease(f.db, f.task!)
+  await assert.rejects(
+    withTaskAuthority({ ...lease, sessionId: 'foreign' }, () =>
+      f.authority.run(f.owner, async () => {}, nativeCommands as any),
+    ),
+    { code: 'TASK_OWNER_MISMATCH' },
+  )
 })

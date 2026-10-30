@@ -107,3 +107,13 @@ test('an enabled runtime without a manual preference asks for each new task',asy
  assert.equal(p.choiceFor(agent,'Implement second.ts')?.choice,'no')
  assert.equal(p.denial(agent,'write',{}),undefined)
 })
+
+for (const choice of ['yes', 'no'] as const)
+  test(`Lisp status is lossless JSON before a prototype operation: ${choice}`, async () => {
+    const f = fixture()
+    await f.p.prepare(f.input)
+    f.p.answered(f.agent, f.input.task, choice, 'human:status')
+    const status = f.p.status(f.agent)
+    assert.deepEqual(JSON.parse(JSON.stringify(status)), status)
+    assert.equal((status as any).operationId, null)
+  })

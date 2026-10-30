@@ -27,13 +27,13 @@ export class LispTaskAuthority {
     const current = this.current()
     if (current) { this.checkOwner(current, owner); return action() }
     nativeCommands?.assertCurrent()
-    const inherited = nativeCommands ? undefined : currentTaskAuthority()
+    const inherited = currentTaskAuthority()
     if (inherited && (inherited.sessionId !== owner.sessionId || inherited.repositoryRoot !== owner.root))
       fail('TASK_OWNER_MISMATCH', '呼び出し元のタスクと Lisp のセッションが一致しません。')
     let task: TaskSnapshot | undefined, unavailable: unknown
     // A compiled outer execution which began without a task cannot acquire one
     // merely because another turn admitted work while it was awaiting.
-    if (!nativeCommands && !inherited && !hasNoTaskAuthority()) {
+    if (!inherited && !hasNoTaskAuthority()) {
       try { task = await this.database(db => findSessionTask(db, { sessionId: owner.sessionId, repositoryRoot: owner.root })) }
       catch (error) { unavailable = error }
     }

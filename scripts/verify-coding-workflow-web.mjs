@@ -126,7 +126,14 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   assert.equal(pending.result.choice.state,'cancelled');assert.equal(pending.result.assessment.verified,false)
   const oldPort = new URL(url).port
   host.kill('SIGTERM');await new Promise(resolve=>host.once('exit',resolve))
-  await page.goto(await launch(oldPort));await poll(async()=>await conversation.getAttribute('data-conversation-session')&&await conversation.getAttribute('data-content-phase')==='active')
+  await page.goto(await launch(oldPort))
+  // A reopened client can select a blank Hero. Explicitly open the session
+  // whose cancellation/history this acceptance check intends to inspect.
+  await page.setViewportSize({width:1280,height:844})
+  const retainedSession=page.locator(`[data-row-key="session:${pendingSessionId}"]`)
+  await retainedSession.waitFor({state:'visible'})
+  await retainedSession.click()
+  await poll(async()=>await conversation.getAttribute('data-conversation-session')===pendingSessionId&&await conversation.getAttribute('data-content-phase')==='active')
   assert.equal(await conversation.getAttribute('data-conversation-session'),pendingSessionId,'browser reopens the cancelled native session after restart')
   assert.equal(await goal.count(),0,'host restart must not reopen cancelled implementation')
   await command('resume')

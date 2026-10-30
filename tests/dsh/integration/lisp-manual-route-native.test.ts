@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
+import { readFile, writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { openConnection } from '../../../src/db/connection.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
 import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { nativeToolResults } from '../helpers/native-mock.js'
+import {
+  codingPrelude,
+  fixtureDefinition,
+  toolValue,
+} from '../helpers/coding-script.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 isolateSkillHome()
 const packages =
@@ -122,6 +128,17 @@ for (const entry of [
               q.tools.some((t: any) => t.name === 'lisp_eval'),
               'ON must publish the actual Lisp tool',
             )
+            return f.mock.toolCallResponse(
+              'status-before-work',
+              'lisp_status',
+              {},
+            )
+          },
+          (q: any) => {
+            const status = nativeToolResults(q.messages).find(
+              (r: any) => r.toolCallId === 'status-before-work',
+            )
+            assert.ok(status && !status.isError, JSON.stringify(status))
             return f.mock.toolCallResponse('calculate', 'lisp_eval', {
               operationId: 'calculate',
               code: '(+ 40 2)',
@@ -243,6 +260,17 @@ for (const entry of [
               q.tools.some((t: any) => t.name === 'lisp_eval'),
               'First ON request must expose executable Lisp, not only shell tools',
             )
+            return f.mock.toolCallResponse(
+              'coding-status-before-work',
+              'lisp_status',
+              {},
+            )
+          },
+          (q: any) => {
+            const status = nativeToolResults(q.messages).find(
+              (r: any) => r.toolCallId === 'coding-status-before-work',
+            )
+            assert.ok(status && !status.isError, JSON.stringify(status))
             return f.mock.toolCallResponse('first-lisp', 'lisp_eval', {
               operationId: 'first-lisp',
               code: '(+ 40 2)',
@@ -319,6 +347,96 @@ for (const entry of [
         )
       } finally {
         for (const fiber of fibers.reverse()) await fiber.dispose()
+        await f.close()
+      }
+    },
+  )
+  test(
+    `${entry}: native Lisp progresses from current preparation to an approved file proposal`,
+    { timeout: 45000 },
+    async () => {
+      const f = await nativeSkillFixture({
+        packages,
+        ...(packageRoot ? { packageRoot } : {}),
+        hostPlugin,
+        extra,
+        nativeAnswer: async (q) => ({
+          answers: q.questions.map((q: any) => ({
+            id: q.id,
+            selected: [q.intent?.approve ?? q.options[0].label],
+          })),
+        }),
+      })
+      try {
+        await writeFile(join(f.dir, 'progress.txt'), 'before')
+        const enabled = (
+          await f.ctx.commands.execute(
+            f.agent,
+            '/kioku-lisp enable',
+            [],
+            new AbortController().signal,
+          )
+        ).result
+        assert.equal(enabled.kind, 'success', enabled.text)
+        f.responses.push(
+          ...codingPrelude(
+            f.mock,
+            'prepare-change',
+            fixtureDefinition('progress.txt'),
+          ),
+          f.mock.toolCallResponse('prototype', 'lisp_eval', {
+            operationId: 'prototype',
+            prototype: true,
+            code: '(format nil "~A" "ACTUAL_LISP_PROGRESS")',
+          }),
+          (q: any) => {
+            const value = toolValue(q, 'prototype')
+            assert.equal(value.ok, true, JSON.stringify(value))
+            return f.mock.toolCallResponse(
+              'inspect-prototype',
+              'lisp_inspect',
+              { resultOperationId: value.operationId, section: 'result' },
+            )
+          },
+          (q: any) => {
+            const value = toolValue(q, 'inspect-prototype')
+            assert.equal(value.ok, true, JSON.stringify(value))
+            assert.equal(value.state, 'SUCCEEDED')
+            assert.equal(value.nextOffset, null)
+            return f.mock.toolCallResponse('apply-proposal', 'lisp_eval', {
+              operationId: 'apply-proposal',
+              code: '(kioku.files:propose-write "progress.txt" "ACTUAL_LISP_PROGRESS")',
+            })
+          },
+          (q: any) => {
+            const r = nativeToolResults(q.messages).find(
+              (m: any) => m.toolCallId === 'apply-proposal',
+            )
+            assert.ok(r && !r.isError, JSON.stringify(r))
+            const value = JSON.parse(
+              r.content
+                .filter((b: any) => b.type === 'text')
+                .map((b: any) => b.text)
+                .join(''),
+            )
+            assert.equal(value.ok, true, JSON.stringify(value))
+            assert.ok(
+              value.changes.some((c: any) => c.state === 'APPLIED'),
+              JSON.stringify(value),
+            )
+            return f.mock.textResponse(
+              'The approved Lisp proposal was applied.',
+            )
+          },
+        )
+        await f.turn(
+          'Write progress.txt with ACTUAL_LISP_PROGRESS using Lisp. Do not modify any other file.',
+        )
+        assert.equal(
+          await readFile(join(f.dir, 'progress.txt'), 'utf8'),
+          'ACTUAL_LISP_PROGRESS',
+        )
+      } finally {
         await f.close()
       }
     },
