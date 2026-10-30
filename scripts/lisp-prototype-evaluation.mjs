@@ -103,7 +103,7 @@ async function runCase({ scenario, variant, sources, artifact, packages, config,
   const row = { id: scenario.id, variant, status: 'failed', modelQuality: null, sourceDigests: sources.filter(s => ['kiokuko-lisp', 'one-shot-software-completion'].includes(s.name)).map(s => ({ id: `${s.name}/${s.relativePath}`, digest: digest(s.content) })), seed: null }
   let f, detach, timeout, abort, timedOut = false, requests = [], evidenceStart = 0, start = Date.now()
   try {
-    f = await nativeSkillFixture({ packages, explicit: true, mode, prompts, extra: { lisp: { enabled: true, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' } },
+    f = await nativeSkillFixture({ packages, explicit: true, mode, prompts, startupChoice: 'decision OFF / Lisp ON', extra: { lisp: { enabled: true, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' } },
       nativeAnswer: async request => {
         const q = request.questions[0]
         if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['research'] }] }

@@ -17,7 +17,7 @@ test('scripted evaluation setup hands off within the same admitted native turn',
   const { withIsolatedSkillHome } = await import('../helpers/skill-home.js')
   const { DshSkillPrompts } = await import('../../../src/dsh/skill-prompts.js')
   await withIsolatedSkillHome(async () => {
-    const f = await nativeSkillFixture({ packages: packages!, explicit: true, prompts: new DshSkillPrompts(),
+    const f = await nativeSkillFixture({ packages: packages!, explicit: true, prompts: new DshSkillPrompts(), startupChoice: 'decision OFF / Lisp ON',
       extra: { lisp: { enabled: true, sbclPath: 'must-not-start-sbcl' } } })
     let evidenceStart = 0, handoffs = 0
     const task = 'Inspect the protected Lisp task API and current status, without changing files.'
