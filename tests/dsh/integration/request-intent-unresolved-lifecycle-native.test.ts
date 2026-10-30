@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Direct modular Core host lifecycle through real native queued turns. Only finite
  * provider answers and model generation are scripted; no external model runs. */
@@ -71,6 +72,8 @@ test(`direct Core queued ${uncertain} uncertainty preserves current authority du
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
     fibers.push(await ctx.plugin({ name: 'unresolved-lifecycle-questions', apply(context: any) {
       return context.provide('userQuestions', { async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
         clarificationQuestions += request.questions.filter((question: any) => question.id.startsWith('request-clarification-')).length
         return { answers: request.questions.map((question: any) => ({ id: question.id,
           selected: question.id.startsWith('request-clarification-') ? [] : [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'

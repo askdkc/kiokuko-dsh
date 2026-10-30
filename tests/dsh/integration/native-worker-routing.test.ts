@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { HEAD_WORKER_LABEL } from '../../../src/dsh/head-worker-configuration.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
@@ -177,12 +178,14 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     const nativeQuestions = ctx.get('userQuestions', false)
     assert.ok(nativeQuestions)
     nativeQuestions.ask = async (request: any) => {
+      assert.notEqual(request.agent?.session?.header?.origin, 'subagent', 'generic children must never receive startup or intake questions')
+      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, mode === 'lisp' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,
         selected: [question.id === 'head-worker-worker' ? question.options.find((option: any) => option.label.includes('[worker]')).label : question.id === 'head-worker-head' ? question.options.find((option: any) => option.label.includes('[head]')).label : question.id.startsWith('coding-lisp-') ? mode === 'lisp' ? '使う' : '使わない' : question.id === 'enno-execution-mode' ? `通常実行: ${HEAD_WORKER_LABEL}` : question.options?.[0]?.label ?? 'build'] })) }
     }
-    if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), activate: async () => {} })
+    if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), selectTask: async (input: any, choice: string, answerRef: string) => { assert.equal(input.agent, parent.agent); assert.equal(choice, 'yes'); assert.match(answerRef, /^task-startup:/u) }, activate: async () => {} })
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false }, typedDecisions: { mode: 'off' },

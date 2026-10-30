@@ -10,7 +10,7 @@ const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/f
 const packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
 for(const explicit of [false,true])test(`Goal coverage native retry (${explicit?'adapter':'public'}): concrete missing ID, unchanged state, corrected input reaches ready`,{timeout:60000},async()=>{
  let choices=0
- const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra:{lisp:{enabled:false},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}},nativeAnswer:async q=>{choices++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}})
+ const f=await nativeSkillFixture({ startupChoice: 'decision OFF / Lisp OFF', packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra:{lisp:{enabled:false},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}},nativeAnswer:async q=>{choices++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}})
  const definition=fixtureDefinition();definition.goal.criterionIds.push('c-real-run');definition.criteria.push({...definition.criteria[1]!,criterionId:'c-real-run',procedure:'Assert real HTTP results from both 5940 and 15940'})
  let initial:number=0
  try{

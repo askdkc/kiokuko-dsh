@@ -41,7 +41,7 @@ async function fixture(startupTimeoutMs = 60000) {
   const owner = { sessionId: 'cache-session', agentId: 'cache-agent', root }
   workingLispTask(db, owner)
   await manager.start()
-  return { manager, owner, library, dataRoot, async close() { await manager.dispose(); db.close() } }
+  return { manager, owner, library, dataRoot, registerOwner: (value: typeof owner) => workingLispTask(db, value), async close() { await manager.dispose(); db.close() } }
 }
 async function until(check: () => Promise<boolean>) {
   const deadline = Date.now() + 10000
@@ -54,7 +54,8 @@ async function until(check: () => Promise<boolean>) {
 for (const admission of ['simultaneous', 'other-first'] as const) test(`compiled cache (${admission}): concurrent admission, source invalidation, corrupt bundle stops before recovery`, native, async () => {
   const f = await fixture()
   try {
-    const other = { ...f.owner, sessionId: 'other-session', agentId: 'other-agent' }
+    const other = { ...f.owner, root: join(f.owner.root, '..', 'other-project'), sessionId: 'other-session', agentId: 'other-agent' }
+    await mkdir(other.root); f.registerOwner(other)
     // Exercise reversed cache arrival by observing the other session's build phase.
     const firstAdmission = admission === 'simultaneous' ? f.manager.enable(f.owner)
       : until(async () => (await f.manager.status(other) as any).compilation?.state === 'compiling').then(() => f.manager.enable(f.owner))

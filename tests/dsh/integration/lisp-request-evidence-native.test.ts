@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
@@ -23,6 +24,7 @@ for (const provider of ['off', 'abstain', 'unavailable'] as const) {
     `source-bound Lisp intake keeps current references for first and queued turns with provider ${provider}`,
     { timeout: 30000 },
     async () => {
+      const startupIds: string[] = []
       let questions = 0,
         decisionsSent = 0
       const decisions = new DecisionService(
@@ -78,19 +80,21 @@ for (const provider of ['off', 'abstain', 'unavailable'] as const) {
           modelAutoMode: { mode: 'off' },
         },
         nativeAnswer: async (q) => {
-          assert.match(q.questions[0].id, /^lisp-early-/)
+          answerTaskStartup(q, provider === 'off' ? 'decision OFF / Lisp OFF' : 'decision ON / Lisp OFF')
           questions++
-          assert.equal(
-            f.agent.session
-              .snapshotEvents()
-              .filter((e: any) => e.type === 'turn/start').length,
-            0,
-            'Only Lisp availability is prepared before turn/start',
-          )
-          f.agent.followup(second)
-          return {
-            answers: [{ id: q.questions[0].id, selected: ['使わない'] }],
+          startupIds.push(q.questions[0].id)
+          if (questions === 1) {
+            assert.equal(f.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/start').length,0,
+              'initial availability precedes turn/start')
+          } else {
+            assert.equal(questions,2,'only the two genuine queued inputs may ask')
+            assert.equal(f.model.requests.length,1,'the second setting must precede the second provider dispatch')
+            assert.equal(f.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/start'&&e.data.turn===2).length,1,
+              'the queued setting belongs to the actually claimed second turn')
+            assert.notEqual(startupIds[0],startupIds[1])
           }
+          if (questions === 1) f.agent.followup(second)
+          return answerTaskStartup(q, provider === 'off' ? 'decision OFF / Lisp OFF' : 'decision ON / Lisp OFF')
         },
       })
       const errors: unknown[] = []
@@ -183,7 +187,7 @@ for (const provider of ['off', 'abstain', 'unavailable'] as const) {
           [],
           'Provider failure must not become a generic agent error',
         )
-        assert.equal(questions, 1)
+        assert.equal(questions, 2, 'each independent queued request gets its own setting; no duplicate input is enqueued')
         assert.equal(f.model.requests.length, 2)
         if (provider !== 'off')
           assert.ok(

@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mountToolExecutor } from '../helpers/native-tools.js'
 /** Actual published native PTC regression; the model is scripted and no paid API is called. */
@@ -56,7 +57,9 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
     const originalRun = runtime.run
     runtime.run = function (...args: any[]) { row.runtimePrograms.push(args[0]?.code ?? args[0]?.source?.code); return originalRun.apply(this, args) }
     restoreRuntime = () => { runtime.run = originalRun }
-    const q = ctx.plugin({ name: 'ptc-memory-questions', apply(c: any) { return c.provide('userQuestions', { async ask(request: any) { row.questions.push(request.questions); return { answers: request.questions.map((question: any) => { if (question.id !== 'enno-execution-mode') throw new Error('Unexpected interactive question'); return { id: question.id, selected: ['通常実行'] } }) } } }) } }); fibers.push(q); await q
+    const q = ctx.plugin({ name: 'ptc-memory-questions', apply(c: any) { return c.provide('userQuestions', { async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+ row.questions.push(request.questions); return { answers: request.questions.map((question: any) => { if (question.id !== 'enno-execution-mode') throw new Error('Unexpected interactive question'); return { id: question.id, selected: ['通常実行'] } }) } } }) } }); fibers.push(q); await q
     ctx.on('agent/error', ({ error }: any) => row.errors.push(String(error?.stack ?? error)))
     const mock = nativeMock(llm)
     function messageResult(callId: string) {

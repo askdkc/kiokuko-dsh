@@ -24,6 +24,8 @@ export interface LispCodingService {
   choiceFor?(agent: DshUserQuestionAgent, task: string): { choice: 'yes'|'no'; answerRef: string } | undefined
   /** Explicit session preference only; runtime availability or a previous task yes is insufficient. */
   manualSelected?(agent: DshUserQuestionAgent): Promise<boolean>
+  /** A later explicit command can override an inherited task setting. */
+  manualOverride?(agent: DshUserQuestionAgent): { choice: 'yes'|'no'; answerRef: string } | undefined
   enabled(agent: DshUserQuestionAgent): boolean
   discussing(agent: DshUserQuestionAgent): boolean
   activate?(agent: DshUserQuestionAgent): Promise<void>

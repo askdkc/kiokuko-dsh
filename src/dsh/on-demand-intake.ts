@@ -13,6 +13,7 @@ import {
 import { abortable } from './boundary-worker.js'
 import type { AuxiliaryRecovery } from './auxiliary-recovery.js'
 import { filterRequestMemory } from './request-memory.js'
+import { MemorySnapshotStale } from './memory-request-fence.js'
 import type { DshUserQuestions } from './intake-questions.js'
 import {
   isLispImplementation,
@@ -1878,7 +1879,13 @@ export class OnDemandIntake {
     },
   ): Promise<void> {
     const state = agent.session && this.#turns.get(agent.session.id)
-    if(state?.input.agent===agent&&state.memoryDeferred&&Array.isArray(request.messages))request.messages=filterRequestMemory(request.messages,new Map())
+    const requireRebuild = () => {
+      if (Array.isArray(request.messages) && filterRequestMemory(request.messages, new Map()).length !== request.messages.length)
+        throw new MemorySnapshotStale()
+    }
+    // Native requests are immutable after assembly. Rebuild before dispatch;
+    // never edit the provider request or let quarantined memory pass through.
+    if (state?.input.agent === agent && state.memoryDeferred) requireRebuild()
     if (
       state &&
       !state.nativeUnowned &&
@@ -1891,7 +1898,12 @@ export class OnDemandIntake {
         input,
         request,
         this.ownerIdentity(state),
-      )??Promise.resolve()).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state);if(Array.isArray(request.messages))request.messages=filterRequestMemory(request.messages,new Map())})
+      )??Promise.resolve()).catch(async error => {
+        state.input.signal.throwIfAborted()
+        if (error instanceof MemorySnapshotStale) throw error
+        await this.deferMemory(state)
+        requireRebuild()
+      })
     }
   }
   guidance(messages: readonly unknown[], state?: Turn): readonly unknown[] {

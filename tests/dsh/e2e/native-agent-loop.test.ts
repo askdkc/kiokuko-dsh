@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -240,6 +241,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
         async ask(request: any) {
           assert.equal(request.agent, liveAgent, 'every user question must use the exact live DSH Agent scope')
           const question = request.questions[0]
+          if (question.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
           if (question.options?.some((option: any) => option.label === '整理して確認する')) {
             assert.deepEqual(question.options.map((option: any) => option.label), ['整理して確認する', '今回は保存しない'])
             memoryOffers++

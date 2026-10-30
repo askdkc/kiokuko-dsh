@@ -173,6 +173,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_agenticreplay_trace_run_links',
         'dsh_agenticreplay_traces',
         'dsh_answer_reviews',
+        'dsh_auxiliary_recovery',
         'dsh_boundary_jobs',
         'dsh_coding_admissions',
         'dsh_coding_operations',
@@ -317,6 +318,24 @@ test('baseline initialization creates the complete DSH schema with clean integri
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'entries_fts_%' AND name NOT LIKE 'entries_trigram_%' ORDER BY name",
       ).all<{ name: string }>().map(({ name }) => name)
       assert.deepEqual(tables, expectedTables)
+
+      // Migration 050 stores only bounded recovery metadata, never source payload or authority.
+      assert.deepEqual(database.prepare('PRAGMA table_info(dsh_auxiliary_recovery)').all<{name:string}>().map(row=>row.name), [
+        'id', 'session_id', 'native_turn', 'origin', 'source_digest', 'context_digest', 'state', 'attempts',
+        'lease_nonce', 'lease_until', 'next_at', 'last_reason', 'updated_at',
+      ])
+      assert.deepEqual(database.prepare('PRAGMA index_info(dsh_auxiliary_recovery_session)').all<{name:string}>().map(row=>row.name), ['session_id','native_turn'])
+      database.exec('SAVEPOINT auxiliary_schema_contract')
+      try {
+        const insert = database.prepare(`INSERT INTO dsh_auxiliary_recovery(id,session_id,native_turn,origin,source_digest,context_digest,state,attempts,last_reason,updated_at)
+          VALUES(?,'session',1,?,'source','context',?,?,'fixture',0)`)
+        insert.run('first','answer-context','pending',0)
+        insert.run('last','intent-assessment','rejected',3)
+        assert.throws(()=>insert.run('bad-origin','unknown','pending',0), /CHECK/u)
+        assert.throws(()=>insert.run('bad-state','answer-context','adopted',0), /CHECK/u)
+        for (const attempts of [-1,4]) assert.throws(()=>insert.run(`bad-attempt-${attempts}`,'answer-context','pending',attempts), /CHECK/u)
+        assert.throws(()=>insert.run('first','answer-context','pending',0), /UNIQUE/u)
+      } finally { database.exec('ROLLBACK TO SAVEPOINT auxiliary_schema_contract'); database.exec('RELEASE SAVEPOINT auxiliary_schema_contract') }
 
       // Migration 047 separates managed audit from owned receipts. Freeze its exact
       // columns and uniqueness constraints rather than accepting arbitrary extra tables.

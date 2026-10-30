@@ -1,6 +1,6 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
-import { declineOptionalMemoryOffers, openSettings } from './lib/web-test-navigation.mjs';
+import { declineOptionalMemoryOffers, openSettings, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed package, native Web profile with no configured keys, real local API and tool loop.
@@ -224,7 +224,7 @@ try {
       ? { channel: process.env.PLAYWRIGHT_CHANNEL }
       : {}),
   });
-  page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
+  page = await browser.newPage({ locale: 'en-US', viewport: { width: 1280, height: 1000 } });
   page.on("response", async (response) => {
     if (
       response.status() >= 400 &&
@@ -348,6 +348,7 @@ try {
   await poll(() => editor.evaluate((element) => document.activeElement === element), 10_000);
   await editor.fill("Say hello and call models_test_tool");
   await editor.press("Enter");
+  await answerTaskStartupForTest(page);
   await poll(()=>bodies.length===1);
   await openSettings(page);
   await page.getByRole('button',{name:'Kiokuko Models',exact:true}).click();

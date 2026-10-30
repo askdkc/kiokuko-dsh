@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
@@ -21,6 +22,8 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: proposal
   const packageRoot = process.env.KIOKUKO_OWNED_PACKAGE_ROOT
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), mode, extra,
     nativeAnswer: async request => {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+
       const q = request.questions[0]
       if (q.id.startsWith('coding-lisp-')) choices.push(q.id)
       return { answers: [{ id: q.id, selected: [q.id.startsWith('coding-lisp-') ? '使わない' : '通常実行'] }] }

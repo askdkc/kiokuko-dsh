@@ -1,3 +1,4 @@
+import { answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
@@ -81,7 +82,7 @@ export async function apply(ctx) {
   else {
     await writeFile(answers, '')
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
-    page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+    page = await browser.newPage({ locale: 'en-US', viewport: { width: 1280, height: 900 } })
     page.on('pageerror', e => console.error('Browser error:', e.message))
     await page.goto(url)
     // Both onboarding stages load asynchronously. A one-shot visibility check can
@@ -102,6 +103,7 @@ export async function apply(ctx) {
     await editor.waitFor()
     await page.screenshot({ path: join(base, 'initial.png') })
     await command('/shortcut-fixture seed')
+    await answerTaskStartupForTest(page)
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const records = async () => (await readFile(answers, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
     const seed = await poll(async () => (await records()).find(r => r.mode === 'seed'))

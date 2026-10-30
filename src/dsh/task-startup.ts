@@ -73,7 +73,11 @@ export class TaskStartup {
         const previous = this.last.get(prefix)
         const rows = previous && previous.id < before ? [previous] : await decisions.startupBefore(prefix, before)
         // Ambiguous same-turn generations cannot donate a choice to another task.
-        if (rows[0]?.config.startup && (!rows[1] || rows[0].id.split(':')[2] !== rows[1].id.split(':')[2])) choice = rows[0].config.startup
+        if (rows[0]?.config.startup && (!rows[1] || rows[0].id.split(':')[2] !== rows[1].id.split(':')[2])) {
+          choice = rows[0].config.startup
+          const manual = lisp?.manualOverride?.(input.agent)
+          if (manual && !choice.cancelled) choice = { ...choice, lisp: manual.choice === 'yes' }
+        }
       }
       if (!choice && this.host.questions) {
         const response = await abortable(this.host.questions.ask({ agent: input.agent, signal: input.signal, questions: [{

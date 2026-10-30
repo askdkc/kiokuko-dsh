@@ -68,3 +68,22 @@ test('Laya uses the default home socket with no section and respects explicit ru
   const pinned = TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { model: 'aac6fef/laya-multilingual-coreml' } })
   await assert.rejects(discoverLayaConfiguration(pinned, '/repo', signal(), async () => layaReply({ op: 'health' })), { code: 'DECISION_UNSUPPORTED' })
 })
+
+
+test('startup resolves the selected Laya runtime before its immutable ON binding; OFF and cancel do no discovery', async () => {
+  for (const choice of [{decision:true,lisp:false}, {decision:false,lisp:false}, {decision:false,lisp:false,cancelled:true as const}]) {
+    let discoveries=0
+    const service=new DecisionService(TypedDecisionsConfig.parse({provider:'laya-coreml'}),()=>backend,undefined,{
+      resolveConfiguration:async config=>{discoveries++;assert.equal(config.provider,'laya-coreml');return layaConfig()},
+    })
+    const first=await service.bindStartup('startup-choice',choice,signal())
+    assert.equal(discoveries,choice.decision?1:0)
+    assert.equal(first.provider,'laya-coreml','startup must not substitute another backend')
+    assert.deepEqual(first.startup,choice,'discovery must preserve the exact human setting')
+    assert.equal(first.mode,choice.decision?'auto':'off')
+    if(choice.decision)assert.equal(first['laya-coreml']!.runtimeFingerprint,layaConfig()['laya-coreml']!.runtimeFingerprint)
+    assert.deepEqual(await service.bindStartup('startup-choice',choice,signal()),first)
+    assert.equal(discoveries,choice.decision?1:0,'an existing immutable binding must not rediscover')
+    await assert.rejects(service.bindStartup('startup-choice',{decision:!choice.decision,lisp:false},signal()),{code:'DECISION_INVALID_INPUT'})
+  }
+})

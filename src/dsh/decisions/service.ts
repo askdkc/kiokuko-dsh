@@ -207,7 +207,21 @@ export class DecisionService {
     if (!pending) pending = this.startBinding(id, async () => {
       const existing = await this.store?.binding?.(id)
       if (existing) return existing
-      const config = { ...structuredClone(snapshot ?? this.config), mode: choice.decision ? 'auto' as const : 'off' as const, startup: structuredClone(choice) }
+      let config: DecisionConfiguration = { ...structuredClone(snapshot ?? this.config), mode: choice.decision ? 'auto' : 'off', startup: structuredClone(choice) }
+      // Resolve only the selected ON provider before freezing this new binding,
+      // just as bind() does. OFF/cancel must not contact a worker.
+      if (choice.decision && !choice.cancelled && config.provider === 'laya-coreml'
+        && decisionConfigurationIssue(config) === 'missing_laya_model_or_fingerprint') {
+        try {
+          const resolved = await this.resolved(config, signal)
+          if (resolved.provider !== config.provider) throw new DecisionError('INVALID_INPUT')
+          config = { ...resolved, mode: config.mode, startup: config.startup }
+        } catch (error) {
+          if (signal.aborted) throw new DecisionError('CANCELLED')
+          if (!(error instanceof DecisionError)) throw error
+          this.lastFallback = error.code
+        }
+      }
       signal.throwIfAborted()
       return this.store ? this.store.bind(id, config) : config
     })

@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Actual native tools and full-adapter mapPreStep/gate/SQLite admission.
  * Finite-decision responses and question answers are scripted; no model accuracy,
@@ -214,6 +215,8 @@ for (const scenario of [
               apply(context: any) {
                 return context.provide('userQuestions', {
                   async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
                     return {
                       answers: request.questions.map((question: any) => ({
                         id: question.id,

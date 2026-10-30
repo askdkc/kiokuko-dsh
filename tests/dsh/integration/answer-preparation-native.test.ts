@@ -17,7 +17,7 @@ for (const lisp of [false, true])
     `answer preparation reaches permitted ${lisp ? 'Lisp' : 'native'} evidence reads without a clarification or new owner`,
     { timeout: 60000 },
     async () => {
-      const f = await nativeSkillFixture({
+      const f = await nativeSkillFixture({ startupChoice: lisp ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF',
         packages,
         ...(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
           ? { packageRoot: process.env.KIOKUKO_SKILL_PACKAGE_ROOT }

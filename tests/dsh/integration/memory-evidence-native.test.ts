@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 import test from 'node:test'
 import assert from 'node:assert/strict'
@@ -33,7 +34,9 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
     await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
-    fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
+    fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']}))}}})}}))
     // Explicit eager mode exercises conversation retrieval/fencing; default unowned work has independent nonblocking native coverage.
     const config={repositoryRoot:root,databasePath,intakeMode:'eager' as const,answerReview:{mode:'off' as const},memoryIndexReasoning:{mode:'off' as const},typedDecisions:{mode:'off' as const}}
     if(mode==='core') handle=await implementation.mountCore(ctx,config)

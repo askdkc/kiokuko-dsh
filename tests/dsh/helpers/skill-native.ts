@@ -107,7 +107,16 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   if (skillToolPlacement === 'late') fibers.push(await ctx.plugin(skillTool.default ?? skillTool))
   const agent = await ctx.agentLoop.create(session.SessionId('skill-main'),{provider:'mock',model:'qwen3-coder'},{cwd:workspace})
   if (skillToolPlacement === 'agent') fibers.push(await agent.ctx.plugin(skillTool.default ?? skillTool))
-  offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', nativeAnswer) : undefined
+  offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', async (request: any) => {
+    if (request.questions[0]?.id.startsWith('task-startup:') && (options.startupChoice || options.startupChoices)) {
+      const selected = options.startupChoices ? options.startupChoices[startupQuestions.length] : options.startupChoice!
+      const response = answerTaskStartup(request, selected!)
+      assert.ok(!startupQuestions.some(previous => previous.id === request.questions[0].id), 'same startup question must not repeat')
+      startupQuestions.push({ id: request.questions[0].id, selected: selected! })
+      return response
+    }
+    return nativeAnswer(request)
+  }) : undefined
   const errors: unknown[]=[]
   off=ctx.on('agent/error',(e:any)=>errors.push(e.error))
   const turn=async(input='この内容を日本語で説明してください。')=>{agent.followup(llm.createUserMessage({content:[{type:'text',text:input}],source:{kind:'user'}}));await agent.whenIdle();assert.deepEqual(errors,[])}

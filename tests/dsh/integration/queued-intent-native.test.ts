@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Real queued native messages; scripted generation/provider responses prove routing, not model accuracy. */
 import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
@@ -67,6 +68,8 @@ for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-una
       await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
       const questions = ctx.plugin({ name: 'queued-intake-questions', apply(context: any) { return context.provide('userQuestions', { async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, host === 'core-off' ? 'decision OFF / Lisp OFF' : 'decision ON / Lisp OFF')
+
         const id = request.questions[0].id; asked.push(id)
         assert.notEqual(id, 'taskType', 'clear queued requests must not ask their purpose')
         return { answers: [{ id, selected: [id === 'lisp-coding-mode' || id.startsWith('lisp-early-') || id.startsWith('coding-lisp-') ? 'Lispモードを使わない' : '通常実行'] }] }

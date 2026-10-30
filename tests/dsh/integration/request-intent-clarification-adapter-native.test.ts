@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 /** Public plugin entry -> full adapter -> actual native questions and owned write.
  * Finite inference, native generation and human UI replies are scripted. Idle
  * listener/worker instrumentation calls through unchanged and only observes drain. */
@@ -94,6 +95,8 @@ for (const scenario of ['answered', 'dismissed', 'foreign-answer'] as const) {
           memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' },
           semanticCompaction: { mode: 'off' }, modelAutoMode: { mode: 'off' }, toolExposure: { mode: 'full' } },
         async nativeAnswer(request) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
           const question = request.questions[0]
           if (!question.id.startsWith('request-clarification-')) return { answers: [{ id: question.id,
             selected: [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'

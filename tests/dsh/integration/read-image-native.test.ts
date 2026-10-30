@@ -29,7 +29,7 @@ for (const scenario of [
     `native read_image: ${scenario} returns image evidence without mutation authority`,
     { timeout: 60000 },
     async () => {
-      const f = await nativeSkillFixture({
+      const f = await nativeSkillFixture({ startupChoice: scenario === 'lisp-protected' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF',
         packages,
         ...(process.env.KIOKUKO_SKILL_PACKAGE_ROOT
           ? { packageRoot: process.env.KIOKUKO_SKILL_PACKAGE_ROOT }

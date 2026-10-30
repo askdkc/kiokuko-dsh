@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Direct Core + native question service/model loop/owned effects. Provider and
  * model answers and the human UI response are scripted; no external model runs. */
@@ -100,6 +101,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: dir } })
       const agent = handle.agent, workflow = ctx.get(TASK_WORKFLOW_SERVICE, false) as DshTaskWorkflow
       agent.ctx.on('user-questions/request', (request: any) => {
+        if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
         const question = request.questions[0]
         assert.equal(request.agent, agent, 'native question must target the exact live primary agent')
         if (!question.id.startsWith('request-clarification-')) return { answers: [{ id: question.id,

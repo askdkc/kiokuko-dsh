@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
@@ -15,7 +16,7 @@ if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !available)
 test('historical bridge citations remain readable through the native command without automatic request injection', { skip: !available, timeout: 60000 }, async () => {
     const previous = process.env.KIOKUKO_DSH_PACKAGE_ROOT;
     process.env.KIOKUKO_DSH_PACKAGE_ROOT = packages;
-    const f = await deepNativeFixture(mock => Array.from({ length: 4 }, () => (request: any) => mock.textResponse(request.purpose === 'compaction' ? JSON.stringify({schemaVersion:request.system.includes('Use schemaVersion 4')?4:3,memoryOperations:[]}) : 'Driver explanation.')), { questions: async (request) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
+    const f = await deepNativeFixture(mock => Array.from({ length: 4 }, () => (request: any) => mock.textResponse(request.purpose === 'compaction' ? JSON.stringify({schemaVersion:request.system.includes('Use schemaVersion 4')?4:3,memoryOperations:[]}) : 'Driver explanation.')), { questions: async (request) => request.questions[0]?.id.startsWith('task-startup:') ? answerTaskStartup(request, 'decision OFF / Lisp OFF') : ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
     let original: EntryRecord, bridgeId: string;
     try {
         await f.adapter.host.runtime!.withDatabase(db => withImmediateTransaction(db, () => {
@@ -86,7 +87,7 @@ test('ordinary native requests do not automatically derive a bridge or persist m
             output = JSON.parse(request.messages[0].content[0].text).drafts.map((_: unknown, index: number) => ({ index, verdict: 'supported' }));
         }
         return mock.textResponse(request.purpose === 'compaction' ? JSON.stringify(output) : 'Driver explanation.');
-    }), { questions: async request => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
+    }), { questions: async request => request.questions[0]?.id.startsWith('task-startup:') ? answerTaskStartup(request, 'decision OFF / Lisp OFF') : ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: [q.id === 'taskType' ? 'chat' : q.options?.[0]?.value ?? q.options?.[0]?.label ?? 'chat'] })) }) });
     f.provider.resolveModel = async (provider: string, model: string) => ({ provider, id: model, name: model, context: { contextWindow: 131072 } });
     try {
         await f.adapter.host.runtime!.withDatabase(db => withImmediateTransaction(db, () => {

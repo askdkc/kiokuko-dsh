@@ -160,3 +160,21 @@ test('explicit startup settings do not wait for a headless question service',asy
   await new TaskStartup({decisions:f.make(),root:()=>'/repo',lisp:()=>f.lisp,questions:{ask:async()=>{asks++;return new Promise(()=>{})}}}).prepare(request())
   assert.equal(asks,0);assert.equal(f.counts().enabled,true)
 })
+
+
+test('explicit manual OFF after startup ON overrides inherited continuation without changing the prior binding', async t => {
+  const f=await setup(t), decisions=f.make(); let asks=0, override: {choice:'no';answerRef:string}|undefined
+  const lisp={...f.lisp,manualOverride:()=>override}
+  const startup=new TaskStartup({decisions,root:()=>'/repo',lisp:()=>lisp,questions:{ask:async q=>{
+    asks++;return{answers:[{id:q.questions[0].id,selected:['decision OFF / Lisp ON']}]}
+  }}})
+  await startup.prepare(request())
+  assert.equal(f.counts().enabled,true);assert.equal(f.counts().activations,1)
+  override={choice:'no',answerRef:'manual-session:explicit-off'}
+  await startup.prepare(request(2,'keep going'))
+  assert.equal(asks,1,'continuation must retain the human command without another question')
+  assert.equal(f.counts().enabled,false,'an inherited ON may not reactivate explicitly disabled Lisp')
+  assert.equal(f.counts().activations,1)
+  assert.equal((await decisions.bind(dshTurnRequestId({dshSessionId:'session',turn:1}))).startup!.lisp,true)
+  assert.equal((await decisions.bind(dshTurnRequestId({dshSessionId:'session',turn:2}))).startup!.lisp,false)
+})

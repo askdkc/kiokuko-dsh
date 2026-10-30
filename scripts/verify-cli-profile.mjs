@@ -4,6 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
+import { answerTaskStartup } from '../tests/dsh/helpers/task-startup-fixture.ts'
 import { createInputBarrier, inputWasHandled, questionWasAnswered, createQuestionSelection } from './cli-input-barrier.mjs'
 import { completeVerification } from './verification-completion.mjs'
 import { execFile } from 'node:child_process'
@@ -198,11 +199,22 @@ async function tui(resumeSessionId) {
     if (action === 'submit') answerQuestion(request, selected, onAnswered)
     else child.write(action === 'down' ? '\x1b[B' : '\x1b[A')
   }
-  const declinedQuestions = new Set()
+  const declinedQuestions = new Set(), startupQuestions = new Set()
+  let startupLisp = Boolean(resumeSessionId), cancelStartup = false
   const wait = (predicate, description, timeoutMs) => until(predicate, description, timeoutMs, () => {
     const ready = enterReady()
     const request = fresh().filter(value => value.type === 'native-question').at(-1)
     const question = request?.questions?.[0]
+    if (question?.id?.startsWith('task-startup:')) {
+      if (!ready || startupQuestions.has(request.requestSequence)) return
+      const selected = cancelStartup ? '取消・作業を保持' : startupLisp ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF'
+      answerTaskStartup(request, selected) // Validate the independent public contract before driving keys.
+      selectQuestion(request, selected, () => {
+        startupQuestions.add(request.requestSequence)
+        ;(launch.startupChoices ??= []).push({ questionId: question.id, selected, requestSequence: request.requestSequence })
+      })
+      return
+    }
     if (question?.detail !== 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
       || declinedQuestions.has(request.requestSequence) || !ready) return
     assert.deepEqual(question.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
@@ -308,7 +320,7 @@ async function tui(resumeSessionId) {
       return value
     }
     let resumedTaskId
-    const recovery = { required: false, blockedInput: false, command: null }
+    const recovery = { required: false, cancelledInput: false, command: null }
     if (resumeSessionId) {
       const restored = (await taskCommand('status')).task
       assert.ok(restored, 'CLI resume must restore the persisted task')
@@ -323,12 +335,16 @@ async function tui(resumeSessionId) {
       if (firstDone.event.data.text.includes('Lisp: DISABLED')) {
         recovery.required = true
         const blockedText = 'profile-fixture-protected-resume'
+        // Startup can now recover Lisp explicitly. Cancel that setting once to
+        // prove no input/provider dispatch occurs before the visible recovery.
+        cancelStartup = true
         const previousEnds = native('turn/end').length
         await line(blockedText)
-        await wait(() => native('turn/end').slice(previousEnds).some(value => value.event.data.reason.kind === 'blocked'), 'unrecovered protection did not block the native step')
+        await wait(() => native('turn/end').slice(previousEnds).some(value => value.event.data.reason.kind === 'aborted' && value.event.data.reason.reason?.kind === 'user'), 'cancelled startup did not stop the native step before recovery')
+        cancelStartup = false
         assert.ok(!native('user/message').some(value => value.event.data.content?.some(block => block.text === blockedText)), 'blocked input must not be appended as an admitted user message')
         assert.ok(!fresh().some(value => value.type === 'fixture-request' && value.text === blockedText), 'blocked input must not reach the provider')
-        recovery.blockedInput = true
+        recovery.cancelledInput = true
         const previousRuns = native('command/run').length
         await line('/kioku-lisp enable')
         let enabled
@@ -363,6 +379,7 @@ async function tui(resumeSessionId) {
       child.write('\x1b')
       await wait(() => fresh().some(value => value.type === 'fixture-aborted'), 'Esc did not abort native request')
       await wait(() => native('turn/end').some(value => value.event.data.reason.kind === 'aborted'), 'cancelled turn did not converge')
+      startupLisp = true // The following task explicitly enables and verifies Lisp.
       for (const action of ['enable', 'status']) {
         const before = native('command/done').length
         await line(`/kioku-lisp ${action}`)

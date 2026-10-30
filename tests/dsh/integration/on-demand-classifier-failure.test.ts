@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 /** Fault-injected classifier with the real DecisionService and published native host/loop. */
 import assert from 'node:assert/strict'
@@ -46,7 +47,7 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for 
       await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
       const questionFiber = ctx.plugin({ name: 'fault-question-observer', apply(context: any) { return context.provide('userQuestions', {
-        async ask() { questions++; throw new Error('An ordinary answer must not open intake UI') },
+        async ask(request: any) { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF'); questions++; throw new Error('An ordinary answer must not open intake UI') },
       }) } }); fibers.push(questionFiber); await questionFiber
       ctx.on('agent/error', (event: any) => errors.push(String(event.error)))
       let webBodies = 0

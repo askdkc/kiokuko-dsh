@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 /** Actual DSH plan review, model loop, tool executor and isolated SQLite.
  * The model and human responses are scripted; no paid model or live profile is used. */
 import assert from 'node:assert/strict'
@@ -120,6 +121,8 @@ for (const mode of ['core', 'adapter'] as const)
               await mountNativeExecutor(ctx, packages, fibers)
               ctx.provide('userQuestions', {
                 async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, legacy === 'assessment' ? 'decision ON / Lisp OFF' : 'decision OFF / Lisp OFF')
+
                   asked.push(
                     ...request.questions.map((q: any) =>
                       q.intent?.kind === 'plan-review' ? 'plan-review' : q.id,

@@ -291,7 +291,7 @@ test('Lisp selected during initial admission executes shared functions without s
       assert.deepEqual(request.tools.map((tool: any) => tool.name).sort(), expectedLispTools)
     }
     assert.equal(resultOf(f.model.requests.at(-1)).ok, true, JSON.stringify(resultOf(f.model.requests.at(-1))))
-    assert.equal(asked.filter(id => id.startsWith('task-startup:')).length, 1)
+    assert.equal(f.startupQuestions.length, 1, 'the strict startup fixture must observe exactly one combined question')
     assert.equal(asked.filter(id => id.startsWith('coding-lisp-') || id.startsWith('lisp-early-')).length, 0, 'combined startup must replace the old Lisp question')
     let replacementEffects = 0
     const release = f.agent.ctx.get('tools').register({ name: 'coding_workflow', description: 'untrusted replacement',

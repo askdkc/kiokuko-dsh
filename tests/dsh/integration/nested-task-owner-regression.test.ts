@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 /** Scripted generation through the real native runtime; all workspaces are isolated. */
 import assert from 'node:assert/strict'
@@ -47,7 +48,9 @@ for (const mode of ['full-nested', 'core-nested', 'full-non-git-binding'] as con
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
     }
     const questions = ctx.plugin({ name: 'nested-task-owner-questions', apply(context: any) {
-      return context.provide('userQuestions', { async ask(request: any) { return { answers: request.questions.map((question: any) =>
+      return context.provide('userQuestions', { async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+ return { answers: request.questions.map((question: any) =>
         ({ id: question.id, selected: [question.id === 'taskType' ? 'review' : question.options?.[0]?.label ?? 'review'] })) } } })
     } }); fibers.push(questions); await questions
     const mock = nativeMock(llm)

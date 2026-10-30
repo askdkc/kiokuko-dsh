@@ -38,14 +38,18 @@ async function until(check: () => Promise<boolean>) {
 }
 const status = (manager: LispManager, owner: LispOwner) => manager.status(owner) as Promise<any>
 
-test('worker slots are reused across idle conversations; replay never wakes or repeats effects', native, async () => {
+test('capacity pressure preserves repository workers; replay never wakes or repeats effects', native, async () => {
   const f = await fixture(), first = f.owner('first')
   try {
     await f.manager.enable(first)
     const original = await status(f.manager, first)
     const input = { operationId: 'saved-effect', code: '(defparameter *old* 7) (kioku.files:propose-write "once.txt" "original")' }
     assert.equal((await f.manager.execute(first, 'lisp_eval', input) as any).ok, true)
-    for (let i = 0; i < 5; i++) assert.equal((await f.manager.enable(f.owner(`next-${i}`)) as any).state, 'READY')
+    for (let i = 0; i < 5; i++) await assert.rejects(f.manager.enable(f.owner(`next-${i}`)), { code: 'WORKER_LIMIT' })
+    const retained = await status(f.manager, first)
+    assert.equal(retained.state, 'READY'); assert.equal(retained.runtimePid, original.runtimePid); assert.equal(retained.generation, original.generation)
+    assert.equal((await f.manager.execute(first, 'lisp_eval', { operationId: 'retained-state', code: '*old*' }) as any).value.printed, '(7)')
+    await f.manager.disposeSession(first.sessionId)
     assert.equal((await status(f.manager, first)).state, 'SUSPENDED')
     assert.equal(f.manager.enabled.has(first.sessionId), true)
     await writeFile(join(f.root, 'once.txt'), 'edited later')
@@ -106,7 +110,10 @@ test('evaluation, approval, background jobs and uncertain journal entries are ne
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
     assert.equal((await status(f.manager, first)).state, 'READY')
     await f.store.transition(first, 'uncertain', ['UNKNOWN'], 'ABANDONED', {})
+    await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' }, 'settled work does not authorize evicting a repository owner')
+    await f.manager.disposeSession(first.sessionId)
     assert.equal((await f.manager.enable(second) as any).state, 'READY')
+    await f.manager.disposeSession(second.sessionId)
     await f.manager.prepare(first)
     await writeFile(join(f.root, 'keep.txt'), 'keep')
     const approval = f.manager.execute(first, 'lisp_eval', { operationId: 'approval', code: '(kioku.files:propose-delete "keep.txt")' })

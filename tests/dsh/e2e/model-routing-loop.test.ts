@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import { intentFixtureDecisions, semanticFixtureAnswers } from '../helpers/intent-decision-fixture.js'
 import assert from 'node:assert/strict'
@@ -57,7 +58,8 @@ test('native turn accepts steering after a tool without replacing its initial re
 }, async () => {
   const h = await harness()
   const questions = h.ctx.plugin({ name: 'claim-test-ui', apply(ctx: any) {
-    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) })
+    return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+return ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['通常実行'] })) }) } })
   } }); await questions
   const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
     decisions:intentFixtureDecisions(task=>task.includes('追記は不要')?{action:'verify',relation:'same_scope_continuation'}:task.includes('README')?{action:'change',changeScope:'document'}:undefined),
@@ -95,11 +97,12 @@ for (const failure of ['insert', 'first-request', 'late-request', 'late-request-
   }, async () => {
     const h = await harness()
     const questions = h.ctx.plugin({ name: 'claim-failure-test-ui', apply(ctx: any) {
-      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) => {
+      return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+return ({ answers: request.questions.map((q: any) => {
         const answer = q.id === 'taskType' ? '実装・変更' : '通常実行'
         assert.ok(q.options?.some((option: any) => option.label === answer), `Unexpected intake question: ${JSON.stringify(q)}`)
         return { id: q.id, selected: [answer] }
-      }) }) })
+      }) }) } })
     } }); await questions
     const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
       capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
@@ -208,8 +211,9 @@ test('native model-auto applies the selected effort to first prompt and request,
     return ctx.provide('tokenMeter', { measure: () => ({ totalTokens: 100, logRevision: 0, nodes: [] }) })
   } }); await meter
   const questions = h.ctx.plugin({ name: 'model-auto-ui', apply(ctx: any) {
-    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) =>
-      ({ id: q.id, selected: [q.id === 'enno-execution-mode' ? '通常実行' : q.options?.[0]?.label ?? 'build'] })) }) })
+    return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+return ({ answers: request.questions.map((q: any) =>
+      ({ id: q.id, selected: [q.id === 'enno-execution-mode' ? '通常実行' : q.options?.[0]?.label ?? 'build'] })) }) } })
   } }); await questions
   class CodexAdapter extends h.mock.MockAdapter {
     override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model,
@@ -288,8 +292,9 @@ test('native modular core applies model-auto to its first prepared prompt and re
 }, async () => {
   const h = await harness(), originalFetch = globalThis.fetch
   const questions = h.ctx.plugin({ name: 'core-model-auto-ui', apply(ctx: any) {
-    return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((q: any) =>
-      ({ id: q.id, selected: [q.options?.[0]?.label ?? 'build'] })) }) })
+    return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+return ({ answers: request.questions.map((q: any) =>
+      ({ id: q.id, selected: [q.options?.[0]?.label ?? 'build'] })) }) } })
   } }); await questions
   const credentials = h.ctx.plugin({ name: 'core-model-auto-credentials', apply(ctx: any) {
     return ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-key', source: 'file' }) })
@@ -364,6 +369,8 @@ test('native README document execution: reload, write, verification and next tas
   ])
   h.ctx.llm.registerAdapter(['ordinary'], model)
   const questionHost = h.ctx.plugin({ name: 'document-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
     const answers = []
     for (const question of request.questions) {
       if (question.options?.some((option: any) => option.label === '整理して確認する')) {
@@ -431,6 +438,8 @@ test('native code normal execution: cancel, plugin reload, original input recove
   ])
   h.ctx.llm.registerAdapter(['ordinary'], model)
   const questions = h.ctx.plugin({ name: 'selection-test-ui', apply(ctx: any) { return ctx.provide('userQuestions', { ask: async (request: any) => {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
     const question = request.questions[0];
     if (question.id.startsWith('coding-lisp-')) { codingChoices++; return { answers: [{ id: question.id, selected: ['使わない'] }] } }
     assert.equal(question.id, 'enno-execution-mode'); questionCount++

@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import { CODING_READ_ONLY } from '../../../src/dsh/coding-workflow/intent.js'
 import assert from 'node:assert/strict'
@@ -254,7 +255,8 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   }
   try {
     questions = h.ctx.plugin({ name: 'tool-exposure-baseline-ui', apply(ctx: any) {
-      return ctx.provide('userQuestions', { ask: async (request: any) => ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: fixtureTaskType === 'writing' ? 'README.md' : fixtureTaskType === 'devops' ? 'fixture service' : 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) })
+      return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+return ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: fixtureTaskType === 'writing' ? 'README.md' : fixtureTaskType === 'devops' ? 'fixture service' : 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) } })
     } }); await questions
     credentials = h.ctx.plugin({ name: 'tool-exposure-baseline-credentials', apply(ctx: any) {
       return ctx.provide('credentials', { resolve: async () => ({ value: 'fixture-token' }), read: async () => undefined, list: async () => [], registerOwner: () => () => {} })

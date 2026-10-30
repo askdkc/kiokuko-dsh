@@ -1,3 +1,4 @@
+import { answerTaskStartup } from './task-startup-fixture.js'
 import { mountNativeTools } from './native-tools.js'
 import { intentFixtureDecisions } from './intent-decision-fixture.js'
 import { recordRepeatedStage } from './repeated-memory-report.js'
@@ -122,6 +123,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     } }))
   fibers.push(await ctx.plugin({ name: 'repeated-memory-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: any) {
+      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
       return { answers: request.questions.map((question: any) => {
         if (/整理してよい|保存する記憶はこの内容でよい/u.test(question.question)) {
           const phase = question.question.includes('整理してよい') ? 'organize' : 'review'

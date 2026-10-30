@@ -101,9 +101,17 @@ export class LispCodingPreparation {
     state.choice=enabled?'yes':'no';state.answerRef=answerRef ?? `human-command:${state.key}:${enabled}`
     state.phase=enabled?(state.protectedWorkflow?'prototype_required':'selected'):'declined';state.attempts=0;state.failures=0;delete state.operationId
   }
-  cancelled(agent:Agent,task:string):void {
+  manualOverride(agent:Agent):{choice:'yes'|'no';answerRef:string}|undefined {
     const state=this.current(agent)
-    if(state?.task===task){state.key=randomUUID();state.phase='cancelled';delete state.choice;delete state.answerRef}
+    return state?.choice && state.answerRef?.startsWith('human-command:')
+      ? {choice:state.choice,answerRef:state.answerRef}:undefined
+  }
+  cancelled(agent:Agent,task:string):void {
+    let state=this.current(agent)
+    if(!state || state.task!==task){
+      state={agent,...this.host.identity(agent),task,key:randomUUID(),protectedWorkflow:false,phase:'cancelled',attempts:0,failures:0}
+      this.states.set(agent,state)
+    } else {state.key=randomUUID();state.phase='cancelled';delete state.choice;delete state.answerRef}
   }
   binding(agent:Agent):string|undefined { return this.current(agent)?.key }
   status(agent:Agent):object {

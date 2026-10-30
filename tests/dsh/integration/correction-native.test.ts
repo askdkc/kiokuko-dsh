@@ -17,7 +17,7 @@ for(const explicit of [false,true])for(const dropInput of [false,true])test(`nat
   let confirmations=0
   const body='Do not reject Rust compiler compatibility only because a version differs. Verify actual compiler capabilities and native acceptance.'
   const semantic=await correctionDecisionFixture(body)
-  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
+  const f=await nativeSkillFixture({ startupChoice: 'decision ON / Lisp OFF', packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
     const q=request.questions[0]
     if(q.id.startsWith('correction-')){confirmations++;assert.match(q.detail,/scripts\/check.mjs/);return {answers:[{id:q.id,selected:['見直す']}]}}
     return {answers:[{id:q.id,selected:['使わない']}]}
@@ -73,7 +73,7 @@ for(const explicit of [false,true])for(const state of ['shadow','reference','unc
   const body=state==='reference'?'Record compiler version 1.99 as an environment fact.':'A synthetic compiler compatibility correction.'
   const semantic=await correctionDecisionFixture(body,{choice:state==='shadow'?'capability_compatibility':state,mode:state==='shadow'?'shadow':'auto'})
   let confirmations=0
-  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
+  const f=await nativeSkillFixture({ startupChoice: 'decision ON / Lisp OFF', packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra:{...extra,typedDecisions:semantic.configuration},nativeAnswer:async request=>{
     const q=request.questions[0];if(q.id.startsWith('correction-'))confirmations++
     return {answers:[{id:q.id,selected:['使わない']}]}
   }})

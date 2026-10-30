@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { intentFixtureDecisions } from '../helpers/intent-decision-fixture.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
@@ -36,7 +37,7 @@ test('native result DTOs survive text-only logs without automatic episode extrac
     disposeTool=ctx.tools.register({...tools.defineTool({name:'verify',description:'Return a typed execution result',parameters:{exitCode:{type:'number',required:true}},
       output:{schema:{type:'object',additionalProperties:false,properties:{exitCode:{type:'number',required:true}}},render:()=>[{type:'text',text:'Native execution output; the renderer omits its exit code.'}]},
       execute:async(args:any)=>({exitCode:args.exitCode})}),[Symbol.for('kiokuko.coding.read-only')]:true})
-    const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){return {answers:request.questions.map((q:any)=>{const selected=q.id==='kioku-agenticreplay-recording'?'記録しない':q.id==='enno-execution-mode'?'通常実行':q.options.find((option:any)=>option.label==='今回は保存しない')?.label;assert.ok(selected&&q.options.some((option:any)=>option.label===selected),`Unexpected fixture question: ${q.id}`);return {id:q.id,selected:[selected]}})}}})}});fibers.push(questions);await questions
+    const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){if(request.questions[0]?.id.startsWith('task-startup:'))return answerTaskStartup(request,'decision OFF / Lisp OFF');return {answers:request.questions.map((q:any)=>{const selected=q.id==='kioku-agenticreplay-recording'?'記録しない':q.id==='enno-execution-mode'?'通常実行':q.options.find((option:any)=>option.label==='今回は保存しない')?.label;assert.ok(selected&&q.options.some((option:any)=>option.label===selected),`Unexpected fixture question: ${q.id}`);return {id:q.id,selected:[selected]}})}}})}});fibers.push(questions);await questions
     let extractionCalls = 0
     adapter=createDshHostAdapter(ctx,{decisions:intentFixtureDecisions(task=>task==='検証結果を調査して、失敗と成功を報告してください。'?{action:'verify'}:undefined),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),migrationsDirectory:join(process.cwd(),'migrations'),llm:{async *stream(){
       extractionCalls++;throw new Error('unapproved automatic memory extraction')

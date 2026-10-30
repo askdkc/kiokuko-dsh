@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../../helpers/native-tools.js'
 import {interpretedPreparation} from '../../helpers/coding-script.js'
 import {assessTaskCompletion} from '../../../../src/dsh/task-completion.js'
@@ -56,6 +57,8 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
     output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true }, stderr: { type: 'string', required: true } } }, render: (_: unknown, value: any) => [{ type: 'text', text: value.stderr }] },
     execute: async () => { calls++; beforeFull = readRefreshMetadata(db, runId)?.fullCount ?? 0; return { exitCode: 1, stderr: 'E_LOCK_TIMEOUT' } } }))
   fibers.push(await ctx.plugin({ name: 'refresh-fixture-questions', apply(context: any) { return context.provide('userQuestions', { async ask(request: any) {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+
     return { answers: request.questions.map((q: any) => {
       if (/^(boundary-|loop-|effect-)/u.test(q.id)) throw new Error(`Unexpected workflow hold: ${q.id}: ${q.detail}`)
       return { id: q.id, selected: [q.id.startsWith('coding-lisp-') ? '使わない' : q.id === 'kiokuko-plan-confirmation' ? 'approve' : modelSelectionAnswer(q) ?? 'debug'] }

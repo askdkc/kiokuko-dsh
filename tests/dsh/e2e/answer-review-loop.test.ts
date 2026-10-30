@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
@@ -54,6 +55,8 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
     const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => {
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+
       if(request.questions.some((q:any)=>q.options?.some((o:any)=>o.label==='整理して確認する'))) return {answers:request.questions.map((q:any)=>({id:q.id,selected:['今回は保存しない']}))}
       questions++
       return { answers:request.questions.map((q:any)=>{

@@ -276,7 +276,12 @@ export function createRouting({
             turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, step: 0, signal })
         }
         const claim = assemblyClaims.get(agent)
-        if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal })) {
+        if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal }).catch(error => {
+          // The claimed batch was consumed even when startup was cancelled.
+          // It cannot be offered to a later native turn or maintenance pass.
+          if (assemblyClaims.get(agent) === claim) assemblyClaims.delete(agent)
+          throw error
+        })) {
           assemblyClaims.delete(agent); return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }
         }
         if (demand.pending(agent)) return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }

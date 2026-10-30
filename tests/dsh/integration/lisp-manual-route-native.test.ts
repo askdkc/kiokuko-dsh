@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
@@ -54,7 +55,7 @@ for (const entry of [
     `${entry}: manual Lisp ON survives a saved pending coding choice at the next real model step`,
     { timeout: 45000 },
     async () => {
-      const f = await nativeSkillFixture({
+      const f = await nativeSkillFixture({ startupChoice: 'decision OFF / Lisp ON',
         packages,
         ...(packageRoot ? { packageRoot } : {}),
         hostPlugin,
@@ -211,9 +212,10 @@ for (const entry of [
         mode: 'compiled',
         extra,
         nativeAnswer: async (q) => {
+          answerTaskStartup(q, asked ? 'decision OFF / Lisp OFF' : 'decision OFF / Lisp ON')
+          if (asked) return answerTaskStartup(q, 'decision OFF / Lisp OFF')
           asked++
-          assert.match(q.questions[0].id, /^lisp-early-/)
-          return { answers: [{ id: q.questions[0].id, selected: ['使う'] }] }
+          return answerTaskStartup(q, 'decision OFF / Lisp ON')
         },
       })
       try {
@@ -355,7 +357,7 @@ for (const entry of [
     `${entry}: native Lisp progresses from current preparation to an approved file proposal`,
     { timeout: 45000 },
     async () => {
-      const f = await nativeSkillFixture({
+      const f = await nativeSkillFixture({ startupChoice: 'decision OFF / Lisp ON',
         packages,
         ...(packageRoot ? { packageRoot } : {}),
         hostPlugin,

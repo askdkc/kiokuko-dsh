@@ -1,6 +1,6 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
-import { declineOptionalMemoryOffers } from './lib/web-test-navigation.mjs';
+import { declineOptionalMemoryOffers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
@@ -65,7 +65,7 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   for (const stream of [host.stdout, host.stderr]) stream.on('data', c => { logs += c })
   const url = await poll(() => logs.match(/https?:\/\/127\.0\.0\.1:\d+\/\?token=[^\s]+/)?.[0])
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
-  page = await browser.newPage()
+  page = await browser.newPage({ locale: 'en-US' })
   await declineOptionalMemoryOffers(page)
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
@@ -76,7 +76,7 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   const conversation = page.locator('[data-conversation-content]:visible').first()
   await newSessionForTest(page, conversation, poll)
   const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
-  const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click() }
+  const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click(); if (/ (?:seed|question|keep|approve)$/.test(text)) await answerTaskStartupForTest(page, text.endsWith(' seed') ? 'decision OFF / Lisp OFF' : 'decision OFF / Lisp ON') }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
   await command('/lisp-plan-fixture seed')
   await poll(async () => (await records()).find(r => r.mode === 'seed'))

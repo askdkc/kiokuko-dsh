@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync } from 'node:fs'
@@ -27,9 +28,9 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, mode: 'full', extra, nativeAnswer: async request => {
     const question = request.questions[0]
     questions.push(question)
-    if (question.id.startsWith('lisp-early-')) {
+    if (question.id.startsWith('task-startup:')) {
       assert.equal(f.model.requests.length,0); assert.equal(existsSync(join(f.dir,'src/parser.mjs')),false)
-      return { answers: [{ id: question.id, selected: [choice] }] }
+      return answerTaskStartup(request, choice === '使う' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
     }
     if (question.id.startsWith('coding-lisp-')) {
       assert.match(question.detail, /Goal:.*public parser/u)
@@ -69,9 +70,9 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     await f.turn('Implement src/parser.mjs so the public command adds one to its numeric input. 通常実行で。')
     assert.equal(execFileSync(process.execPath, ['src/parser.mjs', '41'], { cwd: f.dir, encoding: 'utf8' }).trim(), '42')
     assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), program)
-    assert.equal(questions.filter(question=>question.id.startsWith('lisp-early-')).length,1)
+    assert.equal(questions.filter(question=>question.id.startsWith('task-startup:')).length,1)
     assert.equal(questions.filter(question=>question.id.startsWith('coding-lisp-')).length,0, 'the same Goal reuses its genuine early human answer')
-    assert.equal(questions.filter(question=>/^(?:lisp-early-|coding-lisp-)/u.test(question.id)).length,1, 'unrelated execution-mode questions do not reopen the Lisp choice')
+    assert.equal(questions.filter(question=>/^(?:task-startup:|lisp-early-|coding-lisp-)/u.test(question.id)).length,1, 'unrelated execution-mode questions do not reopen the Lisp choice')
     const db = openConnection(join(f.dir, 'state.sqlite3'))
     try {
       assert.equal(db.prepare('SELECT status FROM ledger_runs').get<any>().status, 'completed')
@@ -87,7 +88,7 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
 for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) test(`native early coding ${answer}: no model or implementation dispatch`, { skip: !installed, timeout: 30000 }, async () => {
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, extra, nativeAnswer: async request => {
     const question=request.questions[0]
-    assert.ok(question.id.startsWith('lisp-early-'))
+    answerTaskStartup(request, '取消・作業を保持') // Validate the question before testing a transport-level cancellation.
     if(answer==='disconnected')throw new Error('Disconnected')
     return {answers:answer==='closed'?[]:[{id:question.id,selected:answer==='cancel'?['取消・作業を保持']:[]}]}
   } })
@@ -107,8 +108,9 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
   const questions: any[] = []
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: mode === 'full', mode, extra, nativeAnswer: async request => {
     const question = request.questions[0]
-    const coding = question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')
+    const coding = question.id.startsWith('task-startup:') || question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')
     if (coding) questions.push(question)
+    if (question.id.startsWith('task-startup:')) return answerTaskStartup(request, questions.length === 1 ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
     return { answers: [{ id: question.id, selected: [coding ? questions.length === 1 ? '使う' : '使わない' : '通常実行'] }] }
   } })
   try {
@@ -131,18 +133,18 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
   } finally { await f.close() }
 })
 
-test('native core reload after cancellation preserves work and admits a fresh explicit request', {skip:!installed,timeout:120000},async()=>{
+for (const explicit of [false, true]) for (const reload of [false, true]) test(`native ${explicit ? 'full' : 'core'} ${reload ? 'reload' : 'same host'} after cancellation preserves work and admits a fresh explicit request`, {skip:!installed,timeout:120000},async()=>{
   const questions:any[]=[]
-  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:false,mode:'compiled',extra,nativeAnswer:async request=>{
+  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit,mode:'compiled',extra,nativeAnswer:async request=>{
     const question=request.questions[0];questions.push(question)
-    return {answers:[{id:question.id,selected:[questions.length===1?'取消・作業を保持':'使わない']}]}
+    return answerTaskStartup(request, questions.length===1?'取消・作業を保持':'decision OFF / Lisp OFF')
   }})
   try{
     await writeFile(join(f.dir,'kept.txt'),'existing work')
     f.responses.push(...codingPrelude(f.mock,'cancelled-must-not-run'))
     await f.turn('Implement src/parser.mjs. 通常実行で。')
     assert.equal(f.model.requests.length,0);assert.equal(existsSync(join(f.dir,'src/parser.mjs')),false)
-    await f.reload('compiled')
+    if (reload) { if (explicit) await f.reloadHost('compiled'); else await f.reload('compiled') }
     f.responses.splice(0)
     f.responses.push(...codingPrelude(f.mock,'fresh'),f.mock.toolCallResponse('fresh-write','kioku_write',{path:'src/parser.mjs',content:'console.log(42)\n'}),f.mock.toolCallResponse('fresh-state','coding_workflow',{action:'status'}),(request:any)=>{
       assert.equal(toolValue(request,'fresh-state').choice.state,'no')

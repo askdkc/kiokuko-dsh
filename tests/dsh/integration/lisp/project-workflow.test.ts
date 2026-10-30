@@ -242,7 +242,11 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     for (const [index, symbol] of ['kioku.user::task-identity', 'kioku.user::|Case Sensitive|'].entries()) {
       assert.equal((await describe(`unusual-function-${index}`, symbol)).ok, true)
     }
-    const other = { ...owner, agentId: 'other-agent', sessionId: 'other-session' }
+    const sameRepository = { ...owner, agentId: 'same-repo-agent', sessionId: 'same-repo-session' }
+    workingLispTask(db, sameRepository)
+    await assert.rejects(manager.enable(sameRepository), { code: 'REPOSITORY_IN_USE' })
+    const other = { ...owner, root: join(base, 'other-workspace'), agentId: 'other-agent', sessionId: 'other-session' }
+    await mkdir(other.root); workingLispTask(db, other)
     await manager.enable(other)
     const isolated = await manager.execute(other, 'lisp_describe', { operationId: 'isolated-task-tools', symbol: 'kioku.user' }) as any
     assert.deepEqual(isolated.value.symbols, [], 'task definitions must not leak into another worker')

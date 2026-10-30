@@ -44,7 +44,7 @@ for (const mode of ['unprepared', 'prepared', 'protected'] as const)
           }
         },
       }
-      const f = await nativeSkillFixture({
+      const f = await nativeSkillFixture({ startupChoice: mode === 'protected' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF',
         packages,
         ...(packageRoot ? { packageRoot } : {}),
         hostPlugin,

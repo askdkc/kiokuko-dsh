@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
@@ -166,6 +167,8 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     const nativeQuestions = ctx.get('userQuestions', false)
     assert.ok(nativeQuestions)
     nativeQuestions.ask = async (request: any) => {
+      assert.notEqual(request.agent?.session?.header?.origin, 'subagent', 'generic children must never receive startup or intake questions')
+      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,

@@ -1,3 +1,4 @@
+import { MemorySnapshotStale } from '../../../src/dsh/memory-request-fence.js'
 import { executionRequestAction, codingToolEffect } from '../../../src/dsh/coding-workflow/intent.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
@@ -3825,6 +3826,10 @@ for(const terminal of ['completed','cancelled'] as const)test(`memory quarantine
     source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name:'memory:memory:unverified',text:'unverified private memory'}]}}
   const projected=await f.intake.answerMessages({agent:f.agent,turn:1,step:1,messages:[original],signal:signal()},[original,unverified])
   assert.ok(!projected.includes(unverified));assert.ok(JSON.stringify(projected).includes('quarantined'))
+  const frozen = Object.freeze({ sessionId: f.session.id, messages: Object.freeze([original, unverified]) })
+  await assert.rejects(f.intake.fence(f.agent, frozen), MemorySnapshotStale, 'assembled requests rebuild instead of mutating or forwarding quarantined memory')
+  assert.deepEqual(frozen.messages, [original, unverified], 'the immutable original request stays unchanged')
+  await f.intake.fence(f.agent, Object.freeze({ sessionId: f.session.id, messages: Object.freeze([...projected]) }))
   assert.equal(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state,'pending')
   // Native permissions remain authoritative while optional memory is unavailable.
   t.after(f.ctx.tools.guard((e:any)=>e.name==='cordis_inspect_query'?'native permission denied':undefined))

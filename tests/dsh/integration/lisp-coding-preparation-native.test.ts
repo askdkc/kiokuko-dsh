@@ -1,3 +1,4 @@
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {readFile} from 'node:fs/promises'
@@ -16,10 +17,10 @@ const extra={lisp:{enabled:true,executionMode:'development',sbclPath:process.env
 const result=(q:any,id:string)=>{const r=nativeToolResults(q.messages).find((r:any)=>r.toolCallId===id);assert.ok(r,id);return r}
 for(const explicit of [false,true])test(`ordinary implementation offers Lisp before the first model request (${explicit?'adapter':'public'})`,{timeout:120000},async()=>{
  let asked=0
- const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('lisp-early-')){asked++;assert.equal(f.model.requests.length,0);return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}throw new Error('unexpected question') }})
+ const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision OFF / Lisp OFF')}throw new Error('unexpected question') }})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('src/parser.ts の関数を実装して。外部公開しないで。');assert.equal(asked,1)
  f.responses.push(f.mock.textResponse('Continuing.'));await f.turn('この作業を続行してください');assert.equal(asked,1)
- f.responses.push(f.mock.textResponse('Research only.'));await f.turn('コードは変更しないで。原因を調査して説明して。');assert.equal(asked,1)
+ f.responses.push(f.mock.textResponse('Research only.'));await f.turn('コードは変更しないで。原因を調査して説明して。');assert.equal(asked,2,'a separate research task receives its own startup setting')
  }finally{await f.close()}
 })
 test('a configured request-intent decision arms the early Lisp offer for conversational implementation wording',{timeout:120000},async()=>{
@@ -39,11 +40,11 @@ test('a configured request-intent decision arms the early Lisp offer for convers
    return {provider:'fixture',requestedModel:'fixture',policyVersion:'fixture',answers:batch.questions.map((q:any)=>({id:q.id,status:'abstained',reason:'insufficient'}))}
   }
  }) as any)
- const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('lisp-early-')){asked++;assert.equal(f.model.requests.length,0);return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}throw new Error('unexpected question')}})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision ON / Lisp OFF')}throw new Error('unexpected question')}})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
 })
 test('manual ON routes implementation through Lisp without a mandatory prototype; optional inspection and OFF work',{timeout:120000},async()=>{
- let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]
+ let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,startupChoices:['decision OFF / Lisp ON','decision OFF / Lisp OFF'],nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]
  const command=async(action:string)=>{const r=(await f.ctx.commands.execute(f.agent,`/kioku-lisp ${action}`,[],new AbortController().signal)).result;assert.equal(r.kind,'success',r.text);return r}
  const js='require("fs").writeFileSync("implemented.txt","42")',shell=`${process.execPath} -e '${js}'`
  try{
@@ -87,7 +88,7 @@ test('manual ON routes implementation through Lisp without a mandatory prototype
 
 
 test('ordinary optional prototype failures stay unverified without installing a mandatory prototype gate',{timeout:120000},async()=>{
- const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async()=>{throw new Error('manual ON must not ask again')}})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,startupChoices:['decision OFF / Lisp ON','decision OFF / Lisp OFF'],nativeAnswer:async()=>{throw new Error('manual ON must not ask again')}})
  try{
  const enabled=(await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result;assert.equal(enabled.kind,'success',enabled.text)
  f.responses.push(f.mock.toolCallResponse('failed-one','lisp_eval',{operationId:'failed-one',prototype:true,code:'(error "PROTOTYPE_FAILURE_ONE")'}),(q:any)=>{assert.match(JSON.stringify(result(q,'failed-one')),/PROTOTYPE_FAILURE_ONE/u);return f.mock.toolCallResponse('failed-two','lisp_eval',{operationId:'failed-two',prototype:true,code:'(error "PROTOTYPE_FAILURE_TWO")'})},(q:any)=>{assert.match(JSON.stringify(result(q,'failed-two')),/PROTOTYPE_FAILURE_TWO/u);return f.mock.toolCallResponse('budget','lisp_eval',{operationId:'must-not-execute',prototype:true,code:'42'})},(q:any)=>{assert.equal(result(q,'budget').isError,false,JSON.stringify(result(q,'budget')));return f.mock.textResponse('The prototype failed; automatic retries stopped. No implementation or verification succeeded.')})
@@ -100,7 +101,7 @@ test('ordinary optional prototype failures stay unverified without installing a 
 
 test('manual ON survives same-session reload and a new coding request starts unverified without another question',{timeout:120000},async()=>{
  let questions=0
- const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('coding-lisp-') || q.questions[0].id.startsWith('lisp-early-')){questions++;throw new Error('manual ON must remain selected after reload')}return {answers:[{id:q.questions[0].id,selected:['通常実行']}]}}})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,startupChoice:'decision OFF / Lisp ON',nativeAnswer:async q=>{if(q.questions[0].id.startsWith('coding-lisp-') || q.questions[0].id.startsWith('lisp-early-')){questions++;throw new Error('manual ON must remain selected after reload')}return {answers:[{id:q.questions[0].id,selected:['通常実行']}]}}})
  try{
  const enabled=(await f.ctx.commands.execute(f.agent,'/kioku-lisp enable',[],new AbortController().signal)).result;assert.equal(enabled.kind,'success',enabled.text)
  await f.reload('compiled')
@@ -116,7 +117,7 @@ test('manual ON survives same-session reload and a new coding request starts unv
 
 for (const reload of [false, true]) test(`manual ON supplies a formal Goal choice without an early matching request (${reload ? 'reload' : 'current'})`, {timeout:120000}, async () => {
  let questions = 0
- const f = await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,nativeAnswer:async q=>{
+ const f = await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,startupChoice:'decision OFF / Lisp ON',nativeAnswer:async q=>{
    if (q.questions[0].id.startsWith('coding-lisp-') || q.questions[0].id.startsWith('lisp-early-')) questions++
    return {answers:[{id:q.questions[0].id,selected:['通常実行']}]}
  }})
@@ -128,7 +129,7 @@ for (const reload of [false, true]) test(`manual ON supplies a formal Goal choic
    f.responses.push(...codingPrelude(f.mock,'manual'), (request:any) => {
      const workflow = toolValue(request,'manual-propose')
      assert.equal(workflow.choice.state,'yes')
-     assert.match(workflow.choice.answerRef,/^manual-session:/u)
+     assert.equal(f.startupQuestions.length,1);assert.equal(workflow.choice.answerRef,f.startupQuestions[0]!.id,'Goal must use the exact accepted startup setting')
      assert.equal(workflow.assessment.verified,false)
      return f.mock.textResponse('Goal prepared; the prototype and verification remain pending.')
    })
@@ -143,10 +144,10 @@ for (const reload of [false, true]) test(`manual ON supplies a formal Goal choic
 })
 
 for(const mode of ['explicit','numeric','skip','ASK_CANCELLED'] as const)test(`native early ${mode} cancellation ends implementation and permits the next independent conversation`,{timeout:120000},async()=>{
- let asked=0
+ let asked=0,startupSettings=0
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{
-  asked++;if(mode==='ASK_CANCELLED')throw Object.assign(new Error('User cancelled question'),{code:'ASK_CANCELLED'})
-  return {answers:[{id:q.questions[0].id,selected:mode==='skip'?[]:[mode==='numeric'?'3':'取消・作業を保持']}]}
+  startupSettings++;answerTaskStartup(q,'取消・作業を保持');if(asked){return answerTaskStartup(q,'decision OFF / Lisp OFF')}asked++;if(mode==='ASK_CANCELLED')throw Object.assign(new Error('User cancelled question'),{code:'ASK_CANCELLED'})
+  return {answers:[{id:q.questions[0].id,selected:mode==='skip'?[]:[mode==='numeric'?'5':'取消・作業を保持']}]}
  }})
  const errors:unknown[]=[]
  const offError=f.ctx.on('agent/error',(event:any)=>errors.push(event.error))
@@ -164,7 +165,7 @@ for(const mode of ['explicit','numeric','skip','ASK_CANCELLED'] as const)test(`n
   await send('Explain what happened without changing code.')
   assert.equal(asked,1);assert.equal(f.model.requests.length,1)
   const after=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
-  assert.equal(after.codingPreparation.phase,'not_applicable')
+  assert.equal(after.codingPreparation.phase,'declined','the separate explanation accepted an explicit Lisp OFF setting');assert.equal(after.codingPreparation.attempts,0);assert.equal(after.codingPreparation.verified,false);assert.equal(startupSettings,2)
   assert.deepEqual(errors,[])
  }finally{offError();await f.close()}
 })
@@ -173,7 +174,7 @@ test('native Lisp cancellation preserves unrelated queued input without a generi
  let release!:(answer:any)=>void,questionId='',notify!:()=>void
  const opened=new Promise<void>(resolve=>{notify=resolve})
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{
-  questionId=q.questions[0].id;notify();return new Promise(resolve=>{release=resolve})
+  answerTaskStartup(q,'取消・作業を保持');if(questionId)return answerTaskStartup(q,'decision OFF / Lisp OFF');questionId=q.questions[0].id;notify();return new Promise(resolve=>{release=resolve})
  }})
  const errors:unknown[]=[],off=f.ctx.on('agent/error',(event:any)=>errors.push(event.error))
  const enqueue=(text:string)=>f.agent.followup(f.llm.createUserMessage({content:[{type:'text',text}],source:{kind:'user'}}))
