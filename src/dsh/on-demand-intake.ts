@@ -57,7 +57,7 @@ import {
   type MemoryOwnerIdentity,
   type MemoryOwnerKind,
 } from './memory-owner.js'
-import type { IntentAssessment } from './decisions/intent-assessment.js'
+import { assessmentAllowsPreparation, mayConfirmRequestInterpretation, type IntentAssessment } from './decisions/intent-assessment.js'
 import type { IntakeDiagnosticObservation } from './decisions/diagnostics.js'
 
 class RequestClarification extends Error {
@@ -141,6 +141,7 @@ interface Dependencies {
     context: RequestIntentContext,
     decision: RequestIntentDecision,
     recoveryAttempt?: number,
+    userConfirmed?: boolean,
   ) => Promise<IntentAssessment | undefined>
   readonly diagnostic?: (
     input: DemandInput,
@@ -160,6 +161,7 @@ interface Dependencies {
     input: DemandInput,
     task: string,
     requestIntentContext?: RequestIntentContext,
+    clarificationFrom?: { turn: number; task: string },
   ) => Promise<void>
   /** Exact idempotent request replay; never accepts a new turn as continuation. */
   readonly replay?: (input: DemandInput) => Promise<boolean>
@@ -217,6 +219,8 @@ interface Turn {
   preparation?: Promise<void>
   selectionPending?: boolean
   nativeUnowned?: boolean
+  /** An issued source question fences effects until real preparation, not model inference. */
+  clarificationPending?: boolean
   /** Only project context actually produced for this exact captured turn. */
   answerContextReady?: boolean
   memoryDeferred?: boolean
@@ -383,6 +387,10 @@ export class OnDemandIntake {
     }
   }
   readonly #turns = new Map<string, Turn>()
+  readonly #nativeConfirmations = new WeakMap<DemandAgent, Map<string, {
+    session: DemandAgent['session']; contentDigest: string; sourcesDigest: string;
+    scopeDigest: string; candidateDigest: string; originalTurn: number; originalTask: string;
+  }>>()
   readonly #clarificationContexts = new WeakMap<
     object,
     Map<string, ClarificationContext>
@@ -485,16 +493,16 @@ export class OnDemandIntake {
     let verified:IntentAssessment|undefined
     state.auxiliaryReceipt=await this.host.recovery?.defer({source:{sessionId:state.input.agent.session!.id,turn:state.input.turn,
       origin:'intent-assessment',sourceDigest:canonicalContentHash(state.task),contextDigest:digest},
-      current:()=>this.recoveryCurrent(state)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest,
+      current:()=>this.recoveryCurrent(state)&&!this.#clarifications.has(state.session.id)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest,
       check:async(signal,attempt)=>{
         await this.host.validate({...state.input,signal})
-        const result=await this.host.assess?.({...state.input,signal},context,decision,attempt)
+        const result=await this.host.assess?.({...state.input,signal},context,decision,attempt,this.hasNativeConfirmation(state,context,decision))
         signal.throwIfAborted()
         if(!result)return {state:'rejected',reason:'assessment_disabled'}
-        if(result.outcome==='consistent'){verified=result;return {state:'verified',reason:'semantic_rechecked'}}
+        if(assessmentAllowsPreparation(result)){verified=result;return {state:'verified',reason:result.outcome==='user_confirmed'?'native_user_confirmation_accepted':'semantic_rechecked'}}
         return {state:result.semantic==='contradicted'?'rejected':'retry_wait',reason:result.semantic==='contradicted'?'semantic_contradicted':'assessment_unresolved'}
       },verified:async()=>{
-        if(verified&&this.recoveryCurrent(state)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest){
+        if(verified&&this.recoveryCurrent(state)&&!this.#clarifications.has(state.session.id)&&state.assessment?.digest===digest&&canonicalContentHash([state.requestIntentContext,decision])===digest){
           state.assessment={digest,result:verified};await this.diagnose(state,{kind:'assessment',assessment:verified})
         }
       }},'assessment_unresolved')??{storage:'unavailable',state:'pending',workMayContinue:true,memoryAdopted:false}
@@ -663,7 +671,7 @@ export class OnDemandIntake {
       messageRefs: requestIntentMessageRefs(input.messages, task),
     })
     try {
-      await this.host.prepareNativeCoding(input, task, context)
+      await this.host.prepareNativeCoding(input, task, context, this.nativeContinuation(input))
     } catch (error) {
       input.signal.throwIfAborted()
       // The Lisp choice retains cancellation. The actual turn consumes it
@@ -773,6 +781,8 @@ export class OnDemandIntake {
         messages: Object.freeze(structuredClone([...input.messages])),
       },
       task: humanTask(input.messages),
+      ...(this.isClarificationContinuation(input)
+        ? {clarificationPending:true} : {}),
       humanContents: new Map(
         humanMessages(input.messages).map((message) => [
           humanId(message),
@@ -839,7 +849,7 @@ export class OnDemandIntake {
             ),
           })
         this.assertCurrent(state)
-        await this.host.prepareNativeCoding?.(state.input, state.task, context)
+        await this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input))
         this.assertCurrent(state)
         state.nativeUnowned = true
         if (context) {
@@ -859,7 +869,7 @@ export class OnDemandIntake {
         const context=await this.host.requestContext?.(state.input,state.task)
           ?? createRequestIntentContext({task:state.task,messageRefs:requestIntentMessageRefs(state.input.messages,state.task)})
         this.assertCurrent(state)
-        await this.host.prepareNativeCoding(state.input,state.task,context)
+        await this.host.prepareNativeCoding(state.input,state.task,context,this.nativeContinuation(state.input))
         this.assertCurrent(state)
       }
       try {
@@ -1137,6 +1147,55 @@ export class OnDemandIntake {
       current,
     })
   }
+  private isClarificationContinuation(input: DemandInput): boolean {
+    const messages = humanMessages(input.messages), known = this.#clarificationContexts.get(input.agent)
+    if (!known) return false
+    const sources = collectClarificationContext(messages.map(message => ({id:humanId(message),text:humanTask([message])})),known).sources
+    return messages.some(message => {
+      const reply = known.get(humanId(message))
+      return reply && canonicalContentHash(reply.sources) === canonicalContentHash(sources)
+    })
+  }
+  /** Startup preferences are reused only from this exact native confirmation,
+   * never by matching a model-written "continue" or quoted answer. */
+  private nativeContinuation(input: DemandInput): {turn:number;task:string} | undefined {
+    const messages = humanMessages(input.messages)
+    const clarification = collectClarificationContext(messages.map(message => ({id:humanId(message),text:humanTask([message])})),
+      this.#clarificationContexts.get(input.agent) ?? new Map())
+    for (const message of messages) {
+      const receipt = this.#nativeConfirmations.get(input.agent)?.get(humanId(message))
+      if (receipt && receipt.session === input.agent.session && receipt.originalTurn < input.turn &&
+        receipt.contentDigest === canonicalContentHash(humanTask([message])) &&
+        receipt.sourcesDigest === canonicalContentHash(clarification.sources))
+        return {turn:receipt.originalTurn,task:receipt.originalTask}
+    }
+    return undefined
+  }
+  private confirmationScope(context: RequestIntentContext): string {
+    // Eligible confirmations adopt no proposals. Fresh unselected assistant
+    // prose must not invalidate the human answer; selected refs are bound in
+    // confirmationCandidate and still cannot enter this path.
+    return canonicalContentHash({ activeTask: context.activeTask ?? null,
+      activeGoal: context.activeGoal ?? null })
+  }
+  private confirmationCandidate(candidate: RequestIntentDecision): string {
+    return canonicalContentHash([candidate.relation, candidate.action, candidate.changeScope,
+      candidate.taskOperation ?? null, candidate.evidence.proposalRefs])
+  }
+  private hasNativeConfirmation(state: Turn, context: RequestIntentContext, candidate: RequestIntentDecision): boolean {
+    if (!mayConfirmRequestInterpretation(candidate)) return false
+    const messages = humanMessages(state.input.messages)
+    const clarification = collectClarificationContext(messages.map(message => ({id:humanId(message),text:humanTask([message])})),
+      this.#clarificationContexts.get(state.input.agent) ?? new Map())
+    return messages.some(message => {
+      const receipt = this.#nativeConfirmations.get(state.input.agent)?.get(humanId(message))
+      return !!receipt && receipt.session === state.input.agent.session &&
+        receipt.contentDigest === canonicalContentHash(humanTask([message])) &&
+        receipt.sourcesDigest === canonicalContentHash(clarification.sources) &&
+        receipt.scopeDigest === this.confirmationScope(context) &&
+        receipt.candidateDigest === this.confirmationCandidate(candidate)
+    })
+  }
   private async assess(
     state: Turn,
     decision: RequestIntentDecision | undefined,
@@ -1162,7 +1221,7 @@ export class OnDemandIntake {
       let result:IntentAssessment|undefined
       const started=performance.now(),deadline=AbortSignal.timeout(1500)
       const signal=AbortSignal.any([state.input.signal,deadline])
-      try {result=await abortable(this.host.assess({...state.input,signal},context,decision),signal)}
+      try {result=await abortable(this.host.assess({...state.input,signal},context,decision,undefined,this.hasNativeConfirmation(state,context,decision)),signal)}
       catch {state.input.signal.throwIfAborted();result={semantic:'unavailable',semanticInputDigest:canonicalContentHash([context,decision]),
         detector:{state:'unavailable',reason:deadline.aborted?'timeout':'process_failed',elapsedMs:Math.ceil(performance.now()-started)},outcome:'unavailable'}}
       this.assertCurrent(state)
@@ -1176,9 +1235,9 @@ export class OnDemandIntake {
         throw new Error('Assessment source changed')
       state.assessment = { digest, result }
       await this.diagnose(state, { kind: 'assessment', assessment: result })
-      if(result.outcome!=='consistent')await this.deferAssessment(state,context,decision,digest)
+      if(!assessmentAllowsPreparation(result))await this.deferAssessment(state,context,decision,digest)
     }
-    return state.assessment!.result.outcome === 'consistent'
+    return assessmentAllowsPreparation(state.assessment!.result)
   }
   private async prepare(
     state: Turn,
@@ -1310,6 +1369,7 @@ export class OnDemandIntake {
         requestIntent: state.requestIntent ?? null,
       })
       state.status = 'prepared'
+      delete state.clarificationPending
       this.#clarifications.delete(state.input.agent.session!.id)
       delete state.confirmationResume
     })()
@@ -1406,8 +1466,13 @@ export class OnDemandIntake {
     const target = !!executionClarification(state.task, decision, context)
     const transition =
       context?.activeTask && !taskCanExecute(context.activeTask)
-    const question = reason.assessment
-      ? '現在の依頼と実行候補の対象・操作・制約を照合できませんでした。今回の対象と希望する操作、以前の指示を変更する範囲を教えてください。'
+    const confirmCurrent = reason.assessment && state.assessment?.result.semantic === 'insufficient' &&
+      !!decision && mayConfirmRequestInterpretation(decision) && !(decision.relation === 'same_scope_continuation' && context?.proposals.length) && !target && !scope && !transition
+    const confirmLabel = 'この依頼の対象・操作・制約のまま進める'
+    const question = confirmCurrent
+      ? `次の依頼について、対象と操作を判定しきれませんでした。\n\n${state.task}\n\n予定している操作: ${{answer:'回答',research:'調査',verify:'検証',change:decision!.changeScope==='document'?'文書の編集':'コード・テスト・設定の変更',operate:'操作',unknown:'未確定'}[decision!.action]}。\nこの依頼に書かれた対象・操作・制約のまま進めてよいですか？違う場合は、具体的な対象と希望する操作を訂正してください。`
+      : reason.assessment
+      ? target ? '依頼の対象を特定できませんでした。変更・確認する具体的なファイルや項目と、希望する操作を教えてください。' : '依頼の対象・操作・制約を判定しきれませんでした。今回の具体的な対象と希望する操作、以前の指示を変更する範囲を教えてください。'
       : transition
         ? `現在のタスクは ${context!.activeTask!.state} です。続けるために、どの操作を希望しますか？（${taskAllowedOperations(context!.activeTask!).join(' / ')}）`
         : target
@@ -1458,37 +1523,6 @@ export class OnDemandIntake {
           'Preserve the request and report the unavailable assessment. Do not repeat clarification, claim preparation succeeded, or switch tools to bypass this preparation boundary.',
         detail:
           '原文照合または有限領域検査を利用できません。実行は準備されていません。',
-      }
-    }
-    // An inconclusive detector is not evidence that the human omitted a target.
-    // Return the submitted interpretation for repair; keep preparation denied.
-    if (
-      reason.assessment &&
-      state.assessment?.result.semantic === 'insufficient' &&
-      reason.candidate
-    ) {
-      const assessment = state.assessment.result
-      const issues = assessment.semanticIssues ?? []
-      const unresolved = assessment.semanticChecks?.filter(check => issues.includes(check.criterion)) ?? []
-      const providerUncertain = issues.length > 0 && unresolved.length === issues.length && unresolved.every(check =>
-        check.status === 'abstained' && (check.reason === 'uncertain' || check.reason === 'tie'))
-      return {
-        prepared: false,
-        status: 'assessment_rejected',
-        semantic: state.assessment.result.semantic,
-        semanticIssues: state.assessment.result.semanticIssues ?? [],
-        semanticChecks: assessment.semanticChecks ?? [],
-        originalTask: state.task,
-        requestIntent: reason.candidate,
-        currentReferences: context
-          ? requestIntentRequiredReferenceIds(context)
-          : [],
-        availableReferences: context ? requestIntentReferenceIds(context) : [],
-        permissions: 'unchanged_native_policy',
-        nextAction: providerUncertain ? 'report_assessment_uncertainty' : 'revise_request_intent_or_report_conflict',
-        detail: providerUncertain
-          ? 'The independent provider abstained because of confidence or tied choices. This does not establish ambiguity in the user request or an incorrect candidate. Preserve the request and candidate and report the unresolved provider assessment. Do not resubmit an identical candidate, change its meaning merely to obtain acceptance, ask the human for internal classification fields, or bypass preparation. No work is prepared.'
-          : 'The independent comparison did not establish the submitted candidate. Re-read the captured request, answers, active task and same-session plan. Cite an existing proposal only when the request adopts it. Correct the candidate or report the specific unresolved comparison; do not repeat an identical submission or ask the human to supply internal classification fields. Ask a concrete question only if the source itself leaves an action or target ambiguous. No work is prepared.',
       }
     }
     const replies =
@@ -1590,6 +1624,7 @@ export class OnDemandIntake {
       result: result as unknown,
       operation: undefined as Promise<unknown> | undefined,
     }
+    state.clarificationPending = true
     this.#clarifications.set(sessionId, pending)
     await this.diagnose(state, {
       kind: 'question',
@@ -1613,7 +1648,7 @@ export class OnDemandIntake {
               {
                 id,
                 question,
-                ...(scope && !target && !transition
+                ...(confirmCurrent ? { options: [{label:confirmLabel},{label:'対象または操作を訂正する'}] } : scope && !target && !transition
                   ? {
                       options: [
                         { label: '文章のみ' },
@@ -1667,23 +1702,60 @@ export class OnDemandIntake {
           }
           return pending.result
         }
-        const answer = response.answers[0]
+        let answer = response.answers[0]
+        let answerQuestionId = id, answerQuestion = question
+        if (confirmCurrent && answer?.id === id && !answer.custom?.trim() &&
+          answer.selected.length === 1 && answer.selected[0] === '対象または操作を訂正する') {
+          answerQuestionId = `${id}-correction`
+          answerQuestion = `次の依頼について、訂正後の具体的な対象（ファイル・項目など）と希望する操作を入力してください。変更しない範囲もあれば含めてください。\n\n${state.task}`
+          await this.diagnose(state, {kind:'question',questionRef:answerQuestionId,reason:'clarification_required'})
+          const corrected = await abortable(this.host.questions!.ask({agent:state.input.agent,signal,
+            questions:[{id:answerQuestionId,question:answerQuestion}]}),signal)
+          signal.throwIfAborted()
+          this.assertCurrent(state)
+          if (this.#clarifications.get(sessionId) !== pending || pending.status !== 'waiting') return result
+          await this.host.validate(state.input)
+          const afterCorrection = this.host.requestContext
+            ? await this.host.requestContext(state.input,state.task)
+            : (await this.host.interpret?.(state.input,state.task))?.context
+          signal.throwIfAborted()
+          this.assertCurrent(state)
+          if (context && (!afterCorrection || canonicalContentHash(afterCorrection) !== canonicalContentHash(context))) {
+            if (afterCorrection) {
+              state.requestIntentContext = afterCorrection
+              state.requestIntent = unresolvedRequestIntent(afterCorrection,'clarification_context_changed')
+              state.requestIntentContextDigest = canonicalContentHash(afterCorrection)
+            }
+            pending.result = {...result,status:'clarification_context_changed',
+              detail:'The source changed while awaiting the correction. No answer was queued; refresh the current request.'}
+            return pending.result
+          }
+          answer = corrected.answers[0]
+        }
         const value = answer?.custom?.trim() || answer?.selected[0]?.trim()
-        if (answer?.id !== id || !value || value.length > 8192) return result
-        // Preserve actual native sources and answers once; never recursively quote an earlier generated envelope.
-        // label the actual UI answer separately, and re-enter ordinary native
-        // capture. The reply itself is never mapped to execution authority.
+        if (answer?.id !== answerQuestionId || !value || value.length > 8192) return result
+        // Preserve native sources and answers once, then recapture the reply.
+        // Only the exact affirmative selection below creates a scoped receipt;
+        // a free-text correction is fresh user evidence, never an admission.
         const answerMessageId = randomUUID()
         const reply = clarificationReply(clarification, {
           id: answerMessageId,
-          questionId: id,
-          question,
+          questionId: answerQuestionId,
+          question: answerQuestion,
           value,
           scope: answerScope,
         })
         const content = reply.content
         signal.throwIfAborted()
         this.assertCurrent(state)
+        if (confirmCurrent && answerQuestionId === id && decision && context && !answer.custom?.trim() &&
+          answer.selected.length === 1 && answer.selected[0] === confirmLabel) {
+          const receipts = this.#nativeConfirmations.get(state.input.agent) ?? new Map()
+          receipts.set(answerMessageId, { session: state.input.agent.session, originalTurn: state.input.turn, originalTask: state.task,
+            contentDigest: canonicalContentHash(content), sourcesDigest: canonicalContentHash(clarification.sources),
+            scopeDigest: this.confirmationScope(context), candidateDigest: this.confirmationCandidate(decision) })
+          this.#nativeConfirmations.set(state.input.agent, receipts)
+        }
         replies.set(answerMessageId, reply.context)
         this.#clarificationContexts.set(state.input.agent, replies)
         state.input.agent.followup!({
@@ -1694,12 +1766,14 @@ export class OnDemandIntake {
         })
         await this.diagnose(state, {
           kind: 'answer',
-          questionRef: id,
+          questionRef: answerQuestionId,
           answerRef: answerMessageId,
         })
         pending.status = 'queued'
         pending.result = {
           ...result,
+          questionId: answerQuestionId,
+          question: answerQuestion,
           status: 'clarification_answer_queued',
           answer: value,
           answerRef: answerMessageId,
@@ -1845,7 +1919,10 @@ export class OnDemandIntake {
           'Main-model interpretation conflicts with the configured decision provider',
         )
       }
-      return { ...prior, evidence: bound.evidence }
+      // The explicit submission is a current main-model interpretation, even
+      // when its classification agrees with earlier provider extraction.
+      // Preserve the explicit submission's provenance; this is not user confirmation.
+      return bound
     }
     return bound
   }
@@ -2071,6 +2148,7 @@ export class OnDemandIntake {
       !this.#stopped &&
       !execution.signal.aborted &&
       UNOWNED_NATIVE_TOOLS.has(execution.name) &&
+      (!state?.clarificationPending || NATIVE_EVIDENCE_READS.has(execution.name) || execution.name === 'skill') &&
       execution.parent === undefined &&
       !!state &&
       state.nativeUnowned === true &&
@@ -2082,11 +2160,12 @@ export class OnDemandIntake {
       proof.nativeUnownedDigest === canonicalContentHash(execution.arguments)
     )
   }
-  /** Direct native Bash follows native permissions, independently of optional task intake. */
+  /** Ordinary native Bash follows native policy; an issued clarification cannot be bypassed by switching tools. */
   nativeCommand(execution: Execution): boolean {
     const state = this.bound(execution),
       actual = this.definition(execution),
       proof = this.#executions.get(execution)
+    if (state?.clarificationPending) return false
     if (
       !this.options.onlyWhenDeferred &&
       !this.#stopped &&
@@ -2124,6 +2203,14 @@ export class OnDemandIntake {
         proof.nativeCommandDigest === canonicalContentHash(execution.arguments))
     )
   }
+  /** Known observational/cancellation Lisp contracts stay usable while waiting.
+   * Live evaluation is effect-capable; do not inspect or guess its code string. */
+  private pendingLispEffect(execution: Execution): boolean {
+    if (['lisp_status','lisp_hot_status','lisp_cancel'].includes(execution.name)) return false
+    const args = execution.arguments as {resultOperationId?:unknown;ref?:unknown} | undefined
+    return !(execution.name === 'lisp_inspect' && execution.parent === undefined &&
+      typeof args?.resultOperationId === 'string' && args.ref === undefined)
+  }
   /** Delegate real root Lisp tools to their own effect/lease/approval authority. */
   nativeLisp(execution: Execution): boolean {
     const state = this.bound(execution),
@@ -2138,6 +2225,7 @@ export class OnDemandIntake {
       state.status !== 'answer' ||
       state.input.signal.aborted ||
       !actual ||
+      (state.clarificationPending && this.pendingLispEffect(execution)) ||
       !isLispImplementation(actual.execute) ||
       (execution.agent && this.host.nativeChild?.(execution.agent))
     )
@@ -2520,6 +2608,12 @@ export class OnDemandIntake {
           }
           try {
             this.assertCurrent(state)
+            if (state.clarificationPending && (
+              execution.name === 'bash' || isLispNativeCommand(execution, actual.execute) ||
+              (isLispImplementation(actual.execute) && this.pendingLispEffect(execution)) ||
+              (state.nativeUnowned && UNOWNED_NATIVE_TOOLS.has(execution.name) &&
+                !NATIVE_EVIDENCE_READS.has(execution.name) && execution.name !== 'skill')
+            )) return denied('The current request is awaiting clarification. Native commands cannot bypass that question; resolve it and prepare the exact request first.')
             if (
               state.confirmationResume &&
               execution.name !== TASK_PREPARE_TOOL &&

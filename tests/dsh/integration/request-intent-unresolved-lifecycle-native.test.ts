@@ -5,7 +5,7 @@ import { mountNativeExecutor } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import test, { mock } from 'node:test'
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -117,6 +117,11 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       (request: any) => {
         const prepared = resultFor(request, 'first-prepare')
         assert.equal(prepared.isError, false, text(prepared))
+        // This provider deliberately abstains on semantic checks in both turns.
+        // Count each distinct user request, not both requests as one question.
+        assert.equal(JSON.parse(text(prepared)).prepared, false)
+        assert.equal(JSON.parse(text(prepared)).status, 'awaiting_clarification')
+        assert.equal(clarificationQuestions, 1)
         working = readCurrent()
         assert.equal(working.state, 'Working'); assert.equal(working.runStatus, 'active')
         // A queued human follow-up creates a genuine next native turn, without
@@ -139,17 +144,12 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         const result = resultFor(request, 'uncertain-next-prepare')
         assert.equal(result.isError, false, text(result))
         assert.equal(JSON.parse(text(result)).prepared, false)
-        assert.equal(JSON.parse(text(result)).status,
-          uncertain === 'whole-intent' ? 'request_interpretation_required' : 'awaiting_clarification')
-        if (uncertain === 'whole-intent') {
-          assert.equal(JSON.parse(text(result)).nextAction, 'submit_current_request_intent')
-          assert.equal(clarificationQuestions, 0)
-        } else assert.equal(clarificationQuestions, 1)
+        assert.equal(JSON.parse(text(result)).status, 'awaiting_clarification')
+        assert.equal(JSON.parse(text(result)).nextAction, 'wait_for_user')
+        assert.equal(clarificationQuestions, 2, 'one question per distinct native user request; no same-request repeat')
         assert.deepEqual(authority(readCurrent()), authority(working!))
         rejected = true
-        return f.mock.textResponse(uncertain === 'whole-intent'
-          ? 'Interpret the captured request without asking the human to classify it.'
-          : 'Clarify the new artifact scope before changing the active work.')
+        return f.mock.textResponse('Wait for the user to clarify the concrete target and action before changing the active work.')
       })
     await f.turn(firstRequest)
     console.info(`Core ${uncertain} immediate idle:`, JSON.stringify(authority(readCurrent())))
@@ -159,6 +159,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     console.info(`Core ${uncertain} settled idle:`, JSON.stringify(authority(readCurrent())))
     assert.deepEqual(authority(readCurrent()), authority(working!), 'dismissed clarification preserves current work through settled idle')
     assert.equal(rejected, true)
+    assert.equal(await readFile(join(dir, 'PLAN.md'), 'utf8'), 'PRESERVE_CURRENT_WORKING_TASK')
+    assert.equal(existsSync(join(dir, 'REPORT.md')), false)
     assert.ok(providerCalls.some(call => call.task === nextRequest && call.question === 'request-task-operation'))
     if (uncertain === 'change-scope') assert.ok(providerCalls.some(call => call.task === nextRequest && call.question === 'request-change-scope'))
   } finally {

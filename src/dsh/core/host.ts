@@ -565,7 +565,7 @@ export async function mountCore(
     {
       diagnostic: createIntakeDiagnosticSink(runtime),
       recovery: runtime.auxiliaryRecovery,
-      assess: (input, context, decision, recoveryAttempt) =>
+      assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
         assessRequestIntent(
           decisions,
           dshTurnRequestId({
@@ -575,7 +575,7 @@ export async function mountCore(
           context,
           decision,
           input.signal,
-          {...(recoveryAttempt===undefined?{}:{recoveryAttempt})},
+          {...(recoveryAttempt===undefined?{}:{recoveryAttempt}), ...(userConfirmed ? {userConfirmed:true} : {})},
         ),
       ...(questions ? { questions } : {}),
       answerContext: new DshAnswerContext(runtime, {
@@ -590,11 +590,11 @@ export async function mountCore(
             cwd: root,
           }),
       }),
-      prepareNativeCoding: async (input, task, requestIntentContext) => {
+      prepareNativeCoding: async (input, task, requestIntentContext, clarificationFrom) => {
         const lisp = get(LISP_CODING_SERVICE) as LispCodingService | undefined
         const sessionId = input.agent.session?.id
         if (!sessionId) return
-        await taskStartup.prepare({ ...input, sessionId, task, taskType: null })
+        await taskStartup.prepare({ ...input, sessionId, task, taskType: null, ...(clarificationFrom ? {clarificationFrom} : {}) })
         if (!lisp?.prepareNative) return
         const requestIntent = requestIntentContext
           ? await classifyRequestIntent(

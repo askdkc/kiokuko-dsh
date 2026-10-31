@@ -47,7 +47,7 @@ export class TaskStartup {
     /** Configured preselection for the card; absent marks no option. */
     defaults?(): StartupDefaults
   }) {}
-  prepare(input: LispCodingInput & { sessionId: string }): Promise<void> {
+  prepare(input: LispCodingInput & { sessionId: string; clarificationFrom?: { turn: number; task: string } }): Promise<void> {
     const root = this.host.root(input.agent)
     const prefix = `task-startup:${canonicalContentHash([input.sessionId, root])}:`
     const turn = String(input.turn).padStart(16, '0')
@@ -63,7 +63,7 @@ export class TaskStartup {
     })
     return pending
   }
-  private async choose(input: LispCodingInput & { sessionId: string }, key: string, prefix: string, before: string): Promise<void> {
+  private async choose(input: LispCodingInput & { sessionId: string; clarificationFrom?: { turn: number; task: string } }, key: string, prefix: string, before: string): Promise<void> {
     const { decisions } = this.host, lisp = this.host.lisp()
     const current = () => {
       input.signal.throwIfAborted()
@@ -75,8 +75,14 @@ export class TaskStartup {
     let receipt = await decisions.readStartup(key)
     if (!receipt?.startup) {
       const configured = await decisions.startupConfiguration()
-      const config = await decisions.readStartup(requestId) ?? configured
-      let choice: TaskStartupChoice | undefined = configured.startup
+      // Only the intake's native-answer path supplies this exact original key.
+      // Reuse its immutable mode binding, not the latest unrelated session task.
+      const from = input.clarificationFrom
+      const prior = from && Number.isSafeInteger(from.turn) && from.turn >= 1 && from.turn < input.turn
+        ? await decisions.readStartup(`${prefix}${String(from.turn).padStart(16, '0')}:${canonicalContentHash(from.task)}`)
+        : undefined
+      const config = await decisions.readStartup(requestId) ?? prior ?? configured
+      let choice: TaskStartupChoice | undefined = prior?.startup ?? configured.startup
       if (!choice && continuation(input.task)) {
         const previous = this.last.get(prefix)
         const rows = previous && previous.id < before ? [previous] : await decisions.startupBefore(prefix, before)

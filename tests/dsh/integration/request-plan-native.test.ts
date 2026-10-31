@@ -373,11 +373,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           resultFor(request, 'inconclusive-plan'),
                         )
                         assert.equal(inconclusive.prepared, false)
-                        assert.equal(inconclusive.status, 'assessment_rejected')
-                        assert.equal(
-                          inconclusive.requestIntent.action,
-                          'change',
-                        )
+                        assert.equal(inconclusive.status, 'awaiting_clarification')
                         assert.equal(
                           existsSync(join(root, 'src/parser.ts')),
                           false,
@@ -386,7 +382,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           asked.filter((id) =>
                             id.startsWith('request-clarification-'),
                           ).length,
-                          0,
+                          1,
                         )
                         return toolCall(
                           'missing-scope-plan',
@@ -430,7 +426,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           asked.filter((id) =>
                             id.startsWith('request-clarification-'),
                           ).length,
-                          0,
+                          1,
                         )
                         return toolCall(
                           'prepare-plan',
@@ -493,8 +489,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
               assert.equal(
                 asked.filter((id) => id.startsWith('request-clarification-'))
                   .length,
-                0,
-                'clear plan adoption needs no generic human question, including a legacy model request',
+                legacy === 'assessment' ? 1 : 0,
+                'an insufficient plan candidate asks once and cannot execute without resolved evidence',
               )
               assert.equal(
                 asked.filter((id) => id === 'enno-execution-mode').length <= 1,

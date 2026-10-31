@@ -24,7 +24,7 @@ export const DiagnosticAttempt = z.object({ origin: z.enum(['intake','provider']
 export type DiagnosticAttempt = z.input<typeof DiagnosticAttempt>
 export const DIAGNOSTIC_REASONS = ['observed','resolved','unresolved','native_unowned','clarification_required','target_unknown','scope_unknown',
   'transition_required','question_unavailable','context_changed','answer_queued','resume_observed','receipt_observed','continuation_observed',
-  'assessment_disabled','assessment_consistent','assessment_clarify','assessment_unavailable','provider_completed','provider_fallback','provider_cancelled','evaluation_failed'] as const
+  'assessment_disabled','assessment_user_confirmed','assessment_consistent','assessment_clarify','assessment_unavailable','provider_completed','provider_fallback','provider_cancelled','evaluation_failed'] as const
 export const DiagnosticEvent = z.object({ kind: z.enum(['reference','extraction','semantic_match','detector','route','admission','task_resume','question','answer','resume','provider','choice','receipt','continuation']),
   status: z.enum(['observed','not_run','waiting','queued','blocked']), reason: z.enum(DIAGNOSTIC_REASONS),
   parentEventId: digest.optional(), referenceDigest: digest.optional(), targetSessionId: nativeId.optional(),
@@ -296,7 +296,7 @@ export function createIntakeDiagnosticSink(runtime: DiagnosticRuntime) {
       } else if(observation.kind==='assessment') {
         const a=observation.assessment;if(!a)throw new DiagnosticConflict('causal_conflict')
         const key=['assessment',a.semanticInputDigest,a.semanticOutputDigest??null,a.detector]
-        const reason=a.outcome==='consistent'?'assessment_consistent':a.outcome==='clarify'?'assessment_clarify':'assessment_unavailable'
+        const reason=a.outcome==='user_confirmed'?'assessment_user_confirmed':a.outcome==='consistent'?'assessment_consistent':a.outcome==='clarify'?'assessment_clarify':'assessment_unavailable'
         const semanticId=diagnosticEventId(owner.id,['semantic',key])
         appendDiagnosticEvent(db,owner.id,semanticId,{kind:'semantic_match',status:'observed',reason,
           semanticVerdict:a.semantic,assessmentInputDigest:a.semanticInputDigest,...(a.semanticOutputDigest?{assessmentOutputDigest:a.semanticOutputDigest}:{}),

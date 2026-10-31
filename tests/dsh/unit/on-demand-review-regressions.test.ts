@@ -3483,7 +3483,7 @@ test('legacy taskType returns the current interpretation contract to the model w
   assert.equal(f.admissions.length, 1)
 })
 
-test('multinguin recurrence: inconclusive assessment returns the submitted candidate for model repair without reasking the human', async (t) => {
+test('multinguin recurrence: inconclusive assessment asks once; dismissal does not admit an unselected plan', async (t) => {
   const message = human('finish-project', 'finish this project')
   const context = createRequestIntentContext({
     task: 'finish this project',
@@ -3544,7 +3544,6 @@ test('multinguin recurrence: inconclusive assessment returns the submitted candi
             {
               id: request.questions[0].id,
               selected: [],
-              custom: 'PLAN.mdの内容を網羅',
             },
           ],
         }
@@ -3566,18 +3565,16 @@ test('multinguin recurrence: inconclusive assessment returns the submitted candi
   }
   for (let i = 0; i < 2; i++) {
     const result = await f.execute(TASK_PREPARE_TOOL, args)
-    assert.equal(result.value.status, 'assessment_rejected')
+    assert.equal(result.value.status, 'awaiting_clarification')
     assert.equal(result.value.prepared, false)
-    assert.equal(result.value.requestIntent.action, 'change')
-    assert.equal(result.value.requestIntent.changeScope, 'implementation')
     assert.equal(
       result.value.nextAction,
-      'revise_request_intent_or_report_conflict',
+      'wait_for_user',
     )
     assert.equal(f.admissions.length, 0)
-    assert.equal(f.intake.awaitingClarification(f.agent), false)
+    assert.equal(f.intake.awaitingClarification(f.agent), true)
   }
-  assert.equal(asks, 0)
+  assert.equal(asks, 1)
   const repaired = await f.execute(TASK_PREPARE_TOOL, {
     requestIntent: {
       ...args.requestIntent,
@@ -3586,7 +3583,7 @@ test('multinguin recurrence: inconclusive assessment returns the submitted candi
   })
   assert.equal(repaired.value.prepared, true)
   assert.equal(f.admissions.length, 1)
-  assert.equal(asks, 0)
+  assert.equal(asks, 1)
 })
 
 test('a missing main-model artifact scope requires model interpretation, not an automatic human question', async (t) => {
@@ -3902,7 +3899,7 @@ test('memory quarantine: a nonresponsive auxiliary preparation reaches a native 
   finally{clearTimeout(keepalive)}
 })
 
-for(const verdict of ['supported','contradicted','insufficient'] as const)test(`semantic idle reevaluation: ${verdict} preserves exact source, bounded attempts and native authority`,async t=>{
+for(const verdict of ['supported','contradicted','insufficient'] as const)test(`pending user question blocks idle reevaluation: ${verdict} preserves exact source, bounded attempts and native authority`,async t=>{
   const root=await mkdtemp(join(tmpdir(),'native-semantic-recovery-')),db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
   let now=1000
   const recovery=new AuxiliaryRecovery({withDatabase:async fn=>fn(db)},join(root,'quarantine'),{budgetMs:1000,retryMs:10000,now:()=>now})
@@ -3920,13 +3917,9 @@ for(const verdict of ['supported','contradicted','insufficient'] as const)test(`
   assert.equal((await f.execute('review_probe')).isError,true)
   await (f.agent as any).ctx.emit('agent/idle',f.agent)
   const until=async(expected:string)=>{const end=Date.now()+2000;while(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state!==expected){assert.ok(Date.now()<end);await new Promise(r=>setTimeout(r,5))}}
-  await until(verdict==='supported'?'verified':verdict==='contradicted'?'rejected':'retry_wait')
-  if(verdict==='insufficient'){
-    for(let i=0;i<2;i++){now+=20000;await recovery.idle(f.session.id)}
-    await until('rejected');assert.equal(calls.length,4)
-  }else assert.equal(calls.length,2)
-  assert.deepEqual(calls[1]!.context,calls[0]!.context);assert.deepEqual(calls[1]!.decision,calls[0]!.decision)
-  assert.equal(calls[1]!.attempt,1);assert.equal(f.admissions.length,0,'advisory reevaluation cannot itself admit an effect')
+  await until('stale')
+  assert.equal(calls.length,1,'background inference cannot silently resolve an unanswered question')
+  assert.equal(f.admissions.length,0,'silence is not consent')
   assert.equal(f.bodies(),0)
   t.after(f.ctx.tools.guard((e:any)=>e.name===TASK_PREPARE_TOOL?'native permission denied':undefined))
   assert.equal((await f.prepare()).isError,true);assert.equal(f.admissions.length,0)

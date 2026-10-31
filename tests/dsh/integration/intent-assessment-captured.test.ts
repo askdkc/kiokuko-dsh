@@ -88,12 +88,12 @@ for (const request of requests) for (const verdict of ['supported', 'insufficien
     if (verdict === 'supported') {
       assert.equal((await execute('effect_probe', {})).isError, false); assert.equal(effects, 1)
     } else if (verdict !== 'contradicted') {
-      assert.equal(value.status, 'assessment_rejected')
+      assert.equal(value.status, 'awaiting_clarification')
       assert.deepEqual(value.semanticChecks, criteria.map((criterion, index) => verdict.startsWith('partial-') && index !== 1
         ? { criterion, status: 'selected', choiceId: 'supported' }
         : { criterion, status: 'abstained', reason: verdict.replace('partial-', '') }))
       assert.equal(questions, 0, 'Provider abstention alone must not ask the human to repair inference')
-      assert.equal(value.nextAction, verdict.endsWith('insufficient') ? 'revise_request_intent_or_report_conflict' : 'report_assessment_uncertainty')
+      assert.equal(value.nextAction, 'wait_for_user')
       assert.equal(value.originalTask, request.task)
       assert.equal((await execute('effect_probe', {})).isError, true); assert.equal(effects, 0)
       assert.equal((await execute(TASK_PREPARE_TOOL, submit)).value.prepared, false)

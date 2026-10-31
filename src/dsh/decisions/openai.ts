@@ -44,6 +44,8 @@ function decode(value: unknown, batch: DecisionBatch, settings: NonNullable<Deci
   const answers = batch.questions.map((q, index) => {
     const a = response.answers[index]!
     if (a.name !== q.id) throw new DecisionError('MALFORMED_RESPONSE')
+    // A refusal is not an uncertainty verdict eligible for semantic fallback.
+    if (a.type === 'refusal' && batch.purpose === 'intent-semantic-match') throw new DecisionError('UNAVAILABLE')
     if (a.type === 'refusal') return { id: q.id, status: 'abstained' as const, reason: 'insufficient' as const }
     if (!('choices' in q) && q.type === 'noul' && a.type === 'predicate')
       return { id: q.id, status: 'measured' as const, type: 'noul' as const, probability: a.probability }

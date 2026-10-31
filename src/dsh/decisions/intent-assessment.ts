@@ -11,7 +11,7 @@ import {
   type FiniteDomainProblem,
   type MicroJudgeResult,
 } from './micro-judge.js'
-export const INTENT_ASSESSMENT_POLICY = 'source-candidate-independent-v1'
+export const INTENT_ASSESSMENT_POLICY = 'source-candidate-independent-v2'
 export type SemanticVerdict =
   'supported' | 'contradicted' | 'insufficient' | 'unavailable'
 export type SemanticCheck = { criterion: typeof criteria[number][0] } & (
@@ -28,24 +28,24 @@ export interface IntentAssessment {
   /** Normalized provider outcomes, not a claim about human ambiguity or authority. */
   semanticChecks?: readonly SemanticCheck[]
   detector: MicroJudgeResult
-  outcome: 'consistent' | 'clarify' | 'unavailable'
+  outcome: 'consistent' | 'user_confirmed' | 'clarify' | 'unavailable'
 }
 const criteria = [
   [
     'action',
-    'The proposed action and artifact scope preserve every requested action, negation, quotation, actor and distinction between explanation, verification and implementation.',
+    'Assess only the represented action and changeScope classification against the original user request. Preserve negation, quotation, actor and the distinction between explanation, verification and implementation. The candidate is not an execution plan: it does not propose file contents, a path resolution or a rewritten request. Do not require those absent fields to classify an explicit request.',
   ],
   [
     'reference',
-    'Every proposed continuation, scope change and adopted proposal refers to the exact supplied current-session source. Omitted or uncertain targets are not replaced by the current directory.',
+    'Assess the represented relation and selected proposal references against the supplied current-session source. A new request need not have an active Goal or proposal. Same-scope continuation may refer to the active task without a formal Goal. Targets remain those in the original source, not an invented current-directory target; the candidate does not supply a replacement target.',
   ],
   [
     'constraints',
-    'The candidate preserves applicable target exclusions and constraints. It does not turn a forbidden, quoted or hypothetical action into a request.',
+    'Does this classification conflict with a prohibition, exclusion or constraint in the original source? A forbidden, quoted or hypothetical action is not a request. If the source contains no applicable constraint, this criterion is supported, not missing information. The classification does not replace the source constraints or grant execution permissions.',
   ],
   [
     'latest-answer',
-    'Apply the latest explicitly labelled native clarification answer to its question and current scope. A same-scope explicit revision can supersede the earlier conflicting instruction; do not let an older prohibition permanently override it. Unrelated constraints remain in force.',
+    'If the source contains an explicitly labelled native clarification answer, assess the classification using that answer and its question/current scope. A same-scope explicit revision can supersede the earlier conflicting instruction; unrelated constraints remain in force. If there is no labelled clarification answer, assess the current user request normally: the absence of a clarification is supported for this criterion, not insufficient evidence.',
   ],
 ] as const
 /** Separate inference compares original source against a candidate; extraction scores/results are deliberately excluded. */
@@ -99,6 +99,7 @@ export function compileIntentRelations(
   context: RequestIntentContext,
   candidate: RequestIntentDecision,
   semantic: SemanticVerdict,
+  interpretation: 'independent' | 'native-user' = 'independent',
 ): FiniteDomainProblem {
   const domains: FiniteDomainProblem['domains'] = [],
     constraints: Expression[] = [],
@@ -155,9 +156,11 @@ export function compileIntentRelations(
       ? [0, 1]
       : [1],
   )
-  const semanticVariable = value(
+  // This is the admission policy requirement, not a rewritten semantic verdict.
+  const interpretationRequirement = value(
     'bool',
-    semantic === 'supported' ? [1] : semantic === 'contradicted' ? [0] : [0, 1],
+    semantic === 'supported' || (semantic === 'insufficient' && interpretation === 'native-user' && mayConfirmRequestInterpretation(candidate))
+      ? [1] : semantic === 'contradicted' ? [0] : [0, 1],
   )
   // A candidate task transition must belong to the host's current legal operation set.
   if (candidate.taskOperation)
@@ -169,7 +172,7 @@ export function compileIntentRelations(
       ),
     )
   const valid = value('bool', [0, 1])
-  let conjunction: Expression = op('and', resolved, semanticVariable)
+  let conjunction: Expression = op('and', resolved, interpretationRequirement)
   for (const relation of requirements)
     conjunction = op('and', conjunction, relation)
   // Split conjunctions into ternary relations; propagation can eliminate impossible states before MRV search.
@@ -185,13 +188,26 @@ export function compileIntentRelations(
   constraints.push(op('eq', valid, flatten(conjunction)))
   return { domains, constraints, query: valid, workBudget: 200000 }
 }
+/** Confirmation is supplied only by the intake's private native-answer receipt.
+ * It is never inferred from a model submission or an auxiliary abstention.
+ * Scope expansion and lifecycle operations retain their separate protocols. */
+export function mayConfirmRequestInterpretation(candidate: RequestIntentDecision): boolean {
+  return candidate.source !== 'unresolved' &&
+    (candidate.relation === 'new' || candidate.relation === 'same_scope_continuation') &&
+    ['answer', 'research', 'verify', 'change'].includes(candidate.action) &&
+    (candidate.action !== 'change' || candidate.changeScope !== 'unknown') &&
+    candidate.taskOperation === undefined && candidate.evidence.proposalRefs.length === 0
+}
+export function assessmentAllowsPreparation(result: IntentAssessment): boolean {
+  return result.outcome === 'consistent' || result.outcome === 'user_confirmed'
+}
 export async function assessRequestIntent(
   service: DecisionService | undefined,
   requestId: string,
   context: RequestIntentContext,
   candidate: RequestIntentDecision,
   signal: AbortSignal,
-  options: Parameters<typeof runMicroJudge>[3] & {recoveryAttempt?:number} = {},
+  options: Parameters<typeof runMicroJudge>[3] & {recoveryAttempt?:number; userConfirmed?:boolean} = {},
 ): Promise<IntentAssessment | undefined> {
   // Explicitly disabled typed decisions retain the existing native authority path; no assessment is claimed.
   if (service && (await service.bind(requestId, signal)).mode === 'off')
@@ -253,7 +269,8 @@ export async function assessRequestIntent(
     } catch {
       signal.throwIfAborted()
     }
-  const problem = compileIntentRelations(context, candidate, semantic)
+  const interpreted = options.userConfirmed === true && semantic === 'insufficient' && mayConfirmRequestInterpretation(candidate)
+  const problem = compileIntentRelations(context, candidate, semantic, interpreted ? 'native-user' : 'independent')
   const detector = await runMicroJudge(
     problem,
     canonicalContentHash([requestId, semanticInputDigest]),
@@ -266,7 +283,7 @@ export async function assessRequestIntent(
     !detector.result.complete
       ? 'unavailable'
       : detector.result.status === 'entailed'
-        ? 'consistent'
+        ? interpreted ? 'user_confirmed' : 'consistent'
         : 'clarify'
   return {
     semantic,
