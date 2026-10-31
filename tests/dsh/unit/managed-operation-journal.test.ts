@@ -159,3 +159,32 @@ test('retained child proof preserves linked parent audit through expiry',()=>{
  assert.equal(j.prune(Date.now()+10000),0);assert.equal(j.readOperation(parent.op.operationId).state,'completed')
  }finally{f.close()}
 })
+
+test('a human can end an unknown external operation without claiming an observed result',()=>{
+ const f=fixture();try{
+  const j=f.journal,{scope,op}=prepared(j)
+  j.claim(op.operationId);j.transition(op.operationId,{state:'unknown',cause:'timeout'});j.seal(scope.scopeId)
+  assert.equal(j.snapshot(scope.scopeId).complete,false)
+  assert.throws(()=>j.abandon(op.operationId,''),/contract/u,'an abandonment needs bounded evidence')
+  const abandoned=j.abandon(op.operationId,'human-inspected:no-live-process')
+  assert.equal(abandoned.state,'abandoned');assert.equal(abandoned.receiptRef,'human-inspected:no-live-process')
+  assert.equal(abandoned.outcome,undefined,'abandonment is not a claimed success or failure')
+  const snap=j.snapshot(scope.scopeId)
+  assert.equal(snap.unresolved,0);assert.equal(snap.complete,true)
+  assert.equal(snap.operations[0]!.state,'abandoned')
+  // Terminal already: no later receipt may overwrite a human reconciliation.
+  assert.throws(()=>j.abandon(op.operationId,'human-inspected:again'))
+  assert.throws(()=>j.reconcile(op.operationId,{state:'completed',outcome:'succeeded',receiptRef:'late'}),/contract/u)
+  f.reopen()
+  assert.equal(new ManagedOperationJournal(f.db).readOperation(op.operationId).state,'abandoned')
+ }finally{f.close()}
+})
+
+test('only unknown operations may be abandoned and other sessions are unaffected',()=>{
+ const f=fixture();try{
+  const j=f.journal,{op}=prepared(j)
+  assert.throws(()=>j.abandon(op.operationId,'too-early'),/contract/u,'a prepared operation is not an unknown outcome')
+  j.claim(op.operationId);j.transition(op.operationId,{state:'completed',outcome:'succeeded',receiptRef:'host'})
+  assert.throws(()=>j.abandon(op.operationId,'after-success'),/contract/u)
+ }finally{f.close()}
+})

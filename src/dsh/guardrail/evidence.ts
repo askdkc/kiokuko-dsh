@@ -48,6 +48,9 @@ export function retainProtocolResult(receipt: ExecutionReceipt, result: HostProc
 function projectProtocolSnapshot(state: ProtocolState, receipt: ExecutionReceipt, original: ManagedJournalSnapshot): ProtocolEvidenceSnapshot {
   const binding={taskId:state.lease.taskId,unitId:state.recipe.unitId,workerGeneration:receipt.generation,protocolBindGeneration:state.generation,leaseAuthorityGeneration:state.lease.generation,leaseRevision:state.lease.revision}
   if(!original.sealed||!original.collectorComplete||!original.complete||original.unresolved!==0||original.scope.sessionId!==receipt.sessionId||original.scope.runtimeIdentity!==state.runtimeDigest||canonicalContentHash(original.scope.binding as any)!==canonicalContentHash(binding))throw Error('Protocol journal scope is incomplete or bound to a different authority')
+  // A human abandonment ends the blocking deadlock, but it proves nothing about the
+  // external effect. Such a scope can never become protocol test evidence.
+  if(original.operations.some(operation=>operation.state==='abandoned'))throw Error('Protocol journal contains a human-abandoned operation without an observed receipt')
   const ownedDigest=canonicalContentHash(receipt as any)
   const supporting=original.operations.filter(operation=>operation.originalRef===receipt.operationId)
   if(supporting.length!==1||supporting[0]!.route!=='owned'||supporting[0]!.kind!=='process'||supporting[0]!.state!=='completed'||supporting[0]!.receiptRef!==ownedDigest||supporting[0]!.outcome!==(receipt.exitCode===0?'succeeded':'failed'))throw Error('Protocol journal does not contain the exact completed owned result')

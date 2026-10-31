@@ -2490,6 +2490,50 @@ for (const cancelled of [true, false])
       )
   })
 
+test('KDSH-INTAKE-TURN-DEADLOCK: a failed turn whose boundary already ended cannot poison later human turns', async (t) => {
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    prepareNativeCoding: async (input) => {
+      // Only the second request fails; later turns must be judged on their own.
+      if (input.messages.some((message: any) => String(message.content?.[0]?.text ?? '').includes('commit messages')))
+        throw new Error('未確定の処理を /kioku-lisp recover で確認してから解除してください。')
+    },
+  })
+  await f.capture([human('first', 'Implement parser.ts')], 1)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer')
+  // The host ends the first turn, then a new human request fails on a live session.
+  f.events.push(event('turn/end', 1), event('turn/start', 2))
+  f.intake.finish(f.session, 1)
+  await assert.rejects(
+    f.capture([human('second', 'okay, commit messages?')], 2),
+    /未確定の処理/u,
+  )
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'stale')
+  // Turn 2's boundary ends (its error turn/end), so turn 3 is a genuinely new request.
+  f.events.push(event('turn/end', 2), event('turn/start', 3))
+  await f.capture([human('third', 'fuck')], 3)
+  assert.equal(f.intake.snapshot(f.session.id)?.status, 'answer',
+    'a later human turn must not be refused forever by an already-ended failure')
+  assert.equal(f.bodies(), 0)
+})
+
+test('KDSH-INTAKE-LIVE-TURN: an in-flight previous turn still blocks a superseding capture', async (t) => {
+  const started = deferred(), release = deferred()
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    prepareNativeCoding: async () => { started.resolve(); await release.promise },
+  })
+  const first = f.capture([human('live', 'Implement parser.ts')], 1)
+  await started.promise
+  // No turn/end for turn 1 exists yet: the earlier attempt is still live.
+  await assert.rejects(
+    f.capture([human('live-next', 'Explain the parser')], 2),
+    /Previous on-demand turn has not ended/u,
+  )
+  release.resolve()
+  await first
+})
+
 test('only a current cancelled Lisp capture invokes native user cancellation, preserving its inbox', async (t) => {
   const calls: unknown[] = []
   const f = await fixture(t, {

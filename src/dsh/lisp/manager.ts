@@ -1245,7 +1245,10 @@ export class LispManager {
     await this.claimSession(owner)
     const managed = await this.managedUnresolved(owner)
     if (managed.unknownCount > 0) return {ok:false,code:'RECONCILIATION_REQUIRED',
-      message:'External operation results remain unknown. Inspect the listed originals. Native results without a verifiable host receipt cannot be cleared by restarting Lisp; no command was retried.',managedOperations:managed.operations,managedOperationCount:managed.total,managedOperationsTruncated:managed.truncated}
+      message:'外部処理の結果が未確定です。対象と元のホスト証跡を確認し、影響が無いと確認できた操作だけを /kioku-lisp abandon-managed 操作ID で終了してください。Lisp の再起動では外部処理を確定できず、コマンドは自動再実行しません。',
+      managedOperations:managed.operations,managedUnknownOperations:managed.unknownOperations,
+      managedOperationCount:managed.total,managedOperationsTruncated:managed.truncated,
+      recovery:'/kioku-lisp diagnostics 操作ID で記録を確認し、/kioku-lisp abandon-managed 操作ID で終了します。' }
 
     if (await this.isTaskMode(owner)) {
       await this.stopTaskWorkers(owner.sessionId)
@@ -1273,6 +1276,22 @@ export class LispManager {
     await this.authorizeRecovery(owner)
     await this.startWorker(state)
     return this.status(owner)
+  }
+  /** Human reconciliation of one unknown external operation. It records the
+   * inspected evidence, performs no dispatch and grants no replay. Restarting
+   * Lisp cannot clear these, so this is the only supported exit. */
+  abandonManaged(owner: LispOwner, id: string, evidence: string): Promise<unknown> {
+    return this.taskAuthority.run(owner, async () => {
+      this.claimSession(owner)
+      await this.taskAuthority.authorizeEffect(owner)
+      const operationId = identifier.parse(id)
+      const note = evidence.trim()
+      if (!note) fail('INVALID_INPUT', '照合した内容を evidence として指定してください。確認していない操作を終了することはできません。')
+      const result = await this.#store.database(db => new ManagedOperationJournal(db).abandon(operationId, note))
+      return { ok: true, operation: { id: result.operationId, route: result.route, kind: result.kind, state: result.state, receiptRef: result.receiptRef ?? null },
+        reconciliation: { recorded: true, reexecuted: false, effectsReverted: false },
+        recovery: '/kioku-lisp recover で新しい Lisp を起動できます。元の外部処理は自動再実行も復元もしません。' }
+    })
   }
   async abandon(owner: LispOwner, id: string): Promise<unknown> {
     await this.claimSession(owner)

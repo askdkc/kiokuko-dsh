@@ -411,7 +411,7 @@ function CompletionReport(props: Record<string, unknown>): unknown {
 }
 
 interface DeepDisplayItem { id: string; kind: 'report' | 'status'; text: string; delivered: boolean }
-interface LispDisplayState { enabled: boolean; state: string; recovery?: string; error?: { message: string; recovery: string }; operations?: { id: string; state: string }[] }
+interface LispDisplayState { enabled: boolean; state: string; recovery?: string; error?: { message: string; recovery: string }; operations?: { id: string; state: string }[]; managedOperations?: { id: string; route: string; kind: string; state: string }[]; managedUnknownOperations?: { id: string; route: string; kind: string; state: string }[] }
 /** Recovery stays available even when the model loop is stopped. */
 function LispSessionStatus(props: Record<string, unknown>): unknown {
   const sessionId = String(props.sessionId)
@@ -423,9 +423,9 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
   const dialog = useRef<HTMLDialogElement | null>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
   const current = useRef(sessionId); current.current = sessionId
-  const request = async (action?: string) => {
+  const request = async (action?: string, payload?: Record<string, unknown>) => {
     const url = new URL('/api/kiokuko.lisp', hostBase()); url.searchParams.set('sessionId', sessionId)
-    const response = await fetch(url, action ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) } : {})
+    const response = await fetch(url, action ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action, ...payload }) } : {})
     if (response.status === 404 && !action) return null
     const value = await response.json() as LispDisplayState & { message?: string; code?: string }
     if (!response.ok) throw new Error(value.message ?? 'Lisp の状態を取得できません。接続を確認してください。')
@@ -450,11 +450,11 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
     void refresh()
     return () => { disposed = true; clearTimeout(timer) }
   }, [sessionId])
-  const act = async (action: string) => {
+  const act = async (action: string, payload?: Record<string, unknown>) => {
     if (busy) return
     setBusy(true); setError('')
     try {
-      const result = await request(action)
+      const result = await request(action, payload)
       if (current.current !== sessionId) return
       if (result?.code) setDetails(JSON.stringify(result, null, 2))
       else { setDetails(''); if (result?.state) setStatus({ ...status, ...result, enabled: result.enabled ?? status?.enabled ?? true }) }
@@ -462,7 +462,15 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
     finally { if (current.current === sessionId) setBusy(false) }
   }
   if (!status?.enabled && !error) return null
-  const label = ({ READY: '実行可能', SUSPENDED: '休止中（次回自動起動）', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
+  const label = ({ READY: '実行可能', SUSPENDED: '休止中（次回自動起動）', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', RECONCILIATION_REQUIRED: '外部処理の確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
+  // An unknown external effect blocks every later turn until a human ends it,
+  // so the control offers that exact action instead of only a restart.
+  const unknownExternal = [...new Map([...(status?.managedUnknownOperations ?? []), ...(status?.managedOperations ?? [])].filter(item => item.state === 'unknown').map(item => [item.id, item])).values()]
+  const reconcile = (id: string) => {
+    const evidence = typeof window === 'undefined' ? '' : window.prompt(`外部処理の証跡を確認した内容を記録します。\n操作: ${id}\n影響が無いと確認できた場合だけ、確認内容を入力してください。`, '')
+    if (evidence === null || !evidence.trim()) return
+    void act('abandon-managed', { operationId: id, evidence: evidence.trim() })
+  }
   return jsxs(Fragment, { children: [jsx('button', { type: 'button', ref: trigger, onClick: () => setOpen(true), children: `Lisp: ${label}` }),
     jsx('dialog', { ref: dialog, onCancel: () => setOpen(false), 'aria-label': 'Lisp の状態と復旧', style: { maxWidth: 'min(720px, 90vw)', maxHeight: '85vh' },
       children: jsxs('section', { children: [jsx('h2', { children: `Lisp: ${label}` }),
@@ -471,6 +479,14 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
         ...(error ? [jsx('p', { role: 'alert', children: error })] : []),
         ...(details ? [jsx('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }, children: details })] : []),
         jsx('p', { children: '未確定の変更は自動で再実行・復元しません。詳細は /kioku-lisp diagnostics でも確認できます。' }),
+        ...(unknownExternal.length ? [
+          jsx('p', { children: '外部処理の結果が未確定です。Lisp の再起動・取消では確定できません。元のホスト証跡を確認し、影響が無いと確認できた操作だけを終了してください。' }),
+          jsx('ul', { children: unknownExternal.slice(0, 3).map(item => jsx('li', { children: jsxs(Fragment, { children: [
+            jsx('code', { children: item.id }), ' ', `${item.route}/${item.kind}`, ' ',
+            jsx('button', { type: 'button', disabled: busy, onClick: () => reconcile(item.id), children: '照合して終了' }),
+          ] }) })) }),
+          ...(unknownExternal.length > 3 ? [jsx('p', { children: `/kioku-lisp status で残り ${unknownExternal.length - 3} 件を確認できます。` })] : []),
+        ] : []),
         jsx(NumberedPicker, { label: 'Lisp の操作', disabled: busy,
           options: [{ value: 'cancel', label: '停止する' }, { value: 'recover', label: '照合して新しい Lisp を起動', disabled: ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? '') }, { value: 'close', label: '閉じる' }],
           onChoose: (value: string) => value === 'close' ? setOpen(false) : void act(value) }),

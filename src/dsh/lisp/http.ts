@@ -19,10 +19,21 @@ export function mountLispHttp(ctx: Context, manager: LispManager, resolveOwner: 
       const body = await request.text()
       if (body.length > 1024) return Response.json({ error: 'Request too large' }, { status: 413, headers })
       const parsed: unknown = JSON.parse(body)
-      if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length !== 1 || !('action' in parsed)) throw new Error('Invalid action')
+      const shape = (parsed as { action?: unknown })?.action === 'abandon-managed'
+        ? ['action', 'operationId', 'evidence']
+        : ['action']
+      if (!parsed || typeof parsed !== 'object' || !('action' in parsed)
+        || Object.keys(parsed).some(key => !shape.includes(key)) || !('action' in parsed)) throw new Error('Invalid action')
       let result: unknown
       if (parsed.action === 'cancel') result = await manager.execute(owner, 'lisp_cancel', {})
       else if (parsed.action === 'recover') { const current = resolveOwner(id, true); result = await (recover ? recover(id, request.signal) : manager.recover(current, request.signal)) }
+      else if (parsed.action === 'abandon-managed') {
+        // Human reconciliation from the Lisp control; the exact ID and the
+        // inspected evidence stay explicit so nothing is cleared by a guess.
+        const payload = JSON.parse(body) as { action: string; operationId?: unknown; evidence?: unknown }
+        if (typeof payload.operationId !== 'string' || typeof payload.evidence !== 'string') throw new Error('Invalid action')
+        result = await manager.abandonManaged(owner, payload.operationId, payload.evidence)
+      }
       else throw new Error('Invalid action')
       return Response.json(result, { headers })
     } catch (error) { return Response.json(failure(error), { status: 409, headers }) }

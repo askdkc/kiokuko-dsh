@@ -4,7 +4,7 @@ import { withImmediateTransaction } from '../db/transaction.js'
 
 /** Audit of plugin-managed boundaries, not a sandbox or an OS-wide tracer. */
 export const MANAGED_JOURNAL_COVERAGE = Object.freeze(['lisp-process-bridge', 'owned-process', 'owned-file'] as const)
-export type JournalState = 'prepared' | 'dispatching' | 'running' | 'completed' | 'denied' | 'cancelled-before-dispatch' | 'cancelled-confirmed' | 'unknown'
+export type JournalState = 'prepared' | 'dispatching' | 'running' | 'completed' | 'denied' | 'cancelled-before-dispatch' | 'cancelled-confirmed' | 'abandoned' | 'unknown'
 export type JournalDelivery = 'pending' | 'delivered' | 'not-delivered' | 'unknown'
 export type JournalCause = 'permission-denied' | 'cancelled' | 'timeout' | 'dispatch-error' | 'persistence-error' | 'recovery' | 'host-error'
 export interface JournalBinding {
@@ -30,8 +30,8 @@ export interface ManagedJournalSnapshot {
 }
 export interface JournalLimits { maxOperations: number; maxOperationsPerScope: number; maxScopes: number; maxSnapshots: number; maxRequestBytes: number; retentionMs: number }
 const defaults: JournalLimits = {maxOperations: 100000, maxOperationsPerScope: 4096, maxScopes: 10000, maxSnapshots: 20000, maxRequestBytes: 1048576, retentionMs: 30 * 86400000}
-const terminal = new Set<JournalState>(['completed', 'denied', 'cancelled-before-dispatch', 'cancelled-confirmed'])
-const states = new Set<JournalState>(['prepared','dispatching','running','completed','denied','cancelled-before-dispatch','cancelled-confirmed','unknown'])
+const terminal = new Set<JournalState>(['completed', 'denied', 'cancelled-before-dispatch', 'cancelled-confirmed', 'abandoned'])
+const states = new Set<JournalState>(['prepared','dispatching','running','completed','denied','cancelled-before-dispatch','cancelled-confirmed','abandoned','unknown'])
 const causes = new Set<JournalCause>(['permission-denied','cancelled','timeout','dispatch-error','persistence-error','recovery','host-error'])
 function fail(): never { throw new Error('Managed operation journal contract violation') }
 function freeze<T>(value: T): T { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value) }; return value }
@@ -223,6 +223,18 @@ export class ManagedOperationJournal {
       return this.save({...op,...next,updatedAt:Date.now()})
     })
   }
+  /** A human ends an unknown external operation without claiming an observed result.
+   * Only `unknown` may be abandoned, and the supplied evidence is bounded text, so a
+   * restart can never be mistaken for a verified receipt. No dispatch occurs here. */
+  abandon(id:string,evidence:string):ManagedOperation {
+    boundedText(evidence)
+    return this.transaction(()=>{
+      const op=this.readOperation(id)
+      if(op.state!=='unknown') fail()
+      // Abandonment carries no outcome: the effect may or may not have happened.
+      return this.save({...op,state:'abandoned',receiptRef:evidence,updatedAt:Date.now()})
+    })
+  }
   setDelivery(id:string,delivery:JournalDelivery):ManagedOperation {
     if(!['pending','delivered','not-delivered','unknown'].includes(delivery)) fail()
     return this.transaction(()=>{const op=this.readOperation(id);if(op.delivery===delivery)return op;return this.save({...op,delivery,updatedAt:Date.now()})})
@@ -257,12 +269,12 @@ export class ManagedOperationJournal {
     return this.transaction(()=>{
       const rows=this.db.prepare(`WITH RECURSIVE protected(scope_id) AS (
         SELECT scope_id FROM dsh_managed_snapshots WHERE retained=1
-        UNION SELECT scope_id FROM dsh_managed_operations WHERE state NOT IN ('completed','denied','cancelled-before-dispatch','cancelled-confirmed')
+        UNION SELECT scope_id FROM dsh_managed_operations WHERE state NOT IN ('completed','denied','cancelled-before-dispatch','cancelled-confirmed','abandoned')
         UNION SELECT o.scope_id FROM protected p JOIN dsh_managed_scopes c ON c.scope_id=p.scope_id
           JOIN dsh_managed_operations o ON o.operation_id=json_extract(c.scope_json,'$.parentId')
         ) SELECT scope_id FROM dsh_managed_scopes s WHERE sealed=1 AND created_at<?
         AND NOT EXISTS(SELECT 1 FROM protected p WHERE p.scope_id=s.scope_id)
-        AND NOT EXISTS(SELECT 1 FROM dsh_managed_operations o WHERE o.scope_id=s.scope_id AND state NOT IN ('completed','denied','cancelled-before-dispatch','cancelled-confirmed'))`).all<{scope_id:string}>(now-this.limits.retentionMs)
+        AND NOT EXISTS(SELECT 1 FROM dsh_managed_operations o WHERE o.scope_id=s.scope_id AND state NOT IN ('completed','denied','cancelled-before-dispatch','cancelled-confirmed','abandoned'))`).all<{scope_id:string}>(now-this.limits.retentionMs)
       for(const row of rows){
         this.db.prepare('DELETE FROM dsh_managed_transitions WHERE operation_id IN (SELECT operation_id FROM dsh_managed_operations WHERE scope_id=?)').run(row.scope_id)
         this.db.prepare('DELETE FROM dsh_managed_operations WHERE scope_id=?').run(row.scope_id)

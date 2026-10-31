@@ -614,6 +614,14 @@ export class OnDemandIntake {
     )
     return promise
   }
+  /** True only while the previous turn has no matching turn/end in the session log. */
+  private turnIsOpen(state: Turn): boolean {
+    const events = state.input.agent.session?.snapshotEvents?.() ?? []
+    return !events.some(
+      (event) =>
+        event.type === 'turn/end' && eventTurn(event) === state.input.turn,
+    )
+  }
   private existingTurn(execution: Execution): number | undefined {
     const last = execution.agent?.session
       ?.snapshotEvents?.()
@@ -733,9 +741,13 @@ export class OnDemandIntake {
           return false
         }
       }
+      // A superseded capture is only a live turn while its own boundary stays open.
+      // Once turn/end exists for it, the host has finished that turn; its failure
+      // must not refuse every later human request for the rest of the session.
       if (
         previous.input.turn !== input.turn &&
-        !['closed', 'prepared'].includes(previous.status)
+        !['closed', 'prepared'].includes(previous.status) &&
+        this.turnIsOpen(previous)
       )
         throw new Error('Previous on-demand turn has not ended')
       previous.controller.abort(

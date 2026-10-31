@@ -31,7 +31,7 @@ export interface ProtocolState {
 export interface ProtocolExecution {
   id: string; scope: string; parent: string; sequence: number;
   route: 'native' | 'owned'; kind: 'process' | 'file';
-  state: 'prepared' | 'dispatching' | 'running' | 'completed' | 'denied' | 'cancelled-before-dispatch' | 'cancelled-confirmed' | 'unknown';
+  state: 'prepared' | 'dispatching' | 'running' | 'completed' | 'denied' | 'cancelled-before-dispatch' | 'cancelled-confirmed' | 'abandoned' | 'unknown';
   outcome: 'succeeded' | 'failed' | 'none'; request: string; runtime: string; receipt: string;
   workerGeneration: string; protocolGeneration: number; leaseGeneration: number;
 }

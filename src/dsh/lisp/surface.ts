@@ -730,12 +730,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
   }, (sessionId, signal) => recover(owner(agents.get(sessionId)), signal)))
-  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | disable' },
+  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | abandon-managed ID 証跡 | disable' },
     handler: async invocation => {
       try {
         const binding = owner(invocation.agent)
-        const [action = 'status', argument, ...extra] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
-        if (extra.length || (argument && !['approval', 'status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
+        const words = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
+        const [action = 'status', argument, ...extra] = words
+        // Human reconciliation takes an ID plus free-text evidence, so it owns its own shape.
+        const managedEvidence = action === 'abandon-managed' ? words.slice(2).join(' ') : ''
+        if (action === 'abandon-managed') {
+          if (!argument) fail('INVALID_COMMAND', '使い方: /kioku-lisp abandon-managed 操作ID 照合した内容')
+        } else if (extra.length || (argument && !['approval', 'status', 'hot', 'diagnostics', 'abandon', 'restore'].includes(action))) fail('INVALID_COMMAND', '使い方: /kioku-lisp enable|enable-task|status|hot [NAME]|diagnostics|cancel|recover|abandon ID|restore ID|disable')
         let result: unknown
         if (action === 'approval') {
           if (argument && !['ask', 'auto', 'status'].includes(argument)) fail('INVALID_COMMAND', 'Use /kioku-lisp approval ask|auto|status')
@@ -767,6 +772,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           result = await recover(binding, invocation.signal)
         }
         else if (action === 'abandon') result = await manager.abandon(binding.owner, argument ?? '')
+        else if (action === 'abandon-managed') result = await manager.abandonManaged(binding.owner, argument ?? '', managedEvidence)
         else if (action === 'restore') result = await manager.restore(binding.owner, argument ?? '', invocation.signal)
         else if (action === 'diagnostics') result = await manager.diagnostics(binding.owner, argument === '--json' ? undefined : argument)
         else if (action === 'hot') result = await manager.execute(binding.owner, 'lisp_hot_status', argument && argument !== '--json' ? { name: argument } : {}, binding.signal)

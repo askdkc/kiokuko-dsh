@@ -46,7 +46,8 @@ export function formatLispStatus(value: LispStatusView): string {
   }
   if(value.managedReconciliationRequired||value.state==='RECONCILIATION_REQUIRED') {
     lines.push('外部処理の結果・停止は未確定です。上の詳細と元のホストreceiptを照合してください。')
-    lines.push('Lisp の recover/abandon だけでは外部処理を確定できません。自動再実行はしません。')
+    lines.push('確認できた操作だけを /kioku-lisp abandon-managed 操作ID で終了し、その後に /kioku-lisp recover で再開します。')
+    lines.push('Lisp の再起動だけでは外部処理を確定できず、自動再実行もしません。')
   } else if(value.state==='STOP_UNCONFIRMED'||value.state==='STOPPING') {
     lines.push('停止をまだ確認できません。/kioku-lisp cancel で停止を確認し、実行結果を照合してください。')
   } else if(value.state==='RECOVERY_REQUIRED') {

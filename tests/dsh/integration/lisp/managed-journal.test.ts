@@ -45,6 +45,39 @@ test('real SBCL returning 42 retains native process operation and a complete zer
   }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })
 
+test('a human abandonment is the only way out of RECONCILIATION_REQUIRED and then Lisp becomes usable again',async()=>{
+  const base=await realpath(await mkdtemp(join(tmpdir(),'managed-abandon-'))),root=join(base,'work')
+  await mkdir(root)
+  const db=new NodeSqliteAdapter(join(base,'db'),new DatabaseSync(join(base,'db')))
+  const owner={sessionId:'abandon-session',agentId:'abandon-agent',root}
+  workingLispTask(db,owner)
+  const manager=new LispManager({store:new LispStore(async fn=>fn(db)),dataRoot:join(base,'runtime'),
+    config:LispConfig.parse({enabled:true,executionMode:'development',startupTimeoutMs:60000}),toolCall:async()=>{throw new Error('no native calls expected')}})
+  try{
+    await manager.start();await manager.enable(owner)
+    const journal=new ManagedOperationJournal(db)
+    const scope=journal.createScope({sessionId:owner.sessionId,parentId:'job-that-vanished',runtimeIdentity:'sbcl:current'})
+    const operation=journal.prepare(scope.scopeId,{route:'native',kind:'process',request:{program:'orphan'}})
+    journal.claim(operation.operationId);journal.transition(operation.operationId,{state:'unknown',cause:'timeout'});journal.seal(scope.scopeId)
+    const blocked=await manager.recover(owner) as any
+    assert.equal(blocked.code,'RECONCILIATION_REQUIRED')
+    assert.equal(blocked.managedOperations[0].id,operation.operationId)
+    // Abandoning without inspected evidence must be refused.
+    await assert.rejects(manager.abandonManaged(owner,operation.operationId,''),/INVALID/u)
+    const abandoned=await manager.abandonManaged(owner,operation.operationId,'Inspected the listed job: no live process, no queued work, target file untouched.') as any
+    assert.equal(abandoned.ok,true)
+    assert.equal(abandoned.operation.state,'abandoned')
+    assert.equal(journal.readOperation(operation.operationId).state,'abandoned')
+    // The blocking condition is gone: recovery now starts a fresh worker.
+    const recovered=await manager.recover(owner) as any
+    assert.notEqual(recovered.code,'RECONCILIATION_REQUIRED')
+    assert.equal((await manager.status(owner) as any).managedReconciliationRequired,false)
+    // A later effect is permitted again.
+    const usable=await manager.execute(owner,'lisp_eval',{code:'(+ 41 1)'}) as any
+    assert.equal(usable.ok,true,JSON.stringify(usable))
+  }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
+})
+
 test('session admission after manager restart recovers orphan native dispatch before permitting any further effect',async()=>{
   const base=await realpath(await mkdtemp(join(tmpdir(),'managed-restart-'))),root=join(base,'work'),path=join(base,'db')
   await mkdir(root)

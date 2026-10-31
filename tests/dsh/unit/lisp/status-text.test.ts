@@ -20,9 +20,11 @@ test('managed unknowns remain visible and are never presented as cleared by Lisp
       ],managedUnknownOperations:[{id:'unknown-child',route:'native',kind:'process',state:'unknown'}],operations:[{id:'unknown-eval',state:'UNKNOWN',kind:'lisp_eval'}],operationCount:100,pendingCount:1}
   const text=formatLispStatus(status)
   assert.match(text,/外部処理の未解決: 125件/);assert.match(text,/\/kioku-lisp diagnostics unknown-child/)
-  assert.match(text,/外部処理を確定できません/);assert.match(text,/自動再実行はしません/)
+  assert.match(text,/\/kioku-lisp abandon-managed 操作ID/);assert.match(text,/自動再実行もしません/)
   assert.ok(text.indexOf('unknown-child')<text.indexOf('running-child'))
-  assert.doesNotMatch(text,/recover で再開できます/)
+  // Restarting Lisp alone is not an exit; the reported action must be actionable.
+  assert.doesNotMatch(text,/(^|\n)Lisp の recover だけで|recover で再開できます/)
+  assert.doesNotMatch(text,/recover だけでは外部処理を確定できません。/u)
 })
 
 test('status keeps pending counts beyond the page and bounds rendered operation IDs',()=>{
