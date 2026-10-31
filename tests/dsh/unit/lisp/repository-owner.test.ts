@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { claimRepository } from '../../../../lisp/repository-owner.mjs'
 import { processIdentity, sameProcess } from '../../../../lisp/process-identity.mjs'
-import { mkdtempSync, mkdirSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -38,12 +38,15 @@ function electionDeferred<T>() {
   return {promise,resolve,reject}
 }
 
-function writeRepositoryProbe(script:string){
-  writeFileSync(script,`import assert from'node:assert/strict';import{parentPort}from'node:worker_threads';
+function writeRepositoryProbe(script:string,gate?:{armed:string;ready:string;released:string}){
+  // The optional gate models blocked verification without timing repeated SQLite retries.
+  const blocked=gate?`if(existsSync(${JSON.stringify(gate.armed)})){writeFileSync(${JSON.stringify(gate.ready)},'ready');const pause=new Int32Array(new SharedArrayBuffer(4));while(!existsSync(${JSON.stringify(gate.released)}))Atomics.wait(pause,0,0,10)}`:''
+  writeFileSync(script,`import assert from'node:assert/strict';import{parentPort}from'node:worker_threads';import{existsSync,writeFileSync}from'node:fs';
     import{claimRepository}from ${JSON.stringify(new URL('../../../../lisp/repository-owner.mjs',import.meta.url).href)};
     parentPort.on('message',({root,expectation})=>{
       if(expectation==='busy'){let lease;try{assert.throws(()=>{lease=claimRepository(root)},/REPOSITORY_IN_USE/,'owner is protected before SBCL readiness')}finally{lease?.close()}}
       else{assert.equal(expectation,'free');const lease=claimRepository(root);lease.close()}
+      ${blocked}
       parentPort.postMessage({root,expectation,verified:true})
     })`)
 }
@@ -253,32 +256,55 @@ test('supervisor crash cannot donate a still-live runtime; PID birth mismatch pe
 })
 
 test('SQLite verification does not starve another pair child cleanup',{timeout:10000},async t=>{
+  const started=performance.now()
+  let checks=0,closedAt=0,probeDoneAt=0
+  const mark=(stage:string)=>t.diagnostic(JSON.stringify({stage,elapsedMs:Math.round(performance.now()-started),checks}))
+  mark('fixture-started')
   const base=realpathSync(mkdtempSync(join(tmpdir(),'owner-probe-interference-')))
   const root=join(base,'locked'),script=join(base,'alive.mjs'),probeScript=join(base,'probe.mjs')
+  const gate={armed:join(base,'armed'),ready:join(base,'ready'),released:join(base,'released')}
   mkdirSync(root)
-  const owner=claimRepository(root),controller=new AbortController(),children:ElectionChild[]=[],closed:Promise<unknown>[]=[],workers:Worker[]=[]
-  let calls=0,closedAt=0,probeDoneAt=0,verificationAt=0
+  const owner=claimRepository(root),controller=new AbortController(),signal=AbortSignal.any([t.signal,controller.signal])
+  const children:ElectionChild[]=[],workers:Worker[]=[]
+  mark('owner-ready')
   try{
     writeFileSync(script,`process.on('message',()=>process.send({state:'owner'}));process.send('waiting')`)
-    writeRepositoryProbe(probeScript)
-    await withRepositoryProbe(probeScript,controller.signal,async probe=>{
+    writeRepositoryProbe(probeScript,gate)
+    await withRepositoryProbe(probeScript,signal,async probe=>{
+      mark('warmup-requested');await probe(root,'busy');checks++;mark('worker-ready')
+      assert.equal(existsSync(gate.ready),false,'warmup must not enter the unarmed gate')
       let work=Promise.resolve()
       try{
-        await withElectionPair(script,base,{round:0,onChild:child=>{
-          children.push(child);closed.push(once(child,'close').then(()=>{closedAt=performance.now()}))
-        }},()=>{
-          verificationAt=performance.now()
-          work=(async()=>{for(let i=0;i<10;i++){await probe(root,'busy');calls++};probeDoneAt=performance.now()})()
-          void work.catch(()=>{})
+        await withElectionPair(script,base,{round:0,signal,onStage:stage=>mark('pair:'+stage),onChild:child=>{
+          children.push(child);child.once('close',()=>{closedAt=performance.now()})
+        }},async()=>{
+          writeFileSync(gate.armed,'armed');mark('probe-requested')
+          work=probe(root,'busy').then(()=>{checks++;probeDoneAt=performance.now();mark('probe-completed')})
+          let settled=false,failure:unknown
+          void work.then(()=>{settled=true},error=>{failure=error;settled=true})
+          while(!existsSync(gate.ready)){
+            signal.throwIfAborted()
+            if(settled)throw failure??new Error('SQLite probe replied before entering its blocked phase')
+            await new Promise(resolve=>setTimeout(resolve,5))
+          }
+          mark('probe-blocked');assert.equal(probeDoneAt,0)
         })
-        await work
-        assert.equal(calls,10,'all real SQLite busy checks must execute')
-        assert.ok(closedAt<probeDoneAt,'child termination must be observed while independent SQLite verification is still running')
-      }finally{await work;await Promise.all(closed)}
-    },worker=>workers.push(worker))
+        assert.equal(probeDoneAt,0,'child cleanup must finish while the verification worker is still blocked')
+        mark('children-closed')
+      }finally{
+        // Release on every path. withElectionPair already bounds and verifies
+        // child termination; awaiting its close events again would be unbounded.
+        writeFileSync(gate.released,'released');mark('probe-released');await work
+      }
+      assert.equal(checks,2,'warmup and gated requests must both perform the real ownership assertion')
+      assert.ok(closedAt>0&&closedAt<probeDoneAt)
+    },worker=>{workers.push(worker);mark('worker-created')})
     assert.equal(children.length,2);assert.ok(children.every(child=>child.signalCode==='SIGKILL'))
-    t.diagnostic(JSON.stringify({sqliteChecks:calls,childrenTerminated:children.length,childCloseMs:Math.round(closedAt-verificationAt),probeDoneMs:Math.round(probeDoneAt-verificationAt)}))
-  }finally{controller.abort();owner.close();if(children.every(child=>child.exitCode!==null||child.signalCode!==null)&&workers.every(worker=>worker.threadId===-1))rmSync(base,{recursive:true,force:true})}
+    mark('workers-stopped')
+  }finally{
+    controller.abort();owner.close()
+    if(children.every(child=>child.exitCode!==null||child.signalCode!==null)&&workers.every(worker=>worker.threadId===-1))rmSync(base,{recursive:true,force:true})
+  }
 })
 
 test('SQLite probe assertion failure remains a failure and releases its worker',{timeout:10000},async()=>{
