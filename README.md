@@ -129,11 +129,11 @@ Choose “使う” to use Lisp, “使わない” to use ordinary tools, or �
 Ordinary edits and tests run without further confirmation after that choice. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist. Completion requires current item evidence and a fresh final check through the user’s entry point. See [Goal-driven coding](docs/coding-workflow.md) and [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
-## Typed decisions (Jev / Laya / Nimble)
+## Typed decisions (Jev / Laya / OpenAI / Nimble)
 
-Optional [automatic model selection](docs/model-selection.md#automatic-model-selection) chooses a validated `openai-codex` model and reasoning effort for a new normal task. It defaults to `modelAutoMode.mode: off`; `/kioku-model-auto on | observe | off | status` changes only the current session. `observe` measures a proposal without changing the model. It requires a ready Jev or Laya backend, dsh-codex, native model metadata and a token meter. Failed or unavailable classification keeps the current model; manual model selection takes priority.
+Optional [automatic model selection](docs/model-selection.md#automatic-model-selection) chooses a validated `openai-codex` model and reasoning effort for a new normal task. It defaults to `modelAutoMode.mode: off`; `/kioku-model-auto on | observe | off | status` changes only the current session. `observe` measures a proposal without changing the model. It requires a ready Jev, Laya or OpenAI backend, dsh-codex, native model metadata and a token meter. Failed or unavailable classification keeps the current model; manual model selection takes priority.
 
-[Answer review](docs/answer-review.md) is enabled by default on the full plugin and modular core. It evaluates an already displayed normal answer using the configured Jev, Laya or Nimble provider and may ask the same main model to reconsider once. The defaults are:
+[Answer review](docs/answer-review.md) is enabled by default on the full plugin and modular core. It evaluates an already displayed normal answer using the configured Jev, Laya, OpenAI or Nimble provider and may ask the same main model to reconsider once. The defaults are:
 
 ```yaml
 answerReview:
@@ -144,7 +144,58 @@ answerReview:
 Set `answerReview.mode: off` to disable it. It inherits `typedDecisions`, adds evaluation inference (and at most one main-model turn), and does not delay the first answer. If the selected provider is unavailable, review is skipped and the original answer is preserved; no other provider is substituted. Laya v1 findings are unverified suggestions because worker-side truncation cannot be checked. `/kioku-decisions status` reports progress and skip reasons; it does not certify correctness.
 
 
-Jev is the default. Switch in DSH's command input without editing configuration or restarting DSH:
+<a id="openai-decisions-setup"></a>
+### Set up OpenAI Decisions
+
+Jev remains the default; OpenAI, local Laya and Nimble are alternatives. OpenAI uses the official [Decisions API](https://developers.openai.com/api/docs/guides/decisions), `POST /v1/decisions`, with `gpt-6-luna` as this checkout's default decision model. This is separate from the main chat model: ChatGPT/Codex OAuth login does not supply `OPENAI_API_KEY`, and a TypeSafe/Jev key cannot replace it.
+
+These instructions describe the current source. They do not assert that the published npm `latest` already includes OpenAI support. If `use openai` is unavailable, check the installed build's command support first.
+
+1. Create an API key for your OpenAI API project and add it to the credential store used by the running DSH. With the standard `credentials-local` provider, choose the path as follows:
+
+   | Configuration | Credential file |
+   |---|---|
+   | Default harness home | `~/.dsh/.credentials.yaml` |
+   | Custom `DSH_HOME` | `$DSH_HOME/.credentials.yaml` |
+   | Explicit `credentials.path` (the provider's `config.path`) | The configured path, overriding the home default |
+
+   `--profile web` keeps profile packages and patches under `$DSH_HOME/profiles/web`; it does **not** by itself move credentials there. A profile can override `credentials.path`, or its launcher can use another `DSH_HOME`. Use that effective file, not a guessed `profiles/web/.credentials.yaml`.
+
+2. In an existing file, add only `OPENAI_API_KEY` under `refs` and preserve all other `refs` and `records`. This is a minimal **new-file example**, with a nonfunctional placeholder:
+
+   ```yaml
+   version: 1
+   refs:
+     OPENAI_API_KEY: "OPENAI_API_KEY_EXAMPLE_ONLY"
+   records: {}
+   ```
+
+   Replace the placeholder privately with your key. On macOS/Linux, protect the actual file; for the default path:
+
+   ```sh
+   chmod 600 "$HOME/.dsh/.credentials.yaml"
+   ```
+
+   Use your configured path instead when it differs. The default `watch: true` reloads valid file edits automatically for subsequent requests; restarting DSH is unnecessary. Do not paste keys into chat, screenshots or Git.
+
+3. In DSH's command input, select OpenAI and inspect the result:
+
+   ```text
+   /kioku-decisions use openai
+   /kioku-decisions status
+   ```
+
+   `use openai` makes a real API probe, which may incur usage charges. Only a successful probe and save persist the choice for this project and new requests; failure or cancellation keeps the prior choice. Existing requests keep their binding. `status` makes no inference call. Optional `/kioku-decisions probe` makes another real probe.
+
+The standard provider resolves **saved file > launch environment > project `.env` > harness-home `.env`**. Environment variables still work when the credentials service is present, unless a saved value overrides them. For an environment-only setup, export the key **before** launching DSH from that shell:
+
+```sh
+export OPENAI_API_KEY='OPENAI_API_KEY_EXAMPLE_ONLY'
+```
+
+This is a placeholder, not a usable key. An export in another shell after DSH has started does not update its launch snapshot; use the watched file to update an already running instance. Keep credential-bearing `.env` files out of Git.
+
+Other selections remain available:
 
 ```text
 /kioku-decisions use jev
@@ -153,29 +204,9 @@ Jev is the default. Switch in DSH's command input without editing configuration 
 /kioku-decisions use default
 ```
 
-Laya connects directly to the existing worker started by `start-laya`; no worker replacement or fingerprint setup is needed. Jev needs a TypeSafe key; Nimble needs an endpoint and model configured first. A successful probe saves the selection for this project and applies it to new requests. It survives restarts and preserves in-flight request bindings. `use default` restores the plugin configuration.
+Jev uses `TYPESAFE_API_KEY`; `/kioku-typesafe-key` manages only that key, never the OpenAI key. Laya connects to the existing `start-laya` worker at `~/Library/Caches/laya-coreml/worker.sock` using v1 `health`/`predict`. `install-laya` reuses a worker or shows setup instructions. Nimble requires its configured endpoint and model. `use default` restores the plugin configuration.
 
-Set the API key in DSH's `~/.dsh/.credentials.yaml` (`$DSH_HOME/.credentials.yaml` if set), or use `/kioku-typesafe-key YOUR_KEY`. Keep any existing entries:
-
-```yaml
-version: 1
-refs:
-  TYPESAFE_API_KEY: YOUR_KEY
-```
-
-If creating the YAML file yourself, run `chmod 600 ~/.dsh/.credentials.yaml` (use `$DSH_HOME` if set).
-
-In the DSH command UI, check the key and test the connection:
-
-```text
-/kioku-typesafe-key status
-/kioku-decisions probe
-/kioku-decisions status
-```
-
-`probe` sends a synthetic API request; `status` does not. `/kioku-typesafe-key clear` removes the stored key. Key input is visible when using `/kioku-typesafe-key YOUR_KEY`. See [typed decisions](docs/typed-decisions.md) and the [explicit Lisp API](docs/typesafe.md) for more.
-
-Jev remains the default. Nimble and local [Laya-CoreML](docs/laya-coreml.md) are optional alternatives; Laya connects directly to `~/Library/Caches/laya-coreml/worker.sock` using the existing v1 `health`/`predict` protocol. `/kioku-decisions install-laya` reuses a running worker or shows setup instructions.
+See [credential precedence, troubleshooting and configuration](docs/typed-decisions.md#openai-credentials), the [official credential-store reference](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/credentials/credentials-local/README.md), and the [TypeSafe Lisp API](docs/typesafe.md).
 
 Use `aac6fef/laya-multilingual-coreml` for English and other languages. Its 1,024-token input capacity includes the question, options and state; the `-ane` variant allows only 96 tokens. See the [upstream model specifications](https://github.com/mizorewww/laya-coreml#available-checkpoints). After the [initial setup](docs/Laya-CoreML-ja.md), use the following commands. Stop any running Laya worker before starting it with the new model; `LAYA_MODEL` also overrides the old default in an existing worker script.
 

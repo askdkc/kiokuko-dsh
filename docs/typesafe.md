@@ -31,9 +31,14 @@ not verified. Invoke the same command with a new key to replace it immediately.
 
 The first command reports configuration, source and writability. Clear removes
 the stored key and reports any remaining source. DSH resolves `TYPESAFE_API_KEY`
-for each call. Its inherited environment takes precedence and makes changes
-read-only; the managed credential store precedes project/user environment files.
-To change an inherited key, update that launch environment and restart DSH.
+for each call. With the standard credentials-local provider, the saved file wins,
+then the launch environment, project `.env` and harness-home `.env`. Saving writes
+the higher-priority file even when an environment fallback exists. Default file
+watching applies valid edits without a restart; an environment-only change must
+be present when DSH is launched. Preserve existing `refs` and `records`.
+See [credential paths, permissions and precedence](typed-decisions.md#openai-credentials).
+Those storage rules also apply to `TYPESAFE_API_KEY`, but `/kioku-typesafe-key`
+does not set `OPENAI_API_KEY`; ChatGPT/Codex OAuth is separate from both keys.
 With no credential provider, evaluation can use the host's `TYPESAFE_API_KEY`,
 but save/clear return `TYPESAFE_STORAGE_UNAVAILABLE`. Kiokuko creates no separate
 credential file and never supplies the key to workers or their subprocesses.

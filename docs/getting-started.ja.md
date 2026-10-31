@@ -3,6 +3,8 @@
 `kiokuko-dsh`はDeepSeek Harness向けPluginです。公開パッケージが提供する
 のは`./dsh` Plugin entrypointだけです。導入、session、lifecycleはDSHが所有します。
 
+補助判定でOpenAIを使う場合は、[OpenAI Decisionsの設定](../README.ja.md#openai-decisions-setup)でAPIキーの保存先とWeb profileとの違いを確認してください。主モデルのChatGPT/Codex OAuthとは別です。手順は現行ソースの対応を示し、公開済みnpmの `latest` に含まれることを保証しません。
+
 ## インストール
 
 公式 DeepSeek Harness の現在のソースと Node.js 24.16.0 以上を使用します。DSH の版名による固定判定はせず、実際のホスト API と解決したソース revision に対する隔離試験で互換性を確認します。[検証範囲](current-upstream-compatibility-report.md)を参照してください。

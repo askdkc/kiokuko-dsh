@@ -24,6 +24,7 @@
     "skills/",
     "dsh/cordis.patch.yml",
     "docs/",
+    "scripts/prepare-build.mjs",
     "scripts/backfill-akinator-memory.mjs",
     "scripts/setup-dsh.mjs",
     "scripts/repair-session-log.mjs",
@@ -168,7 +169,7 @@
         "Enabled source-candidate assessment distinguishes unavailable and incomplete checks from proof; the micro judge is native-verified on Apple Silicon macOS only, unsupported platforms report unavailable, and explicit typed-decision OFF records no assessment"
       ],
       "lifecycleEvidence": [
-        "prepare runs only npm run build",
+        "prepare builds by default; selected CI installs defer to the verifier clean build",
         "Git installs use repository-scoped pnpm allowBuilds approval on a supporting pnpm version; source revision pinning is optional and separate",
         "Disposable-profile install, Web start, and uninstall evidence is recorded by CI"
       ]
@@ -201,7 +202,7 @@
     "publint": "publint",
     "pack:check": "node scripts/pack-check.mjs",
     "prepublishOnly": "node scripts/prepublish.mjs",
-    "prepare": "npm run build",
+    "prepare": "node scripts/prepare-build.mjs",
     "test:agenticreplay:package": "npm run build && node scripts/verify-agenticreplay-consumer.mjs && node scripts/verify-agenticreplay-consumer.mjs --pnpm",
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",

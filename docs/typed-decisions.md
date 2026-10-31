@@ -23,7 +23,7 @@ excerpted or rewritten, and classification grants no execution permission.
 The common API also accepts explicit `noul` (yes probability) and `score`
 (ordered rubric) questions. Their validated answers have `status: "measured"`;
 they grant no permission. The existing Choice request and answer shapes remain
-valid. TypeSafe can evaluate all three question types in one batch. Nimble and
+valid. TypeSafe and OpenAI can evaluate all three question types in one batch. Nimble and
 Laya accept Choice only and return `DECISION_UNSUPPORTED` before inference for
 other kinds. The separate Lisp `kioku.typesafe:evaluate` API retains its own
 wire contract.
@@ -49,6 +49,59 @@ base configuration. A stale host cannot overwrite a selection saved by another
 host; restart it to load the latest choice. Changing the base configuration uses
 that configuration's selection, with the YAML provider as the default.
 
+<a id="openai-credentials"></a>
+## OpenAI credentials
+
+Jev remains the default; OpenAI, local Laya and Nimble are alternatives. OpenAI uses the official [Decisions API](https://developers.openai.com/api/docs/guides/decisions), `POST /v1/decisions`, with `gpt-6-luna` as this checkout's default decision model. This is separate from the main chat model: ChatGPT/Codex OAuth login does not supply `OPENAI_API_KEY`, and a TypeSafe/Jev key cannot replace it.
+
+These instructions describe the current source. They do not assert that the published npm `latest` already includes OpenAI support. If `use openai` is unavailable, check the installed build's command support first.
+
+1. Create an API key for your OpenAI API project and add it to the credential store used by the running DSH. With the standard `credentials-local` provider, choose the path as follows:
+
+   | Configuration | Credential file |
+   |---|---|
+   | Default harness home | `~/.dsh/.credentials.yaml` |
+   | Custom `DSH_HOME` | `$DSH_HOME/.credentials.yaml` |
+   | Explicit `credentials.path` (the provider's `config.path`) | The configured path, overriding the home default |
+
+   `--profile web` keeps profile packages and patches under `$DSH_HOME/profiles/web`; it does **not** by itself move credentials there. A profile can override `credentials.path`, or its launcher can use another `DSH_HOME`. Use that effective file, not a guessed `profiles/web/.credentials.yaml`.
+
+2. In an existing file, add only `OPENAI_API_KEY` under `refs` and preserve all other `refs` and `records`. This is a minimal **new-file example**, with a nonfunctional placeholder:
+
+   ```yaml
+   version: 1
+   refs:
+     OPENAI_API_KEY: "OPENAI_API_KEY_EXAMPLE_ONLY"
+   records: {}
+   ```
+
+   Replace the placeholder privately with your key. On macOS/Linux, protect the actual file; for the default path:
+
+   ```sh
+   chmod 600 "$HOME/.dsh/.credentials.yaml"
+   ```
+
+   Use your configured path instead when it differs. The default `watch: true` reloads valid file edits automatically for subsequent requests; restarting DSH is unnecessary. Do not paste keys into chat, screenshots or Git.
+
+3. In DSH's command input, select OpenAI and inspect the result:
+
+   ```text
+   /kioku-decisions use openai
+   /kioku-decisions status
+   ```
+
+   `use openai` makes a real API probe, which may incur usage charges. Only a successful probe and save persist the choice for this project and new requests; failure or cancellation keeps the prior choice. Existing requests keep their binding. `status` makes no inference call. Optional `/kioku-decisions probe` makes another real probe.
+
+The standard provider resolves **saved file > launch environment > project `.env` > harness-home `.env`**. Environment variables still work when the credentials service is present, unless a saved value overrides them. For an environment-only setup, export the key **before** launching DSH from that shell:
+
+```sh
+export OPENAI_API_KEY='OPENAI_API_KEY_EXAMPLE_ONLY'
+```
+
+This is a placeholder, not a usable key. An export in another shell after DSH has started does not update its launch snapshot; use the watched file to update an already running instance. Keep credential-bearing `.env` files out of Git.
+
+## Provider configuration
+
 Configure `typedDecisions` on the full plugin or modular core:
 
 OpenAI uses the distinct official [Decisions API](https://developers.openai.com/api/docs/guides/decisions),
@@ -56,12 +109,29 @@ OpenAI uses the distinct official [Decisions API](https://developers.openai.com/
 It maps Choice, Noul (predicate) and Score to the native API and validates ordered
 named answers, distributions, rubric levels and individual refusals. The default
 model is `gpt-6-luna`; probability ≥ 0.9 and margin ≥ 0.2 are required for Choice.
-Set `OPENAI_API_KEY` through DSH credentials (or the environment when no credentials
-service exists). TypeSafe credentials are never substituted. No redirects,
+Kiokuko resolves `OPENAI_API_KEY` through `ctx.credentials.resolve` when the service
+exists; the standard local provider includes the launch environment and `.env`
+fallbacks described [above](#openai-credentials). Only a composition without that
+service uses Kiokuko's direct `process.env` fallback. A different credential
+provider may have different resolution rules. TypeSafe credentials are never substituted. No redirects,
 automatic retries, or provider fallback are added. `use openai` probes before
 persisting; missing credentials, failed probes and cancellation leave selection unchanged.
 Existing Jev/Laya stored configuration digests retain their original shape.
 Current token records retain input/output totals; cached-token breakdown is not recorded.
+
+To select OpenAI in the plugin or core configuration instead of a project command:
+
+```yaml
+typedDecisions:
+  mode: auto
+  provider: openai
+  openai:
+    model: gpt-6-luna
+    timeoutMs: 5000
+```
+
+Keep keys in the credential store, not in `typedDecisions`. A configured provider
+is not evidence of a successful API call; use the command probe to verify access.
 
 The normal startup card offers the four decision/Lisp ON/OFF combinations and Cancel
 in one question before model tool assembly. It uses the currently selected backend,
@@ -129,7 +199,8 @@ A live comparison requires explicit
 `TYPESAFE_API_KEY`; it sends only the checked-in synthetic fixture and must not
 be interpreted as a production accuracy estimate.
 
-Set the TypeSafe key through DSH, then inspect status:
+The following commands manage only the TypeSafe/Jev key; for OpenAI, use the
+[credential-file setup](#openai-credentials). Set the TypeSafe key through DSH, then inspect status:
 
 ```text
 /kioku-typesafe-key <key>

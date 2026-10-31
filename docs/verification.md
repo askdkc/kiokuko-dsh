@@ -15,9 +15,19 @@ Native fixture preparation is deferred until a selected, executable check declar
 root dependencies (`npm ci`), not the DSH runtime fixture. Missing or invalid native
 fixtures remain `prerequisite-missing` for checks that require them.
 
-The required CI `verify` aggregate waits for `verify-main`, the complete Protected
-Lisp matrix and the complete semantic platform matrix. All three dependency results
-must be `success`; failure, cancellation, skipped or missing results fail the aggregate.
+CI schedules **Linux x64** and **macOS ARM64**. Full selection has 21 jobs:
+selection, two native micro-judge builds, 17 verification lanes and the aggregate.
+Linux ARM64 is not scheduled or claimed as CI coverage. Its runtime/build support
+remains in the native target registry; this workflow does not produce its binary.
+
+The required `verify` aggregate consumes `select`, `micro-judge-native` and `checks`.
+Every selected lane and native artifact must be present, successful, fresh and
+bound to the same selected plan and source. Failure, cancellation, a missing
+selected report, an extra target or an altered artifact fails acceptance. Only
+prose-only selection can legitimately skip both executable job groups. The
+remaining Linux x64/macOS ARM64 check inventories and their deadlines are unchanged.
+The CI review bundle contains exactly its selected targets; standalone native
+bundle verification still requires the complete supported-target inventory.
 
 Output defaults to a fresh OS temporary directory. Supply an empty directory
 outside the repository with `--output`. `plan.json`, per-command logs, official
@@ -79,6 +89,21 @@ arbitrary stdout or a successful no-op process is insufficient.
 | packages-live | packages-live | `node scripts/run-ci-native.mjs packages-live` | Explicit selected native fixture; nonempty official lifecycle without skipped required cases. |
 
 ## Consolidated duplicate invocations
+
+Selected CI dependency installs set `KIOKUKO_CI_DEFER_PREPARE=1` only on the root
+`npm ci` step. With `CI=true`, this defers this package's `prepare` build to the
+verifier's required clean build; it does not disable dependency lifecycle scripts.
+Ordinary npm/pnpm preparation still builds, including in CI without this explicit
+flag, and build failure remains a failed prepare. The verifier's source/build
+digests, packed-artifact receipts and stale-source rejection remain mandatory.
+
+For full coverage, Linux ARM64 removal changes the planned job count from 27 to
+21 and official DSH fixture builds from 19 to 15. Deferring prepare removes one
+redundant plugin build in each of the remaining 17 verification lanes. This is an
+execution-plan comparison, not a measured hosted-CI duration improvement. Official
+DSH still builds separately for each selected fixture lane; no OS/architecture,
+Node/ABI or native dependency is reused across platforms.
+
 
 - `skill-prompts` is covered by `native-unit`: `tests/dsh/unit/skill-compiler.test.ts`, `tests/dsh/unit/skill-snapshot.test.ts`.
 - `index-reasoning` is covered by `native-integration`: `tests/dsh/integration/index-reasoning.test.ts`, `tests/dsh/integration/index-reasoning-native.test.ts`, `tests/dsh/integration/index-reasoning-evaluation.test.ts`.

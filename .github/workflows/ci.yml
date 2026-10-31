@@ -112,7 +112,10 @@ jobs:
           else
             brew install sbcl python
           fi
-      - run: npm ci
+      - name: Install dependencies without the duplicate package build
+        run: npm ci
+        env:
+          KIOKUKO_CI_DEFER_PREPARE: '1'
       - name: Install locked CLI and terminal test support
         if: matrix.fixture
         run: npm ci --prefix tests/fixtures/dsh-runtime

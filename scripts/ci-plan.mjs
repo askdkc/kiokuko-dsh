@@ -9,7 +9,6 @@ import { digest, sourceDigest, partitionPlans, partitionPlan, verificationPlan }
 
 export const ciPlatforms = Object.freeze({
   'linux-x64': { runner: 'ubuntu-24.04', platform: 'linux', architecture: 'x64' },
-  'linux-arm64': { runner: 'ubuntu-24.04-arm', platform: 'linux', architecture: 'arm64' },
   'darwin-arm64': { runner: 'macos-15', platform: 'darwin', architecture: 'arm64' },
 });
 export const ciToolchain = Object.freeze({ node: 'v24.16.0', npm: '11.13.0', rust: 'rustc 1.85.0 (4d91de4e4 2025-02-17)' });
@@ -38,7 +37,7 @@ export function selectChanges(request) {
     if (native.test(file)) {
       application = true;
       const affected = /(?:darwin|macos)/.test(file) ? ['darwin-arm64'] : /linux/.test(file)
-        ? ['linux-x64', 'linux-arm64'] : Object.keys(ciPlatforms);
+        ? ['linux-x64'] : Object.keys(ciPlatforms);
       affected.forEach(key => platforms.add(key)); continue;
     }
     if ((ordinaryRoots.test(file) || ordinaryFiles.test(file)) && file.endsWith('.ts')) { application = true; continue; }
@@ -62,7 +61,7 @@ export function lanePlan(contract, selection, id) {
   }
   assert.ok(checks.size > 0);
   assert.ok([...checks.values()].every(check => (check.dependsOn ?? []).every(id => checks.has(id))), 'Missing selected dependency');
-  if (selection.bundleScope !== 'release-review') assert.ok(!checks.has('pack-check'), 'Complete package acceptance needs all native targets');
+  if (selection.bundleScope !== 'release-review') assert.ok(!checks.has('pack-check'), 'Complete package acceptance needs all selected CI native targets');
   return { schema: 'verification-plan-v1', package: contract.package, profile: 'ci-selected', partition: id,
     platform: lane.platform, completeScope: false, checks: [...checks.values()] };
 }

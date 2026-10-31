@@ -13,7 +13,7 @@ AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
 
 新的修改任务可以选择普通执行或役小角(enno-oduno)。役小角支持推荐模板，也可从DSH已配置的模型中为各角色选择模型。[模型选择与连接限制](docs/model-selection.md)。
 
-可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev 或 Laya、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
+可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev、Laya 或 OpenAI、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
 
 记忆功能是可选的。任务结束后，Kiokuko 会询问是否整理记录的经验，显示临时预览，并且只保存用户批准的确切修订版本。自动记忆写入已停用。[审查、回忆与遗忘](docs/replay-memory-review.md)。
 
@@ -114,11 +114,11 @@ DSH 更新后若无法加载 Kiokuko，请参阅[启动恢复步骤](docs/dsh-pl
 
 [文档](docs/README.md) · [权限](PERMISSIONS.md) · [MIT 许可证](LICENSE)
 
-## 类型化判定（Jev / Laya / Nimble）
+## 类型化判定（Jev / Laya / OpenAI / Nimble）
 
-可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)会为新的普通任务选择经过验证的 `openai-codex` 模型和推理强度。默认值为 `modelAutoMode.mode: off`；`/kioku-model-auto on | observe | off | status` 仅更改当前会话。`observe` 评估建议，但不更换模型。此功能需要已就绪的 Jev 或 Laya 后端、dsh-codex、原生模型元数据和 token meter。分类失败或不可用时保留当前模型；手动选择优先。
+可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)会为新的普通任务选择经过验证的 `openai-codex` 模型和推理强度。默认值为 `modelAutoMode.mode: off`；`/kioku-model-auto on | observe | off | status` 仅更改当前会话。`observe` 评估建议，但不更换模型。此功能需要已就绪的 Jev、Laya 或 OpenAI 后端、dsh-codex、原生模型元数据和 token meter。分类失败或不可用时保留当前模型；手动选择优先。
 
-[回答复核](docs/answer-review.md)在完整插件和模块化核心中默认启用。它通过配置的 Jev、Laya 或 Nimble provider 评估已经显示的普通回答，并可能让同一个主模型重新考虑一次。默认配置为：
+[回答复核](docs/answer-review.md)在完整插件和模块化核心中默认启用。它通过配置的 Jev、Laya、OpenAI 或 Nimble provider 评估已经显示的普通回答，并可能让同一个主模型重新考虑一次。默认配置为：
 
 ```yaml
 answerReview:
@@ -128,7 +128,58 @@ answerReview:
 
 设置 `answerReview.mode: off` 可禁用此功能。它沿用 `typedDecisions` 配置，会增加评估推理（以及最多一轮主模型调用），但不会延迟首次回答。所选 provider 不可用时会跳过复核并保留原回答，不会替换为其他 provider。由于无法检查 worker 内部的截断，Laya v1 的评估结果仅作为未经验证的建议。`/kioku-decisions status` 显示进度与跳过原因，并不证明回答正确。
 
-Jev 是默认选项。在 DSH 命令输入框中即可切换，无需编辑配置或重启 DSH：
+<a id="openai-decisions-setup"></a>
+### 设置 OpenAI Decisions
+
+默认仍为 Jev，也可选择 OpenAI、本地 Laya 或 Nimble。OpenAI 使用官方 [Decisions API](https://developers.openai.com/api/docs/guides/decisions) 的 `POST /v1/decisions`；此源码中的默认判定模型为 `gpt-6-luna`。它与主聊天模型的认证分开：ChatGPT/Codex OAuth 登录不会提供 `OPENAI_API_KEY`，TypeSafe/Jev 密钥也不能替代它。
+
+以下步骤对应当前源码，并不表示已发布的 npm `latest` 已包含 OpenAI 支持。如果没有 `use openai`，请先确认已安装 build 支持的命令。
+
+1. 为 OpenAI API 项目创建 API 密钥，添加到运行中的 DSH 使用的凭据存储中。标准 `credentials-local` 按以下规则选择文件：
+
+   | 配置 | 凭据文件 |
+   |---|---|
+   | 默认 harness home | `~/.dsh/.credentials.yaml` |
+   | 自定义 `DSH_HOME` | `$DSH_HOME/.credentials.yaml` |
+   | 显式 `credentials.path`（provider 的 `config.path`） | 指定路径，优先于 home 默认值 |
+
+   `--profile web` 的软件包和 patch 位于 `$DSH_HOME/profiles/web`，但该选项本身不会移动凭据文件。如果 profile 设置了 `credentials.path`，或 launcher 使用另一个 `DSH_HOME`，请编辑实际路径，不要猜测为 `profiles/web/.credentials.yaml`。
+
+2. 对于已有文件，只在 `refs` 下添加 `OPENAI_API_KEY`，保留其他所有 `refs` 和 `records`。以下是带有无效示例密钥的**新文件最小示例**：
+
+   ```yaml
+   version: 1
+   refs:
+     OPENAI_API_KEY: "OPENAI_API_KEY_EXAMPLE_ONLY"
+   records: {}
+   ```
+
+   请在本机私下将示例值替换为真实密钥。macOS/Linux 上将实际文件权限设为600。默认路径的命令为：
+
+   ```sh
+   chmod 600 "$HOME/.dsh/.credentials.yaml"
+   ```
+
+   如果更改了路径，也请修改命令中的路径。默认 `watch: true` 会自动重新读取有效的文件修改，供后续请求使用，无需重启 DSH。不要把密钥贴到对话、截图或 Git 中。
+
+3. 在 DSH 命令输入框中选择 OpenAI 并查看结果：
+
+   ```text
+   /kioku-decisions use openai
+   /kioku-decisions status
+   ```
+
+   `use openai` 的 probe 会调用真实 API，可能产生使用费用。只有 probe 和保存均成功后，才会为本项目的新请求保存选择；失败或取消时保留原选择，进行中的请求仍使用原 binding。`status` 不调用推理。可选的 `/kioku-decisions probe` 会再发送一次真实 probe。
+
+标准 provider 的优先级为 **保存文件 > 启动时环境变量 > 项目 `.env` > harness home `.env`**。即使 credentials 服务存在，只要没有更高优先级的保存值，环境变量仍可使用。若只使用环境变量，请在同一 shell 中启动 DSH **之前**设置：
+
+```sh
+export OPENAI_API_KEY='OPENAI_API_KEY_EXAMPLE_ONLY'
+```
+
+此值只是不可用的示例。DSH 启动后在其他 shell 中 export 不会更新启动时 snapshot；更新运行中的实例应编辑 watch 监视的文件。含密钥的 `.env` 也不要提交到 Git。
+
+其他选项仍可使用：
 
 ```text
 /kioku-decisions use jev
@@ -137,29 +188,9 @@ Jev 是默认选项。在 DSH 命令输入框中即可切换，无需编辑配�
 /kioku-decisions use default
 ```
 
-Laya 直接连接由 `start-laya` 启动的现有 worker，无需替换 worker 或配置 fingerprint。Jev 需要 TypeSafe 密钥；Nimble 需要先配置端点和模型。探测成功后，所选项会按项目保存并应用于新的请求。重启后仍会保留，正在处理的请求所绑定的 provider 不变。`use default` 恢复插件配置。
+Jev 使用 `TYPESAFE_API_KEY`；`/kioku-typesafe-key` 只管理该密钥，不会保存 OpenAI 密钥。Laya 通过 `~/Library/Caches/laya-coreml/worker.sock` 的 v1 `health`/`predict` 连接 `start-laya` 启动的现有 worker。`install-laya` 会复用 worker 或显示设置说明。Nimble 需要预先配置端点和模型。`use default` 恢复插件配置。
 
-在 DSH 的 `~/.dsh/.credentials.yaml`（设置了 `DSH_HOME` 时为 `$DSH_HOME/.credentials.yaml`）中设置 API 密钥，或使用 `/kioku-typesafe-key YOUR_KEY`。请保留已有条目：
-
-```yaml
-version: 1
-refs:
-  TYPESAFE_API_KEY: YOUR_KEY
-```
-
-如果手动创建 YAML 文件，请运行 `chmod 600 ~/.dsh/.credentials.yaml`（设置了 `DSH_HOME` 时使用对应路径）。
-
-在 DSH 命令界面中检查密钥并测试连接：
-
-```text
-/kioku-typesafe-key status
-/kioku-decisions probe
-/kioku-decisions status
-```
-
-`probe` 会发送合成的 API 测试请求，`status` 不会。`/kioku-typesafe-key clear` 可删除保存的密钥。使用 `/kioku-typesafe-key YOUR_KEY` 时，输入的密钥会显示在界面上。更多信息请参阅[类型化判定](docs/typed-decisions.md)和[显式 Lisp API](docs/typesafe.md)。
-
-Jev 仍为默认选项。Nimble 和本地 [Laya-CoreML](docs/laya-coreml.md)是可选替代方案；Laya 使用现有 v1 `health`/`predict` 协议，直接连接 `~/Library/Caches/laya-coreml/worker.sock`。`/kioku-decisions install-laya` 会复用运行中的 worker，或显示设置说明。
+详情请参阅[优先级、设置与故障排查](docs/typed-decisions.md#openai-credentials)、[官方凭据存储说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/credentials/credentials-local/README.md)及 [TypeSafe Lisp API](docs/typesafe.md)。
 
 英语及其他语言请使用 `aac6fef/laya-multilingual-coreml`。其 1,024-token 输入容量包括问题、选项和状态；`-ane` 变体仅允许 96 tokens。请参阅[上游模型规格](https://github.com/mizorewww/laya-coreml#available-checkpoints)。完成[初始设置](docs/Laya-CoreML-ja.md)后，使用以下命令。请先停止正在运行的 Laya worker，再使用新模型启动；`LAYA_MODEL` 也会覆盖现有 worker 脚本中的旧默认值。
 

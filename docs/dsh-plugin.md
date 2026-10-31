@@ -53,7 +53,7 @@ requires an explicit resume and a new generation. Old results cannot complete
 or modify that new generation. Model changes transfer the same task to the
 verified primary continuation; CLI resume rereads its persisted state.
 
-Jev/Laya interpretations are advisory. If they are unavailable or abstain, the
+Jev/Laya/OpenAI interpretations are advisory. If they are unavailable or abstain, the
 host records an unresolved decision and accepts a validated main-model
 interpretation or an explicit operation. The original request and authority
 checks remain in force. The CLI displays this SQLite snapshot and committed

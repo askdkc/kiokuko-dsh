@@ -131,13 +131,17 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
 ## Installation lifecycle
 
-The only npm lifecycle hook is:
+The source-install preparation hook is:
 
 ```text
-prepare = npm run build
+prepare = node scripts/prepare-build.mjs
 ```
 
-It builds the package from the fixed source checkout. It does not modify a DSH
+It normally runs the invoking package manager's `run build` from the source
+checkout. Only an explicit `CI=true` plus `KIOKUKO_CI_DEFER_PREPARE=1` defers
+this package's duplicate prepare build to the selected verifier's required clean
+build. Dependency lifecycle scripts still run; source/build digests and tested
+archive receipts remain required. It does not modify a DSH
 profile, contact an external service, or edit user configuration. A Git source
 install must pin a full commit and authorize the exact generated archive key
 with pnpm `allowBuilds`; the npm tarball already contains `dist/`.

@@ -327,6 +327,14 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   assert.ok(jobs.checks.if.includes('always()'));assert.ok(jobs.checks.if.includes("needs.select.result == 'success'"));assert.ok(jobs.checks.if.includes("needs.micro-judge-native.result == 'success'"));
   assert.ok(jobs.checks.steps.some(s=>s.run?.includes('scripts/verify.mjs --ci-plan')&&s.run.includes('--lane')));
   const prep=jobs.checks.steps.find(s=>s.run==='npm ci --prefix tests/fixtures/dsh-runtime');assert.ok(prep);assert.equal(prep.if,'matrix.fixture');
+  const install=jobs.checks.steps.find(s=>s.run==='npm ci');
+  assert.equal(install.env.KIOKUKO_CI_DEFER_PREPARE,'1');
+  assert.equal(jobs.checks.env?.KIOKUKO_CI_DEFER_PREPARE,undefined,'defer is scoped to dependency installation');
+  assert.ok(!install.run.includes('--ignore-scripts'),'dependency lifecycle scripts must still execute');
+  const packageJson=JSON.parse(readFileSync(new URL('../package.json',import.meta.url)));
+  assert.equal(packageJson.scripts.prepare,'node scripts/prepare-build.mjs');
+  assert.ok(packageJson.files.includes('scripts/prepare-build.mjs'));
+
   assert.doesNotMatch(text,/--legacy-peer-deps|--force|--package-lock=false|npm install.*fixtures/);
   const fixture=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package.json',import.meta.url))),lock=JSON.parse(readFileSync(new URL('../tests/fixtures/dsh-runtime/package-lock.json',import.meta.url)));
   assert.ok(fixture.dependencies['@deepseek-ai/dsh']);
@@ -341,7 +349,7 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   const cli=actual.checks.find(c=>c.id==='dsh-cli-profile');assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
   assert.deepEqual(cli.completionEvidence,{profile:'dsh-cli',interactive:true,cliVersion:'0.14.11',sourceEntry:true});
   assert.ok(actual.checks.find(c=>c.id==='verification-contract').profiles.includes('semantic'));
-  const complete=createCiPlan(actual,{full:true},{});assert.equal(complete.jobCount,27);assert.equal(complete.lanes.length,22);
+  const complete=createCiPlan(actual,{full:true},{});assert.equal(complete.jobCount,21);assert.equal(complete.lanes.length,17);
   const ordinary=createCiPlan(actual,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},{});assert.equal(ordinary.jobCount,5);assert.equal(ordinary.lanes.length,2);
   const aggregate=jobs.verify;assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
   const gate=aggregate.steps.find(s=>s.run?.includes('scripts/verify-ci-results.mjs'));assert.equal(gate.env.NEEDS_JSON,'${{ toJSON(needs) }}');assert.ok(gate.run.includes('--ci-plan'));
@@ -475,3 +483,5 @@ test('prepare reproducibility installs its build dependencies even under NODE_EN
 });
 
 import './code-intelligence-host.test.mjs';
+
+import './prepare-build.test.mjs';

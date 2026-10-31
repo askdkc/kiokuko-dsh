@@ -128,9 +128,9 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 選択後の通常の編集・テストには追加確認を求めません。ソース・実データの削除と既存の永続DB変更は対象を確認します。各項目の最新の証拠と、通常の利用入口からの最終確認が揃った場合だけ完了します。[Goal 駆動コーディング](docs/coding-workflow.md)と[独自実行、レシート、記憶の再利用](docs/owned-execution.md)を参照してください。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
 
-## 型付き判定（Jev / Laya / Nimble）
+## 型付き判定（Jev / Laya / OpenAI / Nimble）
 
-任意の[モデル自動選択](docs/model-selection.ja.md#通常実行のモデル自動選択)は、新しい通常タスクで検証済みの `openai-codex` モデルと推論強度を選びます。既定値は `modelAutoMode.mode: off` です。`/kioku-model-auto on | observe | off | status` は現在のセッションだけを変更します。`observe` は候補を計測し、実モデルは変えません。利用にはJevかLayaの準備完了、dsh-codex、DSHのモデル情報とtoken meterが必要です。判定不能なら現在のモデルを維持し、手動選択を優先します。
+任意の[モデル自動選択](docs/model-selection.ja.md#通常実行のモデル自動選択)は、新しい通常タスクで検証済みの `openai-codex` モデルと推論強度を選びます。既定値は `modelAutoMode.mode: off` です。`/kioku-model-auto on | observe | off | status` は現在のセッションだけを変更します。`observe` は候補を計測し、実モデルは変えません。利用にはJev・Laya・OpenAIのいずれかの準備完了、dsh-codex、DSHのモデル情報とtoken meterが必要です。判定不能なら現在のモデルを維持し、手動選択を優先します。
 
 [回答の再検討](docs/answer-review.md)は、表示済みの通常回答を評価し、指摘があれば同じ主モデルに一度だけ見直させる機能です。通常版・modular coreで既定で有効です。既定値は次のとおりです。
 
@@ -140,46 +140,74 @@ answerReview:
   budgetMs: 5000
 ```
 
-無効にする場合は `answerReview.mode: off` を指定します。評価providerは `typedDecisions` のJev／Laya／Nimbleを継承します。選択したproviderが利用できない場合は評価をスキップし、元の回答で終了します。別providerへの自動切替はありません。最初の回答はそのまま表示され、評価の追加推論と、最大1回の主モデルによる再検討が発生します。Laya v1はworker内部の切り詰めを確認できないため、指摘は未確認の候補として扱います。`/kioku-decisions status` で進行状態・スキップ理由を確認できます。正しさを保証する機能ではありません。
+無効にする場合は `answerReview.mode: off` を指定します。評価providerは `typedDecisions` のJev／Laya／OpenAI／Nimbleを継承します。選択したproviderが利用できない場合は評価をスキップし、元の回答で終了します。別providerへの自動切替はありません。最初の回答はそのまま表示され、評価の追加推論と、最大1回の主モデルによる再検討が発生します。Laya v1はworker内部の切り詰めを確認できないため、指摘は未確認の候補として扱います。`/kioku-decisions status` で進行状態・スキップ理由を確認できます。正しさを保証する機能ではありません。
 
 
-Jevが既定です。DSHのコマンド入力欄で切り替えられます。設定編集や再起動は不要です。
+通常の作業開始時に、decision／Lisp の4通りのON/OFFを一つのカードで選べます。取消・Skipでは開始しません。選択は依頼に保存し、同じ依頼の再処理・再起動・明示的な「続けて」では再利用します。別の依頼では確認し直します。LispがONでも既存の権限・承認・Stopは維持します。ヘッドレスでは既存設定と明示的なLispセッション設定を保ち、`typedDecisions.startup: {decision: true, lisp: true}` でも明示できます。ONは利用成功の証明ではなく、認証不足や判断失敗は記録して主モデルへ戻します。
+
+<a id="openai-decisions-setup"></a>
+### OpenAI Decisions の設定
+
+既定はJevで、OpenAI・ローカルのLaya・Nimbleも選べます。OpenAIは公式 [Decisions API](https://developers.openai.com/api/docs/guides/decisions) の `POST /v1/decisions` を使い、このソースの既定判定モデルは `gpt-6-luna` です。主モデルの認証とは別です。ChatGPT/CodexのOAuthログインから `OPENAI_API_KEY` は供給されず、TypeSafe/Jevのキーも代用できません。
+
+以下は現行ソースの手順で、公開済みnpmの `latest` にOpenAI対応が含まれることを示すものではありません。`use openai` がない場合は、まず導入済みbuildのコマンド対応を確認してください。
+
+1. OpenAI APIプロジェクトのAPIキーを作り、稼働中DSHが使う保存先へ追加します。標準の `credentials-local` では次のように決まります。
+
+   | 設定 | credentialsファイル |
+   |---|---|
+   | 既定のharness home | `~/.dsh/.credentials.yaml` |
+   | `DSH_HOME` を指定 | `$DSH_HOME/.credentials.yaml` |
+   | `credentials.path` を明示（providerの `config.path`） | homeの既定値より優先される指定先 |
+
+   `--profile web` のパッケージ・patchは `$DSH_HOME/profiles/web` にありますが、指定だけでcredentialsの保存先は移動しません。profileで `credentials.path` を変えた場合や、launcherが別の `DSH_HOME` を使う場合は、その実際の保存先を編集します。`profiles/web/.credentials.yaml` と推測しないでください。
+
+2. 既存ファイルでは `refs` に `OPENAI_API_KEY` だけを追加し、ほかの `refs` と `records` はすべて残します。次は無効な例示キーを使った**新規ファイル用の最小例**です。
+
+   ```yaml
+   version: 1
+   refs:
+     OPENAI_API_KEY: "OPENAI_API_KEY_EXAMPLE_ONLY"
+   records: {}
+   ```
+
+   例示値を手元で実際のキーへ置き換えます。macOS/Linuxでは実際の保存先を権限600にします。既定パスの場合：
+
+   ```sh
+   chmod 600 "$HOME/.dsh/.credentials.yaml"
+   ```
+
+   保存先を変更している場合はコマンドのパスも変更します。既定の `watch: true` なら、有効なファイル編集は自動再読され、次の要求から使われます。DSH再起動は不要です。キーを会話・スクリーンショット・Gitへ貼らないでください。
+
+3. DSHのコマンド入力欄で切り替え、状態を確認します。
+
+   ```text
+   /kioku-decisions use openai
+   /kioku-decisions status
+   ```
+
+   `use openai` のprobeは実API呼出しで、利用料金が発生する場合があります。probeと保存の成功後だけ、このプロジェクトの新しい要求へ選択を保存します。失敗・取消時は元の選択を保持し、進行中の要求のbindingも変えません。`status` は推論を呼びません。任意の `/kioku-decisions probe` は追加の実probeを行います。
+
+標準providerの優先順位は **保存ファイル > 起動時環境変数 > projectの `.env` > harness homeの `.env`** です。credentialsサービスがある構成でも、保存値で上書きされていなければ環境変数を使えます。環境変数だけで設定する場合は、同じシェルからDSHを起動する**前**に設定します。
+
+```sh
+export OPENAI_API_KEY='OPENAI_API_KEY_EXAMPLE_ONLY'
+```
+
+この値は使用できない例示値です。DSH起動後に別シェルでexportしても起動時snapshotは変わりません。稼働中の更新にはwatch対象のファイルを使います。キーを書いた `.env` もGitへ追加しないでください。
+
+ほかの選択肢も維持しています。
 
 ```text
 /kioku-decisions use jev
 /kioku-decisions use laya
-/kioku-decisions use openai
 /kioku-decisions use nimble
 /kioku-decisions use default
 ```
 
-Layaは`start-laya`で起動済みのworkerへ直接接続します。workerの差し替えやfingerprint設定は不要です。JevにはTypeSafeキー、Nimbleには接続先・モデルの事前設定が必要です。probeが成功してから選択をプロジェクト単位で保存し、次のリクエストへ適用します。再起動後も保持し、進行中のリクエストは変更しません。`use default`でプラグイン設定へ戻せます。
+Jevは `TYPESAFE_API_KEY` を使います。`/kioku-typesafe-key` が管理するのはこのキーだけで、OpenAIのキーは保存しません。Layaは `start-laya` で起動済みのworkerへ `~/Library/Caches/laya-coreml/worker.sock` のv1 `health`/`predict` で接続します。`install-laya` はworkerを再利用するか導入手順を案内します。Nimbleは接続先とモデルの事前設定が必要です。`use default` はプラグイン設定に戻します。
 
-OpenAIは公式 Decisions API (`POST /v1/decisions`、既定モデル `gpt-6-luna`) を使います。DSH credentials の `OPENAI_API_KEY`、credentialsサービスがない構成では同名環境変数が必要です。Jevのキーは使いません。切替時のprobeはAPI呼出しを伴い、失敗・取消時は切替を保存しません。
-
-通常の作業開始時に、decision／Lisp の4通りのON/OFFを一つのカードで選べます。取消・Skipでは開始しません。選択は依頼に保存し、同じ依頼の再処理・再起動・明示的な「続けて」では再利用します。別の依頼では確認し直します。LispがONでも既存の権限・承認・Stopは維持します。ヘッドレスでは既存設定と明示的なLispセッション設定を保ち、`typedDecisions.startup: {decision: true, lisp: true}` でも明示できます。ONは利用成功の証明ではなく、認証不足や判断失敗は記録して主モデルへ戻します。
-
-APIキーは DSH の `~/.dsh/.credentials.yaml`（`DSH_HOME` を設定している場合は `$DSH_HOME/.credentials.yaml`）に書くか、`/kioku-typesafe-key YOUR_KEY` で保存します。既存の項目は残してください。
-
-```yaml
-version: 1
-refs:
-  TYPESAFE_API_KEY: YOUR_KEY
-```
-
-YAMLファイルを手動で作る場合は `chmod 600 ~/.dsh/.credentials.yaml` を実行してください（`DSH_HOME` を設定している場合はそのパスを使用）。
-
-DSHのコマンド入力欄で利用可能な状態を確認します。
-
-```text
-/kioku-typesafe-key status
-/kioku-decisions probe
-/kioku-decisions status
-```
-
-`probe` は検査用のAPIリクエストを送ります。`status` は送信しません。保存したキーは `/kioku-typesafe-key clear` で削除できます。`/kioku-typesafe-key YOUR_KEY` の入力中はキーが画面に表示されます。詳しくは[型付き判定](docs/typed-decisions.md)と[Lispからの明示的な呼び出し](docs/typesafe.md)を参照してください。
-
-Jevが既定です。Nimbleとローカルの[Laya-CoreML](docs/Laya-CoreML-ja.md)も選べます。Layaは`~/Library/Caches/laya-coreml/worker.sock`へ直接接続し、既存のv1 `health`/`predict`を使います。`/kioku-decisions install-laya`でも起動済みworkerを利用でき、接続できなければ導入手順を案内します。
+詳しくは[優先順位・設定・トラブル対処](docs/typed-decisions.md#openai-credentials)、[公式credentials仕様](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/credentials/credentials-local/README.md)、[TypeSafeのLisp API](docs/typesafe.md)を参照してください。
 
 英語を含め、どの言語でも `aac6fef/laya-multilingual-coreml` を使います。入力上限は質問・選択肢・判定対象を合わせて1,024 tokensで、`-ane` 版は96 tokensのみです。[開発元のモデル仕様](https://github.com/mizorewww/laya-coreml#available-checkpoints)を参照してください。[初期導入](docs/Laya-CoreML-ja.md)を済ませてから、次のコマンドを実行します。起動中のLaya workerがあれば停止してから新しいモデルで起動してください。`LAYA_MODEL` の指定は、既存workerスクリプトの古い既定値も上書きします。
 

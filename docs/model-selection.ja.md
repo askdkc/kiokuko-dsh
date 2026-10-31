@@ -14,7 +14,7 @@ DSHの権限判定、必要な検証を維持し、役小角の契約・WorkUnit
 
 Webプロファイルでは [Kiokuko Models](kiokuko-models.md) から接続を設定できます。DSH本体のModelsで設定する必要はありません。登録したモデルは、通常会話・Enno・Deepでネイティブ接続と併用できます。
 
-通常版・modular coreとも `modelAutoMode.mode: off` が既定です。同じDSHプロファイルでKiokuko Modelsまたはdsh-codexからCodexを認証し、JevかLayaの判定を準備したうえで、まず `observe` で選択案を確認します。
+通常版・modular coreとも `modelAutoMode.mode: off` が既定です。同じDSHプロファイルでKiokuko Modelsまたはdsh-codexからCodexを認証し、Jev・Laya・[OpenAI](typed-decisions.md#openai-credentials)のいずれかの判定を準備したうえで、まず `observe` で選択案を確認します。
 
 ```yaml
 modelAutoMode:
@@ -34,7 +34,7 @@ modelAutoMode:
 
 初期候補は `gpt-6-luna` の low・medium・high と `gpt-6-sol` の high です。`modelAutoMode.routes` には最大4件、`id`（`luna-low`、`luna-medium`、`luna-high`、`sol-high`）と `binding`（`provider`、`model`、`reasoningEffort`）を指定できます。IDは経路のラベルなので、登録済みのAstraなども正確なbindingで割り当てられます。候補はCodex由来とResponses方式を確認でき、現在のモデル一覧、文脈容量・入力形式・推論強度、要求設定の検証、token meterを通った接続に限定します。ネイティブの `openai-codex` とKiokuko所有のCodex接続が対象です。名前だけを似せた接続やOpenAI API接続は対象外です。有効なbindingが2件未満なら判定しません。
 
-新しい受付済みの通常タスクでは、現在の依頼文、タスク種別、添付の種類、経路IDと判定基準を選択中のJevかLayaへ送ります。この判定のために添付の内容、全履歴、リポジトリ全体は送信しません。Choice 1問の結果をrunに保存し、継続では同じ経路を使います。再起動時に判定結果が不明なら再送せず元のモデルを維持します。`observe`、棄権、probe失敗、metadata不足、非対応effort、timeout、入力超過でも元のモデルを維持します。取消、セッション同一性の不一致、保存の整合性エラーでは要求を止めます。認証・利用枠・モデル利用不可によるdispatch失敗を別モデルへ自動再送しません。
+新しい受付済みの通常タスクでは、現在の依頼文、タスク種別、添付の種類、経路IDと判定基準を選択中のJev・Laya・OpenAIへ送ります。この判定のために添付の内容、全履歴、リポジトリ全体は送信しません。Choice 1問の結果をrunに保存し、継続では同じ経路を使います。再起動時に判定結果が不明なら再送せず元のモデルを維持します。`observe`、棄権、probe失敗、metadata不足、非対応effort、timeout、入力超過でも元のモデルを維持します。取消、セッション同一性の不一致、保存の整合性エラーでは要求を止めます。認証・利用枠・モデル利用不可によるdispatch失敗を別モデルへ自動再送しません。
 
 状態表示では、設定・準備状態・選択案・適用したbindingと、nativeの `request/header` で確認した実モデルを区別します。初期候補は判定基準であり、品質・時間・利用枠の改善を保証しません。Enno、Deep、子、雑談、回答の再検討、保護されたLisp実行は既存の経路を使います。実装失敗後の自動昇格は初期版に含めません。
 
