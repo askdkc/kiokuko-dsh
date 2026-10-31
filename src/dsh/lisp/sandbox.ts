@@ -6,7 +6,7 @@ import { networkFilter } from './seccomp.js'
 import { checkedDirectory } from './files.js'
 
 export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string; workspace?: string; protected?: boolean }
-export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string; group?: boolean }
+export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string; group?: boolean; namespaceInfo?: boolean }
 const systemPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 export async function executable(name: string): Promise<string> {
   if (/\p{Cc}/u.test(name)) fail('INVALID_EXECUTABLE', '実行ファイル名が不正です。')
@@ -70,9 +70,9 @@ export async function sandboxLaunch(layout: SandboxLayout, program: string, args
       ...(runtime === '/' || runtime === '/usr' ? [] : [join(runtime, 'bin'), join(runtime, 'lib'), join(runtime, 'libexec'), join(runtime, 'share')])])) {
       try { await access(path); binds.push('--ro-bind', path, path) } catch { /* optional runtime directory */ }
     }
-    return { command: await executable('bwrap'), args: ['--unshare-all', '--die-with-parent', '--new-session', '--clearenv', ...Object.entries(env).flatMap(([k,v]) => ['--setenv', k, v]),
+    return { command: await executable('bwrap'), args: ['--unshare-all', '--die-with-parent', '--new-session', '--info-fd', '5', '--clearenv', ...Object.entries(env).flatMap(([k,v]) => ['--setenv', k, v]),
       ...binds, '--proc', '/proc', '--dev', '/dev', '--bind', layout.scratch, layout.scratch, '--bind', layout.cache, layout.cache,
-      '--seccomp', '4', '--chdir', cwd, '--', binary, ...args], env, cwd, seccompPath }
+      '--seccomp', '4', '--chdir', cwd, '--', binary, ...args], env, cwd, seccompPath, namespaceInfo: true }
   }
   return fail('UNSUPPORTED_OS', 'Common Lisp は macOS と Linux で利用できます。')
 }
