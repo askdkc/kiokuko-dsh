@@ -161,6 +161,8 @@ import {
   type RequestIntentDecision,
 } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner } from '../memory-owner.js'
+import { readStartupDefaults } from '../live-config.js'
+import { StartupDefaultsConfig } from '../startup-defaults.js'
 import { executionClarification } from '../intake-clarification.js'
 
 export interface CoreModuleHost {
@@ -187,6 +189,7 @@ export const CoreConfig = z
     enabled: z.boolean().default(true),
     intakeMode: IntakeModeConfig,
     typedDecisions: TypedDecisionsConfig.prefault({}),
+    startupDefaults: StartupDefaultsConfig.prefault({}),
     answerReview: AnswerReviewConfig.prefault({}),
     memoryReuse: MemoryReuseConfig.prefault({}),
     memoryRetrieval: MemoryRetrievalConfig.prefault({}),
@@ -556,6 +559,7 @@ export async function mountCore(
     return decision ? { context, decision } : undefined
   }
   const taskStartup = new TaskStartup({ decisions, ...(questions ? { questions } : {}), root: () => root,
+    defaults: () => readStartupDefaults(ctx, config.startupDefaults),
     lisp: () => get(LISP_CODING_SERVICE) as LispCodingService | undefined })
   const demand = new OnDemandIntake(
     {

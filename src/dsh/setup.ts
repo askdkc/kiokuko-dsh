@@ -2,7 +2,7 @@ import { realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { readRegularFile } from '../config/read-regular-file.js'
 import { KiokukoError } from '../errors.js'
-import { deploymentParent, publishFile, type DeploymentFile } from './managed-file-deployment.js'
+import { deploymentParent, publishFile, retireManagedFile, type DeploymentFile } from './managed-file-deployment.js'
 import { planStandardSkills, retireStandardSkills } from './standard-skill-deployment.js'
 import { SOUL_ROUTING_ENTRY_CONTRACT } from './standard-skills.js'
 
@@ -133,6 +133,13 @@ async function planInstructionRemoval(workspace: string): Promise<DeploymentFile
   return { target, previous, content }
 }
 
+/** Empty removal restores the absent pre-setup file; it never writes zero bytes. */
+async function applyInstructionRemoval(workspace: string, instructions: DeploymentFile): Promise<string> {
+  return instructions.content === ''
+    ? await retireManagedFile(workspace, instructions)
+    : await publishFile(workspace, instructions)
+}
+
 /** Explicitly retire matching deployed Skills and remove this product's AGENTS.md block. */
 export async function removeDshSetup(options: { homeDirectory?: string; cwd?: string; check?: boolean } = {}) {
   const workspace = await realpath(options.cwd ?? process.cwd())
@@ -144,7 +151,7 @@ export async function removeDshSetup(options: { homeDirectory?: string; cwd?: st
     skills,
     instructions: { path: path.join(workspace, 'AGENTS.md'), status: instructions ? 'unchanged' : 'unmanaged-or-absent' },
   }
-  if (instructions) result.instructions.status = options.check ? 'update-needed' : await publishFile(workspace, instructions)
+  if (instructions) result.instructions.status = options.check ? 'update-needed' : await applyInstructionRemoval(workspace, instructions)
   result.current = !options.check || result.skills.removed === 0 && result.instructions.status !== 'update-needed'
   return result
 }

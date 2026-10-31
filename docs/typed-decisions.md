@@ -28,6 +28,11 @@ Laya accept Choice only and return `DECISION_UNSUPPORTED` before inference for
 other kinds. The separate Lisp `kioku.typesafe:evaluate` API retains its own
 wire contract.
 
+The configured provider (`typedDecisions.provider`, default `typesafe`) is the default
+for new requests whenever this project has no saved selection. `/kioku-decisions use`
+still saves an explicit project selection, which the configured default never
+overwrites; `use default` returns to it.
+
 Switch backends in DSH without a restart:
 
 ```text
@@ -136,11 +141,16 @@ is not evidence of a successful API call; use the command probe to verify access
 The normal startup card offers the four decision/Lisp ON/OFF combinations and Cancel
 in one question before model tool assembly. It uses the currently selected backend,
 shown in the card; selection does not prove authentication or successful inference.
+`startupDefaults.decision` and `startupDefaults.lisp` (default `ask`) mark one of those
+options as the preset; the native question UI preselects a label ending in
+` (Recommended)`, so the card still opens editable. A preset grants no authority.
 Immutable existing decision bindings also retain the task choice, without granting
 tool or file authority. The same request and explicit continuation reuse the choice;
-an unrelated new request asks again. Cancel/Skip starts no task. Headless operation
-keeps the configured decision mode and explicit manual Lisp preference; an explicit
-`typedDecisions.startup: { decision: true, lisp: true }` config selects both.
+an unrelated new request asks again. Cancel/Skip starts no task. Headless operation with `ask` keeps the
+configured decision mode and explicit manual Lisp preference; `on`/`off` supply that
+answer instead. An explicit
+`typedDecisions.startup: { decision: true, lisp: true }` config selects both and
+outranks the startup defaults for binding.
 Runtime failures retain the choice and permit explicit recovery without a new question.
 
 Semantic-comparison diagnostics retain only the known criterion names

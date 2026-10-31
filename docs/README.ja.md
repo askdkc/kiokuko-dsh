@@ -2,6 +2,7 @@
 
 目的別に参照してください。
 
+- [Lisp と判定の既定値](../README.ja.md#startup-defaults) — 作業開始カードの既定の回答と判定providerの設定。
 - [OpenAI Decisionsの設定](../README.ja.md#openai-decisions-setup) — APIキーの保存先・自動再読・優先順位・判定providerの切替。[詳細な設定（英語）](typed-decisions.md#openai-credentials)。
 - [導入ガイド](getting-started.ja.md) — DeepSeek Harness Pluginの導入と実行。
 - [基本概念](concepts.ja.md) — RAG、記憶のライフサイクル、Project/Ecosystem/Global、Akinator。

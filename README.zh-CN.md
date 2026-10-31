@@ -128,6 +128,32 @@ answerReview:
 
 设置 `answerReview.mode: off` 可禁用此功能。它沿用 `typedDecisions` 配置，会增加评估推理（以及最多一轮主模型调用），但不会延迟首次回答。所选 provider 不可用时会跳过复核并保留原回答，不会替换为其他 provider。由于无法检查 worker 内部的截断，Laya v1 的评估结果仅作为未经验证的建议。`/kioku-decisions status` 显示进度与跳过原因，并不证明回答正确。
 
+<a id="startup-defaults"></a>
+## Lisp 与判定的默认值
+
+普通任务开始时只询问一次是否使用型别化判定和 Lisp，并在该请求内保留选择。在设置 → 通用 → **Kiokuko 作业开始时的默认值** 中指定后，该卡片会预先选好这一项，日常任务即可从惯用选择开始。
+
+| 设置 | 取值 | 作用 |
+|---|---|---|
+| `startupDefaults.decision` | `ask`（默认）、`on`、`off` | 预先选择是否使用型别化判定；没有提问 UI 时以该值决定 |
+| `startupDefaults.lisp` | `ask`（默认）、`on`、`off` | 预先选择是否把 Lisp 作为执行路径 |
+| `typedDecisions.provider` | `typesafe`（默认）、`openai`、`nimble`、`laya-coreml` | 新请求使用的判定 provider |
+
+`ask` 让卡片保持未选择状态，行为与以前相同。默认值只是预先选中已提供的某个回答，不会增加执行权限、启用被禁用的模块，也不会跳过 Lisp 的启动、审批与 Stop 检查。卡片仍会显示并保留另一选项，在该处选择的回答对该请求优先。
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    startupDefaults:
+      decision: on
+      lisp: on
+    typedDecisions:
+      provider: openai
+```
+
+provider 默认值只在项目尚未保存 `/kioku-decisions use` 选择时生效。显式选择保持优先，不会被默认值覆盖；`use default` 会回到配置值。配置不完整（例如 Nimble 缺少 endpoint 与 model）的 provider 仍按不可用处理，不会替换成其他后端。
+
+在无法提问的无头环境中，`ask` 继续沿用既有配置与手动会话选择，`on`／`off` 则明确给出该回答。
 <a id="openai-decisions-setup"></a>
 ### 设置 OpenAI Decisions
 

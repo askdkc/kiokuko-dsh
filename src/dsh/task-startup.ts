@@ -8,12 +8,15 @@ import type { DshUserQuestions } from './intake-questions.js'
 import { selectedDecisionSettings, type DecisionConfiguration } from './decisions/config.js'
 import type { DecisionService } from './decisions/service.js'
 import type { LispCodingInput, LispCodingService } from './lisp/coding-choice.js'
+import { applyStartupDefault, isStartupDefault, startupOptionLabel, stripRecommendedSuffix, type StartupDefaults } from './startup-defaults.js'
 
 export type TaskStartupChoice = NonNullable<DecisionConfiguration['startup']>
 export const TASK_STARTUP_OPTIONS = [
   'decision ON / Lisp ON', 'decision ON / Lisp OFF',
   'decision OFF / Lisp ON', 'decision OFF / Lisp OFF', '取消・作業を保持',
 ] as const
+/** Index of the cancel option; each earlier index encodes one ON/OFF pair. */
+const CANCEL_INDEX = 4
 export function parseTaskStartupAnswer(response: unknown, questionId: string): TaskStartupChoice | undefined {
   const answers = (response as any)?.answers
   if (!Array.isArray(answers) || answers.length !== 1 || answers[0]?.id !== questionId) return undefined
@@ -21,9 +24,12 @@ export function parseTaskStartupAnswer(response: unknown, questionId: string): T
   if (!Array.isArray(a.selected) || a.selected.length > 1 || !a.selected.every((s: unknown) => typeof s === 'string')
     || a.custom !== undefined && typeof a.custom !== 'string') return undefined
   if (!a.selected.length && !a.custom?.trim()) return { decision: false, lisp: false, cancelled: true }
-  const text = a.custom?.trim() || a.selected[0]
-  const index = /^[1-5]$/.test(text) ? Number(text) - 1 : TASK_STARTUP_OPTIONS.indexOf(text)
-  return index < 0 ? undefined : index === 4 ? { decision: false, lisp: false, cancelled: true }
+  // The Web UI appends the preset marker for its recommendation; it is presentation only.
+  const text = stripRecommendedSuffix(a.custom?.trim() || a.selected[0])
+  const index = /^[1-5]$/.test(text)
+    ? Number(text) - 1
+    : (TASK_STARTUP_OPTIONS as readonly string[]).indexOf(text)
+  return index < 0 ? undefined : index === CANCEL_INDEX ? { decision: false, lisp: false, cancelled: true }
     : { decision: index < 2, lisp: index % 2 === 0 }
 }
 function continuation(task: string): boolean {
@@ -38,6 +44,8 @@ export class TaskStartup {
     decisions: DecisionService; questions?: DshUserQuestions
     root(agent: LispCodingInput['agent']): string
     lisp(): LispCodingService | undefined
+    /** Configured preselection for the card; absent marks no option. */
+    defaults?(): StartupDefaults
   }) {}
   prepare(input: LispCodingInput & { sessionId: string }): Promise<void> {
     const root = this.host.root(input.agent)
@@ -79,11 +87,15 @@ export class TaskStartup {
           if (manual && !choice.cancelled) choice = { ...choice, lisp: manual.choice === 'yes' }
         }
       }
+      const defaults = this.host.defaults?.() ?? { decision: 'ask' as const, lisp: 'ask' as const }
+      const options = TASK_STARTUP_OPTIONS.map((label, index) => ({
+        label: startupOptionLabel(label, index < CANCEL_INDEX && isStartupDefault(defaults, index)),
+      }))
       if (!choice && this.host.questions) {
         const response = await abortable(this.host.questions.ask({ agent: input.agent, signal: input.signal, questions: [{
           id: key, header: 'Kiokuko · 作業開始', question: 'この作業で decision と Lisp を使いますか？',
-          detail: `選択はこの作業に適用します。decision: ${config.provider} / ${selectedDecisionSettings(config)?.model ?? '未設定'}。未認証時に他へ切り替えません。Lisp の通常の権限・承認・Stop は維持します。取消・Skip は作業を保持して中止します。`,
-          options: TASK_STARTUP_OPTIONS.map(label => ({ label })),
+          detail: `既定の選択を付けただけです。この作業では自由に変更できます。decision: ${config.provider} / ${selectedDecisionSettings(config)?.model ?? '未設定'}。未認証時に他へ切り替えません。Lisp の通常の権限・承認・Stop は維持します。取消・Skip は作業を保持して中止します。`,
+          options,
         }] }), input.signal).catch(error => {
           if (error?.code === 'ASK_CANCELLED' && !input.signal.aborted) return { answers: [{ id: key, selected: [] }] }
           throw error
@@ -92,9 +104,14 @@ export class TaskStartup {
         if (!choice) throw new ExecutionSelectionPending('Invalid decision/Lisp startup answer; no work started')
       }
       if (!choice) {
-        // Headless preserves existing configuration, including an explicit manual Lisp preference.
+        // Headless cannot ask: the configured default decides, and an explicit
+        // manual Lisp preference still wins because it was a human command.
         // Module availability never implicitly turns Lisp on.
-        choice = config.startup ?? { decision: config.mode !== 'off', lisp: await lisp?.manualSelected?.(input.agent) === true }
+        const manual = await lisp?.manualSelected?.(input.agent) === true
+        choice = config.startup ?? {
+          decision: applyStartupDefault(defaults.decision, config.mode !== 'off'),
+          lisp: applyStartupDefault(defaults.lisp, manual),
+        }
       }
       current()
       receipt = await decisions.bindStartup(key, choice, input.signal, config)

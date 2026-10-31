@@ -8,11 +8,10 @@ import {
   Config as BusinessConfig,
   type Config as DshConfig,
 } from "./config.js";
-import {
-  nativeApprovalConfig,
-  bindApprovalConfig,
-} from "./live-approval-config.js";
-const Config = nativeApprovalConfig(BusinessConfig);
+import { nativeLiveConfig, bindLiveConfig } from "./live-config.js";
+// The native settings form may edit the Lisp approval mode, the startup defaults
+// and the decision provider without replacing the rest of the configuration.
+const Config = nativeLiveConfig(BusinessConfig);
 import type { DshRuntime } from "./runtime.js";
 import {
   KIOKUKO_DSH_HOST_SERVICE,
@@ -100,7 +99,7 @@ export async function apply(ctx: Context, config: DshConfig): Promise<void> {
 }
 
 async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
-  const resolvedConfig = Config.parse(bindApprovalConfig(ctx, config));
+  const resolvedConfig = Config.parse(bindLiveConfig(ctx, config));
   if (!resolvedConfig.enabled) return;
   const profileName = (
     ctx.get?.("profileContext", false) as { name?: string } | undefined
@@ -328,6 +327,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       answerReview: resolvedConfig.answerReview,
       completion: resolvedConfig.completion,
       typedDecisions: resolvedConfig.typedDecisions,
+      startupDefaults: resolvedConfig.startupDefaults,
       memoryReuse: resolvedConfig.memoryReuse,
       semanticCompaction: resolvedConfig.semanticCompaction,
       modelHandoff: resolvedConfig.modelHandoff,

@@ -125,9 +125,37 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 
 既定の開発モードでは Bubblewrap は不要です。Linux で明示的に保護互換モードを選ぶ場合に必要です。
 「使う」は Lisp、「使わない」は通常ツール、「取消・作業を保持」は準備内容を残して取消です。閉じる・未回答では実装を始めません。通常実行／役小角の選択は別に保持します。Lisp の起動失敗はブロッカーとして残し、復旧または明示的な経路変更後に再開します。
+
+Lisp を毎回選び直す必要はありません。`startupDefaults.lisp` を設定すると、作業開始カードがその回答を選んだ状態で表示され、その場で変更もできます。[作業開始時の既定値](#startup-defaults)を参照してください。
 選択後の通常の編集・テストには追加確認を求めません。ソース・実データの削除と既存の永続DB変更は対象を確認します。各項目の最新の証拠と、通常の利用入口からの最終確認が揃った場合だけ完了します。[Goal 駆動コーディング](docs/coding-workflow.md)と[独自実行、レシート、記憶の再利用](docs/owned-execution.md)を参照してください。
 [設定、API、停止・復旧方法](docs/lisp.md)を参照してください。
 
+<a id="startup-defaults"></a>
+## Lisp と判定の既定値
+
+通常の作業では、型付き判定を使うか Lisp を使うかを一度だけ確認し、その依頼のあいだ選択を保持します。設定 → 一般 → **Kiokuko の作業開始時の既定値** を指定すると、このカードが最初から選んだ状態で表示され、いつもの選択から作業を始められます。
+
+| 設定 | 値 | 動作 |
+|---|---|---|
+| `startupDefaults.decision` | `ask`（既定）、`on`、`off` | 型付き判定を使うかを先に選び、質問UIがない場合はその値で決定します |
+| `startupDefaults.lisp` | `ask`（既定）、`on`、`off` | Lisp を実行経路にするかを先に選びます |
+| `typedDecisions.provider` | `typesafe`（既定）、`openai`、`nimble`、`laya-coreml` | 新しい依頼で使う判定provider |
+
+`ask` はカードを未選択のままにし、これまでの動作を変えません。既定値は、もともと提示している回答のどれかを先に選ぶだけで、実行権限を増やしたり、無効なモジュールを有効にしたり、Lispの起動・承認・Stopの確認を省いたりはしません。カードは表示され、もう一方の選択肢も残ります。その場で選んだ回答は、その依頼では既定値より優先します。
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    startupDefaults:
+      decision: on
+      lisp: on
+    typedDecisions:
+      provider: openai
+```
+
+provider の既定値は、そのプロジェクトに `/kioku-decisions use` の選択が保存されていない場合に使います。明示した選択はそのまま優先し、既定値で上書きしません。`use default` で設定値に戻ります。Nimble の endpoint と model のように設定が不足しているproviderは、別のbackendへ切り替えず、これまでどおり利用不可として扱います。
+
+質問サービスがないヘッドレス環境では、`ask` は従来どおり既存設定と手動のセッション選択に従い、`on`／`off` はその回答を明示します。
 ## 型付き判定（Jev / Laya / OpenAI / Nimble）
 
 任意の[モデル自動選択](docs/model-selection.ja.md#通常実行のモデル自動選択)は、新しい通常タスクで検証済みの `openai-codex` モデルと推論強度を選びます。既定値は `modelAutoMode.mode: off` です。`/kioku-model-auto on | observe | off | status` は現在のセッションだけを変更します。`observe` は候補を計測し、実モデルは変えません。利用にはJev・Laya・OpenAIのいずれかの準備完了、dsh-codex、DSHのモデル情報とtoken meterが必要です。判定不能なら現在のモデルを維持し、手動選択を優先します。

@@ -132,6 +132,8 @@ export class DecisionService {
   constructor(private config: DecisionConfiguration, private readonly provider: (config: DecisionConfiguration, observer?: ChoiceDiagnosticObserver) => DecisionProvider, private readonly store?: DecisionStore,
     private readonly options: ReadinessOptions & { memoryReuse?: MemoryReuseConfiguration; semanticCompaction?: SemanticCompactionConfiguration; repositoryRoot?: string;
       selectionStore?: DecisionSelectionStore; resolveConfiguration?: (config: DecisionConfiguration, signal: AbortSignal) => Promise<DecisionConfiguration>;
+      /** Live configured provider; an explicit saved selection still wins. */
+      configuredProvider?: () => DecisionConfiguration['provider'];
       onEvaluation?: (observation: DecisionObservation) => void; cacheMaxEntries?: number } = {}) {
     if (options.cacheMaxEntries !== undefined && (!Number.isSafeInteger(options.cacheMaxEntries) || options.cacheMaxEntries < 1))
       throw new Error('Invalid decision cache capacity')
@@ -162,6 +164,15 @@ export class DecisionService {
     return this.initialization ??= (async () => {
       const selected = await this.options.selectionStore?.load()
       if (selected) { this.config = selected.config; this.selectionRevision = selected.revision }
+      else {
+        // A saved `/kioku-decisions use` selection wins; otherwise the configured
+        // provider is the default for later requests and `use default`.
+        const configured = this.options.configuredProvider?.()
+        if (configured && configured !== this.config.provider) {
+          this.config = { ...structuredClone(this.config), provider: configured }
+          this.baseConfig.provider = configured
+        }
+      }
     })()
   }
   private async resolved(config: DecisionConfiguration, signal: AbortSignal): Promise<DecisionConfiguration> {

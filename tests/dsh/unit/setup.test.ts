@@ -205,3 +205,24 @@ test('malformed DSH markers stop removal before any Skill is deleted', async t =
   await assert.rejects(removeDshSetup(options), { code: 'CONFLICT' })
   assert.equal(await readFile(soul, 'utf8'), before)
 })
+
+test('removal of a block-only AGENTS.md restores the pre-setup absence instead of leaving an empty file', async t => {
+  const options = await fixture(t)
+  // The pre-setup state has no AGENTS.md. A file holding only our own block must
+  // therefore be removed, not rewritten to zero bytes.
+  await writeFile(options.agents, DSH_MANAGED_BLOCK)
+  const check = await removeDshSetup({ ...options, check: true })
+  assert.equal(check.current, false)
+  assert.equal(check.instructions.status, 'update-needed')
+  assert.equal(await readFile(options.agents, 'utf8'), DSH_MANAGED_BLOCK)
+
+  const removed = await removeDshSetup(options)
+  assert.equal(removed.instructions.status, 'removed')
+  await assert.rejects(stat(options.agents), { code: 'ENOENT' })
+
+  assert.deepEqual(await removeDshSetup({ ...options, check: true }), {
+    current: true,
+    skills: { directory: path.join(options.homeDirectory, '.agents', 'skills'), removed: 0, preserved: 0 },
+    instructions: { path: options.agents, status: 'unmanaged-or-absent' },
+  })
+})

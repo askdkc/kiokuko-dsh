@@ -20,6 +20,12 @@ interface Tools {
   execute(input: unknown): Promise<unknown>
 }
 
+const notDispatched = new WeakSet<object>()
+/** Host-local preparation evidence; serialized error text cannot mint this fact. */
+export function lispHostToolWasNotDispatched(result: unknown): boolean {
+  return !!result && typeof result === 'object' && notDispatched.has(result)
+}
+
 /** Host-owned nested calls retain their exact parent identity and all DSH policy stages. */
 export async function createLispHostDispatch(ctx: Context, tools: Tools): Promise<(input: Invocation) => Promise<any>> {
   if (typeof tools.setExecutor !== 'function') return input => tools.execute(input)
@@ -37,6 +43,8 @@ export async function createLispHostDispatch(ctx: Context, tools: Tools): Promis
   return async input => {
     const prepared = await activePipeline.prepare(input)
     const outcome = prepared.kind === 'dispatch' ? await activePipeline.dispatch(prepared.exec) : prepared
-    return activePipeline.complete(prepared.exec, outcome)
+    const result = await activePipeline.complete(prepared.exec, outcome)
+    if (prepared.kind !== 'dispatch' && result && typeof result === 'object') notDispatched.add(result)
+    return result
   }
 }

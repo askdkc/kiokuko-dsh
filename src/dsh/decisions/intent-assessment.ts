@@ -14,12 +14,19 @@ import {
 export const INTENT_ASSESSMENT_POLICY = 'source-candidate-independent-v1'
 export type SemanticVerdict =
   'supported' | 'contradicted' | 'insufficient' | 'unavailable'
+export type SemanticCheck = { criterion: typeof criteria[number][0] } & (
+  | { status: 'selected'; choiceId: 'supported' | 'contradicted' | 'insufficient' }
+  | { status: 'abstained'; reason: 'insufficient' | 'uncertain' | 'tie' | 'unassessed' }
+  | { status: 'unassessed' }
+)
 export interface IntentAssessment {
   semantic: SemanticVerdict
   semanticInputDigest: string
   semanticOutputDigest?: string
   providerDecisionId?: string
   semanticIssues?: readonly string[]
+  /** Normalized provider outcomes, not a claim about human ambiguity or authority. */
+  semanticChecks?: readonly SemanticCheck[]
   detector: MicroJudgeResult
   outcome: 'consistent' | 'clarify' | 'unavailable'
 }
@@ -195,6 +202,7 @@ export async function assessRequestIntent(
     semanticOutputDigest: string | undefined,
     providerDecisionId: string | undefined
   let semanticIssues: string[] = []
+  let semanticChecks: SemanticCheck[] | undefined
   if (service)
     try {
       const result = await service.evaluate(
@@ -213,6 +221,13 @@ export async function assessRequestIntent(
       if (result.status === 'completed') {
         semanticOutputDigest = canonicalContentHash(result.result)
         const answers = result.result.answers
+        semanticChecks = criteria.map(([criterion]) => {
+          const answer = answers.find(a => a.id === `semantic-${criterion}`)
+          if (answer?.status === 'abstained') return { criterion, status: 'abstained', reason: answer.reason }
+          if (answer?.status === 'selected' && (answer.choiceId === 'supported' || answer.choiceId === 'contradicted' || answer.choiceId === 'insufficient'))
+            return { criterion, status: 'selected', choiceId: answer.choiceId }
+          return { criterion, status: 'unassessed' }
+        })
         semanticIssues = criteria
           .filter(
             ([name]) =>
@@ -256,6 +271,7 @@ export async function assessRequestIntent(
   return {
     semantic,
     semanticIssues,
+    ...(semanticChecks ? { semanticChecks } : {}),
     semanticInputDigest,
     ...(semanticOutputDigest ? { semanticOutputDigest } : {}),
     ...(providerDecisionId ? { providerDecisionId } : {}),

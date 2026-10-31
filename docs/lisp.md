@@ -282,6 +282,22 @@ remain available when the AI loop is stopped:
 /kioku-lisp recover
 ```
 
+The default `status` view shows counts and up to three unresolved Lisp operations
+and three unresolved external operations, each with its exact `diagnostics` command.
+Successful operation IDs stay in `/kioku-lisp status --json`; ordinary status does
+not print the full history. Reading either view never starts or recovers a worker.
+
+An owned file proposal rejected by the host before dispatch is `NOT_APPLIED`,
+not an unknown mutation. The Lisp generation and its definitions remain usable;
+the host's preparation and permission checks still apply to any later attempt.
+An error after dispatch, even with identical text, remains `UNKNOWN`.
+
+`RECONCILIATION_REQUIRED` means external effects still lack a verifiable receipt.
+Inspect `/kioku-lisp diagnostics OPERATION_ID` and the original host evidence.
+A SIGTERM or job settlement message alone is not proof that the process and its
+resources stopped. `recover` or `abandon` cannot clear these external unknowns,
+and no interrupted command is automatically retried.
+
 In ordinary development conversations, `recover` starts a fresh worker after a
 timeout, output limit or Stop, including between turns. It needs no task setup;
 old turn permissions remain expired, and definitions/heap values are discarded.
@@ -430,9 +446,10 @@ The legacy lisp.approvalMode ask/auto configuration and profile commands remain 
 Use kioku_read/write/edit/remove/exec/result for observed work. Host receipts distinguish actual process outcome, source-bound verification and saving status. Lisp/model passed fields are advisory. Saving can be retried without repeating development effects; after restart an interrupted process remains unknown. See [owned execution](owned-execution.md).
 <!-- /kiokuko:runtime -->
 
-Pinned DSH stores this setting in the native `kiokuko-lisp` namespace, keyed by
-the host-owned profile identity. Current DSH exposes `lisp.approvalMode` through
-the native `kiokuko-dsh` configuration form and saves its profile patch. This
+Pinned DSH stores the approval setting in the native `kiokuko-lisp` namespace, keyed by
+the host-owned profile identity. Current DSH exposes `lisp.approvalMode`, the
+`startupDefaults` pair and `typedDecisions.provider` together through the native
+`kiokuko-dsh` configuration form, and saves the profile patch. This
 compatibility difference does not change the controls or scope. No separate
 preference file or database migration is used.
 
@@ -530,6 +547,7 @@ Clean installation and platform status: [code intelligence setup](code-intellige
 
 ## Coding task choice and recovery
 
-For a new coding task, `coding_workflow` first defines and displays the Goal, implementation items and observable conditions. The host then asks whether to use Lisp. Configuration alone never implies yes; an explicit manual session ON is reused as the selected route. Closing the question leaves it pending and `coding_workflow next` reopens the same question. Explicit continuation after a host restart restores the task choice; a new task or material scope change asks again. A saved yes followed by startup failure remains a visible blocker; recover the runtime or explicitly change the task route with `/kioku-lisp disable`. No uses ordinary tools and still requires fresh item checks followed by a final user-entry Goal check. Lisp evaluation success alone is insufficient: bind `task_completion` and collect actual host process evidence. See [coding workflow](coding-workflow.md).
+For a new coding task, `coding_workflow` first defines and displays the Goal, implementation items and observable conditions. The host then asks whether to use Lisp. Configuration alone never implies yes; an explicit manual session ON is reused as the selected route.
+`startupDefaults.lisp` (default `ask`) only preselects the Lisp answer on the task-startup card, which stays editable; a saved answer still wins. The default never enables the module or satisfies a yes: a missing runtime or failed startup remains the same recoverable blocker. Closing the question leaves it pending and `coding_workflow next` reopens the same question. Explicit continuation after a host restart restores the task choice; a new task or material scope change asks again. A saved yes followed by startup failure remains a visible blocker; recover the runtime or explicitly change the task route with `/kioku-lisp disable`. No uses ordinary tools and still requires fresh item checks followed by a final user-entry Goal check. Lisp evaluation success alone is insufficient: bind `task_completion` and collect actual host process evidence. See [coding workflow](coding-workflow.md).
 
 Live opt-in condition/restart recovery: see [bounded recovery](lisp-recovery.md).

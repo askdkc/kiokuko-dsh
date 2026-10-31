@@ -162,6 +162,44 @@ test('explicit startup settings do not wait for a headless question service',asy
 })
 
 
+test('a configured default preselects the card and still allows an override', async t => {
+  const f = await setup(t); let asked: any
+  const startup = new TaskStartup({ decisions: f.make(), root: () => '/repo', lisp: () => f.lisp,
+    defaults: () => ({ decision: 'on', lisp: 'off' }),
+    questions: { ask: async q => {
+      asked = q.questions[0]
+      // Only this option carries the native preset marker.
+      assert.deepEqual(asked.options.map((o: any) => o.label), [
+        'decision ON / Lisp ON', 'decision ON / Lisp OFF (Recommended)',
+        'decision OFF / Lisp ON', 'decision OFF / Lisp OFF', '取消・作業を保持',
+      ])
+      // The human overrides the preset with a different pair.
+      return { answers: [{ id: asked.id, selected: ['decision OFF / Lisp ON'] }] }
+    } }
+  })
+  await startup.prepare(request())
+  const bound = await f.make().bind(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }))
+  assert.deepEqual(bound.startup, { decision: false, lisp: true }, 'the explicit answer wins over the preset')
+  assert.equal(f.counts().enabled, true)
+})
+
+test('a configured default decides when no question service can ask', async t => {
+  const f = await setup(t)
+  const startup = new TaskStartup({ decisions: f.make(), root: () => '/repo', lisp: () => f.lisp,
+    defaults: () => ({ decision: 'on', lisp: 'on' }) })
+  await startup.prepare(request())
+  const bound = await f.make().bind(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }))
+  assert.deepEqual(bound.startup, { decision: true, lisp: true })
+  assert.equal(f.counts().enabled, true, 'the configured Lisp default enables the selected route')
+  // `ask` keeps the headless behaviour rather than inventing a preference.
+  const g = await setup(t, { mode: 'off' })
+  await new TaskStartup({ decisions: g.make(), root: () => '/repo', lisp: () => g.lisp,
+    defaults: () => ({ decision: 'ask', lisp: 'ask' }) }).prepare(request())
+  const kept = await g.make().bind(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }))
+  assert.equal(kept.mode, 'off', 'ask preserves the configured mode')
+  assert.equal(g.counts().enabled, false)
+})
+
 test('explicit manual OFF after startup ON overrides inherited continuation without changing the prior binding', async t => {
   const f=await setup(t), decisions=f.make(); let asks=0, override: {choice:'no';answerRef:string}|undefined
   const lisp={...f.lisp,manualOverride:()=>override}

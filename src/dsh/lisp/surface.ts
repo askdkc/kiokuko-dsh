@@ -1,5 +1,6 @@
-import { createLispHostDispatch } from './host-tool-dispatch.js'
-import { ManagedDispatchDenied } from '../managed-operation-runner.js'
+import { createLispHostDispatch, lispHostToolWasNotDispatched } from './host-tool-dispatch.js'
+import { formatLispStatus, type LispStatusView } from './status-text.js'
+import { ManagedDispatchDenied, managedAdmissionDenied } from '../managed-operation-runner.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -45,7 +46,7 @@ import { isSavedLispResultRead } from '../memory-application.js'
 import { attachmentInput, type LispAttachmentSession, type LispAttachmentStore } from './attachment-input.js'
 import { HttpTypeSafeClient } from '../typesafe/client.js'
 import { typeSafeCredentials } from '../typesafe/command.js'
-import { LISP_TOOLS, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
+import { LISP_TOOLS, LispError, failure, fail, identifier, renderResult, type LispConfiguration, type LispOwner, type LispTool } from './contracts.js'
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
@@ -98,6 +99,7 @@ function restrictInheritedTools(tools: Tools, scopedTools: Tools, agent: Agent, 
 }
 
 function text(value: unknown): string {
+  if (value && typeof value === 'object' && 'enabled' in value) return formatLispStatus(value as LispStatusView)
   const result = value as { state?: string; enabled?: boolean; ok?: boolean; message?: string; recovery?: string; error?: { message?: string; recovery?: string }; operations?: { id: string; state: string }[] }
   const hot = value as { tools?: { name: string; revision: number; bundleRef: string | null }[]; hot?: { tools: { name: string; revision: number; bundleRef: string | null }[] } }
   const shared = hot.tools ?? hot.hot?.tools
@@ -159,6 +161,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const execute = () => dispatchHostTool({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
       ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
     const result=await (taskLease ? withTaskAuthority(taskLease, execute) : execute()) as any
+    if (lispHostToolWasNotDispatched(result)) managedAdmissionDenied(new LispError(
+      'OWNED_EXECUTION_NOT_DISPATCHED', result.error?.message ?? JSON.stringify(result.content),
+      '元の要求とホストの拒否理由を確認してください。この変更は適用されておらず、Lisp の復旧は不要です。',
+    ))
     if(result.isError)fail('OWNED_EXECUTION_FAILED',JSON.stringify(result.content))
     return result.value
   }

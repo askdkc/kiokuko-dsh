@@ -126,9 +126,37 @@ Check it with `dsh --profile <profile> --dump-config`, using the same profile na
 
 The default development mode does not require Bubblewrap. The explicit protected compatibility mode does on Linux.
 Choose “使う” to use Lisp, “使わない” to use ordinary tools, or “取消・作業を保持” to cancel while preserving prepared work. Closing the question leaves implementation pending. Lisp choice and normal/Enno selection are separate. A failed Lisp startup remains a recoverable blocker until the selected route works or you explicitly change it.
+
+A Lisp default does not have to be chosen again for every task. Set `startupDefaults.lisp` to preselect it; the task card then marks that answer and still lets you change it. See [Startup defaults](#startup-defaults).
 Ordinary edits and tests run without further confirmation after that choice. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist. Completion requires current item evidence and a fresh final check through the user’s entry point. See [Goal-driven coding](docs/coding-workflow.md) and [owned execution, receipts and memory reuse](docs/owned-execution.md).
 See [setup, APIs, limits and recovery](docs/lisp.md).
 
+<a id="startup-defaults"></a>
+## Startup defaults for Lisp and decisions
+
+Every non-trivial task asks once whether to use typed decisions and Lisp, then remembers the answer for that request. Settings → General → **Kiokuko startup defaults** sets the answer that card preselects, so a routine task starts from your usual choice.
+
+| Setting | Values | Effect |
+|---|---|---|
+| `startupDefaults.decision` | `ask` (default), `on`, `off` | Preselects whether typed decisions are used, and decides it when no question UI is available |
+| `startupDefaults.lisp` | `ask` (default), `on`, `off` | Preselects whether Lisp is the execution route |
+| `typedDecisions.provider` | `typesafe` (default), `openai`, `nimble`, `laya-coreml` | Backend for new requests |
+
+`ask` leaves the card neutral and preserves the previous behaviour. A default only selects an answer that is already offered: it never grants execution authority, enables a disabled module, or skips the Lisp runtime, approval and Stop checks. The card still appears, still marks the alternative, and the answer picked there wins for that request.
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    startupDefaults:
+      decision: on
+      lisp: on
+    typedDecisions:
+      provider: openai
+```
+
+The provider default applies wherever no `/kioku-decisions use` selection was saved for this project. An explicit selection stays authoritative and is not overwritten; `use default` returns to the configured value. A provider whose configuration is incomplete, such as Nimble without an endpoint and model, still fails closed rather than substituting another backend.
+
+In a headless host with no question service, `ask` keeps the previous behaviour of following the existing configuration and manual session choice, while `on`/`off` supply that answer explicitly.
 ## Typed decisions (Jev / Laya / OpenAI / Nimble)
 
 Optional [automatic model selection](docs/model-selection.md#automatic-model-selection) chooses a validated `openai-codex` model and reasoning effort for a new normal task. It defaults to `modelAutoMode.mode: off`; `/kioku-model-auto on | observe | off | status` changes only the current session. `observe` measures a proposal without changing the model. It requires a ready Jev, Laya or OpenAI backend, dsh-codex, native model metadata and a token meter. Failed or unavailable classification keeps the current model; manual model selection takes priority.

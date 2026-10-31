@@ -129,6 +129,32 @@ answerReview:
 
 끄려면 `answerReview.mode: off`를 설정하세요. `typedDecisions` 설정을 이어받으며, 평가 추론과 최대 한 턴의 주 모델 호출이 추가되지만 첫 답변을 지연시키지는 않습니다. 선택한 provider를 사용할 수 없으면 검토를 건너뛰고 원래 답변을 유지하며, 다른 provider로 대체하지 않습니다. Laya v1의 결과는 worker 내부의 잘림을 확인할 수 없어 검증되지 않은 제안으로 취급합니다. `/kioku-decisions status`는 진행 상황과 건너뛴 이유를 보여 줄 뿐, 정확성을 보증하지 않습니다.
 
+<a id="startup-defaults"></a>
+## Lisp 및 판정 기본값
+
+일반 작업을 시작할 때 형식화된 판정과 Lisp 사용 여부를 한 번 묻고 그 요청 동안 선택을 유지합니다. 설정 → 일반 → **Kiokuko 작업 시작 시 기본값** 을 지정하면 이 카드가 미리 선택된 상태로 표시되어, 평소 선택으로 작업을 시작할 수 있습니다.
+
+| 설정 | 값 | 동작 |
+|---|---|---|
+| `startupDefaults.decision` | `ask`(기본), `on`, `off` | 형식화된 판정 사용 여부를 미리 선택하고, 질문 UI가 없으면 그 값으로 결정합니다 |
+| `startupDefaults.lisp` | `ask`(기본), `on`, `off` | Lisp를 실행 경로로 쓸지 미리 선택합니다 |
+| `typedDecisions.provider` | `typesafe`(기본), `openai`, `nimble`, `laya-coreml` | 새 요청에 사용할 판정 provider |
+
+`ask`는 카드를 미선택 상태로 두고 이전 동작을 유지합니다. 기본값은 이미 제시된 답변 하나를 미리 고를 뿐이며, 실행 권한을 늘리거나 비활성 모듈을 켜거나 Lisp의 시작·승인·Stop 검사를 생략하지 않습니다. 카드는 계속 표시되고 다른 선택지도 남으며, 그 자리에서 고른 답변이 해당 요청에서 기본값보다 우선합니다.
+
+```yaml
+- id: kiokuko-dsh
+  config:
+    startupDefaults:
+      decision: on
+      lisp: on
+    typedDecisions:
+      provider: openai
+```
+
+provider 기본값은 해당 프로젝트에 `/kioku-decisions use` 선택이 저장되지 않은 경우에만 적용됩니다. 명시적인 선택은 그대로 우선하며 기본값이 덮어쓰지 않습니다. `use default` 는 설정값으로 돌아갑니다. Nimble에 endpoint와 model이 없는 경우처럼 설정이 불완전한 provider는 다른 backend로 대체하지 않고 사용할 수 없는 상태로 남습니다.
+
+질문 서비스가 없는 헤드리스 환경에서 `ask` 는 기존 설정과 수동 세션 선택을 따르고, `on`／`off` 는 그 답변을 명시합니다.
 <a id="openai-decisions-setup"></a>
 ### OpenAI Decisions 설정
 

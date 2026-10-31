@@ -94,6 +94,8 @@ import { MemoryReuseConfig } from "../memory/reuse.js";
 import { createDecisionService } from "./decisions/host.js";
 import { createIntakeDiagnosticSink } from "./decisions/diagnostics.js";
 import { TypedDecisionsConfig } from "./decisions/config.js";
+import { StartupDefaultsConfig } from "./startup-defaults.js";
+import { readStartupDefaults } from "./live-config.js";
 import type { DecisionService } from "./decisions/service.js";
 
 import { AnswerReviewCoordinator } from "./answer-review/coordinator.js";
@@ -243,6 +245,7 @@ export interface DshHostAdapterOptions {
   readonly modelHandoff?: import("zod").z.input<typeof ModelHandoffConfig>;
   readonly modelAutoMode?: import("zod").z.input<typeof ModelAutoConfig>;
   readonly typedDecisions?: import("zod").z.input<typeof TypedDecisionsConfig>;
+  readonly startupDefaults?: import("zod").z.input<typeof StartupDefaultsConfig>;
   readonly memoryReuse?: import("zod").z.input<typeof MemoryReuseConfig>;
   readonly memoryRetrieval?: import("zod").z.input<
     typeof MemoryRetrievalConfig
@@ -977,7 +980,9 @@ export function createDshHostAdapter(
     return realpathSync(session.header.cwd);
   };
   const taskStartup = new TaskStartup({ decisions, ...(userQuestions ? { questions: userQuestions } : {}),
-    root: agent => answerCwd(agent as any), lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined });
+    root: agent => answerCwd(agent as any),
+    defaults: () => readStartupDefaults(ctx, StartupDefaultsConfig.parse(options.startupDefaults ?? {})),
+    lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined });
   const demand =
     hasDemandTools && agents && sessions
       ? new OnDemandIntake(

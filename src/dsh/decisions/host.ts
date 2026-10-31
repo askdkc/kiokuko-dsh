@@ -15,6 +15,7 @@ import { DecisionService, databaseDecisionStore } from './service.js'
 import { databaseDecisionSelection } from './selection-store.js'
 import { readDecisionDiagnostics, diagnosticRuntimeLosses, type DiagnosticRuntime } from './diagnostics.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
+import { DECISION_PROVIDER_SERVICE, type DecisionProviderSource } from '../live-config.js'
 
 export function createDecisionService(ctx: { get(name: string, strict?: boolean): unknown }, runtime: Pick<DshCoreRuntime, 'withDatabase'>, configuration: DecisionConfiguration = TypedDecisionsConfig.parse({}), memoryReuse: MemoryReuseConfiguration = MemoryReuseConfig.parse({}), semanticCompaction: SemanticCompactionConfiguration = SemanticCompactionConfig.parse({}), repositoryRoot = process.cwd()): DecisionService {
   const credentials = typeSafeCredentials(ctx)
@@ -44,6 +45,10 @@ export function createDecisionService(ctx: { get(name: string, strict?: boolean)
   }, databaseDecisionStore(runtime), { memoryReuse, semanticCompaction, repositoryRoot,
     selectionStore: databaseDecisionSelection(runtime, repositoryRoot, resolveDecisionConfiguration(configuration, repositoryRoot)),
     resolveConfiguration: (config, signal) => discoverLayaConfiguration(config, repositoryRoot, signal),
+    // The settings form may change the default provider; a saved `/kioku-decisions use`
+    // selection remains authoritative for this project.
+    configuredProvider: () => (ctx.get(DECISION_PROVIDER_SERVICE, false) as DecisionProviderSource | undefined)?.configured()
+      ?? configuration.provider,
     configurationCheck: async (config, signal) => {
       signal.throwIfAborted()
       if (config.provider === 'openai') { const value = await openAICredential().catch(()=>undefined); return value ? canonicalContentHash(value) : false }
@@ -87,6 +92,7 @@ export function mountDecisionCommand(commands: { register(definition: DshNativeC
           if (readiness.state !== 'ready') return { kind: 'error', text: `判定を利用できません (${readiness.reason ?? readiness.state})。Layaは start-laya、Jevは /kioku-typesafe-key status、OpenAIは OPENAI_API_KEY を確認してください。` }
         } else if (action && action !== 'status') return { kind: 'error', text: usage }
         const inspected = await service.inspectStatus(invocation.signal) as Record<string, unknown>
+
         const session=invocation.agent?.session as {id?:string;snapshotEvents?:()=>Array<{type:string;data?:{turn?:number}}>}|undefined
         const turn=session?.snapshotEvents?.().filter(event=>event.type==='turn/start').at(-1)?.data?.turn
         const bound=session?.id&&turn!==undefined&&Number.isSafeInteger(turn)&&turn>=0?await service.readStartup(dshTurnRequestId({dshSessionId:session.id,turn})):undefined

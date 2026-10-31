@@ -736,20 +736,26 @@ export class LispManager {
     }
     return true
   }
-  private managedUnresolved(owner: LispOwner): Promise<{operations:Array<{id:string;scopeId:string;route:string;kind:string;state:string;originalRef?:string}>;total:number;unknownCount:number;truncated:boolean}> {
+  private managedUnresolved(owner: LispOwner): Promise<{operations:Array<{id:string;scopeId:string;route:string;kind:string;state:string;originalRef?:string}>;total:number;unknownCount:number;unknownOperations:Array<{id:string;scopeId:string;route:string;kind:string;state:string;originalRef?:string}>;truncated:boolean}> {
     return this.#store.database(db => {
       // Safety decisions use the full set, never the bounded diagnostic page.
       const counts = db.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN o.state='unknown' THEN 1 ELSE 0 END),0) AS unknown_count
         FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
         WHERE json_extract(s.scope_json,'$.sessionId')=? AND o.state IN ('unknown','dispatching','running','prepared')`)
         .get<{total:number;unknown_count:number}>(owner.sessionId)!
+      const project = (row: {operation_json:string}) => {
+        const value=JSON.parse(row.operation_json)
+        return {id:value.operationId,scopeId:value.scopeId,route:value.route,kind:value.kind,state:value.state,...(value.originalRef?{originalRef:value.originalRef}:{})}
+      }
       const operations = db.prepare(`SELECT o.operation_json FROM dsh_managed_operations o JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
         WHERE json_extract(s.scope_json,'$.sessionId')=? AND o.state IN ('unknown','dispatching','running','prepared') ORDER BY o.rowid DESC LIMIT 100`)
-        .all<{operation_json:string}>(owner.sessionId).map(row => {
-          const value=JSON.parse(row.operation_json)
-          return {id:value.operationId,scopeId:value.scopeId,route:value.route,kind:value.kind,state:value.state,...(value.originalRef?{originalRef:value.originalRef}:{})}
-        })
-      return {operations,total:counts.total,unknownCount:counts.unknown_count,truncated:counts.total>operations.length}
+        .all<{operation_json:string}>(owner.sessionId).map(project)
+      // A compact human view must still identify an old unknown pushed off the diagnostic page.
+      const unknownOperations = counts.unknown_count ? db.prepare(`SELECT o.operation_json FROM dsh_managed_operations o
+        JOIN dsh_managed_scopes s ON s.scope_id=o.scope_id
+        WHERE json_extract(s.scope_json,'$.sessionId')=? AND o.state='unknown' ORDER BY o.rowid DESC LIMIT 3`)
+        .all<{operation_json:string}>(owner.sessionId).map(project) : []
+      return {operations,total:counts.total,unknownCount:counts.unknown_count,unknownOperations,truncated:counts.total>operations.length}
     })
   }
   async status(owner: LispOwner, offset?: number): Promise<unknown> {
@@ -766,7 +772,7 @@ export class LispManager {
     const summary = await this.#store.operationSummaries(owner.sessionId, offset)
     const taskSummary = taskMode ? await this.#store.taskSummary(owner) : undefined
     const operations = summary.operations.map(o => ({ id: o.operation_id, agent: o.agent_id, kind: o.kind, state: o.state, updatedAt: o.updated_at }))
-    return { approval, enabled: true, managedOperations, managedOperationCount:managed.total, managedOperationsTruncated:managed.truncated, managedReconciliationRequired:managedReconciliation, state: managedReconciliation ? 'RECONCILIATION_REQUIRED' : unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
+    return { approval, enabled: true, managedOperations, managedUnknownOperations:managed.unknownOperations, managedOperationCount:managed.total, managedOperationsTruncated:managed.truncated, managedReconciliationRequired:managedReconciliation, state: managedReconciliation ? 'RECONCILIATION_REQUIRED' : unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
       generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null,
       runtimePid: state.worker?.runtimePid ?? null, repositoryRoot:state.worker?.repositoryRoot ?? null,
       owner:{hostPid:process.pid,sessionId:owner.sessionId,agentId:owner.agentId},
@@ -776,10 +782,10 @@ export class LispManager {
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
       limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: this.#config.executionMode==='development'?'normal-user-environment':process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
-      operations,
+      operations, operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates,
       ...(taskSummary ? { task: taskSummary } : {}),
       hot: await this.#hot.status(owner),
-      ...(offset === undefined ? {} : { operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates, offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
+      ...(offset === undefined ? {} : { offset, nextOffset: offset + 10 < summary.count ? offset + 10 : null }),
       recovery: managedReconciliation ? 'Managed operations remain unresolved. Inspect the listed operation IDs and original receipts; restarting or abandoning Lisp does not reconcile external effects.' : unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {

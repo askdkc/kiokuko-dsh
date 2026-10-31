@@ -5,6 +5,7 @@ import { SemanticCompactionConfig } from './semantic-compaction/contracts.js'
 import { ModelHandoffConfig } from './model-handoff.js'
 import { MemoryReuseConfig } from '../memory/reuse.js'
 import { TypedDecisionsConfig } from './decisions/config.js'
+import { StartupDefaultsConfig } from './startup-defaults.js'
 import { MemoryReviewConfig } from '../memory/review/contracts.js'
 export { MemoryReviewConfig }
 import { AkinatorMemoryConfig } from '../akinator/memory-probe-types.js'
@@ -89,6 +90,8 @@ export const Config = z.object({
   skillPrompts: SkillPromptsConfig.prefault({}),
   lisp: LispConfig.prefault({}),
   typedDecisions: TypedDecisionsConfig.prefault({}),
+  /** Preselected answers for the per-task decision/Lisp card; `ask` keeps no preset. */
+  startupDefaults: StartupDefaultsConfig.prefault({}),
   answerReview: AnswerReviewConfig.prefault({}),
   completion: CompletionConfig.prefault({}),
   memoryReuse: MemoryReuseConfig.prefault({}),

@@ -2,6 +2,7 @@
 
 Choose a guide by what you need to do:
 
+- [Startup defaults for Lisp and decisions](../README.md#startup-defaults) — preselect the per-task card answer and set the decision provider.
 - [OpenAI Decisions setup](../README.md#openai-decisions-setup) — API key, credential file paths, automatic reload, precedence and provider switching; [detailed configuration](typed-decisions.md#openai-credentials).
 - [Getting started](getting-started.md) — install and run the DeepSeek Harness plugin.
 - [Concepts](concepts.md) — RAG, memory lifecycle, Project/Ecosystem/Global scopes, and Akinator.

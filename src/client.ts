@@ -68,6 +68,18 @@ interface LispApprovalScope {
   mutate?(ops: { op: 'set'; path: string[]; value: unknown }[]): Promise<boolean>
 }
 
+const STARTUP_MODE_LABELS: Record<string, string> = {
+  ask: 'Ask each task (no preset)',
+  on: 'Use by default',
+  off: 'Do not use by default',
+}
+const DECISION_PROVIDERS = ['typesafe', 'openai', 'nimble', 'laya-coreml'] as const
+const PROVIDER_LABELS: Record<string, string> = {
+  typesafe: 'Jev (TypeSafe)',
+  openai: 'OpenAI Decisions',
+  nimble: 'Nimble',
+  'laya-coreml': 'Laya-CoreML (local)',
+}
 function LispApprovalControl(props: Record<string, unknown>): unknown {
   const scope = props.approvalScope as LispApprovalScope
   const [state, setState] = useState(() => scope.getSnapshot())
@@ -92,6 +104,51 @@ function LispApprovalControl(props: Record<string, unknown>): unknown {
         children: [jsx('option', { value: 'ask', children: 'Ask' }), jsx('option', { value: 'auto', children: 'Auto-approve all' })] }),
     ] }) }),
     ...(state.status === 'ready' && state.writable ? [] : [jsx('span', { children: ' Profile settings are unavailable or read-only.' })]),
+    ...(error ? [jsx('span', { role: 'alert', children: error })] : []),
+    ...(busy ? [jsx('span', { role: 'status', children: 'Saving…' })] : []),
+  ] })
+}
+
+/**
+ * The profile defaults a new task starts from. The startup card marks the
+ * configured pair and still lets every task choose otherwise; the provider
+ * default applies wherever no saved `/kioku-decisions use` selection exists.
+ */
+function StartupDefaultsControl(props: Record<string, unknown>): unknown {
+  const scope = props.approvalScope as LispApprovalScope
+  const [state, setState] = useState(() => scope.getSnapshot())
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => scope.subscribe(() => setState(scope.getSnapshot())), [scope])
+  const modern = props.modern === true
+  const startup = (state.value?.startupDefaults ?? {}) as { decision?: string; lisp?: string }
+  const provider = (state.value?.typedDecisions as { provider?: string } | undefined)?.provider ?? 'typesafe'
+  const ready = state.status === 'ready' && state.writable && modern
+  const save = async (ops: { op: 'set'; path: string[]; value: unknown }[]) => {
+    if (busy || !ready) return
+    setBusy(true); setError('')
+    try {
+      const saved = await scope.mutate!(ops)
+      if (saved === false) throw new Error('The host did not save these defaults. Reload the current values and try again.')
+    } catch (error) { setError(messageOf(error)) }
+    finally { setBusy(false) }
+  }
+  const modeSelect = (label: string, field: 'decision' | 'lisp', value: string) => jsx('label', { children: jsxs(Fragment, { children: [
+    `${label} `,
+    jsxs('select', { 'aria-label': label, value, disabled: busy || !ready,
+      onChange: (event: { target: { value: string } }) => void save([{ op: 'set', path: ['startupDefaults', field], value: event.target.value }]),
+      children: Object.entries(STARTUP_MODE_LABELS).map(([mode, text]) => jsx('option', { value: mode, children: text }, mode)) }),
+  ] }) })
+  return jsxs('div', { children: [
+    modeSelect('Decisions by default', 'decision', startup.decision ?? 'ask'),
+    modeSelect('Lisp by default', 'lisp', startup.lisp ?? 'ask'),
+    jsx('label', { children: jsxs(Fragment, { children: [
+      'Decision provider ',
+      jsxs('select', { 'aria-label': 'Decision provider', value: provider, disabled: busy || !ready,
+        onChange: (event: { target: { value: string } }) => void save([{ op: 'set', path: ['typedDecisions', 'provider'], value: event.target.value }]),
+        children: DECISION_PROVIDERS.map(id => jsx('option', { value: id, children: PROVIDER_LABELS[id] }, id)) }),
+    ] }) }),
+    ...(ready ? [] : [jsx('span', { children: ' These defaults need the native plugin settings form; edit the profile YAML instead.' })]),
     ...(error ? [jsx('span', { role: 'alert', children: error })] : []),
     ...(busy ? [jsx('span', { role: 'status', children: 'Saving…' })] : []),
   ] })
@@ -1314,6 +1371,10 @@ export function apply(ctx: DshClientContext): void {
     scope.slots.inject('settings.general.item', () => scope.slots.register({ name: 'settings.general.item', id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
       inject: () => ({ approvalScope, modern }),
     }, LispApprovalControl))
+    // Only the native plugin form persists these, so the legacy scope omits them.
+    if (modern) scope.slots.inject('settings.general.item', () => scope.slots.register({ name: 'settings.general.item', id: 'kiokuko-startup-defaults', locale: LOCALE_NAMESPACE,
+      inject: () => ({ approvalScope, modern }),
+    }, StartupDefaultsControl))
   }
   ctx.inject?.(['settingsScope'], scope => installApprovals(scope, scope.settingsScope!.bind({namespace: 'kiokuko-lisp'}), false))
   ctx.inject?.(['configForms'], scope => installApprovals(scope, scope.configForms!.get('kiokuko-dsh'), true))

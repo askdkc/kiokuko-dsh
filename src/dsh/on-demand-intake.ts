@@ -1433,6 +1433,7 @@ export class OnDemandIntake {
         prepared: false,
         status: 'assessment_unavailable',
         semantic: a.semantic,
+        semanticChecks: a.semanticChecks ?? [],
         detector:
           a.detector.state === 'unavailable'
             ? a.detector.reason
@@ -1454,11 +1455,17 @@ export class OnDemandIntake {
       state.assessment?.result.semantic === 'insufficient' &&
       reason.candidate
     ) {
+      const assessment = state.assessment.result
+      const issues = assessment.semanticIssues ?? []
+      const unresolved = assessment.semanticChecks?.filter(check => issues.includes(check.criterion)) ?? []
+      const providerUncertain = issues.length > 0 && unresolved.length === issues.length && unresolved.every(check =>
+        check.status === 'abstained' && (check.reason === 'uncertain' || check.reason === 'tie'))
       return {
         prepared: false,
         status: 'assessment_rejected',
         semantic: state.assessment.result.semantic,
         semanticIssues: state.assessment.result.semanticIssues ?? [],
+        semanticChecks: assessment.semanticChecks ?? [],
         originalTask: state.task,
         requestIntent: reason.candidate,
         currentReferences: context
@@ -1466,9 +1473,10 @@ export class OnDemandIntake {
           : [],
         availableReferences: context ? requestIntentReferenceIds(context) : [],
         permissions: 'unchanged_native_policy',
-        nextAction: 'revise_request_intent_or_report_conflict',
-        detail:
-          'The independent comparison did not establish the submitted candidate. Re-read the captured request, answers, active task and same-session plan. Cite an existing proposal only when the request adopts it. Correct the candidate or report the specific unresolved comparison; do not repeat an identical submission or ask the human to supply internal classification fields. Ask a concrete question only if the source itself leaves an action or target ambiguous. No work is prepared.',
+        nextAction: providerUncertain ? 'report_assessment_uncertainty' : 'revise_request_intent_or_report_conflict',
+        detail: providerUncertain
+          ? 'The independent provider abstained because of confidence or tied choices. This does not establish ambiguity in the user request or an incorrect candidate. Preserve the request and candidate and report the unresolved provider assessment. Do not resubmit an identical candidate, change its meaning merely to obtain acceptance, ask the human for internal classification fields, or bypass preparation. No work is prepared.'
+          : 'The independent comparison did not establish the submitted candidate. Re-read the captured request, answers, active task and same-session plan. Cite an existing proposal only when the request adopts it. Correct the candidate or report the specific unresolved comparison; do not repeat an identical submission or ask the human to supply internal classification fields. Ask a concrete question only if the source itself leaves an action or target ambiguous. No work is prepared.',
       }
     }
     const replies =
@@ -1498,6 +1506,7 @@ export class OnDemandIntake {
         status: 'assessment_rejected',
         semantic: state.assessment?.result.semantic,
         semanticIssues: state.assessment?.result.semanticIssues ?? [],
+        semanticChecks: state.assessment?.result.semanticChecks ?? [],
         detector:
           state.assessment?.result.detector.state === 'available'
             ? state.assessment.result.detector.result.status
@@ -1555,6 +1564,7 @@ export class OnDemandIntake {
         ? {
             semantic: state.assessment?.result.semantic,
             semanticIssues: state.assessment?.result.semanticIssues ?? [],
+            semanticChecks: state.assessment?.result.semanticChecks ?? [],
           }
         : {}),
       permissions: 'unchanged_native_policy',

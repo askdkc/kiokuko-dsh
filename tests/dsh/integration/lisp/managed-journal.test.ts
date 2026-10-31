@@ -77,6 +77,7 @@ test('session admission after manager restart recovers orphan native dispatch be
     const pagedStatus=await manager.status(owner) as any
     assert.equal(pagedStatus.managedOperations.length,100)
     assert.equal(pagedStatus.managedOperations.some((item:any)=>item.id===operation.operationId),false)
+    assert.equal(pagedStatus.managedUnknownOperations[0].id,operation.operationId,'compact status retains the exact old unknown beyond the ordinary diagnostic page')
     assert.equal(pagedStatus.managedOperationCount,102)
     assert.equal(pagedStatus.managedOperationsTruncated,true)
     assert.equal(pagedStatus.state,'RECONCILIATION_REQUIRED')

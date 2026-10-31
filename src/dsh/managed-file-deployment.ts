@@ -1,4 +1,4 @@
-import { chmod, link, lstat, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, mkdtemp, rename, rm, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { readRegularFile, type RegularFileSnapshot } from '../config/read-regular-file.js'
 import { KiokukoError } from '../errors.js'
@@ -66,5 +66,21 @@ export async function publishFile(home: string, file: DeploymentFile): Promise<'
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
+}
+
+/**
+ * Restore an absent pre-setup state. Writing zero bytes instead would leave a
+ * managed file that no later setup inserts into, so removal is the only faithful
+ * restore. The same identity guard as publishFile rejects a concurrent rewrite.
+ */
+export async function retireManagedFile(home: string, file: DeploymentFile): Promise<'removed' | 'unchanged'> {
+  await deploymentParent(home, file.target, false)
+  const current = await readRegularFile(file.target, { containmentRoot: home })
+  if (current === undefined) return 'unchanged'
+  if (!sameSnapshot(current, file.previous)) {
+    throw new KiokukoError('CONFLICT', `Managed file changed during synchronization: ${file.target}`)
+  }
+  await unlink(file.target)
+  return 'removed'
 }
 

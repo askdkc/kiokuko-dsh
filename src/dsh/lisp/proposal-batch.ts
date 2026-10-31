@@ -5,6 +5,7 @@ import { confirm, type ApprovalQuestions } from './approval.js'
 import { digest, fail, failure, LispError, type LispOwner, type ProposalInput } from './contracts.js'
 import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents, type FileSnapshot } from './files.js'
 import type { LispStore } from './store.js'
+import { isManagedAdmissionDenied } from '../managed-operation-runner.js'
 
 export interface ChangeOutcome {
   id: string; path: string; state: 'APPLIED' | 'UNCHANGED' | 'NOT_APPLIED' | 'UNKNOWN';
@@ -61,7 +62,7 @@ export class LispProposalBatch {
           const state=result.applied?'APPLIED':result.receipt?.state==='unknown'?'UNKNOWN':'NOT_APPLIED'
           outcomes.push({id:`${evalId}:${index}`,path:request.path,state,...(result.receipt?.error?{message:result.receipt.error}:{})})
           if(state!=='APPLIED')break
-        }catch(error){const problem=failure(error);outcomes.push({id:`${evalId}:${index}`,path:request.path,state:attempted?'UNKNOWN':'NOT_APPLIED',code:problem.code,message:problem.message});break}
+        }catch(error){const problem=failure(error);outcomes.push({id:`${evalId}:${index}`,path:request.path,state:attempted&&!isManagedAdmissionDenied(error)?'UNKNOWN':'NOT_APPLIED',code:problem.code,message:problem.message});break}
       }
       for(const [index,request] of requests.entries())if(!outcomes.some(outcome=>outcome.path===request.path))outcomes.push({id:`${evalId}:${index}`,path:request.path,state:'NOT_APPLIED',reason:'batch_stopped'})
       return outcomes
