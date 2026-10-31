@@ -17,6 +17,12 @@ permissions, and disposable-profile result independently.
 | npm lifecycle | `prepare: npm run build` |
 | Automatic size policy | intentionally exceeded; manual `user-reviewed` track |
 
+This table records the **0.1.3 review snapshot**, including its original lifecycle
+command; it is not the current package's release evidence. Current source uses
+`prepare: node scripts/prepare-build.mjs` with normal builds and an explicit CI-only
+deferral. See [current lifecycle and permissions](../PERMISSIONS.md#installation-lifecycle)
+and [CI build ownership](verification.md#consolidated-duplicate-invocations).
+
 The Commit field is filled only after the user commits and pushes the verified
 working tree. The catalog must point to that full immutable Commit, not a branch
 name or moving tag.

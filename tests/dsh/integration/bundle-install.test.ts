@@ -50,7 +50,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
   }
   assert.equal(packageManifest.name, 'kiokuko-dsh')
-  assert.equal(packageManifest.scripts?.prepare, 'npm run build')
+  assert.ok(packageManifest.scripts?.prepare?.trim(), 'source installs must declare a prepare hook')
+  assert.ok(packageManifest.files?.includes('scripts/prepare-build.mjs'), 'the prepare helper must ship with the package')
   assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
   assert.equal(packageManifest.exports?.['./package.json'], './package.json')
   assert.equal(packageManifest.exports?.['./locale/*.json'], './dist/locale/*.json')
@@ -107,8 +108,11 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
   assert.equal(bundledConfig?.agenticReplay?.enabled, true)
   assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
 
-  await run('npm', ['run', 'build'])
-  await access(join(repositoryRoot, 'dist/dsh/index.js'))
+  const builtEntry = join(repositoryRoot, 'dist/dsh/index.js')
+  // Exercise the public hook and reject a successful no-op using stale dist.
+  await rm(builtEntry, { force: true })
+  await run('npm', ['run', 'prepare'], { KIOKUKO_CI_DEFER_PREPARE: '' })
+  await access(builtEntry)
   assert.equal(plugin.name, 'kiokuko-dsh')
   assert.equal('default' in plugin, false)
 
@@ -128,6 +132,10 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     assert.match(archive.stdout, /package\/dist\/index\.js\n/)
     assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
     assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
+    assert.match(archive.stdout, /package\/scripts\/prepare-build\.mjs\n/)
+    const packedPrepare = await run('tar', ['-xOzf', tarball, 'package/scripts/prepare-build.mjs'])
+    assert.equal(packedPrepare.stdout, await readFile(join(repositoryRoot, 'scripts/prepare-build.mjs'), 'utf8'),
+      'the packed prepare helper must match the source exercised by this test')
     const installedPatch = YAML.parse((await run('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
     assert.deepEqual(installedPatch, patch, 'the installed bundle retains both independent provider and execution rows')
     assert.ok(installedPatch[1]?.insert?.[1]?.inject?.includes('subagents'))

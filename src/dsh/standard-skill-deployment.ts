@@ -1,4 +1,4 @@
-import { realpath } from 'node:fs/promises'
+import { readdir, realpath, rmdir, unlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { readRegularFile } from '../config/read-regular-file.js'
@@ -15,8 +15,14 @@ export interface StandardSkillDeployment {
   readonly unchanged: number
 }
 
+export interface StandardSkillRetirement {
+  readonly directory: string
+  readonly removed: number
+  readonly preserved: number
+}
+
 /** Preflight all standard Skills plus Japanese output without writing files. */
-export async function planStandardSkills(homeDirectory: string = os.homedir()): Promise<{ home: string; directory: string; files: DeploymentFile[] }> {
+export async function planStandardSkills(homeDirectory: string = os.homedir(), options: { preserveUnmanaged?: boolean } = {}): Promise<{ home: string; directory: string; files: DeploymentFile[] }> {
   if (!path.isAbsolute(homeDirectory) || homeDirectory.includes('\0') || path.resolve(homeDirectory) === path.parse(homeDirectory).root) {
     throw new KiokukoError('VALIDATION_ERROR', 'Standard Skill deployment requires an absolute user home')
   }
@@ -35,8 +41,8 @@ export async function planStandardSkills(homeDirectory: string = os.homedir()): 
     const target = path.join(directory, bundled.directoryName, bundled.relativePath)
     await deploymentParent(home, target, false)
     const previous = await readRegularFile(target, { containmentRoot: home })
-    const rendered = renderStandardSkillFile(previous?.content, bundled, target)
-    files.push({ target, content: rendered.content, previous })
+    const content = options.preserveUnmanaged ? bundled.content : renderStandardSkillFile(previous?.content, bundled, target).content
+    files.push({ target, content, previous })
   }
   return { home, directory, files }
 }
@@ -49,5 +55,66 @@ export async function synchronizeStandardSkills(homeDirectory: string = os.homed
     else result[await publishFile(home, file)]++
   }
   // Atomicity is per file. An interrupted tree is completed on the next plugin load.
+  return result
+}
+
+async function countUnplannedEntries(directory: string, planned: ReadonlySet<string>): Promise<number> {
+  let entries
+  try { entries = await readdir(directory, { withFileTypes: true }) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+    throw error
+  }
+  let count = 0
+  for (const entry of entries) {
+    const target = path.join(directory, entry.name)
+    if (entry.isDirectory()) count += await countUnplannedEntries(target, planned)
+    else if (!planned.has(target)) count++
+  }
+  return count
+}
+
+async function removeEmptyDeploymentDirectories(directory: string, files: readonly DeploymentFile[]): Promise<void> {
+  const directories = new Set<string>()
+  for (const file of files) {
+    let current = path.dirname(file.target)
+    while (current !== directory && current.startsWith(`${directory}${path.sep}`)) {
+      directories.add(current)
+      current = path.dirname(current)
+    }
+  }
+  for (const target of [...directories].sort((left, right) => right.length - left.length)) {
+    try { await rmdir(target) } catch { /* Preserve non-empty, absent, or otherwise unavailable directories. */ }
+  }
+}
+
+/** Remove only deployed files that still match this package byte-for-byte. */
+export async function retireStandardSkills(homeDirectory: string = os.homedir(), options: { check?: boolean } = {}): Promise<StandardSkillRetirement> {
+  const { home, directory, files } = await planStandardSkills(homeDirectory, { preserveUnmanaged: true })
+  const planned = new Set(files.map(file => file.target))
+  const result = { directory, removed: 0, preserved: await countUnplannedEntries(directory, planned) }
+  for (const file of files) {
+    if (file.previous === undefined) continue
+    if (file.previous.content !== file.content) {
+      result.preserved++
+      continue
+    }
+    if (options.check) {
+      result.removed++
+      continue
+    }
+    const current = await readRegularFile(file.target, { containmentRoot: home })
+    if (current === undefined) continue
+    if (current.content !== file.content) {
+      result.preserved++
+      continue
+    }
+    try {
+      await unlink(file.target)
+      result.removed++
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  if (!options.check) await removeEmptyDeploymentDirectories(directory, files)
   return result
 }

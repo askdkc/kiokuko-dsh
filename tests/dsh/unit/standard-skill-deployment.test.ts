@@ -3,7 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeF
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test, { type TestContext } from 'node:test'
-import { synchronizeStandardSkills } from '../../../src/dsh/standard-skill-deployment.js'
+import { retireStandardSkills, synchronizeStandardSkills } from '../../../src/dsh/standard-skill-deployment.js'
 import { loadStandardSkillParity } from '../../../src/dsh/standard-skill-integrity.js'
 
 async function fixture(t: TestContext): Promise<string> {
@@ -97,4 +97,45 @@ test('Japanese Skill without a management marker is preserved even with the corr
   await assert.rejects(synchronizeStandardSkills(home), { code: 'CONFLICT' })
   assert.equal(await readFile(target, 'utf8'), userContent)
   assert.deepEqual(await readdir(path.join(home, '.agents', 'skills')), ['japanese-translation-for-oss-models'])
+})
+
+test('retirement removes only byte-identical bundled files, preserves user files, and is idempotent', async t => {
+  const home = await fixture(t)
+  const deployed = await synchronizeStandardSkills(home)
+  const japaneseDirectory = path.join(deployed.directory, 'japanese-translation-for-oss-models')
+  const japanesePath = path.join(japaneseDirectory, 'SKILL.md')
+  const customized = 'User-owned Skill with the same directory and filename\n'
+  await writeFile(japanesePath, customized)
+  const notesPath = path.join(deployed.directory, 'notes.txt')
+  await writeFile(notesPath, 'user notes')
+
+  assert.deepEqual(await retireStandardSkills(home), {
+    directory: deployed.directory,
+    removed: 42,
+    preserved: 2,
+  })
+  assert.deepEqual((await readdir(deployed.directory)).sort(), ['japanese-translation-for-oss-models', 'notes.txt'])
+  assert.equal(await readFile(japanesePath, 'utf8'), customized)
+  assert.equal(await readFile(notesPath, 'utf8'), 'user notes')
+
+  assert.deepEqual(await retireStandardSkills(home), {
+    directory: deployed.directory,
+    removed: 0,
+    preserved: 2,
+  })
+  assert.deepEqual(await readdir(japaneseDirectory), ['SKILL.md'])
+  assert.equal(await readFile(notesPath, 'utf8'), 'user notes')
+})
+
+test('retirement check reports removable files without changing the deployed tree', async t => {
+  const home = await fixture(t)
+  const deployed = await synchronizeStandardSkills(home)
+  assert.deepEqual(await retireStandardSkills(home, { check: true }), {
+    directory: deployed.directory,
+    removed: 43,
+    preserved: 0,
+  })
+  assert.equal((await readdir(deployed.directory)).length, 17)
+  assert.equal(await readFile(path.join(deployed.directory, 'kiokuko-soul', 'SKILL.md'), 'utf8'),
+    (await loadStandardSkillParity()).files.find(file => file.skillName === 'kiokuko-soul' && file.relativePath === 'SKILL.md')!.content)
 })

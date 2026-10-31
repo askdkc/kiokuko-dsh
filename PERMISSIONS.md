@@ -39,8 +39,10 @@ Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
   the startup directory’s `AGENTS.md` with the DSH host-owned contract. Preserves
   instructions outside the markers; absent or unmanaged files stay untouched.
   Refuses linked files or ambiguous markers. The bundled `scripts/setup-dsh.mjs`
-  provides the same repair for an explicit workspace and a read-only `--check`.
-  It does not scan parent/global instruction files or other session workspaces.
+  provides the same repair for an explicit workspace, a read-only `--check`, and
+  explicit `--remove` retirement of byte-identical deployed files and its managed
+  block. It does not scan parent/global instruction files or other session
+  workspaces.
 - On plugin load, enumerates stored DSH session IDs and validates each history.
   When DSH rejects a v3 history containing legacy Kiokuko informational
   events, reads that exact native session file and marks the five supported

@@ -220,6 +220,20 @@ Released v0/v1/v2/v3 history readers are bundled privately into the npm artifact
 
 ## Remove
 
+| Target | After `dsh plugin remove` | How to remove it |
+|---|---|---|
+| DSH rows (`kiokuko-dsh` / `kiokuko-models`) | Removed; the stock export row is restored | No further action |
+| Deployed Skills under `~/.agents/skills` | Remain | `setup-dsh.mjs --remove` |
+| DSH block in `AGENTS.md` | Remains | `setup-dsh.mjs --remove` |
+| `kiokuko-models.json` | Remains | Remove manually only when the saved provider definitions are no longer needed |
+| Kiokuko database and `.agenticreplay/runs` | Remain intentionally | Do not remove them as part of plugin removal |
+
+Disable individual rows when temporarily turning Kiokuko off. Disabling the whole
+bundle also removes the provider referenced by `agent-default-model`, leaving its
+default-model binding unresolved. `patchReload: "live"` has no reader in the
+current DSH and must not be treated as evidence that a profile change took effect
+immediately.
+
 ```bash
 dsh plugin --profile web remove kiokuko-dsh
 ```
@@ -268,19 +282,24 @@ block in the startup directory’s `AGENTS.md`, as described below.
 ## Bundled standard Skills: canonical source and refresh
 
 The repository's `skills/<name>/` directories are the single canonical source
-for the eight standard Skills and for the bundled Japanese output Skill.
+for the 16 standard Skills and for the separately bundled Japanese output and
+Lisp Skills.
 `src/dsh/standard-skills.ts` resolves them relative to the built module
 (`dist/dsh/` → `../../skills/<name>`), and `src/dsh/standard-skill-integrity.ts`
 refuses to load a tree that breaks the manifest: exactly one management marker
 per file, frontmatter `name` equal to the manifest name with a non-empty
 description and no `disable-model-invocation`, every local Markdown link
-resolvable inside its own Skill, and exactly 8 Skills with 27 Markdown files and
-19 reference files.
+resolvable inside its own Skill, and exactly 16 standard Skills with 42 Markdown
+files and 26 reference files.
 
-The Japanese output Skill is an additional ninth Skill. Its directory is
+The Japanese output Skill and Lisp Skill bring the package inventory to 18 Skill
+directories. The Japanese output directory is
 `japanese-translation-for-oss-models/`; its frontmatter/provider name is
-`natural-japanese-output`. Both names refer to the same Skill. Deployment includes
-all nine Skills and 28 Markdown files, including the 19 references.
+`natural-japanese-output`. Both names refer to the same Skill. Setup deploys the
+16 standard Skills plus
+Japanese output: 17 directories and 43 files, including the 26 references. Lisp
+is supplied through the DSH Skill provider and is not installed globally by this
+setup path.
 
 `veteran-programmer-skill` checks workflow completeness before and after changes
 spanning setup, delivery, persisted state or runtime handoffs. SOUL and the code
@@ -300,8 +319,9 @@ alone does not establish remaining input budget or model quality.
 The enabled plugin runs setup on every load, before registering its DSH surfaces:
 
 1. Validate the bundled Skills and preflight the deployment targets.
-2. Synchronize all eight managed Skill directories to the process user's
-   `~/.agents/skills/`, creating missing files and replacing stale managed files.
+2. Synchronize all 16 standard Skill directories and the Japanese output Skill
+   to the process user's `~/.agents/skills/`, creating missing files and replacing
+   stale managed files.
 3. Replace the existing `<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->` through
    `<!-- END KIOKUKO-DSH MANAGED BLOCK -->` section of the startup directory's
    `AGENTS.md` with the DSH contract. Preserve all text outside those markers.
@@ -356,6 +376,9 @@ npm run build
 node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
 node scripts/setup-dsh.mjs --cwd /absolute/path/to/project
 node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --check
+# Explicitly remove byte-identical deployed copies and the DSH AGENTS.md block.
+node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --remove
+node scripts/setup-dsh.mjs --cwd /absolute/path/to/project --remove --check
 ```
 
 The same `scripts/setup-dsh.mjs` ships in the installed package. Use the **actual
@@ -374,8 +397,8 @@ runtime user. Check the reported paths: a successful source build or bundled
 parity check alone does not prove that another process's deployed files match.
 
 `node scripts/verify-standard-skills.mjs` remains a source/bundle integrity check
-for the eight standard Skills (27 files, 19 references). Use `setup-dsh.mjs --check`
-for the complete nine-Skill deployment **and** project instruction check.
+for the 16 standard Skills (42 files, 26 references). Use `setup-dsh.mjs --check`
+for the complete 17-directory, 43-file deployment **and** project instruction check.
 
 ## STORE contract and permissions
 
@@ -402,9 +425,14 @@ Runtime effects are explicit:
 - optional GitHub or embedding credentials are supplied by the user and are
   never bundled or persisted by the plugin.
 
-`prepare` runs only `npm run build`. Git installs need build approval in the
-consuming profile; use the repository-scoped rule in [Install](#install) so
-ordinary updates do not require another commit-specific permission.
+`prepare` runs `node scripts/prepare-build.mjs`, which normally builds through
+the invoking package manager. Only `CI=true` together with
+`KIOKUKO_CI_DEFER_PREPARE=1` defers this package's duplicate build to the selected
+verifier's clean build; dependency lifecycle scripts remain enabled. See
+[CI build ownership](verification.md#consolidated-duplicate-invocations).
+Git installs still need build approval in the consuming profile; use the
+repository-scoped rule in [Install](#install) so ordinary updates do not require
+another commit-specific permission.
 
 The npm tarball already contains `dist/`, so its normal install path does not
 depend on a consumer-side build permission.

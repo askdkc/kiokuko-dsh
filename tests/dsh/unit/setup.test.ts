@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'n
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { DSH_MANAGED_BLOCK, renderDshInstructions, setupDsh } from '../../../src/dsh/setup.js'
+import { DSH_MANAGED_BLOCK, removeDshSetup, renderDshInstructions, renderDshRemoval, setupDsh } from '../../../src/dsh/setup.js'
 
 const begin = '<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->'
 const end = '<!-- END KIOKUKO-DSH MANAGED BLOCK -->'
@@ -157,4 +157,51 @@ test('setup refreshes generated ownership and semantic theme guidance once while
   assert.equal(await readFile(options.agents, 'utf8'), first)
   assert.equal((await setupDsh(options)).instructions.status, 'unchanged')
   assert.equal(await readFile(options.agents, 'utf8'), first)
+})
+
+test('removal restores surrounding bytes with the existing newline convention and leaves foreign instructions unchanged', () => {
+  const lf = `prefix\n${DSH_MANAGED_BLOCK}\nsuffix`
+  assert.equal(renderDshRemoval(lf), 'prefix\nsuffix')
+  const crlf = `prefix\r\n${DSH_MANAGED_BLOCK.replaceAll('\n', '\r\n')}\r\nsuffix`
+  assert.equal(renderDshRemoval(crlf), 'prefix\r\nsuffix')
+  const foreign = '<!-- BEGIN KIOKUKO-AI MANAGED BLOCK -->\nAI instructions\n<!-- END KIOKUKO-AI MANAGED BLOCK -->'
+  assert.equal(renderDshRemoval(foreign), foreign)
+  assert.equal(renderDshRemoval('unmanaged instructions'), 'unmanaged instructions')
+})
+
+test('remove setup retires matching Skills and the DSH block, supports check, and is idempotent', async t => {
+  const options = await fixture(t)
+  const prefix = '<!-- BEGIN KIOKUKO-AI MANAGED BLOCK -->\r\nAI rules\r\n<!-- END KIOKUKO-AI MANAGED BLOCK -->\r\n'
+  const suffix = '\r\nUser footer'
+  await writeFile(options.agents, prefix + legacy.replaceAll('\n', '\r\n') + suffix)
+  await setupDsh(options)
+
+  const check = await removeDshSetup({ ...options, check: true })
+  assert.equal(check.current, false)
+  assert.equal(check.skills.removed, 43)
+  assert.equal(check.instructions.status, 'update-needed')
+  assert.ok((await readFile(options.agents, 'utf8')).includes(begin))
+
+  const removed = await removeDshSetup(options)
+  assert.equal(removed.skills.removed, 43)
+  assert.equal(removed.skills.preserved, 0)
+  assert.equal(removed.instructions.status, 'updated')
+  assert.equal(await readFile(options.agents, 'utf8'), prefix + 'User footer')
+  assert.deepEqual(await removeDshSetup({ ...options, check: true }), {
+    current: true,
+    skills: { directory: path.join(options.homeDirectory, '.agents', 'skills'), removed: 0, preserved: 0 },
+    instructions: { path: options.agents, status: 'unmanaged-or-absent' },
+  })
+})
+
+test('malformed DSH markers stop removal before any Skill is deleted', async t => {
+  const options = await fixture(t)
+  await writeFile(options.agents, legacy)
+  await setupDsh(options)
+  const soul = path.join(options.homeDirectory, '.agents/skills/kiokuko-soul/SKILL.md')
+  const before = await readFile(soul, 'utf8')
+  await writeFile(options.agents, begin)
+
+  await assert.rejects(removeDshSetup(options), { code: 'CONFLICT' })
+  assert.equal(await readFile(soul, 'utf8'), before)
 })

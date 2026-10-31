@@ -3,7 +3,7 @@ import path from 'node:path'
 import { readRegularFile } from '../config/read-regular-file.js'
 import { KiokukoError } from '../errors.js'
 import { deploymentParent, publishFile, type DeploymentFile } from './managed-file-deployment.js'
-import { planStandardSkills } from './standard-skill-deployment.js'
+import { planStandardSkills, retireStandardSkills } from './standard-skill-deployment.js'
 import { SOUL_ROUTING_ENTRY_CONTRACT } from './standard-skills.js'
 
 const BEGIN = '<!-- BEGIN KIOKUKO-DSH MANAGED BLOCK -->'
@@ -44,8 +44,13 @@ Choose design tokens by semantic role, not by current appearance. If a role is m
 
 ${END}`
 
-/** Replace only a DSH-owned block, preserving every other product's instructions. */
-export function renderDshInstructions(existing: string): string {
+interface DshBlockLocation {
+  readonly start: number
+  readonly end: number
+}
+
+/** Locate one complete DSH-owned block and reject ambiguous ownership markers. */
+export function locateDshBlock(existing: string): DshBlockLocation | undefined {
   const conflict = () => new KiokukoError('CONFLICT', 'AGENTS.md must contain exactly one complete kiokuko-dsh managed block; repair its markers before setup')
   const starts = existing.split(BEGIN).length - 1
   const ends = existing.split(END).length - 1
@@ -63,9 +68,26 @@ export function renderDshInstructions(existing: string): string {
     const nested = existing.indexOf(LEGACY_BEGIN, start + LEGACY_BEGIN.length)
     if (end < start || nested !== -1 && nested < end) throw conflict()
     closing = LEGACY_END
-  } else return existing
+  } else return undefined
+  return { start, end: end + closing.length }
+}
+
+/** Replace only a DSH-owned block, preserving every other product's instructions. */
+export function renderDshInstructions(existing: string): string {
+  const location = locateDshBlock(existing)
+  if (location === undefined) return existing
   const newline = existing.includes('\r\n') ? '\r\n' : '\n'
-  return existing.slice(0, start) + DSH_MANAGED_BLOCK.replaceAll('\n', newline) + existing.slice(end + closing.length)
+  return existing.slice(0, location.start) + DSH_MANAGED_BLOCK.replaceAll('\n', newline) + existing.slice(location.end)
+}
+
+/** Remove only a DSH-owned block and its following setup separator newline. */
+export function renderDshRemoval(existing: string): string {
+  const location = locateDshBlock(existing)
+  if (location === undefined) return existing
+  let suffix = existing.slice(location.end)
+  if (suffix.startsWith('\r\n')) suffix = suffix.slice(2)
+  else if (suffix.startsWith('\n')) suffix = suffix.slice(1)
+  return existing.slice(0, location.start) + suffix
 }
 
 async function planInstructions(workspace: string): Promise<DeploymentFile | undefined> {
@@ -98,6 +120,32 @@ export async function setupDsh(options: { homeDirectory?: string; cwd?: string; 
     result.instructions.status = options.check ? 'update-needed' : await publishFile(workspace, instructions)
   }
   result.current = !options.check || result.skills.created + result.skills.updated === 0 && result.instructions.status !== 'update-needed'
+  return result
+}
+
+async function planInstructionRemoval(workspace: string): Promise<DeploymentFile | undefined> {
+  const target = path.join(workspace, 'AGENTS.md')
+  const previous = await readRegularFile(target, { containmentRoot: workspace })
+  if (previous === undefined) return undefined
+  const content = renderDshRemoval(previous.content)
+  if (content === previous.content) return undefined
+  await deploymentParent(workspace, target, false)
+  return { target, previous, content }
+}
+
+/** Explicitly retire matching deployed Skills and remove this product's AGENTS.md block. */
+export async function removeDshSetup(options: { homeDirectory?: string; cwd?: string; check?: boolean } = {}) {
+  const workspace = await realpath(options.cwd ?? process.cwd())
+  // Validate instruction ownership before deleting any deployed Skill.
+  const instructions = await planInstructionRemoval(workspace)
+  const skills = await retireStandardSkills(options.homeDirectory, { check: options.check ?? false })
+  const result = {
+    current: true,
+    skills,
+    instructions: { path: path.join(workspace, 'AGENTS.md'), status: instructions ? 'unchanged' : 'unmanaged-or-absent' },
+  }
+  if (instructions) result.instructions.status = options.check ? 'update-needed' : await publishFile(workspace, instructions)
+  result.current = !options.check || result.skills.removed === 0 && result.instructions.status !== 'update-needed'
   return result
 }
 
