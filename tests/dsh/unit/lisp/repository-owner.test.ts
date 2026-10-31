@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { claimRepository } from '../../../../lisp/repository-owner.mjs'
 import { processIdentity, sameProcess } from '../../../../lisp/process-identity.mjs'
-import { mkdtempSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { createHash } from 'node:crypto'
 import { fork, execFileSync } from 'node:child_process'
+import { Worker } from 'node:worker_threads'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { openConnection } from '../../../../src/db/connection.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
@@ -36,9 +37,54 @@ function electionDeferred<T>() {
   const promise=new Promise<T>((yes,no)=>{resolve=yes;reject=no})
   return {promise,resolve,reject}
 }
+
+function writeRepositoryProbe(script:string){
+  writeFileSync(script,`import assert from'node:assert/strict';import{parentPort}from'node:worker_threads';
+    import{claimRepository}from ${JSON.stringify(new URL('../../../../lisp/repository-owner.mjs',import.meta.url).href)};
+    parentPort.on('message',({root,expectation})=>{
+      if(expectation==='busy'){let lease;try{assert.throws(()=>{lease=claimRepository(root)},/REPOSITORY_IN_USE/,'owner is protected before SBCL readiness')}finally{lease?.close()}}
+      else{assert.equal(expectation,'free');const lease=claimRepository(root);lease.close()}
+      parentPort.postMessage({root,expectation,verified:true})
+    })`)
+}
+/** SQLite busy waits are synchronous; keep them off the child-process supervisor's event loop. */
+async function withRepositoryProbe(script:string,signal:AbortSignal,
+  run:(probe:(root:string,expectation:'busy'|'free')=>Promise<void>)=>Promise<void>,onWorker?:(worker:Worker)=>void){
+  const worker=new Worker(script,{execArgv:[]}),fatal=electionDeferred<never>()
+  void fatal.promise.catch(()=>{})
+  let stopping=false,pending=false
+  worker.on('error',error=>fatal.reject(error))
+  worker.on('exit',code=>{if(!stopping)fatal.reject(new Error(`SQLite probe exited before verification: ${code}`))})
+  const abort=()=>fatal.reject(signal.reason??new Error('SQLite probe aborted'))
+  signal.addEventListener('abort',abort,{once:true})
+  try{
+    onWorker?.(worker);signal.throwIfAborted()
+    await run(async(root,expectation)=>{
+      signal.throwIfAborted();assert.equal(pending,false,'a probe serializes its own SQLite connection checks');pending=true
+      const reply=electionDeferred<unknown>(),receive=(value:unknown)=>reply.resolve(value)
+      const timer=setTimeout(()=>reply.reject(new Error('SQLite probe deadline')),5000)
+      worker.once('message',receive)
+      try{
+        worker.postMessage({root,expectation})
+        const result=await Promise.race([reply.promise,fatal.promise])
+        assert.deepEqual(result,{root,expectation,verified:true})
+      }finally{clearTimeout(timer);worker.off('message',receive);pending=false}
+    })
+  }finally{
+    stopping=true;signal.removeEventListener('abort',abort);fatal.reject(new Error('SQLite probe stopped'))
+    let timer:ReturnType<typeof setTimeout>|undefined
+    try{
+      await Promise.race([worker.terminate(),new Promise<never>((_,reject)=>{
+        timer=setTimeout(()=>reject(new Error('SQLite probe cleanup unconfirmed')),2000)
+      })])
+      assert.equal(worker.threadId,-1,'the SQLite verification worker must terminate before removing its fixture')
+    }finally{clearTimeout(timer)}
+  }
+}
+
 /** Observe IPC and process termination before any wait; every failed stage drains its own children. */
 async function withElectionPair(script:string,root:string,options:{round:number;signal?:AbortSignal;timeoutMs?:number;
-  onChild?:(child:ElectionChild)=>void;onStage?:(stage:string)=>void},verify:(values:ElectionValue[])=>void):Promise<void> {
+  onChild?:(child:ElectionChild)=>void;onStage?:(stage:string)=>void},verify:(values:ElectionValue[])=>void|Promise<void>):Promise<void> {
   const fatal=electionDeferred<never>();void fatal.promise.catch(()=>{})
   let stage='spawn',stopping=false
   const fail=(code:string)=>{if(!stopping)fatal.reject(new Error(`round ${options.round}: ${code} during ${stage}`))}
@@ -76,48 +122,50 @@ async function withElectionPair(script:string,root:string,options:{round:number;
       try{child.send('go',error=>{if(error)fail('IPC send failed')})}catch{fail('IPC send failed')}
     }
     const values=await Promise.race([Promise.all(children.map(s=>s.result.promise)),fatal.promise])
-    enter('verify');verify(values)
+    enter('verify');await Promise.race([Promise.resolve().then(()=>verify(values)),fatal.promise])
   } finally {
     stopping=true;clearTimeout(deadline);options.signal?.removeEventListener('abort',abort)
     for(const {child} of children)if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL')
     let timer:ReturnType<typeof setTimeout>|undefined
     try{await Promise.race([Promise.all(children.map(s=>s.closed.promise)),new Promise<never>((_,reject)=>{
-      timer=setTimeout(()=>reject(new Error(`round ${options.round}: child cleanup unconfirmed`)),2000)
+      timer=setTimeout(()=>reject(new Error(`round ${options.round}: child cleanup unconfirmed during ${stage}: ${JSON.stringify(children.map(({child,phase})=>({pid:child.pid,phase,exitCode:child.exitCode,signalCode:child.signalCode,connected:child.connected,killed:child.killed})))}`)),2000)
     })])}finally{clearTimeout(timer)}
   }
 }
 
 test('fresh concurrent SQLite admissions elect one owner, including before runtime ready',{timeout:30000},async t=>{
   const base=realpathSync(mkdtempSync(join(tmpdir(),'owner-election-'))),started=performance.now()
-  const script=join(base,'contender.mjs'),children=new Set<ElectionChild>(),controller=new AbortController()
+  const script=join(base,'contender.mjs'),probeScript=join(base,'probe.mjs'),children=new Set<ElectionChild>(),probeWorkers=new Set<Worker>(),controller=new AbortController()
   const signal=AbortSignal.any([t.signal,controller.signal])
   writeFileSync(script,`import{claimRepository}from ${JSON.stringify(new URL('../../../../lisp/repository-owner.mjs',import.meta.url).href)};
     process.once('message',()=>{try{const lease=claimRepository(process.argv[2]);
       process.once('message',()=>{lease.close();process.exit(0)});process.send({state:'owner'})}
       catch(error){process.send({state:'rejected',reason:error.message},error=>process.exit(error?1:0))}})
     process.send('waiting')`)
+  writeRepositoryProbe(probeScript)
   let next=0,completed=0
-  // Four independent pairs keep all 24 cold-process elections inside the
-  // original 30s deadline even with the observed 3.3s CI round duration.
-  // Each pair still has its own 5s deadline and supervised cleanup.
-  const run=async()=>{
+  // Keep all 24 cold-process elections and the original 30s deadline.
+  // Each of the four pairs retains its 5s deadline and supervised cleanup;
+  // synchronous SQLite verification runs on its own worker thread.
+  const run=()=>withRepositoryProbe(probeScript,signal,async probe=>{
     while(next<24){
       signal.throwIfAborted();const round=next++,root=mkdtempSync(join(base,'repo-')),roundStarted=performance.now()
       t.diagnostic(JSON.stringify({round,phase:'start',elapsedMs:Math.round(performance.now()-started)}))
-      await withElectionPair(script,root,{round,signal,onChild:child=>children.add(child)},values=>{
+      await withElectionPair(script,root,{round,signal,onChild:child=>children.add(child)},async values=>{
         assert.equal(values.filter(v=>v.state==='owner').length,1,JSON.stringify({round,values}))
         assert.equal(values.find(v=>v.state==='rejected')!.reason,'REPOSITORY_IN_USE')
-        assert.throws(()=>claimRepository(root),/REPOSITORY_IN_USE/,'owner is protected before SBCL readiness')
+        await probe(root,'busy')
       })
-      const recovered=claimRepository(root);recovered.close();completed++
+      await probe(root,'free');completed++
       t.diagnostic(JSON.stringify({round,phase:'complete',durationMs:Math.round(performance.now()-roundStarted),completed}))
     }
-  }
+  },worker=>probeWorkers.add(worker))
   const workers=[run(),run(),run(),run()]
   try{await Promise.all(workers);assert.equal(completed,24)}
   finally{
     controller.abort();await Promise.allSettled(workers)
     assert.ok([...children].every(c=>c.exitCode!==null||c.signalCode!==null),'all fixture children must terminate before removing their repositories')
+    assert.ok([...probeWorkers].every(worker=>worker.threadId===-1),'all SQLite probes must stop before removing their repositories')
     rmSync(base,{recursive:true,force:true})
   }
 })
@@ -202,4 +250,59 @@ test('supervisor crash cannot donate a still-live runtime; PID birth mismatch pe
     lease?.close();if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill('SIGKILL');await exited}
     rmSync(root,{recursive:true,force:true})
   }
+})
+
+test('SQLite verification does not starve another pair child cleanup',{timeout:10000},async t=>{
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'owner-probe-interference-')))
+  const root=join(base,'locked'),script=join(base,'alive.mjs'),probeScript=join(base,'probe.mjs')
+  mkdirSync(root)
+  const owner=claimRepository(root),controller=new AbortController(),children:ElectionChild[]=[],closed:Promise<unknown>[]=[],workers:Worker[]=[]
+  let calls=0,closedAt=0,probeDoneAt=0,verificationAt=0
+  try{
+    writeFileSync(script,`process.on('message',()=>process.send({state:'owner'}));process.send('waiting')`)
+    writeRepositoryProbe(probeScript)
+    await withRepositoryProbe(probeScript,controller.signal,async probe=>{
+      let work=Promise.resolve()
+      try{
+        await withElectionPair(script,base,{round:0,onChild:child=>{
+          children.push(child);closed.push(once(child,'close').then(()=>{closedAt=performance.now()}))
+        }},()=>{
+          verificationAt=performance.now()
+          work=(async()=>{for(let i=0;i<10;i++){await probe(root,'busy');calls++};probeDoneAt=performance.now()})()
+          void work.catch(()=>{})
+        })
+        await work
+        assert.equal(calls,10,'all real SQLite busy checks must execute')
+        assert.ok(closedAt<probeDoneAt,'child termination must be observed while independent SQLite verification is still running')
+      }finally{await work;await Promise.all(closed)}
+    },worker=>workers.push(worker))
+    assert.equal(children.length,2);assert.ok(children.every(child=>child.signalCode==='SIGKILL'))
+    t.diagnostic(JSON.stringify({sqliteChecks:calls,childrenTerminated:children.length,childCloseMs:Math.round(closedAt-verificationAt),probeDoneMs:Math.round(probeDoneAt-verificationAt)}))
+  }finally{controller.abort();owner.close();if(children.every(child=>child.exitCode!==null||child.signalCode!==null)&&workers.every(worker=>worker.threadId===-1))rmSync(base,{recursive:true,force:true})}
+})
+
+test('SQLite probe assertion failure remains a failure and releases its worker',{timeout:10000},async()=>{
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'owner-probe-failure-'))),script=join(base,'probe.mjs')
+  const controller=new AbortController(),workers:Worker[]=[]
+  try{
+    writeRepositoryProbe(script)
+    await assert.rejects(withRepositoryProbe(script,controller.signal,probe=>probe(base,'busy'),worker=>workers.push(worker)),/Missing expected exception/)
+    assert.equal(workers.length,1);assert.equal(workers[0]!.threadId,-1)
+    const recovered=claimRepository(base);recovered.close()
+  }finally{controller.abort();if(workers.every(worker=>worker.threadId===-1))rmSync(base,{recursive:true,force:true})}
+})
+
+test('cancelling pending SQLite verification drains its worker',{timeout:10000},async()=>{
+  const base=realpathSync(mkdtempSync(join(tmpdir(),'owner-probe-cancel-'))),script=join(base,'probe.mjs')
+  const owner=claimRepository(base),controller=new AbortController(),workers:Worker[]=[]
+  let timer:ReturnType<typeof setTimeout>|undefined
+  try{
+    writeRepositoryProbe(script)
+    await assert.rejects(withRepositoryProbe(script,controller.signal,async probe=>{
+      await probe(base,'busy')
+      const pending=probe(base,'busy');timer=setTimeout(()=>controller.abort(),20)
+      await pending;assert.fail('cancelled SQLite verification cannot complete')
+    },worker=>workers.push(worker)),{name:'AbortError'})
+    assert.equal(workers.length,1);assert.equal(workers[0]!.threadId,-1)
+  }finally{clearTimeout(timer);controller.abort();owner.close();if(workers.every(worker=>worker.threadId===-1))rmSync(base,{recursive:true,force:true})}
 })
