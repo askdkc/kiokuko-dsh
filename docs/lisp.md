@@ -295,8 +295,24 @@ An error after dispatch, even with identical text, remains `UNKNOWN`.
 `RECONCILIATION_REQUIRED` means external effects still lack a verifiable receipt.
 Inspect `/kioku-lisp diagnostics OPERATION_ID` and the original host evidence.
 A SIGTERM or job settlement message alone is not proof that the process and its
-resources stopped. `recover` or `abandon` cannot clear these external unknowns,
-and no interrupted command is automatically retried.
+resources stopped. No interrupted command is automatically retried.
+
+Restarting Lisp cannot clear an unknown external operation, and neither can
+`recover` or `abandon`. While one remains, every later effect is refused. After
+inspecting the original receipt, end only the operations you have confirmed are
+harmless; the recorded text is the human evidence, not an observed result:
+
+```text
+/kioku-lisp abandon-managed OPERATION_ID
+/kioku-lisp recover
+```
+
+`abandon-managed` accepts only `unknown` operations, requires the inspection
+evidence, and records no success or failure outcome. It never re-executes the
+command and never reverts an effect, so operations whose effects you cannot
+verify must stay open until you resolve them yourself. The Lisp control beside
+the session input offers the same action for the listed operations, and a scope
+containing an abandoned operation cannot later be used as protocol test evidence.
 
 A host that supplies versioned Bash termination receipts can reconcile an exact
 original native child as `cancelled-confirmed` after observing its managed range

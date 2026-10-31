@@ -63,7 +63,7 @@ test('a human abandonment is the only way out of RECONCILIATION_REQUIRED and the
     assert.equal(blocked.code,'RECONCILIATION_REQUIRED')
     assert.equal(blocked.managedOperations[0].id,operation.operationId)
     // Abandoning without inspected evidence must be refused.
-    await assert.rejects(manager.abandonManaged(owner,operation.operationId,''),/INVALID/u)
+    await assert.rejects(manager.abandonManaged(owner,operation.operationId,''),/照合した内容を evidence として指定してください/u)
     const abandoned=await manager.abandonManaged(owner,operation.operationId,'Inspected the listed job: no live process, no queued work, target file untouched.') as any
     assert.equal(abandoned.ok,true)
     assert.equal(abandoned.operation.state,'abandoned')
@@ -73,7 +73,7 @@ test('a human abandonment is the only way out of RECONCILIATION_REQUIRED and the
     assert.notEqual(recovered.code,'RECONCILIATION_REQUIRED')
     assert.equal((await manager.status(owner) as any).managedReconciliationRequired,false)
     // A later effect is permitted again.
-    const usable=await manager.execute(owner,'lisp_eval',{code:'(+ 41 1)'}) as any
+    const usable=await manager.execute(owner,'lisp_eval',{operationId:'after-human-abandonment',code:'(+ 41 1)'}) as any
     assert.equal(usable.ok,true,JSON.stringify(usable))
   }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })
