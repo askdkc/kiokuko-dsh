@@ -179,6 +179,9 @@ test('native task schema streams through the managed OpenCode Go route while hos
     const advertisedStart = { operation: 'start', taskId: 'task-fixture', expectedRevision: 1, expectedGeneration: 1 }
     assert.equal(publicInput.safeParse(advertisedStart).success, false, 'the advertised start operation must require its reason')
     assert.equal(publicInput.safeParse({ ...advertisedStart, reason: 'Start the current task' }).success, true)
+    const typedStart = { ...advertisedStart, reason: 'Start the current task', evidence: [] }
+    for (const invalid of [{ ...typedStart, expectedRevision: '1' }, { ...typedStart, expectedGeneration: '1' }, { ...typedStart, evidence: '[]' }])
+      assert.equal(publicInput.safeParse(invalid).success, false, 'the actual advertised schema rejects stringified numeric and array fields')
     assert.equal(publicInput.safeParse({ operation: 'create', taskType: 'research' }).success, true)
     assert.equal(publicInput.safeParse({ operation: 'create', taskType: 'research', reason: 'Not a create field' }).success, false)
     const credentials = new CredentialFile(join(f.root, 'unused-credentials.json'))
@@ -281,6 +284,21 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
     const deny = ctx.tools.guard(() => 'Native permission denied')
     assert.equal((await invoke('start', created)).isError, true); deny()
     assert.equal((await service.snapshot(f.agent)).task!.state, 'ToDo')
+    const correct = { operation: 'start', taskId: created.taskId, expectedRevision: created.revision,
+      expectedGeneration: created.generation, reason: 'Start the exact original task', evidence: [] }
+    for (const [field, value] of [['expectedRevision', String(created.revision)], ['expectedGeneration', String(created.generation)], ['evidence', '[]']] as const) {
+      // Repeated invalid calls must stay side-effect free; no implicit coercion or approval.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const args = { ...correct, [field]: value }
+        const result = await executeNativeTool(ctx, packages, { callId: `invalid-${field}-${attempt}`,
+          name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
+          arguments: mode === 'ptc' ? { description: 'Task operation only', code: `return await tools.task_operation(${JSON.stringify(args)})` } : args,
+          agent: f.agent, signal: signal() })
+        assert.equal(result.isError, true)
+        assert.match(JSON.stringify(result.content), new RegExp(field), 'the returned error identifies the invalid field')
+        assert.deepEqual((await service.snapshot(f.agent)).task, created)
+      }
+    }
     const started = await invoke('start', created)
     assert.equal(started.isError, false, JSON.stringify(started))
     const working = (await service.snapshot(f.agent)).task!

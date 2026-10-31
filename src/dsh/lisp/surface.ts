@@ -1,6 +1,8 @@
 import { createLispHostDispatch, lispHostToolWasNotDispatched } from './host-tool-dispatch.js'
 import { formatLispStatus, type LispStatusView } from './status-text.js'
-import { ManagedDispatchDenied, managedAdmissionDenied } from '../managed-operation-runner.js'
+import { ManagedDispatchDenied, managedAdmissionDenied, currentManagedOperation, observeManagedResult } from '../managed-operation-runner.js'
+import { ManagedOperationJournal } from '../managed-operation-journal.js'
+import { nativeStopReceipt } from './native-stop-receipt.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -21,7 +23,7 @@ import type { DshSkillPrompts } from '../skill-prompts.js'
 import { realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import type { DshCoreRuntime as DshRuntime } from '../core-runtime.js'
@@ -469,14 +471,26 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                 if (tools.get('bash', binding.agent) !== pinned.definition || tools.get('bash', binding.agent)?.execute !== pinned.execute)
                   fail('STALE_NATIVE_COMMAND', 'Native Bash implementation changed.')
                 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+                const directory = input.directory ?? binding.owner.root
+                // Bash resolves relative workdirs against the session. Pin that
+                // exact absolute spelling before dispatch so the stop receipt
+                // can be compared without guessing path/symlink equivalence.
+                const workdir = isAbsolute(directory) ? directory : `${binding.owner.root}/${directory}`
                 const child = { name: 'bash', callId: `lisp-native-${randomUUID()}`, agent: binding.agent, parent: execution.token ?? Symbol('lisp-native-command'),
                   ...(execution.rootCallId ?? execution.callId ? { rootCallId: execution.rootCallId ?? execution.callId } : {}),
                   ...(execution.toolSet ? { toolSet: execution.toolSet } : {}),
                   arguments: { command: [input.program, ...input.argv].map(quote).join(' '), description: 'Run the requested Lisp command through native Bash',
-                    workdir: input.directory ?? binding.owner.root, timeoutMs: input.timeoutMs }, signal: AbortSignal.any([binding.signal, signal]) }
+                    workdir, timeoutMs: input.timeoutMs }, signal: AbortSignal.any([binding.signal, signal]) }
                 const commandAdmission = { current: () => {
                   try { this.assertCurrent(); return true } catch { return false }
                 } }
+                const managed = currentManagedOperation()
+                if (managed) await managed.database(db => {
+                  const journal = new ManagedOperationJournal(db)
+                  if (managed.kind !== 'process' || journal.readScope(managed.scopeId).sessionId !== binding.owner.sessionId)
+                    fail('STALE_NATIVE_COMMAND', 'Native command journal owner changed.')
+                  journal.attachOriginalRef(managed.operationId, child.callId)
+                })
                 // Observe the registry's exact dispatch stage, not an error string:
                 // policy rejection returns before tools/execute is reached.
                 let dispatchStarted = false
@@ -495,6 +509,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                 finally { removeDispatchWitness() }
                 if (result.isError) {
                   if (!dispatchStarted) throw new ManagedDispatchDenied('Host rejected tool before dispatch.')
+                  const stopped = nativeStopReceipt(result, { callId: child.callId, rootCallId: child.rootCallId ?? child.callId,
+                    ownerId: binding.agent.id, sessionId: binding.owner.sessionId, cwd: child.arguments.workdir })
+                  if (stopped && managed) {
+                    await observeManagedResult(managed, { receipt: stopped })
+                    fail('NATIVE_COMMAND_CANCELLED', 'Native command was cancelled and its managed process range stopped. Earlier effects may remain; no command was retried.')
+                  }
                   fail('NATIVE_COMMAND_UNCONFIRMED', 'Native command did not return a confirmed result; inspect its host receipt before retrying.')
                 }
                 const value = result.value
@@ -505,8 +525,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   const terminal = await jobs.wait(value.jobId, 5000, binding.agent.id)
                   if (['running', 'stopping'].includes(terminal.status)) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} has not stopped.`)
                   jobs.remove(value.jobId, binding.agent.id)
-                  prototypeProcessFailed = true
-                  return { code: null, stdout: value.output ?? '', stderr: '', timedOut: true, receipt: { route: 'native', processStopped: true } }
+                  fail('STOP_UNCONFIRMED', `Native job ${value.jobId} reported settlement without an observed managed-range stop receipt; inspect the original host call before retrying.`)
                 }
                 this.assertCurrent()
                 if (value.exitCode !== 0 || value.timedOut) prototypeProcessFailed = true

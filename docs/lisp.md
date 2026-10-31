@@ -298,6 +298,13 @@ A SIGTERM or job settlement message alone is not proof that the process and its
 resources stopped. `recover` or `abandon` cannot clear these external unknowns,
 and no interrupted command is automatically retried.
 
+A host that supplies versioned Bash termination receipts can reconcile an exact
+original native child as `cancelled-confirmed` after observing its managed range
+empty. The plugin checks the child/root call, agent, session and exact dispatched
+working directory. The Lisp timeout or cancellation stays an error, and prior
+command effects remain. Older hosts, missing receipts and mismatched identities
+remain unresolved; text, SIGTERM and job settlement cannot substitute for proof.
+
 In ordinary development conversations, `recover` starts a fresh worker after a
 timeout, output limit or Stop, including between turns. It needs no task setup;
 old turn permissions remain expired, and definitions/heap values are discarded.
