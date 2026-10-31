@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
+import { DECISION_PROVIDER_SERVICE } from '../../../src/dsh/live-config.js'
 import { readFile } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteAdapter } from '../../../src/db/adapter.js'
@@ -16,7 +18,7 @@ async function database(t: import('node:test').TestContext) {
   for (const name of ['021_typed_decisions', '024_decision_selection']) db.exec(await readFile(new URL(`../../../migrations/${name}.sql`, import.meta.url), 'utf8'))
   return { db, runtime: { withDatabase: async (operation: any) => operation(db) } as Pick<DshCoreRuntime, 'withDatabase'> }
 }
-const ctx = { get: () => ({ resolve: async () => ({ value: 'fixture-key', source: 'file' }) }) }
+const ctx = { get: (name: string) => name === 'credentials' ? { resolve: async () => ({ value: 'fixture-key', source: 'file' }) } : undefined }
 function command(service: ReturnType<typeof createDecisionService>) {
   let command!: DshNativeCommandDefinition
   mountDecisionCommand({ register: value => { command = value; return () => {} } }, service)
@@ -134,4 +136,25 @@ test('configuration-only Laya discovers once before binding, keeps runtime pinne
   assert.equal((await command(service)('use laya')).kind, 'success')
   assert.equal((await service.bind('after-refresh'))['laya-coreml']?.runtimeFingerprint, fingerprint)
   assert.equal((await service.bind('pinned'))['laya-coreml']?.runtimeFingerprint, layaRuntime.runtimeFingerprint)
+})
+
+// Exercise the real Cordis lookup contract as well as the named credential fixture.
+test('native optional provider lookup preserves configured defaults and saved selections', async t => {
+  const { runtime } = await database(t), calls = jev(t), native = new Context()
+  assert.equal(native.get('unregistered-decision-service', false), undefined)
+  assert.equal(native.get(DECISION_PROVIDER_SERVICE, false), undefined)
+  const fallback = createDecisionService(native, runtime, undefined, undefined, undefined, '/absent-provider')
+  assert.equal((await fallback.bind('fallback')).provider, 'typesafe')
+
+  native.provide('credentials', { resolve: async () => ({ value: 'fixture-key', source: 'file' }) })
+  native.provide(DECISION_PROVIDER_SERVICE, { configured: () => 'openai' as const })
+  const make = () => createDecisionService(native, runtime, undefined, undefined, undefined, '/configured-provider')
+  const configured = make()
+  assert.equal((await configured.bind('configured')).provider, 'openai')
+  assert.equal(calls(), 0, 'binding a configured default does not probe an API')
+  assert.equal((await command(configured)('use jev')).kind, 'success')
+  assert.equal(calls(), 1)
+  const restarted = make()
+  assert.equal((await restarted.bind('saved')).provider, 'typesafe', 'saved choice overrides the configured default')
+  assert.equal((await restarted.bind('configured')).provider, 'openai', 'existing request binding remains immutable')
 })

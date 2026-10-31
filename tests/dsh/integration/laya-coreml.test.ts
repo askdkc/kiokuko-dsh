@@ -29,7 +29,13 @@ test('Laya host reaches framed socket, persists exact bindings/replay, preserves
     return layaReply(request)
   })
   const config = layaConfig(socket.path)
-  const ctx = { get() { throw new Error('Laya must not resolve TypeSafe or Nimble credentials') } }
+  let credentialLookups = 0
+  const ctx = { get(name: string) {
+    if (name !== 'credentials') return undefined
+    credentialLookups++
+    throw new Error('Laya must not resolve TypeSafe or Nimble credentials')
+  } }
+  t.after(() => assert.equal(credentialLookups, 0, 'Laya never looks up credentials'))
   const service = createDecisionService(ctx, runtime, config)
   await service.inspectStatus(signal()); assert.equal(socket.calls(), 0)
   assert.equal((await service.probe(signal())).state, 'ready')

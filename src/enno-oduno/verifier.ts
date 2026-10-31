@@ -131,7 +131,7 @@ export async function runVerifier(
   const tails = { stdout: '', stderr: '' };
   const observeSkip = (lane: keyof typeof tails, chunk: Buffer | string): void => {
     const value = tails[lane] + chunk.toString();
-    if (/(?:# SKIP|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(value)) skipped = true;
+    if (/(?:# SKIP(?=\s)|\b[1-9]\d* (?:skipped|pending)\b|# (?:skipped|todo) [1-9])/iu.test(value)) skipped = true;
     tails[lane] = value.slice(-256);
   };
   let child: ChildProcessByStdio<null, Readable, Readable>;
@@ -224,6 +224,10 @@ export async function runVerifier(
       settle({ status: 'spawn_failed', exitCode: null, signal: null });
     });
     child.once('close', (code, signal) => {
+      // EOF completes a directive token; a chunk ending in '# SKIP' alone
+      // must not misclassify the next chunk's 'ped 0' summary.
+      observeSkip('stdout', '\n');
+      observeSkip('stderr', '\n');
       if (!timedOut) tryKill('SIGTERM');
       settle({
         status: timedOut ? 'timeout' : code === 0 ? 'passed' : 'failed',

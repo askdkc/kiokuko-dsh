@@ -11,8 +11,10 @@ import { ExecutionSelectionPending } from '../../../src/dsh/model-selection-ui.j
 test('plugin startup reports critical failure and preserves the original rejection', async (t) => {
   const failure = new Error('native startup unavailable')
   const errors = t.mock.method(console, 'error', () => {})
-  const ctx = { effect: async () => { throw failure } } as unknown as Context
+  const ctx = new Context()
+  const effect = t.mock.method(ctx.fiber, 'effect', async () => { throw failure })
   await assert.rejects(dshPlugin.apply(ctx, { enabled: true }), error => error === failure)
+  assert.equal(effect.mock.callCount(), 1, 'startup reached the intended native effect boundary')
   assert.deepEqual(errors.mock.calls[0]?.arguments, ['[kiokuko-dsh] [crit] Plugin startup failed:', failure.message])
   assert.match(String(errors.mock.calls[1]?.arguments[0]), /update kiokuko-dsh --latest/)
   assert.match(String(errors.mock.calls[1]?.arguments[0]), /Do not delete session logs/)

@@ -17,23 +17,64 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null ? value as Record<string, unknown> : undefined
 }
 
-/** Recorded facts only; a missing model response is never interpreted as failed implementation. */
+/** Project recorded verifier facts only. Explanations cannot modify this outcome. */
+export function completionVerificationReport(snapshot: Pick<EnnoRunSnapshot, 'contract' | 'finalEvidence' | 'finalEvidenceReady'>) {
+  const checks = snapshot.finalEvidence.map(check => {
+    const counts = check.tapSummary
+    const failed = check.status !== 'passed' || check.signal !== null
+      || check.exitCode !== null && check.exitCode !== 0 || !!counts && (counts.fail > 0 || counts.cancelled > 0)
+    const incomplete = check.skipped === true || check.changedDuringVerification === true
+      || !!counts && (counts.skipped > 0 || counts.todo > 0)
+    return { id: check.verifier.id, recordedStatus: check.status,
+      outcome: failed ? 'failed' as const : incomplete ? 'unverified' as const : 'passed' as const,
+      exitCode: check.exitCode, signal: check.signal, ...(counts ? { counts: { ...counts } } : {}) }
+  })
+  const required = snapshot.contract.finalVerifiers
+  const missing = required.filter(spec => {
+    const matches = snapshot.finalEvidence.filter(check => check.verifier.id === spec.id)
+    return matches.length !== 1 || canonicalContentHash(matches[0]!.verifier) !== canonicalContentHash(spec)
+  }).map(spec => spec.id)
+  const complete = snapshot.finalEvidenceReady && required.length > 0 && missing.length === 0
+    && checks.length === required.length
+  return { schema: 'completion-verification-v1' as const,
+    status: checks.some(check => check.outcome === 'failed') ? 'failed' as const
+      : complete && checks.every(check => check.outcome === 'passed') ? 'passed' as const : 'unverified' as const,
+    scope: 'recorded_final_verifiers' as const, fresh: snapshot.finalEvidenceReady,
+    checks, missingVerifierIds: missing, explanations: 'unverified' as const,
+    otherEnvironments: 'unverified' as const, deployedRuntime: 'unverified' as const }
+}
+
+/** A task's recorded completion, verifier measurements and explanatory prose are independent. */
 export function completionReportText(snapshot: EnnoRunSnapshot, evidenceSummary?: string): string {
   const ja = snapshot.userFacingLanguage === 'ja'
+  const verification = completionVerificationReport(snapshot)
   const done = snapshot.status === 'completed'
-  const heading = ja ? (done ? '依頼された作業は完了しました。' : '作業は未完了のまま停止しました。')
-    : (done ? 'The requested work is complete.' : 'Work stopped before completion.')
-  const lines = [heading, '', ja ? '記録済みの作業結果:' : 'Recorded work results:']
-  for (const unit of snapshot.workUnits) {
-    lines.push(`- ${unit.workUnit.objective}: ${unit.status}${unit.result?.summary ? ` — ${unit.result.summary}` : ''}`)
-    if (unit.result?.changedPaths.length) lines.push(`  ${unit.result.changedPaths.join(', ')}`)
+  const heading = !done ? (ja ? '作業は未完了のまま停止しました。' : 'Work stopped before completion.')
+    : verification.status === 'passed' ? (ja ? '記録された作業と最終チェックは完了しました。' : 'The recorded work and final checks are complete.')
+      : verification.status === 'failed' ? (ja ? '作業完了の記録はありますが、検証は失敗しています。' : 'Work is recorded as complete, but verification failed.')
+        : (ja ? '作業完了の記録はあります。検証は未確認です。' : 'Work is recorded as complete; verification is unverified.')
+  // Keep the safety-relevant status before bounded, potentially long model prose.
+  const lines = [heading, '', `${ja ? '実測された検証' : 'Observed verification'}: ${verification.status}`,
+    ja ? '別環境と稼働中runtime: 未検証。この記録のチェックからは推定しません。'
+      : 'Other environments and deployed runtime: unverified. Not inferred from these checks.']
+  for (const check of verification.checks) {
+    lines.push(`- ${check.id}: ${check.outcome}${check.recordedStatus !== check.outcome ? ` (recorded status: ${check.recordedStatus})` : ''}`)
+    if (check.counts) lines.push(`  tests=${check.counts.tests}, pass=${check.counts.pass}, fail=${check.counts.fail}, cancelled=${check.counts.cancelled}, skipped=${check.counts.skipped}, todo=${check.counts.todo}`)
   }
-  lines.push('', ja ? '最終検証:' : 'Final verification:')
-  for (const check of snapshot.finalEvidence) lines.push(`- ${check.verifier.id}: ${check.status}`)
-  if (!snapshot.finalEvidence.length) lines.push(ja ? '- 記録なし。検証成功とは判定していません。' : '- No recorded results; verification success is not assumed.')
+  if (!verification.checks.length) lines.push(ja ? '- 記録なし。検証成功とは判定していません。' : '- No recorded results; verification success is not assumed.')
+  if (!verification.fresh) lines.push(ja ? '- 現在の最終検証としての鮮度は未確認です。' : '- Freshness as current final verification is unconfirmed.')
+  if (verification.missingVerifierIds.length) lines.push(`${ja ? '未確認の必須チェック' : 'Unverified required checks'}: ${verification.missingVerifierIds.join(', ')}`)
+  lines.push('', ja ? '記録済みの作業状態（検証成功の証明ではありません）:' : 'Recorded work states (not verification proof):')
+  const explanations: string[] = []
+  for (const unit of snapshot.workUnits) {
+    lines.push(`- ${unit.workUnit.objective}: ${unit.status}`)
+    if (unit.result?.changedPaths.length) lines.push(`  ${unit.result.changedPaths.join(', ')}`)
+    if (unit.result?.summary) explanations.push(unit.result.summary)
+  }
+  if (snapshot.blocker) explanations.push(snapshot.blocker)
+  if (snapshot.meditation) explanations.push(snapshot.meditation.summary)
+  if (explanations.length) lines.push('', ja ? '報告された説明（未検証。証拠や確定した原因ではありません）:' : 'Unverified explanations (not evidence or established causes):', ...explanations)
   if (evidenceSummary) lines.push('', evidenceSummary)
-  if (snapshot.blocker) lines.push('', snapshot.blocker)
-  if (snapshot.meditation) lines.push('', snapshot.meditation.summary)
   lines.push('', ja ? '最終回答が表示されなかったため、ホストの記録から結果を表示しています。' : 'The final response was missing; this report is provided from host records.')
   return lines.join('\n').slice(0, 32_768)
 }

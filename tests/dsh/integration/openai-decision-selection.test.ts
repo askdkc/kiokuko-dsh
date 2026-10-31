@@ -40,7 +40,7 @@ function wire(t: import('node:test').TestContext, pending?: () => Promise<Respon
 
 test('use openai probes the real adapter contract, persists, restores, and keeps old Jev bindings', async t => {
   const { db, runtime } = await setup(t), urls = wire(t), refs: string[] = []
-  const ctx = { get: () => ({ resolve: async (ref: string) => { refs.push(ref); return { value: ref === 'OPENAI_API_KEY' ? 'openai-fixture' : 'jev-fixture', source: 'file' } } }) }
+  const ctx = { get: (name: string) => name === 'credentials' ? { resolve: async (ref: string) => { refs.push(ref); return { value: ref === 'OPENAI_API_KEY' ? 'openai-fixture' : 'jev-fixture', source: 'file' } } } : undefined }
   const base = TypedDecisionsConfig.parse({}), make = () => createDecisionService(ctx, runtime, base, undefined, undefined, '/repo')
   const service = make(), run = command(service)
   await service.bind('old-jev')
@@ -66,7 +66,7 @@ test('use openai probes the real adapter contract, persists, restores, and keeps
 
 test('missing OpenAI credential cannot publish selection, dispatch to Jev, or claim ready', async t => {
   const { db, runtime } = await setup(t), urls = wire(t)
-  const ctx = { get: () => ({ resolve: async (ref: string) => ref === 'TYPESAFE_API_KEY' ? { value: 'jev-fixture', source: 'file' } : undefined }) }
+  const ctx = { get: (name: string) => name === 'credentials' ? { resolve: async (ref: string) => ref === 'TYPESAFE_API_KEY' ? { value: 'jev-fixture', source: 'file' } : undefined } : undefined }
   const service = createDecisionService(ctx, runtime), result = await command(service)('use openai')
   assert.equal(result.kind, 'error'); assert.match(result.text!, /DECISION_AUTH.*OPENAI_API_KEY/)
   assert.equal(urls.length, 0); assert.equal((service.status() as any).provider, 'typesafe')
@@ -76,16 +76,25 @@ test('missing OpenAI credential cannot publish selection, dispatch to Jev, or cl
   assert.equal(urls.length, 0)
 })
 
-test('cancelled selection rejects late OpenAI response and preserves stored and bound Jev', async t => {
+test('cancelled selection rejects late OpenAI response and preserves stored and bound Jev', { timeout: 5000 }, async t => {
   const { db, runtime } = await setup(t)
-  let resolve!: (r: Response) => void
-  const urls = wire(t, () => new Promise(r => { resolve = r }))
-  const service = createDecisionService({ get: () => ({ resolve: async () => ({ value: 'fixture', source: 'file' }) }) }, runtime)
-  const controller = new AbortController(), pending = command(service)('use openai', controller.signal)
-  while (!resolve) await new Promise(r => setTimeout(r, 1))
+  let entered!: () => void, respond!: (value: Response) => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const response = new Promise<Response>(resolve => { respond = resolve })
+  const urls = wire(t, () => { entered(); return response })
+  const service = createDecisionService({ get: (name: string) => name === 'credentials'
+    ? { resolve: async () => ({ value: 'fixture', source: 'file' }) } : undefined }, runtime)
+  const controller = new AbortController()
+  t.after(() => { controller.abort(); respond(Response.json({})) })
+  const pending = Promise.resolve(command(service)('use openai', controller.signal))
+  // A setup/lookup failure returns before dispatch. Surface it instead of
+  // spinning forever waiting for a fetch that will never start.
+  await Promise.race([started, pending.then(result => {
+    assert.fail(`selection returned before OpenAI dispatch (${result.kind})`)
+  })])
   controller.abort()
   assert.match((await pending).text!, /DECISION_CANCELLED/)
-  resolve(Response.json({})); await new Promise(r => setTimeout(r, 0))
+  respond(Response.json({})); await new Promise(r => setTimeout(r, 0))
   assert.equal(urls.length, 1); assert.equal((service.status() as any).provider, 'typesafe')
   assert.equal((await service.bind('after-cancel')).provider, 'typesafe')
   assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_decision_selections').get()!.n, 0)
