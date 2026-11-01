@@ -54,7 +54,7 @@ sys.exit(child.wait())
   // hold the tested supervisor alive nor delay the host's close event.
   const lifetime = join(base, 'lifetime.mjs')
   await writeFile(lifetime, `import net from 'node:net';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';
-    const spawn=cp.spawn;const anchor=spawn(process.execPath,['-e','setInterval(()=>{},60000)'],{stdio:'ignore'});anchor.unref();console.log('anchor:'+anchor.pid);cp.spawn=function(command,args,options){const stdio=[...options.stdio];stdio[6]=6;return spawn.call(this,command,args,{...options,stdio})};syncBuiltinESMExports();
+    const spawn=cp.spawn;const anchor=spawn(process.execPath,['-e','setInterval(()=>{},60000)'],{stdio:'ignore'});anchor.unref();console.log('anchor:'+anchor.pid);cp.spawn=function(command,args,options){const stdio=[...options.stdio];stdio[6]=6;const child=spawn.call(this,command,args,{...options,stdio});child.once('spawn',()=>console.log('fixture-spawned:'+child.pid));child.once('exit',(code,signal)=>console.log('fixture-terminal:'+JSON.stringify({pid:child.pid,code,signal})));return child};syncBuiltinESMExports();
     const pipe=new net.Socket({fd:6,readable:true,writable:false});pipe.on('end',()=>process.kill(process.pid,'SIGKILL'));pipe.resume();pipe.unref()`)
   const args = ['--import', lifetime, supervisor, JSON.stringify(launch)]
   if (options.denyKill) {
@@ -151,7 +151,19 @@ sys.exit(child.wait())
       }
       await rm(base, { recursive: true, force: true })
     },
-    run<T>(body: () => Promise<T>) { return withCleanup(body, () => f.cleanup()) },
+    run<T>(body: () => Promise<T>) {
+      return withCleanup(async () => {
+        try { return await body() }
+        catch (error) {
+          // Capture the failed phase before cleanup changes process state. Keep
+          // the original assertion intact; a missing marker is not a timeout diagnosis.
+          console.error('namespace fixture failure:', JSON.stringify({ output, stderr, didExit, didClose,
+            host: { pid: host.pid, exitCode: host.exitCode, signalCode: host.signalCode },
+            monitorPid, childPid, anchorPid }))
+          throw error
+        }
+      }, () => f.cleanup())
+    },
   }
   try { await until(() => !!anchorPid && !!anchorIdentity, 'fixture group anchor did not start', 5000) }
   catch (primary) { await withCleanup(async () => { throw primary }, () => f.cleanup()) }
