@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { mkdtemp, realpath, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -72,7 +72,24 @@ function runNodeTests(testFiles, testTempRoot) {
       try {
         if (process.platform === 'win32') child.kill(signal);
         else if (child.pid !== undefined) process.kill(-child.pid, signal);
-      } catch (error) { if (error.code !== 'ESRCH') throw error; }
+      } catch (error) {
+        if (error.code === 'ESRCH') return;
+        if (error.code === 'EPERM' && process.platform !== 'win32'
+          && (child.exitCode !== null || child.signalCode !== null)) {
+          // A group can retain zombies after its leader exits.
+          // Ignore no permission error unless an independent OS snapshot proves
+          // there is no live member left to terminate. Unknown state stays fatal.
+          try {
+            const rows = execFileSync('/bin/ps', ['-A', '-o', 'pgid=,stat='], { encoding: 'utf8', timeout: 1000 }).trim();
+            if (rows && rows.split('\n').every(line => {
+              const row = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+              if (!row) throw error;
+              return Number(row[1]) !== child.pid || /^[ZX]/.test(row[2]);
+            })) return;
+          } catch { /* No reliable termination evidence: retain the original error. */ }
+        }
+        throw error;
+      }
     };
     const interrupt = () => {
       stopGroup('SIGTERM');

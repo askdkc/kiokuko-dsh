@@ -1,0 +1,217 @@
+# Depot CI Migration
+# Source: .github/workflows/ci.yml
+#
+# Changes made:
+# - Removed unsupported trigger "release"
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: CI
+# Removed unsupported trigger: release. Release events are not supported.
+on:
+  push: null
+  pull_request: null
+  workflow_dispatch: null
+permissions:
+  contents: read
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+jobs:
+  select:
+    name: Select required coverage
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.plan.outputs.native }}
+      lanes: ${{ steps.plan.outputs.lanes }}
+      has_native: ${{ steps.plan.outputs.has_native }}
+      has_lanes: ${{ steps.plan.outputs.has_lanes }}
+      full: ${{ steps.plan.outputs.full }}
+      dsh_sha: ${{ steps.dsh.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+      - id: dsh
+        name: Resolve current official DSH master once
+        shell: bash
+        run: node scripts/resolve-dsh-upstream.mjs
+      - id: plan
+        run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/selected-ci.json
+          if-no-files-found: error
+  micro-judge-native:
+    needs: select
+    if: needs.select.outputs.has_native == 'true'
+    name: Native micro-judge (${{ matrix.key }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.native) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - run: npm ci --ignore-scripts
+      - name: Install the fixed CI Rust toolchain on the disposable runner
+        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Build and accept the selected native target
+        shell: bash
+        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain 1.85.0 rustc)" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json" --output="${{ runner.temp }}/native-${{ matrix.key }}"
+      - run: node --test scripts/micro-judge-artifacts.test.mjs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: micro-judge-${{ matrix.key }}
+          path: ${{ runner.temp }}/native-${{ matrix.key }}
+          if-no-files-found: error
+  checks:
+    needs: [select, micro-judge-native]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.has_lanes == 'true' && needs.micro-judge-native.result == 'success'
+    name: Verify (${{ matrix.id }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.lanes) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+          cache: npm
+      - uses: actions/download-artifact@v8
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/native-input
+      - name: Assemble exactly the selected, current native test bundle
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
+      - uses: pnpm/action-setup@v6
+        if: matrix.pnpm
+        with:
+          version: ${{ matrix.pnpmVersion }}
+      - name: Install selected native test prerequisites
+        if: matrix.sbcl
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y sbcl bubblewrap python3
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          else
+            brew install sbcl python
+          fi
+      - name: Install dependencies without the duplicate package build
+        run: npm ci
+        env:
+          KIOKUKO_CI_DEFER_PREPARE: '1'
+      - name: Install locked CLI and terminal test support
+        if: matrix.fixture
+        run: npm ci --prefix tests/fixtures/dsh-runtime
+      - name: Check out the selected current official DSH revision
+        if: matrix.fixture
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.select.outputs.dsh_sha }}
+          path: .artifacts/official-dsh
+          persist-credentials: false
+      - name: Install the package manager declared by official DSH
+        if: matrix.fixture
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: .artifacts/official-dsh/package.json
+          run_install: false
+      - name: Build current official DSH from its frozen dependency graph
+        if: matrix.fixture
+        working-directory: .artifacts/official-dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:artifacts
+      - name: Stage current official runtime and retain exact source identity
+        if: matrix.fixture
+        run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
+      - name: Restore the selected consumer-test package manager
+        if: matrix.pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ matrix.pnpmVersion }}
+      - name: Install browser runtime only for UI coverage
+        if: matrix.browser
+        run: npx playwright install --with-deps chromium
+      - name: Execute the selected checks against current official DSH
+        env:
+          KIOKUKO_EXPECTED_DSH_SHA: ${{ needs.select.outputs.dsh_sha }}
+        run: node scripts/verify.mjs --ci-plan "${{ runner.temp }}/ci-plan/selected-ci.json" --lane "${{ matrix.id }}" --output "${{ runner.temp }}/verification"
+      - name: Retain a complete tested release-review candidate only in full mode
+        if: needs.select.outputs.full == 'true' && matrix.release
+        uses: actions/upload-artifact@v7
+        with:
+          name: multi-platform-package-${{ github.sha }}
+          path: ${{ runner.temp }}/verification/*.tgz
+          if-no-files-found: error
+      - name: Retain exact official DSH identity with verification evidence
+        if: always() && matrix.fixture
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/verification"
+          cp tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json "${{ runner.temp }}/verification/dsh-upstream.json"
+      - name: Retain selected verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: verification-ci-${{ matrix.id }}
+          path: |
+            ${{ runner.temp }}/verification/**
+            !${{ runner.temp }}/verification/npm-cache/**
+          if-no-files-found: error
+  verify:
+    name: Required selected verification
+    needs: [select, micro-judge-native, checks]
+    if: always()
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+      - uses: actions/download-artifact@v8
+        if: needs.select.result == 'success'
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - uses: actions/download-artifact@v8
+        if: needs.micro-judge-native.result == 'success'
+        with:
+          pattern: micro-judge-*
+          path: ${{ runner.temp }}/native-input
+      - name: Verify selected native identities before aggregate acceptance
+        if: needs.micro-judge-native.result == 'success'
+        run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
+      - uses: actions/download-artifact@v8
+        if: needs.select.outputs.has_lanes == 'true'
+        with:
+          pattern: verification-ci-*
+          path: ${{ runner.temp }}/ci-evidence
+      - name: Require every selected job and current report
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node scripts/verify-ci-results.mjs --ci-plan "${{ runner.temp }}/ci-plan/selected-ci.json" "${{ runner.temp }}/ci-evidence"
