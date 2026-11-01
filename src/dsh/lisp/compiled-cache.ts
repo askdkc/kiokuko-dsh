@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs'
 import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { z } from 'zod'
+import { findSecret } from '../../memory/secrets.js'
 import { digest, LispError, type LispConfiguration } from './contracts.js'
 import { verifyLispVendor } from './integrity.js'
 import { executable, prepareLayout, sandboxLaunch, type SandboxLayout } from './sandbox.js'
@@ -28,6 +29,17 @@ async function fileHash(path: string, limit: number, privateFile = false): Promi
   return { hash: hash.digest('hex'), bytes }
 }
 
+/** Drop a truncated leading line before redaction so a lost key prefix is not exposed. */
+function setupDiagnostics(stderr: Buffer, truncated: boolean): string {
+  let text = stderr.toString('utf8')
+  if (truncated) text = text.includes('\n') ? text.slice(text.indexOf('\n') + 1) : '[truncated stderr]'
+  // Detect secrets in the exact normalized representation that will be shown.
+  const normalized = text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/gu, '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/gu, '')
+  const redact = (value: string) => value.split(/\r?\n/u).map(line => findSecret(line) ? '[redacted secret-bearing diagnostic]' : line).join('\n')
+  // Redact whole lines before truncation, then check the new leading boundary.
+  return redact(Buffer.from(redact(normalized)).subarray(-6000).toString('utf8'))
+}
+
 /** Bounded, supervised, sandboxed setup. No user code or inherited environment. */
 export async function runLispSetup(layout: SandboxLayout, config: LispConfiguration, script: string, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
@@ -37,12 +49,18 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [join(layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })],
       { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe'] })
-    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), bytes = 0, failure: Error | undefined
+    let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), bytes = 0, stderrTruncated = false, failure: Error | undefined
     let stopTimer: ReturnType<typeof setTimeout> | undefined
     const stop = (error: Error) => {
       if (failure) return
       failure = error; child.kill('SIGTERM')
-      stopTimer = setTimeout(() => { cleanup(); reject(new LispError('STOP_UNCONFIRMED', 'Lisp の準備プロセスの停止を確認できません。', 'ホストを停止し、残ったプロセスを確認してから再開してください。')) }, 5000)
+      stopTimer = setTimeout(() => {
+        cleanup()
+        const problem = new LispError('STOP_UNCONFIRMED', `Lisp の準備プロセスの停止を確認できません。\nSetup failure: ${error instanceof LispError ? error.code : error.name}\n${setupDiagnostics(stderr, stderrTruncated)}`,
+          'ホストを停止し、残ったプロセスを確認してから再開してください。')
+        problem.cause = error
+        reject(problem)
+      }, 5000)
     }
     const abort = () => stop(new LispError('CANCELLED', 'Lisp の準備を取り消しました。', recovery))
     const timer = setTimeout(() => stop(new LispError('COMPILE_TIMEOUT', 'Lisp の準備が時間内に完了しませんでした。', 'startupTimeoutMs を確認し、/kioku-lisp recover で再開してください。')), config.startupTimeoutMs)
@@ -50,14 +68,14 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
     for (const output of [child.stdout!, child.stderr!]) output.on('data', (chunk: Buffer) => {
       bytes += chunk.length
       if (output === child.stdout) stdout = Buffer.concat([stdout, chunk]).subarray(-16384)
-      else stderr = Buffer.concat([stderr, chunk]).subarray(-16384)
+      else { const collected = Buffer.concat([stderr, chunk]); stderrTruncated ||= collected.length > 16384; stderr = collected.subarray(-16384) }
       if (bytes > config.maxOutputBytes) stop(new LispError('OUTPUT_LIMIT', 'Lisp の準備中の出力量が上限を超えました。', recovery))
     })
     child.once('error', error => { cleanup(); reject(error) })
     child.once('close', code => {
       cleanup()
       if (failure) reject(failure)
-      else if (code !== 0) reject(new LispError('COMPILE_FAILED', `Lisp の準備に失敗しました。\n${stderr.toString().slice(-6000)}`, recovery))
+      else if (code !== 0) reject(new LispError('COMPILE_FAILED', `Lisp の準備に失敗しました。\n${setupDiagnostics(stderr, stderrTruncated)}`, recovery))
       else resolve(stdout.toString())
     })
     signal.addEventListener('abort', abort, { once: true })

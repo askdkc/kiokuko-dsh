@@ -109,7 +109,13 @@ if (launch.namespaceInfo) {
       // The channel is private to bwrap and closed before guest execution.
       // Check kernel parentage while its monitor is alive, then retain the
       // birth fingerprint so a later orphan or PID reuse cannot change scope.
-      if (sameProcess(pid, identity) && (!identity || parentPid(pid) !== child.pid)) throw new Error('not an owned child')
+      if (sameProcess(pid, identity)) {
+        if (!identity) throw new Error('identity unavailable')
+        try { if (parentPid(pid) !== child.pid) throw new Error('not an owned child') }
+        catch (error) {
+          if (!['ENOENT', 'ESRCH'].includes(error.code) || sameProcess(pid, identity)) throw error
+        }
+      }
       namespace = { pid, identity }
       // A dead bwrap monitor cannot donate a still-live namespace runtime.
       reportRuntime(pid)

@@ -19,7 +19,7 @@ async function until(check: () => boolean, message: string, ms = 2500) {
   const deadline = Date.now() + ms
   while (!check()) { assert.ok(Date.now() < deadline, message); await delay(10) }
 }
-async function fixture(reportDelay: number, options: { coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
+async function fixture(reportDelay: number, options: { parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'namespace-supervisor-'))
   const script = join(base, 'monitor.py')
   await writeFile(script, `import os,sys,time,json,subprocess,select
@@ -67,6 +67,23 @@ sys.exit(child.wait())
     const identity = new URL('./process-identity.mjs', pathToFileURL(supervisor)).href
     await writeFile(fake, `export{sameProcess}from ${JSON.stringify(identity)};export function processIdentity(){throw new Error('fixture identity lookup failed')}`)
     await writeFile(preload, `import{registerHooks}from'node:module';registerHooks({resolve(spec,context,next){if(spec==='./process-identity.mjs'&&context.parentURL===${JSON.stringify(pathToFileURL(supervisor).href)})return{url:${JSON.stringify(pathToFileURL(fake).href)},shortCircuit:true};return next(spec,context)}})`)
+    args.unshift('--import', preload)
+  }
+  if (options.parentageError) {
+    const preload = join(base, 'parentage.mjs')
+    const identity = new URL('./process-identity.mjs', pathToFileURL(supervisor)).href
+    await writeFile(preload, `import fs from'node:fs';import cp from'node:child_process';import{syncBuiltinESMExports}from'node:module';import{processIdentity,sameProcess}from ${JSON.stringify(identity)};
+      const read=fs.readFileSync,exec=cp.execFileSync,counts=new Map();
+      function inject(pid){
+        const owned=JSON.parse(read(${JSON.stringify(join(base, 'spawned.json'))},'utf8'));if(pid!==owned.child)throw Error('foreign fixture injection refused');
+        const gone=${JSON.stringify(options.parentageError.startsWith('gone'))};
+        if(gone){const birth=processIdentity(pid);if(!birth||!sameProcess(pid,birth))throw Error('fixture identity unavailable');process.kill(pid,'SIGKILL');
+          const end=Date.now()+2500;while(sameProcess(pid,birth)){if(Date.now()>end)throw Error('fixture child did not terminate');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5)}}
+        const error=Error('fixture parentage lookup failed');error.code=${JSON.stringify(options.parentageError === 'goneESRCH' ? 'ESRCH' : options.parentageError === 'gone' ? 'ENOENT' : options.parentageError)};
+        console.error('fixture parentage '+error.code+' '+(gone?'dead':'live'));throw error
+      }
+      fs.readFileSync=function(path,...args){const m=/^\\/proc\\/(\\d+)\\/stat$/.exec(String(path));if(m){const n=(counts.get(path)??0)+1;counts.set(path,n);if(n===4)inject(Number(m[1]))}return read.call(this,path,...args)};
+      cp.execFileSync=function(command,args,...rest){if(command==='/bin/ps'&&args?.[3]==='ppid=')inject(Number(args[1]));return exec.call(this,command,args,...rest)};syncBuiltinESMExports()`)
     args.unshift('--import', preload)
   }
   if (options.hostOwner) {
@@ -221,6 +238,27 @@ for (const mode of ['missing', 'malformed', 'identity lookup error', 'closed dia
       await delay(200)
       assert.equal(f.didExit, false, JSON.stringify({ supervisorExited: f.didExit, stdioClosed: f.didClose, ownedChildAlive: sameProcess(pid, identity) }))
       assert.equal(sameProcess(pid, identity), true, 'this real child must not be labelled stopped')
+    })
+  })
+}
+
+for (const code of ['gone', 'goneESRCH', 'ENOENT', 'EACCES'] as const) {
+  test(`namespace parentage lookup ${code}: only confirmed child death settles`, { timeout: 10000 }, async () => {
+    const f = await fixture(0.4, { parentageError: code })
+    await f.run(async () => {
+      const pid = await f.started(), identity = processIdentity(pid)
+      assert.ok(identity)
+      await until(() => f.stderr.includes('fixture parentage'), 'parentage boundary was not reached')
+      f.host.stdin!.end()
+      if (code.startsWith('gone')) {
+        await until(() => f.didClose, 'confirmed child disappearance left Stop unconfirmed')
+        assert.equal(sameProcess(pid, identity), false)
+        assert.equal(f.stderr.includes('LISP_STOP_UNCONFIRMED'), false)
+      } else {
+        await until(() => f.stderr.includes('LISP_STOP_UNCONFIRMED'), 'live lookup failure lost its fence')
+        assert.equal(f.didExit, false)
+        assert.equal(sameProcess(pid, identity), true)
+      }
     })
   })
 }
