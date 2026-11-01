@@ -231,12 +231,11 @@ export class LispManager {
   }
   /** A managed call uses the same admission queue and OS sandbox as legacy Lisp. */
   private async runTask(owner: LispOwner, code: string, input: unknown, signal?: AbortSignal, mode: 'call' | 'compile' | 'eval' = 'call'): Promise<{ value: unknown; output: unknown; generation: string }> {
-    await this.authorizeCodingTask(owner)
-    const repositoryRoot=detectRepositoryRoot({cwd:owner.root,allowDirectory:true}).root
-    const resident=[...this.#agents.values()].find(s=>s.worker&&!s.worker.stopped&&s.worker.repositoryRoot===repositoryRoot)
-    if(resident){
-      if(mode==='eval'||resident!==this.#agents.get(JSON.stringify([owner.sessionId,owner.agentId]))||resident.owner.root!==owner.root)
-        fail('REPOSITORY_IN_USE','このリポジトリの Lisp は別の owner が使用中です。状態は保持し、別 SBCL を起動しません。')
+    await this.claimSession(owner)
+    const resident=this.#agents.get(JSON.stringify([owner.sessionId,owner.agentId]))
+    // Schemas do not make arbitrary Lisp pure. Only reuse this caller's already
+    // protected heap; other callers and development heaps get private scratch.
+    if(mode!=='eval'&&resident?.owner.root===owner.root&&resident.worker?.layout.protected&&!resident.worker.stopped){
       return this.runResidentTask(resident,code,input,signal,mode)
     }
     if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED'))
@@ -262,29 +261,28 @@ export class LispManager {
       const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
       const layout = await prepareLayout(base, this.#library)
       layout.compiled = compiled.path
-      layout.workspace = owner.root
-      layout.protected = this.#config.executionMode === 'protected'
-      worker = this.#config.executionMode==='protected' ? new LispWorker(layout,this.#config,undefined,()=>false) : new LispWorker(layout, this.#config, (method,args,context)=>this.bridge(state,method,args,context))
+      // This function evaluator has no repository mount or host RPC authority.
+      // Repository observation and approved effects use their existing host paths.
+      layout.protected = true
+      worker = new LispWorker(layout,{...this.#config,executionMode:'protected'},undefined,()=>false)
       state.worker = worker
       assertCurrent()
       await worker.start()
       assertCurrent()
-      if(this.#config.executionMode==='protected'){
       const canary = join(base, 'host-canary')
       await writeFile(canary, 'protected', { mode: 0o600 })
       const probe = await this.journalRequest(state, worker, 'eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, combined)
       if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
-      }
       assertCurrent()
       state.state='EVALUATING'
       if (mode === 'compile') {
-        const checked = await this.journalRequest(state, worker, 'task-compile', { code }, this.#config.timeoutMs, combined)
+        const checked = await this.journalRequest(state, worker, 'task-compile', { code }, this.#config.timeoutMs, combined,false)
         assertCurrent()
         if (!checked.ok || checked.proposals.length) fail('TASK_COMPILE_FAILED', String(checked.value).slice(0, 1000))
         return { value: null, output: worker.output(), generation: worker.generation }
       }
       if (mode === 'eval') {
-        const evaluated = await this.journalRequest(state, worker, 'eval', { code, inputs: [] }, this.#config.timeoutMs, combined)
+        const evaluated = await this.journalRequest(state, worker, 'eval', { code, inputs: [] }, this.#config.timeoutMs, combined,false)
         assertCurrent()
         if (!evaluated.ok || evaluated.proposals.length) fail('TASK_EVAL_FAILED', String(evaluated.value).slice(0, 1000))
         const value = evaluated.value as { printed?: string; json?: unknown }
@@ -296,7 +294,7 @@ export class LispManager {
       await writeFile(inputPath, encoded, { flag: 'wx', mode: 0o400 })
       assertCurrent()
       state.state = 'EVALUATING'
-      const response = await this.journalRequest(state, worker, 'task', { code, input: inputPath }, this.#config.timeoutMs, combined)
+      const response = await this.journalRequest(state, worker, 'task', { code, input: inputPath }, this.#config.timeoutMs, combined,false)
       if (!response.ok || response.proposals.length) fail('TASK_EXECUTION_FAILED', String(response.value).slice(0, 1000))
       const result = await snapshot(layout.scratch, 'task-result.json', [])
       if (!result.exists) fail('TASK_RESULT_MISSING', 'Task result was not saved.')
@@ -824,7 +822,8 @@ export class LispManager {
     try {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
       const state = this.entry(owner)
-      if(!['lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
+      if(['lisp_define','lisp_call','lisp_observe','lisp_hot_call'].includes(tool))await this.claimSession(owner)
+      else if(!['lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
       if (tool === 'lisp_cancel') await this.claimSession(owner)
       if (tool === 'lisp_inspect') {
         try { await this.claimSession(owner) }
@@ -855,7 +854,7 @@ export class LispManager {
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
-          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. The exact owner reuses this worker with a fresh package, private result scratch and no host RPC. Other owners cannot borrow it. This is not heap security isolation; write pure functions with explicit dependencies. No mode switch is needed. lisp_hot_status reads active versions.',
+          hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. Reuse only your own protected worker with a fresh package and no host RPC; otherwise use private protected scratch without a repository mount. Schemas do not establish purity. No mode switch is needed. lisp_hot_status reads active versions.',
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a project-relative directory in development mode (scratch-relative in protected mode). Check final receipts and result-code.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
@@ -901,7 +900,6 @@ export class LispManager {
       if (tool.startsWith('lisp_hot_')) return await this.#hot.execute(owner, tool as HotMutation, id, hash,
         Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')), signal)
       if (tool === 'lisp_define' || tool === 'lisp_call' || tool === 'lisp_observe') {
-        if (!await this.isTaskMode(owner)) fail('TASK_MODE_REQUIRED', '作業用ツールには /kioku-lisp enable-task を使用してください。')
         if (tool === 'lisp_observe') {
           const request = z.object({ paths: z.array(z.string().min(1).max(4096)).min(1).max(100), format: z.enum(['text', 'json']).default('text') }).strict()
             .parse(Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'operationId')))

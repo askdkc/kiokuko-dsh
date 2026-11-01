@@ -42,6 +42,7 @@ import { mountLispHttp } from './http.js'
 import { createLispCiAdapter } from './ci.js'
 import { createLispPackageAdapter } from './packages.js'
 import { withTaskAuthority } from '../task-authority-context.js'
+import {isNativeSubagent} from '../native-subagent.js'
 import { TASK_AUTHORITY, type TaskLease } from '../task-state.js'
 import { createLispMemoryVerification } from './memory-verification.js'
 import { isSavedLispResultRead } from '../memory-application.js'
@@ -129,7 +130,7 @@ export const ToolInput = z.object({ operationId: identifier.optional(), code: z.
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
   const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
-  const agents = root.get('agents', false) as { get(id: string): Agent | undefined } | undefined
+  const agents = root.get('agents', false) as { get(id: string): Agent | undefined;isOwnedBy?(id:string,parent:Agent):boolean } | undefined
   const sessions = root.get('sessions', false) as { get(id: string): Session | undefined } | undefined
   const commands = ctx.get('commands', false) as { register(definition: DshNativeCommandDefinition): () => void } | undefined
   if (!tools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
@@ -412,6 +413,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const local: (() => void)[] = []
     agentDisposers.set(agent.id, local)
     const scopedTools = agent.ctx.get('tools') as Tools
+    // A child-local registration must not reintroduce capabilities hidden by
+    // its native inherited-tool filter. Metadata alone cannot widen its scope.
+    const inheritedLisp=isNativeSubagent(agent)?new Set(tools.schemas(agent).map(tool=>tool.name)):undefined
     // Current hosts own native/PTC selection for the Agent's lifetime. Preserve
     // that selection. Protected scopes retain their monotonic registry guards;
     // reserved PTC transport is denied before its program can execute.
@@ -447,6 +451,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     // Lisp and owned/native tools coexist. A worker failure does not restrict
     // the inherited development surface.
     for (const name of LISP_TOOLS) {
+      if(inheritedLisp&&!inheritedLisp.has(name))continue
       const definition = { name, get description() { return `${description(name)} Current Lisp approval mode: ${approvalPolicy.mode()} (profile).` }, modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string; rootCallId?: string; token?: symbol; toolSet?: unknown }) => {
@@ -698,6 +703,18 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     },
     async project(candidate, assembly) {
       const binding = owner(candidate)
+      if(config.enabled&&!manager.enabled.has(binding.owner.sessionId)&&isNativeSubagent(binding.agent)){
+        const parentId=binding.agent.session.header.parentSession,parent=parentId?agents.get(parentId):undefined
+        const liveParent=()=>!!parent&&agents.get(parent.id)===parent&&sessions.get(parent.session.id)===parent.session
+          &&agents.isOwnedBy?.(binding.agent.id,parent)===true&&manager.enabled.get(parent.session.id)===binding.owner.root
+        if(liveParent()&&tools.schemas(binding.agent).some(tool=>LISP_TOOLS.includes(tool.name as LispTool))){
+          // Inherit the execution preference, never its task lease, process or
+          // heap. The existing task mode supplies protected scratch functions.
+          await manager.enableTask(binding.owner,binding.signal)
+          owner(candidate)
+          if(!liveParent())await manager.disable(binding.owner)
+        }
+      }
       const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
       if (workflow && (!development || workflow.protocol || !isLispConversation(candidate)) && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
         unregister(binding.agent)
@@ -710,7 +727,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       // can activate Lisp inside that waterfall: refresh this request, not only
       // the next one. Use native visibility plus the exact guarded definitions.
       const schemas = tools.schemas(binding.agent).filter(schema=>development || fence!.definitions.get(`${candidate.id}:${schema.name}`) === tools.get(schema.name,binding.agent))
-      if (!LISP_TOOLS.every(name => schemas.some(schema => schema.name === name))) fail('HOST_CAPABILITY_MISSING', 'Lisp のツール定義を要求へ反映できません。')
+      // Native scopes may intentionally expose only a subset. Preserve their
+      // exact schemas instead of turning one denied capability into a turn gate.
       const sections = assembly.sections.filter(section => section.name !== 'kiokuko:lisp')
       sections.splice(Math.max(0, sections.findIndex(section => section.name === 'kiokuko:soul') + 1), 0,
         { name: 'kiokuko:lisp', text: '{{kiokuko_lisp}}' })
@@ -793,13 +811,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
 }
 function description(name: LispTool): string {
   return ({ lisp_eval: 'Evaluate Common Lisp, the selected route for computation and command orchestration while Lisp is ON. Use kioku.process:run / start-job for external programs including git, gh, builds and tests; direct native shell calls are rejected. Ordinary development does not require a preliminary prototype. Explicitly protected coding workflows require prototype:true and saved-result inspection before implementation. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
-    lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. Requires enable-task.',
-    lisp_hot_install: 'Validate a candidate against the current approved contract in workers using the selected execution mode, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
+    lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. No task-mode switch is needed; publishing still requires current task authority.',
+    lisp_hot_install: 'Validate a candidate against the current approved contract in protected scratch, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
     lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',
     lisp_hot_status: 'Read project-shared function names, revisions and contract refs; paginate with offset. Supply name to inspect approved checks; contractOffset pages their JSON in 2000 Unicode characters. No worker execution.',
     lisp_hot_deactivate: 'Use the current host approval policy to deactivate a project-shared function at expectedRevision. Existing calls and results remain available; new calls stop.',
-    lisp_define: 'Save a generated Lisp lambda and exact dependency refs as a reusable task tool. Requires /kioku-lisp enable-task. Compiles in an isolated worker and checks declared examples.',
-    lisp_call: 'Run a saved task tool with JSON input or a saved resultRef. Exact retries return the journal result; new calls use isolated workers.',
+    lisp_define: 'Save a generated Lisp lambda and exact dependency refs as a reusable task tool. No enable-task switch or Working task is needed. Compile and check examples in protected scratch; schemas do not grant host effects.',
+    lisp_call: 'Run a saved task tool with JSON input or a saved resultRef. Reuse only your own protected worker; otherwise use private protected scratch with no repository mount or host RPC. Exact retries return the journal result.',
     lisp_observe: 'Capture explicitly named workspace files as immutable task input, returning a resultRef without sending contents to the model.',
     lisp_stage: 'Turn a generated result into a guarded, immutable workspace change candidate bound to an observed baseRef. No workspace write.',
     lisp_verify: 'Materialize one candidate from frozen observed bytes in private scratch, then run an approved host verifier. The receipt remains bound to that candidate; unknown test reporting is not a pass.',

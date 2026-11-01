@@ -150,6 +150,7 @@ export interface PreparedAgentTask {
   skillDiscovery: SkillDiscoverySummary;
   context: ScopedContextResult | null;
   memoryPolicy: MemoryPolicy;
+  memoryWarnings?: readonly string[];
   warnings: CapabilityWarning[];
   nextAction: 'proceed' | 'answer_from_evidence_or_ask_user' | 'required_capability_unavailable';
   securityNotice: string;
@@ -696,6 +697,7 @@ interface FinalTaskContextResult {
   readonly run: NonTerminalTaskRun;
   readonly scopedContext: ScopedContextResult | null;
   readonly memoryUse: MemoryUseSignal;
+  readonly memoryWarnings?: readonly string[];
 }
 
 interface FinalTaskContextInput {
@@ -710,7 +712,7 @@ export async function refreshContinuedTaskContext(input: {
   memoryRetrieval?: import('../memory/retrieval-contracts.js').MemoryRetrievalConfig;
   timeConstraint?: MemoryTimeConstraint;
   assertCurrent: () => void; validateCapabilities: () => Promise<void>
-}): Promise<Pick<PreparedAgentTask, 'context' | 'memoryPolicy'>> {
+}): Promise<Pick<PreparedAgentTask, 'context' | 'memoryPolicy' | 'memoryWarnings'>> {
   const retrievalAnchorTimeMs = Date.now();
   const { database, prepared } = input
   const snapshot = captureProjectManifestSnapshot(prepared.project)
@@ -719,6 +721,7 @@ export async function refreshContinuedTaskContext(input: {
   assertCurrent()
   const query = { project:prepared.project, task:input.task, taskProfile:prepared.intake.profile,
     recommendedTags:prepared.intake.recommendedTags, runId:prepared.run.runId, characterBudget:boundTaskContextCharacterBudget(runState.run.metadata) }
+  try {
   const gated = await queryScopedContextGated(database,query,candidate=>{
     assertCurrent()
     const memoryUse=scopedMemoryUseSignal(database,prepared.project.workspace,candidate)
@@ -733,13 +736,28 @@ export async function refreshContinuedTaskContext(input: {
       && !hasBlockingRequiredCapability(resolveCapabilities({task:input.task,profile:prepared.intake.profile,recommendedTags:prepared.intake.recommendedTags,capabilities:input.capabilities,memoryUse}));
   }}} : {})})
   assertCurrent()
-  return {context:gated.context,memoryPolicy:gated.value}
+  return {context:gated.context,memoryPolicy:gated.value,memoryWarnings:[]}
+  } catch (error) {
+    if (!optionalMemoryUnavailable(error)) throw error;
+    assertCurrent();
+    await input.validateCapabilities();
+    assertCurrent();
+    return { context: null, memoryPolicy: deriveMemoryPolicy(prepared.intake.profile, 'none', input.capabilities),
+      memoryWarnings: ['memory_unavailable'] };
+  }
+}
+
+function optionalMemoryUnavailable(error: unknown): boolean {
+  return error instanceof KiokukoError
+    ? error.code === 'DATABASE_ERROR' || error.code === 'SERVICE_UNAVAILABLE'
+    : error instanceof Error && 'code' in error && error.code === 'ERR_SQLITE_ERROR';
 }
 
 async function selectFinalTaskContext(
   value: FinalTaskContextInput,
 ): Promise<FinalTaskContextResult> {
   const { input, prepared, missingMemoryCapability } = value;
+  try {
   let approvedEmptyContext: ScopedContextResult | null = null;
   const query = prepared.queryFor(value.context);
   const runtime = await searchRuntime(input, query);
@@ -776,6 +794,14 @@ async function selectFinalTaskContext(
   }
   const scopedContext = gated.context ?? (gated.value.closed ? null : approvedEmptyContext);
   return { context, run, scopedContext, memoryUse: gated.value.memoryUse };
+  } catch (error) {
+    if (!optionalMemoryUnavailable(error)) throw error;
+    input.signal?.throwIfAborted();
+    assertCurrentProjectManifest(input.project, input.manifestSnapshot);
+    const context = currentAgentTaskContext(input.database, input.runId, value.context);
+    const run = authoritativeTaskRun(input.database, input.runId, context.status);
+    return { context, run, scopedContext: null, memoryUse: 'none', memoryWarnings: ['memory_unavailable'] };
+  }
 }
 
 async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: string): Promise<PreparedAgentTask> {
@@ -849,10 +875,11 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: st
   const selected = await selectFinalTaskContext({ input, prepared, context, missingMemoryCapability });
   context = selected.context;
   run = selected.run;
-  return withPreparedEnno(input.database, buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
+  return withPreparedEnno(input.database, { ...buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
     runId: input.runId,
     status: run.status,
-  }, selected.scopedContext, skillDiscovery, selected.memoryUse), dshSessionId);
+  }, selected.scopedContext, skillDiscovery, selected.memoryUse),
+    ...(selected.memoryWarnings ? { memoryWarnings: selected.memoryWarnings } : {}) }, dshSessionId);
 }
 
 function withPreparedEnno(

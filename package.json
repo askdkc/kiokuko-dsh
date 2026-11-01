@@ -22,7 +22,7 @@
     "dist/",
     "migrations/",
     "skills/",
-    "dsh/cordis.patch.yml",
+    "dsh/",
     "docs/",
     "scripts/prepare-build.mjs",
     "scripts/backfill-akinator-memory.mjs",
@@ -69,6 +69,10 @@
     "./core": {
       "types": "./dist/dsh/core/index.d.ts",
       "default": "./dist/dsh/core/index.js"
+    },
+    "./harness": {
+      "types": "./dist/dsh/harness/index.d.ts",
+      "default": "./dist/dsh/harness/index.js"
     },
     "./modules/enno": {
       "types": "./dist/dsh/modules/enno.d.ts",

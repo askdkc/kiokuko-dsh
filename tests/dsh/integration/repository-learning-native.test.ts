@@ -37,7 +37,7 @@ test(
   async () => {
     // Public plugin bootstrap, not an injected host or external reflector. The
     // transport is deterministic; this proves wiring, not external model quality.
-    const f = await nativeSkillFixture({ packages, explicit: false, extra });
+    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
     const requests: any[] = [],
       reflections: any[] = [],
       diagnostics: any[] = [],
@@ -230,11 +230,11 @@ test(
         pathToFileURL(join(packages, "@deepseek-ai/dsh-session/lib/index.js"))
           .href
       );
-      const fresh = await f.ctx.agentLoop.create(
-        sessions.SessionId("learning-fresh"),
-        { provider: "mock", model: "qwen3-coder" },
-        { cwd: f.dir },
-      );
+      const { agent: fresh } = await f.ctx.agents.create({
+        sessionId: sessions.SessionId("learning-fresh"),
+        agentOptions: { provider: "mock", model: "qwen3-coder" },
+        meta: { cwd: f.dir },
+      });
       f.responses.push((request: any) => {
         assert.equal(memoryMessages(request).length, 1);
         assert.match(
@@ -258,11 +258,11 @@ test(
 
       const otherRoot = join(f.dir, "other-repository");
       await mkdir(join(otherRoot, ".git"), { recursive: true });
-      const foreign = await f.ctx.agentLoop.create(
-        sessions.SessionId("learning-foreign"),
-        { provider: "mock", model: "qwen3-coder" },
-        { cwd: otherRoot },
-      );
+      const { agent: foreign } = await f.ctx.agents.create({
+        sessionId: sessions.SessionId("learning-foreign"),
+        agentOptions: { provider: "mock", model: "qwen3-coder" },
+        meta: { cwd: otherRoot },
+      });
       f.responses.push((request: any) => {
         assert.equal(memoryMessages(request).length, 0);
         assert.doesNotMatch(
@@ -348,7 +348,7 @@ test(
   "public native plugin records a failed no-tool turn without promoting a failed auxiliary model to learned success",
   { timeout: 30_000 },
   async () => {
-    const f = await nativeSkillFixture({ packages, explicit: false, extra });
+    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
     const diagnostics: any[] = [];
     const off = f.ctx.on(
       "session/event",
@@ -431,7 +431,7 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
     `public native automatic learning honors ${scenario} boundaries`,
     { timeout: 30_000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, explicit: false, extra });
+      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
       const diagnostics: any[] = [];
       const off = f.ctx.on(
         "session/event",
@@ -548,7 +548,7 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
     `public native learning recovers from ${interruption} while its old model response is delayed`,
     { timeout: 30000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, explicit: false, extra });
+      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
       const original = f.model.stream.bind(f.model);
       let release!: () => void;
       let entered!: () => void;

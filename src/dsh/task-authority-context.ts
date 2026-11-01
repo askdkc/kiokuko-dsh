@@ -10,6 +10,9 @@ export function withTaskAuthority<T>(lease: TaskLease, operation: () => T): T {
   return authority.run(Object.freeze({ ...lease }), operation)
 }
 export function withNoTaskAuthority<T>(operation: () => T): T { return authority.run(null, operation) }
+/** A separately scheduled agent resolves its own authority at tool admission.
+ * Neither a caller's lease nor its explicit no-task binding is transferable. */
+export function withoutInheritedTaskAuthority<T>(operation: () => T): T { return authority.exit(operation) }
 export function hasNoTaskAuthority(): boolean { return authority.getStore() === null }
 export function currentTaskAuthority(): TaskLease | undefined {
   return authority.getStore() ?? undefined

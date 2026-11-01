@@ -3,7 +3,7 @@ import { migrateDatabase } from '../../../../src/db/migrate.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm,writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
@@ -17,7 +17,38 @@ const native = {
   timeout: 180000,
 }
 
-async function fixture(auto = false) {
+for(const executionMode of ['protected','development'] as const)test(`resident composition and child scratch preserve parent state and deny reader-time writes (${executionMode})`,native,async()=>{
+ const f=await fixture(false,executionMode),owner={sessionId:'composition-parent',agentId:'parent',root:f.root},child={sessionId:'composition-child',agentId:'child',root:f.root}
+ try{
+  await f.manager.enable(owner)
+  const before=await f.manager.status(owner) as any
+  assert.equal((await f.manager.execute(owner,'lisp_eval',{operationId:'marker',code:'(defparameter kioku.user::*composition-marker* 73)'}) as any).ok,true)
+  const integer={type:'integer'},first=await f.manager.execute(owner,'lisp_define',{operationId:'define-one',name:'add-one',description:'Add one',source:'(lambda (input) (+ input 1))',inputSchema:integer,outputSchema:integer,examples:[{input:1,expected:2}]}) as any
+  assert.equal(first.ok,true,JSON.stringify(first))
+  const composed=await f.manager.execute(owner,'lisp_define',{operationId:'define-composed',name:'add-twice',description:'Compose exact functions',source:'(lambda (input) (add-one (add-one input)))',inputSchema:integer,outputSchema:integer,dependencies:[{binding:'add-one',toolRef:first.toolRef}]}) as any
+  assert.equal(composed.ok,true,JSON.stringify(composed))
+  const result=await f.manager.execute(owner,'lisp_call',{operationId:'composed-call',toolRef:composed.toolRef,input:40}) as any
+  assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.value,42)
+  assert.equal((await f.manager.status(owner) as any).generation,before.generation)
+  assert.equal((await f.manager.execute(owner,'lisp_eval',{operationId:'marker-after',code:'kioku.user::*composition-marker*'}) as any).value.json,73)
+  const target=join(f.root,'reader-boundary.txt');await writeFile(target,'before')
+  const attempted=await f.manager.execute(owner,'lisp_define',{operationId:'reader-effect',name:'reader-effect',description:'Must be denied',source:`#.(progn (with-open-file (s ${JSON.stringify(target)} :direction :output :if-exists :supersede) (write-string "bad" s)) '(lambda (input) input))`,inputSchema:integer,outputSchema:integer}) as any
+  assert.equal(attempted.ok,false,JSON.stringify(attempted));assert.equal(await readFile(target,'utf8'),'before')
+  f.working(owner)
+  const contract=await f.manager.execute(owner,'lisp_hot_contract',{operationId:'shared-contract',name:'shared-add',description:'Shared addition',inputSchema:integer,outputSchema:integer,properties:[{input:1,expected:2}]}) as any
+  assert.equal(contract.ok,true,JSON.stringify(contract))
+  const installed=await f.manager.execute(owner,'lisp_hot_install',{operationId:'shared-install',name:'shared-add',contractRef:contract.contractRef,expectedRevision:0,source:'(lambda (input) (+ input 1))'}) as any
+  assert.equal(installed.ok,true,JSON.stringify(installed));await f.manager.enableTask(child)
+  const childCall=await f.manager.execute(child,'lisp_hot_call',{operationId:'child-call',name:'shared-add',input:41}) as any
+  assert.equal(childCall.ok,true,JSON.stringify(childCall));assert.equal(childCall.value,42)
+  assert.equal((await f.manager.execute(owner,'lisp_eval',{operationId:'parent-after-child',code:'kioku.user::*composition-marker*'}) as any).value.json,73)
+  await f.restart()
+  assert.equal((await f.manager.execute(child,'lisp_hot_call',{operationId:'child-call',name:'shared-add',input:41}) as any).replay,true)
+  assert.equal((await f.manager.execute(child,'lisp_hot_call',{operationId:'new-child-call',name:'shared-add',input:41}) as any).value,42)
+ }finally{await f.close()}
+})
+
+async function fixture(auto = false,executionMode:'development'|'protected'='protected') {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-hot-')))
   const root = join(base, 'workspace')
   await mkdir(root)
@@ -35,7 +66,7 @@ async function fixture(auto = false) {
   const options = {
     store,
     questions,
-    config: LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }),
+    config: LispConfig.parse({ executionMode, enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 }),
     dataRoot: join(base, 'data'),
   }
   let manager = new LispManager(options)

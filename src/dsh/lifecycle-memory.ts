@@ -153,6 +153,7 @@ export class DshLifecycleMemory {
       status: "pending" | "saved" | "unavailable";
       diagnostic?: MemoryFailureDiagnostic & { phase: MemoryFailurePhase };
       reconcile?: () => "saved" | "unavailable";
+      retry?: () => Promise<void>;
     }
   >();
   private stopped = false;
@@ -717,7 +718,20 @@ export class DshLifecycleMemory {
     const key = native
       ? `native-request:${sessionId}:${native.requestSeq}`
       : `${runId}:${task?.generation ?? 0}`;
-    if (this.offered.has(key)) return;
+    if (this.offered.has(key)) {
+      // A repeated host completion may retry a failed memory save, never task work
+      // or a new proposal. The original closure rechecks its exact scope.
+      for (const [approvalKey, approved] of this.approved) {
+        if (approved.status !== "unavailable" || !approved.retry ||
+            approved.proposal.source.taskId !== runId || approved.sessionId !== sessionId) continue;
+        approved.status = "pending";
+        const retry = approved.retry().then(() => { approved.status = "saved"; })
+          .catch(error => { approved.status = "unavailable"; this.reportFailure(error, "save", approvalKey); })
+          .finally(() => this.pending.delete(retry));
+        this.pending.add(retry);
+      }
+      return;
+    }
     this.offered.add(key);
     const request = structuredClone(state.request),
       controller = new AbortController();
@@ -1025,6 +1039,7 @@ export class DshLifecycleMemory {
           });
         },
         save: async (proposal, approvalKey) => {
+          const save = async () => {
           if (
             !this.owned(state.agent) ||
             controller.signal.aborted ||
@@ -1079,6 +1094,10 @@ export class DshLifecycleMemory {
               approved.reconcile = () => store.reconcile(proposal, approvalKey);
             store.save(proposal, approvalKey);
           });
+          };
+          const approved = this.approved.get(approvalKey);
+          if (approved) approved.retry = save;
+          await save();
         },
       });
       if (receipt.approvalKey) {
@@ -1087,8 +1106,11 @@ export class DshLifecycleMemory {
           approved.status =
             receipt.status === "saved" ? "saved" : "unavailable";
       }
+      // Extraction/reflection can be regenerated from the retained replay after
+      // a failure. A subsequent completion notification still asks for approval.
+      if (receipt.status === "unavailable" && !receipt.approvalKey) this.offered.delete(key);
     })()
-      .catch((error) => this.reportFailure(error, "prepare"))
+      .catch((error) => { this.offered.delete(key); this.reportFailure(error, "prepare"); })
       .finally(() => {
         this.controllers.delete(controller);
         this.pending.delete(operation);

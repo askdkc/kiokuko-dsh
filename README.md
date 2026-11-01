@@ -6,7 +6,19 @@ Memory body delivery defaults to 16,000 Unicode characters; relation metadata ha
 Kiokuko adds memory, planning, verification, and observability to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-Memory is optional. After a task ends, Kiokuko asks whether to organize recorded experience, shows an ephemeral preview, and saves only the exact revision the user approves. Automatic memory writers are retired. [Review, recall and forgetting](docs/replay-memory-review.md).
+Memory is advisory. Native turn observations and repository learning remain available; curated memories require the exact preview revision the user approves. Retrieval or reflection failure does not authorize effects or stop unrelated permitted work. [Review, recall and forgetting](docs/replay-memory-review.md).
+
+## Kiokuko-owned harness (unreleased)
+
+This source build registers `kiokuko-dsh/harness` as the DSH agent factory and disables the standard `agent-loop` in its bundle. Kiokuko schedules turns, model requests and native tool execution; DSH continues to supply its public agent/session API, model adapters, UI and permission enforcement. Use the built local tarball when validating this change; it has not been published.
+
+```bash
+dsh plugin --profile dsh-cli add ./kiokuko-dsh-0.2.39.tgz --ignore-scripts
+dsh --profile dsh-cli --dump-config
+dsh-cli
+```
+
+The dump must contain one enabled `kiokuko-dsh/harness` and a disabled `agent-loop`. For the legacy plugin mode, apply the installed `kiokuko-dsh/dsh/cordis.legacy.patch.yml` after the bundle. `dsh-cli --ignore-kiokuko` is a per-launch opt-out when supported by the installed CLI. See [configuration, lifecycle and verification limits](docs/kiokuko-harness.md), including the SBCL prerequisite and the distinction between scripted adapters and live assistant transport.
 
 Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitly forget a memory with `/kioku-memory forget ENTRY_ID --revision N`. [Evidence, explanations and forgetting](docs/memory-evidence.md).
 

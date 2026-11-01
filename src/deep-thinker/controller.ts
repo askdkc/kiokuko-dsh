@@ -1,4 +1,5 @@
 import { serializeModelMemoryContext } from '../context/model-memory.js'
+import {canonicalContentHash} from '../serialization/validate.js'
 import type { DecisionService } from '../dsh/decisions/service.js'
 import { isSyntheticContextSource } from '../dsh/plugin-source.js'
 import { createMemoryReuseRuntime } from '../dsh/memory-reuse.js'
@@ -226,6 +227,14 @@ export class DeepPlanningController {
     if (this.#blocked.get(payload.agent) === payload.turn) return true
     const intent = payload.agent.session && await this.store.intent(payload.agent.session.id, true)
     return !!intent && intent.status !== 'armed'
+  }
+  /** A replacement driver may release its inbox only after our existing store
+   * contains the exact claimed inputs. A rejected preparation alone is no proof. */
+  async retainsInput(payload:DshNativePreStepPayload):Promise<boolean>{
+    const session=payload.agent.session
+    if(!session||this.#agents.get(session.id)!==payload.agent||this.#blocked.get(payload.agent)!==payload.turn)return false
+    const intent=await this.store.intent(session.id,true)
+    return !!intent&&payload.messages.every(input=>intent.messages.some(saved=>canonicalContentHash(saved)===canonicalContentHash(input)))
   }
   async #initialize(intent: DeepIntent, agent: DeepNativeAgent, signal: AbortSignal): Promise<void> {
     const active = this.#initializing.get(intent.startId); if (active) return active

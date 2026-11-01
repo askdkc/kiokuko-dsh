@@ -1,4 +1,4 @@
-import { mountNativeExecutor } from "../helpers/native-tools.js";
+import { mountNativeTools } from "../helpers/native-tools.js";
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import { join } from "node:path";
@@ -12,7 +12,8 @@ import { DshAgenticReplayReadService } from "../../../src/dsh/agenticreplay-read
 import { AgenticReplayConfig } from "../../../src/dsh/config.js";
 import { agenticReplayFixture } from "../helpers/agenticreplay-fixture.js";
 import { nativeMock, nativeToolResults } from "../helpers/native-mock.js";
-const packages = join(process.cwd(), "tests/fixtures/dsh-runtime/node_modules");
+import * as harness from "../../../src/dsh/harness/index.js";
+const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), "tests/fixtures/dsh-runtime/node_modules");
 const load = (n: string) =>
   import(
     pathToFileURL(
@@ -84,6 +85,10 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
       "tool-bash",
     ]) {
       const plugin = await load(name);
+      if(name==='tools'){
+        await mountNativeTools(ctx,plugin,packages,fibers);
+        continue;
+      }
       fibers.push(
         await ctx.plugin(
           plugin.default ?? plugin,
@@ -99,9 +104,7 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
         ),
       );
     }
-    await mountNativeExecutor(ctx, packages, fibers);
-    const loop = await load("agent-loop");
-    fibers.push(await ctx.plugin(loop.default, { agents: [] }));
+    fibers.push(await ctx.plugin(harness));
     const native = nativeMock(llm);
     class Provider extends llm.LlmAdapter {
       async listModels(provider: string) {
@@ -180,11 +183,12 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
     );
     memory = new DshLifecycleMemory(ctx, runtime, f.root);
     memory.connectAgenticReplay(replay);
-    const agent = await ctx.agentLoop.create(
-      session.SessionId(f.binding.sessionId),
-      { provider: "mock", model: "mock" },
-      { cwd: f.root },
-    );
+    const {agent} = await ctx.agents.create({
+      sessionId: session.SessionId(f.binding.sessionId),
+      agentOptions: { provider: "mock", model: "mock" },
+      meta: { cwd: f.root },
+    });
+    assert.equal(agent.constructor.name,'KiokukoHarnessAgent');
     agent.followup(
       llm.createUserMessage({
         source: { kind: "user" },
@@ -235,6 +239,14 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
         ),
       ),
     );
+    const binding=replay.resolveSessionBinding(agent,agent.session);
+    assert.ok(binding);
+    await replay.closeSessionRecording(agent.session.id,'acceptance');
+    const reader=new DshAgenticReplayReadService(replay.config,replay.withIndex);
+    const traces=await reader.list(binding);
+    assert.equal(traces.length,1);
+    const trace=await reader.show(binding,traces[0]!.agenticreplay_run_id);
+    assert.ok(trace.events.some((e:any)=>e.type==='note'&&e.attrs?.action==='tool'&&e.attrs?.phase==='result'&&e.attrs?.call_id==='unowned-command'),'Native tool receipt must correlate with the harness action');
   } finally {
     memory?.stop();
     await memory?.whenIdle();

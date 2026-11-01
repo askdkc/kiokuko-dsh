@@ -24,6 +24,23 @@ for(const input of benignCases)test(`real writer preserves benign body: ${input}
 })
 test('capture has no raw mode',()=>assert.equal(AgenticReplayConfig.safeParse({capture:{content:'raw'}}).success,false))
 
+test('Kiokuko harness lifecycle actions retain parent-child and native sequence correlation without arbitrary payloads',async()=>{
+  const f=await agenticReplayFixture()
+  try {
+    const child={...f.binding,sessionId:'child-session'}
+    f.recorder.harnessAction(f.binding,{seq:10,data:{action:'turn',phase:'start',turn:1,step:0,api_key:'fixture-must-not-leak'}})
+    f.recorder.harnessAction(child,{seq:4,data:{action:'tool',phase:'result',turn:1,step:1,parentSession:f.binding.sessionId,callId:'child-call'}})
+    await f.recorder.shutdown()
+    const rows=await f.reader.list(f.binding)
+    assert.equal(rows.length,1)
+    const parentEvents=(await f.reader.show(f.binding,rows[0]!.agenticreplay_run_id)).events
+    assert.ok(parentEvents.some(e=>e.type==='note'&&e.attrs?.native_seq===10&&e.attrs?.action==='turn'))
+    const childRows=await f.reader.list(child),childEvents=(await f.reader.show(child,childRows[0]!.agenticreplay_run_id)).events
+    assert.ok(childEvents.some(e=>e.type==='note'&&e.attrs?.parent_session===f.binding.sessionId&&e.attrs?.call_id==='child-call'))
+    assert.equal(JSON.stringify([...parentEvents,...childEvents]).includes('fixture-must-not-leak'),false)
+  } finally {await f.dispose()}
+})
+
 test('oversized model requests keep bounded metadata and a correlated response', async () => {
   const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 16_384 })
   try {

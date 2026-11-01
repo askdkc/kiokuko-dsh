@@ -220,6 +220,18 @@ export class DshAgenticReplayRecorder {
     })
   }
   start(binding: DshAgenticReplayBinding): void { this.#admit(binding, true) }
+  /** Metadata only; the host calls this only under the exact session recording choice. */
+  harnessAction(binding:DshAgenticReplayBinding,event:{seq:number;data:unknown}):void {
+    const data=record(event.data)
+    if(!Number.isSafeInteger(event.seq)||event.seq<0||!Number.isSafeInteger(data.turn)||!Number.isSafeInteger(data.step)
+      ||typeof data.action!=='string'||typeof data.phase!=='string')return
+    const trace=this.#admit(binding);if(!trace)return
+    this.#safe(trace,()=>{this.#enqueue(trace,{type:'note',actor:'harness',turn:data.turn,attrs:{
+      format:'kiokuko.harness.action.v1',session_id:label(binding.sessionId),native_seq:event.seq,
+      action:label(data.action),phase:label(data.phase),step:data.step,
+      ...(typeof data.parentSession==='string'?{parent_session:label(data.parentSession)}:{}),
+      ...(typeof data.callId==='string'?{call_id:label(data.callId)}:{})}});this.#link(trace,binding)})
+  }
   markUnavailable(reason: string): void { this.#unavailable = true; this.#unavailableReason = reason; this.#accepting = false }
   #settle(trace: ActiveTrace) {
     trace.active--

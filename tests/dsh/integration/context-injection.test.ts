@@ -52,20 +52,31 @@ test('advisory evidence remains untrusted and precedes memory and the final user
   assert.equal(messages.at(-1)?.content, 'Finish the approved review.\n\nFinalized intake:\nsrc/index.ts\ntests pass')
 })
 
-test('ordinary memory remains untrusted and removes path/internal-id material', async () => {
-  const messages = await injectDshContext({
-    prepared: prepared({
-      context: {
-        untrusted: true,
-        items: [{ entryId: 'test-entry', workspace: 'project:test', title: 'Run lesson', summary: 'runId=abc12345', bodyPreview: 'Read /Users/dkc/private-note.txt before editing.', selectionReasons: ['exact_signal_match'] }],
-      },
-    }),
-    task: 'Review the repository change.',
-  })
-  const memory = messages.find((message) => message.source === 'memory')
-  assert.equal(memory?.role, 'user')
-  assert.equal(memory?.content.includes('/Users/dkc'), false)
-  assert.equal(memory?.content.includes('abc12345'), false)
+test('ordinary memory stays untrusted and an unavailable validation cannot hide the user request', async () => {
+  for (const unavailable of [false, true]) {
+    const messages = await injectDshContext({
+      prepared: prepared({
+        context: {
+          untrusted: true,
+          items: [{ entryId: 'test-entry', workspace: 'project:test', title: 'Run lesson', summary: 'runId=abc12345', bodyPreview: 'Read /Users/dkc/private-note.txt before editing.', selectionReasons: ['exact_signal_match'] }],
+        },
+      }),
+      task: 'Review the repository change.',
+      ...(unavailable ? { runtime: { withDatabase: async () => { throw new Error('optional memory service unavailable: private failure detail') } } } : {}),
+    })
+    const memory = messages.find((message) => message.source === 'memory' && message.name !== 'relations')
+    if (unavailable) {
+      assert.equal(memory, undefined, 'unvalidated advisory memory must not be delivered')
+      assert.ok(messages.some(message => message.source === 'advisory' && message.content.includes('memory_unavailable')))
+      assert.equal(messages.some(message => message.content.includes('private failure detail')), false)
+    } else {
+      assert.equal(memory?.role, 'user')
+      assert.equal(memory?.content.includes('/Users/dkc'), false)
+      assert.equal(memory?.content.includes('abc12345'), false)
+    }
+    assert.ok(messages.at(-1)?.content.startsWith('Review the repository change.'))
+    assert.match(messages[0]!.content, /nextAction=proceed/u)
+  }
 })
 
 test('explicit current directive wins over a stale prepared directive', async () => {

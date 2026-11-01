@@ -67,6 +67,7 @@ export interface DshNativeTurnStoppingPayload {
 }
 
 export interface DshCompositionHost {
+  readonly harnessLifecycle?: import('./harness/lifecycle.js').KiokukoHarnessLifecycle
   readonly onDemandIntake?: OnDemandIntake
   readonly taskWorkflow?: DshTaskWorkflow
   readonly diffReview?: DiffReviewController
@@ -157,13 +158,16 @@ function mountNativeIntakeGate(
   deep?: import('../deep-thinker/controller.js').DeepPlanningController,
   demand?: OnDemandIntake,
   bypassIntake?: (agent: DshNativePreStepPayload['agent']) => boolean,
+  harness?: import('./harness/lifecycle.js').KiokukoHarnessLifecycle,
 ): () => void {
-  return ctx.on('agent/pre-step', async (payload: DshNativePreStepPayload, next) => {
+  const listener = async (payload: DshNativePreStepPayload, next: () => Promise<DshPreStepDecision>): Promise<DshPreStepDecision> => {
     if (deep?.executor.isChild(payload.agent)) return next()
     if (bypassIntake?.(payload.agent)) return next()
-    if (await deep?.preStep(payload)) {
+    if (deep&&await deep.preStep(payload)) {
+      if(harness&&await deep.retainsInput(payload))
+        (payload as import('./harness/lifecycle.js').HarnessStep).inputHandled?.()
       void deep!.kick(payload.agent).catch(() => {})
-      return { kind: 'reject', reason: 'Deep owns and has preserved this input.' }
+      return { kind: 'reject' }
     }
     if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
       const result = await next()
@@ -184,7 +188,8 @@ function mountNativeIntakeGate(
     // supersession. Only after that point may recovery work be kicked.
     worker?.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
     return decision
-  }, { prepend: true })
+  }
+  return harness ? harness.onStep(listener as any) : ctx.on('agent/pre-step', listener, { prepend: true })
 }
 
 function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshEnnoController): () => void {
@@ -210,6 +215,7 @@ function mountNativeBoundaryKick(
   ctx: { on(name: string, listener: (payload: DshNativeTurnStoppingPayload) => void, options?: { readonly prepend?: boolean }): () => void },
   worker: Pick<DshBoundaryWorker, 'kick'>,
   bypassIntake?: (agent: DshNativeTurnStoppingPayload['agent']) => boolean,
+  harness?: import('./harness/lifecycle.js').KiokukoHarnessLifecycle,
 ): readonly (() => void)[] {
   const kick = (payload: DshNativeTurnStoppingPayload): void => {
     if (bypassIntake?.(payload.agent)) return
@@ -217,6 +223,7 @@ function mountNativeBoundaryKick(
     // inside the native turn-stopping callback. The durable worker owns it.
     worker.kick(payload.agent.session?.id ?? payload.agent.sessionId, payload.agent)
   }
+  if(harness)return [harness.onStopping(kick as any),harness.onIdle(agent=>kick({agent} as any))]
   return [
     ctx.on('agent/turn-stopping', kick, { prepend: true }),
     ctx.on('agent/idle', kick),
@@ -393,13 +400,13 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
     }
     if (host.intakeGate !== undefined) {
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
-      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.onDemandIntake, host.bypassNativeIntake))
+      ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.onDemandIntake, host.bypassNativeIntake, host.harnessLifecycle))
     }
     if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
       throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')
     }
     if (host.boundaryWorker !== undefined) {
-      ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker, host.bypassNativeIntake))
+      ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker, host.bypassNativeIntake, host.harnessLifecycle))
     } else if (host.ennoController !== undefined) {
       ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
     }

@@ -2180,6 +2180,8 @@ export function createDshHostAdapter(
       onNativeServiceEvent(ctx, name, listener, options),
   });
   const host: DshCompositionHost = {
+    ...((ctx.get('kiokukoHarness', false) as { lifecycle?: import('./harness/lifecycle.js').KiokukoHarnessLifecycle } | undefined)?.lifecycle
+      ? { harnessLifecycle: (ctx.get('kiokukoHarness', false) as { lifecycle: import('./harness/lifecycle.js').KiokukoHarnessLifecycle }).lifecycle } : {}),
     ...(demand ? { onDemandIntake: demand } : {}),
     ...(taskWorkflow ? { taskWorkflow } : {}),
     bypassNativeIntake: isGenericNativeChild,

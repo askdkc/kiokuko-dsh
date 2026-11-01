@@ -1,0 +1,7 @@
+# Apply after the Kiokuko bundle only when validating the original plugin mode.
+- id: kiokuko-harness
+  disabled: true
+- id: agent-loop
+  disabled: false
+- id: kiokuko-dsh
+  inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, sessionPersistence, llm, agents, attachments, subagents, subprocess]

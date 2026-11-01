@@ -16,7 +16,7 @@ const extra={lisp:{enabled:false},typedDecisions:{mode:'off'},modelHandoff:{mode
   memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}}
 
 for(const mode of ['full','compiled'] as const)test(`native ${mode}: feedback and compaction retain raw history without unapproved memory, and explicit search stays optional`,async()=>{
- const f=await nativeSkillFixture({packages,explicit:true,mode,extra,prompts:new DshSkillPrompts({mode})})
+ const f=await nativeSkillFixture({packages,driver:'kiokuko',explicit:true,mode,extra,prompts:new DshSkillPrompts({mode})})
  try{
   f.responses.push(f.mock.textResponse('Public parser explanation.'));await f.turn('parser の仕組みを説明してください。')
   const session=f.agent.session,start=session.seq
@@ -41,7 +41,7 @@ for(const mode of ['full','compiled'] as const)test(`native ${mode}: feedback an
 })
 
 test('approved first memory survives JSONL/reopened native agent; rejected steps store no model-visible snapshot',async()=>{
- const f=await nativeSkillFixture({packages,explicit:true,extra,prompts:new DshSkillPrompts({mode:'compiled'})})
+ const f=await nativeSkillFixture({packages,driver:'kiokuko',explicit:true,extra,prompts:new DshSkillPrompts({mode:'compiled'})})
  let handle:any,readHandle:any,writer:any,reader:any,off:()=>void=()=>{}
  const errors:unknown[]=[],offError=f.ctx.on('agent/error',({error}:any)=>errors.push(error))
  try{
@@ -50,15 +50,18 @@ test('approved first memory survives JSONL/reopened native agent; rejected steps
   const readerContext=new cordis.Context();reader=await readerContext.plugin(jsonl,{root,compression:'none'})
   const id=nativeSession.SessionId('lifecycle-persisted'),body='Initial parser caution comes only from exact human approval'
   const db=openConnection(join(dirname(f.dir),'state.sqlite3'));try{const workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<any>()!.workspace;await approveFixtureMemory(db,workspace,body,['parser'])}finally{db.close()}
-  handle=await f.ctx.agentLoop.createAgent(f.ctx,{sessionId:id,meta:{cwd:f.dir},agentOptions:{provider:'mock',model:'qwen3-coder'}})
+  handle=await f.ctx.agents.create({sessionId:id,meta:{cwd:f.dir},agentOptions:{provider:'mock',model:'qwen3-coder'}})
   const turn=async()=>{handle.agent.followup(f.llm.createUserMessage({content:[{type:'text',text:'parser の仕組みを説明してください。'}],source:{kind:'user'}}));await handle.agent.whenIdle();assert.deepEqual(errors,[])}
   off=handle.agent.ctx.on('agent/pre-step',async()=>({kind:'reject'}));await turn();assert.equal(handle.agent.session.surface.nodes.length,0);assert.equal(handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='user/message').length,0)
+  assert.equal(handle.agent.inbox.nextTurn.length,1,'The replacement retains the rejected request without promoting its memory snapshot')
   off();off=()=>{}
   const inspect=(request:any)=>{const memory=request.messages.filter((message:any)=>message.source?.sections?.some((section:any)=>section.name==='memory:approved-replay'));assert.equal(memory.length,1);assert.match(JSON.stringify(memory),/Initial parser caution/);return f.mock.textResponse('Approved source read.')}
-  f.responses.push(inspect);await turn();const session=handle.agent.session;await f.ctx.sessions.flush(session)
+  f.responses.push(inspect);handle.agent.steer(f.llm.createUserMessage({content:[{type:'text',text:'parser の元の依頼を続けてください。'}],source:{kind:'user'}}));await handle.agent.whenIdle();assert.deepEqual(errors,[])
+  assert.equal(handle.agent.inbox.nextTurn.length,0);assert.equal(handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='user/message'&&event.data.content?.some((b:any)=>b.text==='parser の仕組みを説明してください。')).length,1)
+  const session=handle.agent.session;await f.ctx.sessions.flush(session)
   readHandle=await readerContext.sessionPersistence.open(id,'read');assert.deepEqual((await readHandle.read()).events,session.snapshotEvents());await readHandle.close();readHandle=undefined
   await handle.dispose();handle=undefined
-  handle=await f.ctx.agentLoop.resume(f.ctx,{resumeSessionId:id,agentOptions:{provider:'mock',model:'qwen3-coder'}})
+  handle=await f.ctx.agents.resume({resumeSessionId:id})
   f.responses.push(inspect);await turn();assert.equal(f.responses.length,0)
   const resumed=handle.agent.session;await f.ctx.sessions.flush(resumed);readHandle=await readerContext.sessionPersistence.open(id,'read');assert.deepEqual((await readHandle.read()).events,resumed.snapshotEvents())
  }finally{off();offError();try{await readHandle?.close()}finally{try{await handle?.dispose()}finally{try{await reader?.dispose()}finally{try{await writer?.dispose()}finally{await f.close()}}}}}

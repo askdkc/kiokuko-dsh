@@ -3,6 +3,8 @@
 # the stock row automatically.
 - id: session-log-download
   disabled: true
+- id: agent-loop
+  disabled: true
 - insert:
     # Saved model providers must survive a failure of the execution plugin.
     - id: kiokuko-models
@@ -10,7 +12,7 @@
       inject: [llm, commands]
     - id: kiokuko-dsh
       name: 'kiokuko-dsh'
-      inject: [skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, sessionPersistence, llm, agents, attachments, subagents, subprocess]
+      inject: [kiokukoHarness, skills, systemPrompt, tools, commands, userQuestions, sessions, sessionQuery, sessionPersistence, llm, agents, attachments, subagents, subprocess]
       config:
         enabled: true
         agenticReplay:
@@ -21,3 +23,6 @@
           capture:
             content: redacted
             reasoning: false
+    - id: kiokuko-harness
+      name: 'kiokuko-dsh/harness'
+      inject: [agents, sessions, llm, systemPrompt, tools, sessionProjections, sessionPersistence]

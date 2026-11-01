@@ -2,6 +2,7 @@
 import { appendFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { createQuestionObserver } from './cli-input-barrier.mjs'
+import { liveAssistantStream } from './live-assistant-bridge.mjs'
 
 export const name = 'kiokuko-cli-profile-fixture'
 export const inject = ['llm', 'agents', 'sessions', 'tools', 'commands']
@@ -29,7 +30,12 @@ export function apply(ctx) {
       const input = [...options.messages].reverse().find(message => message.role === 'user' && message.source?.kind === 'user')
       const text = input?.content?.filter(block => block.type === 'text').map(block => block.text).join('\n') ?? ''
       record({ type: reflection ? 'fixture-repository-learning' : 'fixture-request', text, sessionId: options.sessionId, purpose: options.purpose, tools: options.tools?.map(tool => tool.name) ?? [] })
-      if (text.includes('profile-fixture-hello') && options.tools?.length) {
+      if(process.env.KIOKUKO_CLI_LIVE_BRIDGE&&!text.includes('profile-fixture-slow')) {
+        record({type:'live-assistant-request',text,sessionId:options.sessionId,purpose:options.purpose})
+        yield*liveAssistantStream(process.env.KIOKUKO_CLI_LIVE_BRIDGE,options)
+        return
+      }
+      if (!['standalone','ignore'].includes(process.env.KIOKUKO_CLI_VARIANT) && text.includes('profile-fixture-hello') && options.tools?.length) {
         for (const name of ['prepare_requested_work', 'kioku_read']) assert.ok(options.tools?.some(tool => tool.name === name), `Kiokuko tool ${name} was not ready`)
       }
       let answer = reflection ? JSON.stringify({ lessons: [] }) : 'PROFILE_FIXTURE_OK'
@@ -87,7 +93,7 @@ export function apply(ctx) {
     names: ctx.commands.list(agent).map(command => command.name) })
   ctx.on('agent/created', ({ agent }) => {
     observedAgents.set(agent.id, agent)
-    record({ type: 'agent-created', sessionId: agent.session.id, eventCount: agent.session.snapshotEvents().length,
+    record({ type: 'agent-created', driver: agent.constructor.name, sessionId: agent.session.id, eventCount: agent.session.snapshotEvents().length,
       executionFences: Boolean(ctx.get('executionFences', false)) })
     recordCommands(agent)
   })

@@ -64,6 +64,7 @@ function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSki
     : (finalized.length === 0 || finalized === fallbackTask ? fallbackTask : `${fallbackTask}\n\nFinalized intake:\n${finalized}`)
   return {
     task,
+    ...(prepared.memoryWarnings?.length ? { memoryWarnings: prepared.memoryWarnings } : {}),
     intakeStatus: prepared.intake.status,
     nextAction: 'proceed',
     memoryPolicy: prepared.memoryPolicy,

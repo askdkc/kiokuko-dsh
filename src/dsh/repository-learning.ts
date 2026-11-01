@@ -102,6 +102,9 @@ export class DshRepositoryLearning {
     private runtime: Pick<DshCoreRuntime, "withDatabase">,
     private root: string,
   ) {
+    // The runtime registers the repository, not necessarily the launch cwd.
+    // Keep admission, persistence and subsequent context on that same key.
+    this.root = detectRepositoryRoot({ cwd: root, allowDirectory: true }).root;
     this.disposers.push(
       host.on(
         "agent/created",

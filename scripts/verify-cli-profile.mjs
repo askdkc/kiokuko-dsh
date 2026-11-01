@@ -18,6 +18,13 @@ import { join, resolve, dirname } from 'node:path'
 import YAML from 'yaml'
 
 const [dshArg, cliArg, kiokukoArg, ptyArg, xtermArg, rootArg, stage = 'all'] = process.argv.slice(2)
+const scope = process.argv[9] ?? 'all'
+const variant = process.env.KIOKUKO_CLI_VARIANT ?? 'harness'
+assert.ok(['harness', 'legacy', 'standalone', 'ignore'].includes(variant))
+const kiokukoEnabled = variant !== 'standalone' && variant !== 'ignore'
+assert.ok(kiokukoEnabled || scope === 'normal', 'Lisp acceptance requires Kiokuko')
+const launcher = process.env.KIOKUKO_CLI_LAUNCHER === '1'
+assert.ok(['all','normal'].includes(scope), 'Scope must be all or normal; normal does not validate Lisp')
 assert.ok(['all', 'install', 'tui', 'source'].includes(stage))
 assert.ok(dshArg && cliArg && kiokukoArg && ptyArg && xtermArg, 'Expected DSH_BIN CLI_TGZ KIOKUKO_TGZ NODE_PTY XTERM_ANCHOR [WORK_ROOT]')
 const [dsh, cliPackage, kiokukoPackage] = await Promise.all([dshArg, cliArg, kiokukoArg].map(path => realpath(resolve(path))))
@@ -30,8 +37,9 @@ if (sourceHook) {
   assert.ok(sourceHook.startsWith(`${root}/`), 'Source-entry hook must be a private artifact inside WORK_ROOT')
 }
 const home = join(root, 'home'), dshHome = join(root, 'dsh'), workspace = join(root, 'workspace')
-assert.ok(process.platform !== 'darwin' || Buffer.byteLength(join(home, '.dsh-cli/inject/00000000-0000-0000-0000-000000000000.sock')) < 104,
-  'Use a short WORK_ROOT: macOS Unix sockets are limited to 103 path bytes')
+const socketPathLimit=process.platform==='darwin'?103:process.platform==='linux'?107:undefined
+assert.ok(socketPathLimit===undefined || Buffer.byteLength(join(home, '.dsh-cli/inject/00000000-0000-0000-0000-000000000000.sock'))<=socketPathLimit,
+  `Use a short WORK_ROOT: ${process.platform} Unix sockets are limited to ${socketPathLimit} path bytes`)
 for (const path of [home, dshHome, workspace, join(root, 'tmp'), join(root, 'cache')]) await mkdir(path, { recursive: true, mode: 0o700 })
 const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, SHELL: process.env.SHELL ?? '/bin/sh',
   TMPDIR: join(root, 'tmp'), TMP: join(root, 'tmp'), TEMP: join(root, 'tmp'), XDG_CACHE_HOME: join(root, 'cache'),
@@ -40,6 +48,9 @@ const env = { PATH: process.env.PATH, HOME: home, USERPROFILE: home, SHELL: proc
   DSH_TELEMETRY_MODE: 'DISABLED', DSH_TELEMETRY_DISABLED: '1', DSH_CLI_LANG: 'en',
   npm_config_cache: join(root, 'cache/npm'), npm_config_store_dir: join(root, 'cache/pnpm'),
   npm_config_userconfig: join(root, 'empty.npmrc'), NODE_ENV: 'production', TERM: 'xterm-256color', LANG: 'en_US.UTF-8' }
+if(process.env.KIOKUKO_CLI_LIVE_BRIDGE)env.KIOKUKO_CLI_LIVE_BRIDGE=resolve(process.env.KIOKUKO_CLI_LIVE_BRIDGE)
+env.KIOKUKO_CLI_VARIANT=variant
+if(process.env.KIOKUKO_CLI_TASK)await writeFile(join(workspace,'input.json'),JSON.stringify({values:[20,22],purpose:'isolated harness acceptance'})+'\n')
 await writeFile(env.npm_config_userconfig, '', { mode: 0o600 })
 // Source-entry acceptance imports already installed packages and the current build.
 // Explicit patch overlays exercise source entries without a package-manager operation.
@@ -81,10 +92,15 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 `)
 }
 const exec = promisify(execFile), steps = []
+if(variant==='legacy')sourcePatches.push('--patch',resolve(dirname(kiokukoPackage),'dsh/cordis.legacy.patch.yml'))
+const cliLauncher=resolve(dirname(cliPackage),'bin/dsh-cli.js')
+const trace = resolve(import.meta.dirname, 'cli-profile-trace.mjs')
+if(launcher)env.NODE_OPTIONS=`--import=${trace}`
+const entryArgs = args => launcher ? [cliLauncher,...(variant==='ignore'?['--ignore-kiokuko']:[]),...args.filter((arg,index)=>arg!=='--profile'&&args[index-1]!=='--profile')] : [dsh,...args]
 async function command(label, args, allowFailure = false) {
   console.log(`Starting ${label}`)
   let result
-  try { result = await exec(process.execPath, [...(sourceHook ? ['--import', sourceHook] : []), dsh, ...args, ...sourcePatches], { cwd: workspace, env, timeout: 180000, maxBuffer: 16 * 1024 * 1024 }) }
+  try { result = await exec(process.execPath, [...(sourceHook ? ['--import', sourceHook] : []), ...entryArgs([...args,...sourcePatches])], { cwd: workspace, env, timeout: 180000, maxBuffer: 16 * 1024 * 1024 }) }
   catch (error) { result = error; if (!allowFailure) { await writeFile(join(root, `${label}.log`), `${error.stdout ?? ''}\n${error.stderr ?? ''}`); throw error } }
   await writeFile(join(root, `${label}.log`), `${result.stdout ?? ''}\n${result.stderr ?? ''}`)
   steps.push({ label, exitCode: result.code ?? 0 })
@@ -120,19 +136,27 @@ if (stage === 'install') { console.log(`Install phase passed: ${root}`); process
 } else if (stage === 'tui' && !sourceHook) steps.push(...JSON.parse(await readFile(join(root, 'install-report.json'), 'utf8')).steps)
 const dumped = await command('dump-config', ['--profile', 'dsh-cli', '--dump-config'])
 const rows = YAML.parse(dumped.stdout, { customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: value => value }] })
-assert.equal(rows.filter(row => row.id === 'kiokuko-dsh' && row.disabled !== true).length, 1)
+assert.equal(rows.filter(row => row.id === 'kiokuko-dsh' && row.disabled !== true).length, kiokukoEnabled?1:0)
+const replacementHarness=rows.some(row=>row.name==='kiokuko-dsh/harness'&&row.disabled!==true)
+if(replacementHarness)assert.equal(rows.find(row=>row.id==='agent-loop')?.disabled,true,'Stock AgentLoop must be disabled')
+else assert.equal(rows.find(row=>row.id==='agent-loop')?.disabled??false,false,'Legacy/standalone/ignore must restore the stock factory')
 const cli = rows.find(row => row.id === 'dsh-cli')
 assert.ok(cli)
 const fixture = resolve(import.meta.dirname, 'cli-profile-fixture.mjs')
-const trace = resolve(import.meta.dirname, 'cli-profile-trace.mjs')
 const overlay = join(root, 'probe.patch.yml')
-await writeFile(overlay, YAML.stringify([
-  { id: 'kiokuko-dsh', config: { enabled: true, typedDecisions: { mode: 'off' }, memoryReview: { mode: 'off' },
-    memoryEvolution: { mode: 'off' }, agenticReplay: { enabled: false }, lisp: { enabled: true } } },
+const overlayDocument=new YAML.Document([
+  ...(kiokukoEnabled?[{ id: 'kiokuko-dsh', config: { enabled: true, typedDecisions: { mode: 'off' }, memoryReview: { mode: 'off' },
+    memoryEvolution: { mode: 'off' }, agenticReplay: { enabled: false }, lisp: { enabled: true } } }]:[]),
   { insert: [{ id: 'kiokuko-cli-profile-fixture', name: fixture, inject: ['llm', 'agents', 'sessions', 'tools', 'commands'] }] },
   { id: 'dsh-cli', inject: [...cli.inject, 'kiokukoProfileFixture'], config: { provider: 'kiokuko-profile-fixture', model: 'fixture',
     fullscreen: true, terminalImages: false, smoothStreaming: false, whale: false, activity: false, cwd: workspace } },
-]))
+])
+// Include replaces config objects. Preserve the launcher's native env handoff;
+// direct `dsh --resume` also has argv, which otherwise masks this fixture bug.
+const resumeExpression=new YAML.Scalar('process.env.DSH_CLI_RESUME_SESSION ?? undefined')
+resumeExpression.tag='tag:yaml.org,2002:js'
+overlayDocument.setIn([overlayDocument.contents.items.length-1,'config','sessionId'],resumeExpression)
+await writeFile(overlay,overlayDocument.toString())
 const pty = createRequire(resolve(ptyArg))('node-pty')
 const { Terminal } = createRequire(resolve(xtermArg))('@xterm/headless')
 const events = () => {
@@ -148,7 +172,7 @@ async function tui(resumeSessionId) {
   const start = events().length
   const launch = { resumed: Boolean(resumeSessionId), startedAt: Date.now() }
   launches.push(launch)
-  const child = pty.spawn(process.execPath, ['--import', trace, ...(sourceHook ? ['--import', sourceHook] : []), dsh, '--profile', 'dsh-cli', ...sourcePatches, '--patch', overlay, ...(resumeSessionId ? ['--resume', resumeSessionId] : [])], {
+  const child = pty.spawn(process.execPath, ['--import', trace, ...(sourceHook ? ['--import', sourceHook] : []), ...entryArgs(['--profile', 'dsh-cli', ...sourcePatches, '--patch', overlay, ...(resumeSessionId ? ['--resume', resumeSessionId] : [])])], {
     name: 'xterm-256color', cols: 110, rows: 34, cwd: workspace, env,
   })
   const terminal = new Terminal({ cols: 110, rows: 34, scrollback: 2000, allowProposedApi: true })
@@ -200,7 +224,7 @@ async function tui(resumeSessionId) {
     else child.write(action === 'down' ? '\x1b[B' : '\x1b[A')
   }
   const declinedQuestions = new Set(), startupQuestions = new Set()
-  let startupLisp = Boolean(resumeSessionId), cancelStartup = false
+  let startupLisp = scope==='all'&&Boolean(resumeSessionId), cancelStartup = false
   const wait = (predicate, description, timeoutMs) => until(predicate, description, timeoutMs, () => {
     const ready = enterReady()
     const request = fresh().filter(value => value.type === 'native-question').at(-1)
@@ -224,7 +248,7 @@ async function tui(resumeSessionId) {
     }) // Decline once through the native UI; confirmation requires its matching answer.
   })
   const discovery = join(home, '.dsh-cli/inject/servers.json')
-  const endpoint = () => { try { return JSON.parse(readFileSync(discovery, 'utf8')).find(server => server.pid === child.pid && statSync(server.socketPath).isSocket()) } catch { return undefined } }
+  const endpoint = () => { try { return JSON.parse(readFileSync(discovery, 'utf8')).find(server => (launcher||server.pid === child.pid) && statSync(server.socketPath).isSocket()) } catch { return undefined } }
   const observe = (name, details = {}) => {
     const time = Date.now()
     launch[name] = time
@@ -279,11 +303,15 @@ async function tui(resumeSessionId) {
     assert.ok(fresh().some(value => value.type === 'fixture-loaded' && value.stdoutTTY && value.stdinTTY), 'real TTY required')
     await wait(() => fresh().some(value => value.type === 'agent-created'), 'TUI did not create agent')
     const created = fresh().find(value => value.type === 'agent-created')
+    if(replacementHarness)assert.equal(created.driver,'KiokukoHarnessAgent','Actual CLI must use Kiokuko driver')
+    else assert.notEqual(created.driver,'KiokukoHarnessAgent')
+    if(!kiokukoEnabled)assert.ok(!fresh().find(value=>value.type==='native-commands')?.names.some(name=>name.startsWith('kioku-')),'Kiokuko commands leaked into standalone/ignore')
     launch.sessionId = created.sessionId
     assert.equal(created.executionFences, true, 'CLI execution fences must be mounted')
     if (resumeSessionId) { assert.equal(created.sessionId, resumeSessionId); assert.ok(created.eventCount > 0, 'resumed history is empty') }
     // Registration observations below are diagnostic only. Never wait for Kiokuko
     // before exercising the first input that the real TUI visibly accepts.
+    if(kiokukoEnabled){
     const firstCommand = '/kioku-lisp status'
     observe('firstInputSentAt', { text: firstCommand })
     const firstInput = await typeInput(firstCommand)
@@ -303,6 +331,7 @@ async function tui(resumeSessionId) {
     assert.equal(firstRun.event.data.args.trim(), 'status')
     assert.equal(firstDone?.event.data.kind, 'success', JSON.stringify(firstDone))
     observe('firstCommandCompletedAt', { commandId: firstRun.event.data.commandId })
+    }
     const taskChecks = []
     const taskCommand = async (args, expectedKind = 'success') => {
       const input = await line(`/kioku-task ${args}`)
@@ -321,7 +350,7 @@ async function tui(resumeSessionId) {
     }
     let resumedTaskId
     const recovery = { required: false, cancelledInput: false, command: null }
-    if (resumeSessionId) {
+    if (resumeSessionId && scope==='all') {
       const restored = (await taskCommand('status')).task
       assert.ok(restored, 'CLI resume must restore the persisted task')
       assert.equal(restored.state, 'Pending')
@@ -332,7 +361,7 @@ async function tui(resumeSessionId) {
       resumedTaskId = restored.taskId
       // Task state changes do not restore an independent protected Lisp binding.
       // A cold primary continuation may retain only its ancestor's protection.
-      if (firstDone.event.data.text.includes('Lisp: DISABLED')) {
+      if (native('command/done')[0]?.event.data.text.includes('Lisp: DISABLED')) {
         recovery.required = true
         const blockedText = 'profile-fixture-protected-resume'
         // Startup can now recover Lisp explicitly. Cancel that setting once to
@@ -359,12 +388,12 @@ async function tui(resumeSessionId) {
       }
 
     }
-    const hello = resumeSessionId ? 'profile-fixture-hello-resume' : 'profile-fixture-hello-initial'
+    const hello = resumeSessionId ? 'profile-fixture-hello-resume' : process.env.KIOKUKO_CLI_TASK??'profile-fixture-hello-initial'
     await line(hello)
     await wait(() => native('user/message').some(value => value.event.data.source?.kind === 'user' && value.event.data.content?.some(block => block.text === hello)), 'new native human input missing')
     const human = native('user/message').find(value => value.event.data.source?.kind === 'user' && value.event.data.content?.some(block => block.text === hello))
     await wait(() => fresh().some(value => value.type === 'fixture-request' && value.text === hello), 'new human input did not reach model')
-    await wait(() => native('assistant/message').some(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK')), 'new native answer missing')
+    await wait(() => native('assistant/message').some(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK')), 'new native answer missing', process.env.KIOKUKO_CLI_LIVE_BRIDGE?120000:30000)
     const answer = native('assistant/message').find(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK'))
     await wait(() => native('turn/end').some(value => value.event.seq > answer.event.seq && value.event.data.reason.kind === 'completed'), 'new answer turn did not complete')
     await wait(() => screen().includes('PROFILE_FIXTURE_OK'), 'answer did not render')
@@ -379,6 +408,7 @@ async function tui(resumeSessionId) {
       child.write('\x1b')
       await wait(() => fresh().some(value => value.type === 'fixture-aborted'), 'Esc did not abort native request')
       await wait(() => native('turn/end').some(value => value.event.data.reason.kind === 'aborted'), 'cancelled turn did not converge')
+      if(scope==='all') {
       startupLisp = true // The following task explicitly enables and verifies Lisp.
       for (const action of ['enable', 'status']) {
         const before = native('command/done').length
@@ -459,6 +489,7 @@ async function tui(resumeSessionId) {
       finalSessionId = afterSwitch.sessionId
       await taskCommand(`wait ${createdTask.taskId}`)
       await wait(() => fresh().some(value => value.type === 'task-state' && value.task.taskId === createdTask.taskId && value.task.sessionId === finalSessionId && value.task.state === 'Pending'), 'Transferred task did not stop')
+      }
     }
     await line('/quit')
     await wait(() => exit, '/quit did not exit', 30000)
@@ -467,7 +498,7 @@ async function tui(resumeSessionId) {
     assert.doesNotMatch(output, /skipping the interactive CLI|plugin tree failed to load|UnhandledPromiseRejection/)
     assert.equal(fresh().filter(value => value.type === 'native-error').length, 0, JSON.stringify(fresh().filter(value => value.type === 'native-error')))
     return { sessionId: finalSessionId, initialSessionId: created.sessionId, taskChecks, recovery, eventCount: created.eventCount, resumed: Boolean(resumeSessionId), exitCode: exit.exitCode,
-      commandReadyMs: fresh().find(value => value.type === 'native-commands' && value.names.includes('kioku-lisp')).time - created.time,
+      commandReadyMs: kiokukoEnabled ? fresh().find(value => value.type === 'native-commands' && value.names.includes('kioku-lisp')).time - created.time : null,
       humanSeq: human.event.seq, answerSeq: answer.event.seq }
   } finally {
     launch.commandRegisteredAt = fresh().find(value => value.type === 'native-commands' && value.sessionId === launch.sessionId && value.names.includes('kioku-lisp'))?.time ?? null
@@ -488,7 +519,9 @@ async function retainEvidence() {
     }
   }
 }
-const baseReport = { root, mode: sourceHook ? 'source-entry' : 'installed-package', ...(sourceHook ? { sourceHook, sourcePackages, installation: 'not exercised; no package operations attempted' } : {}), model: 'scripted offline fixture; no real model inference', readiness: 'real TUI socket and input echo; no Kiokuko registration wait', steps }
+const baseReport = { root, scope, replacementHarness, ...(scope==='normal'?{lisp:'not exercised in normal scope; full scope requires real SBCL'}:{}), mode: sourceHook ? 'source-entry' : 'installed-package', ...(sourceHook ? { sourceHook, sourcePackages, installation: 'not exercised; no package operations attempted' } : {}), model: 'scripted offline fixture; no real model inference', readiness: 'real TUI socket and input echo; no Kiokuko registration wait', steps }
+if(process.env.KIOKUKO_CLI_LIVE_BRIDGE)baseReport.model='live assistant-in-loop transport; fresh assistant responses; no external API authentication; scripted cancellation stall only'
+Object.assign(baseReport,{variant,launcher})
 await writeFile(join(root, 'report.json'), JSON.stringify({ ...baseReport, status: 'running' }, null, 2) + '\n')
 try {
   const initial = await tui()

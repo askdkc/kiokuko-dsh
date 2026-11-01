@@ -12,6 +12,13 @@ export function mountDshAgenticReplayHooks(ctx: Context, services: DshAgenticRep
     } catch { return undefined }
   }
   try {
+    on('session/event',(session:object,event:{type:string;seq:number;data:unknown})=>{
+      if(event.type!=='plugin:kiokuko-dsh/harness-action')return
+      try {const id=(session as {id?:string}).id;if(!id)return
+        const resolved=services.resolveModelBinding(id)
+        if(resolved&&services.canRecord(resolved))services.recorder.harnessAction(resolved,event)
+      } catch { /* A recording failure cannot claim task success or block unrelated work. */ }
+    })
     on('llm/stream', (options: Record<string, any>, next: () => AsyncIterable<unknown>) => {
       let resolved
       try { if (typeof options.sessionId === 'string') resolved = services.resolveModelBinding(options.sessionId) } catch { /* no guessed attribution */ }

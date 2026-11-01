@@ -1,5 +1,17 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 
+## Kiokuko 控制的 Harness（尚未发布）
+
+本源码版本通过 bundle 注册 `kiokuko-dsh/harness` AgentFactory，并禁用标准 `agent-loop`。Kiokuko 控制轮次、模型请求和原生工具调用；DSH 提供 Agent/Session API、模型适配器、UI 和权限检查。请使用本地构建的 tarball 验证此未发布版本：
+
+```bash
+dsh plugin --profile dsh-cli add ./kiokuko-dsh-0.2.39.tgz --ignore-scripts
+dsh --profile dsh-cli --dump-config
+dsh-cli
+```
+
+配置中应只有一个启用的 `kiokuko-dsh/harness`，且 `agent-loop` 已禁用。传统插件模式需在 bundle 之后应用安装目录中的 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`。支持该功能的 CLI 可用 `dsh-cli --ignore-kiokuko` 仅在当前启动中排除 Kiokuko。保留记忆生成、保存、检索与利用；辅助服务失败不阻止无关的已授权工作，整理后的记忆仍需批准。[配置与验证边界](docs/kiokuko-harness.md)说明了 SBCL 前提、固定响应与实时 AI 判断的区别。
+
 记忆正文默认上限为 16,000 个 Unicode 字符，关系元数据有独立限额。请参阅[记忆传递预算](docs/memory-delivery.md)。
 
 [English](README.md) | [日本語](README.ja.md) | 简体中文 | [한국어](README.ko.md)
@@ -15,7 +27,7 @@ AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
 
 可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev、Laya 或 OpenAI、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
 
-记忆功能是可选的。任务结束后，Kiokuko 会询问是否整理记录的经验，显示临时预览，并且只保存用户批准的确切修订版本。自动记忆写入已停用。[审查、回忆与遗忘](docs/replay-memory-review.md)。
+记忆是辅助信息。保留原生轮次观察与仓库学习；整理后的记忆只保存用户批准的确切预览版本。检索或生成失败不阻止无关的已授权工作，也不授予操作权限。[审查、回忆与遗忘](docs/replay-memory-review.md)。
 
 使用 `/kioku-memory explain ENTRY_ID` 查看来源和更正；使用 `/kioku-memory forget ENTRY_ID --revision N` 明确遗忘一条记忆。[证据、解释与遗忘](docs/memory-evidence.md)。
 

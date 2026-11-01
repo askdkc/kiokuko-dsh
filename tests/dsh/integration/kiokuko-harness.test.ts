@@ -1,0 +1,264 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import {readFile} from 'node:fs/promises'
+import YAML from 'yaml'
+import { Context } from '@deepseek-ai/cordis'
+import Agents from '@deepseek-ai/dsh-agent'
+import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
+import Llm, { LlmAdapter, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import { KiokukoAgentFactory } from '../../../src/dsh/harness/factory.js'
+import {currentTaskAuthority,withTaskAuthority} from '../../../src/dsh/task-authority-context.js'
+
+function deferred() { let resolve!:()=>void;const promise=new Promise<void>(done=>{resolve=done});return{promise,resolve} }
+
+test('legacy compatibility overlay restores one stock factory and removes its Kiokuko factory dependency',async()=>{
+  const rows=YAML.parse(await readFile(new URL('../../../dsh/cordis.legacy.patch.yml',import.meta.url),'utf8'))
+  assert.equal(rows.find((r:any)=>r.id==='agent-loop')?.disabled,false)
+  assert.equal(rows.find((r:any)=>r.id==='kiokuko-harness')?.disabled,true)
+  assert.equal(rows.find((r:any)=>r.id==='kiokuko-dsh')?.inject.includes('kiokukoHarness'),false)
+  assert.equal(rows.some((r:any)=>r.insert),false,'Overlay must not duplicate bundle entries')
+})
+
+async function fixture() {
+  const ctx = new Context(), requests: unknown[] = []
+  for (const plugin of [Llm, Sessions, Agents]) await ctx.plugin(plugin)
+  ctx.llm.registerAdapter(['harness-fixture'], new class extends LlmAdapter {
+    async *stream(options: any) {
+      requests.push(options)
+      yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
+      yield { type: 'block-end' as const, index: 0, block: { type: 'text' as const, text: 'Kiokuko owns this turn.' } }
+      yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+    }
+  }())
+  let factory!: KiokukoAgentFactory
+  const plugin = await ctx.plugin({name:'harness-contract',inject:['agents','sessions','llm'],apply(scope:Context) {
+    factory = new KiokukoAgentFactory(scope, { provider: 'harness-fixture', model: 'contract-model' })
+    scope.agents.setFactory(factory)
+  }})
+  return { ctx, factory, requests, async close() { await factory.dispose(); await plugin.dispose(); await ctx.fiber.dispose() } }
+}
+
+test('rejected intake retains input and waits for another wake instead of silently consuming or spinning', async () => {
+  const f=await fixture()
+  try {
+    let reject=true,calls=0
+    f.factory.lifecycle.onStep(async(event,next)=>{calls++;return reject?{kind:'reject'}:next()})
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId('kiokuko-rejected')})
+    agent.followup(createUserMessage({content:[{type:'text',text:'Retain this request'}],source:{kind:'user'}}))
+    await agent.whenIdle()
+    assert.equal(calls,1);assert.equal(f.requests.length,0);assert.equal(agent.inbox.nextTurn.length,1)
+    reject=false
+    agent.steer(createUserMessage({content:[{type:'text',text:'Missing fact supplied'}],source:{kind:'user'}}))
+    await agent.whenIdle()
+    assert.equal(f.requests.length,1);assert.equal(agent.inbox.nextTurn.length,0)
+  } finally {await f.close()}
+})
+
+test('context preparation failure parks retained input and only a new wake retries it',async()=>{
+ const f=await fixture();let calls=0,fault=true,agent:any
+ try{
+  await f.ctx.plugin({name:'context-outage-fixture',apply(ctx:Context){ctx.provide('systemPrompt',{assemble(){calls++;if(fault){if(calls===2)agent.cancel({kind:'user'});throw new Error('Context unavailable')}return undefined}} as any)}})
+  agent=(await f.ctx.agents.create({sessionId:SessionId('context-outage')})).agent
+  agent.followup(createUserMessage({content:[{type:'text',text:'Retain before preparation'}],source:{kind:'user'}}));await agent.whenIdle()
+  assert.equal(calls,1,'Preparation must stop after its first failure');assert.equal(agent.inbox.nextTurn.length,1);assert.equal(f.requests.length,0)
+  assert.equal(agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1).data.reason.kind,'error')
+  fault=false;agent.steer(createUserMessage({content:[{type:'text',text:'The context is available now'}],source:{kind:'user'}}));await agent.whenIdle()
+  assert.equal(agent.inbox.nextTurn.length,0);assert.equal(f.requests.length,1)
+  assert.equal(agent.session.snapshotEvents().filter((e:any)=>e.type==='user/message'&&e.data.content?.some((b:any)=>b.text==='Retain before preparation')).length,1)
+ }finally{await f.close()}
+})
+
+test('provider preparation failure records the accepted request and a failed turn without inventing completion', async () => {
+  const f=await fixture()
+  try {
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId('kiokuko-outage'),agentOptions:{provider:'absent-provider',model:'absent-model'}})
+    agent.followup(createUserMessage({content:[{type:'text',text:'Keep this accepted request across provider outage'}],source:{kind:'user'}}))
+    await agent.whenIdle()
+    const events=agent.session.snapshotEvents()
+    assert.equal(events.filter(event=>event.type==='user/message').length,1)
+    assert.equal(events.filter(event=>event.type==='turn/end').at(-1)?.data.reason.kind,'error')
+    assert.equal(events.filter(event=>event.type==='assistant/message').length,0)
+  } finally {await f.close()}
+})
+
+test('cancel commits an interrupted prefix, preserves later waking input and does not publish a runtime error', async () => {
+  const f=await fixture(),started=deferred(),errors:unknown[]=[]
+  try {
+    let first=true
+    f.ctx.on('agent/error',event=>errors.push(event.error))
+    f.ctx.on('llm/stream',async function*(options,next){
+      if(!first){yield*next();return}first=false
+      yield{type:'text-delta' as const,index:0,text:'Observed prefix'};started.resolve()
+      await new Promise((_,reject)=>options.signal!.addEventListener('abort',()=>reject(options.signal!.reason),{once:true}))
+    })
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId('kiokuko-cancel')})
+    agent.followup(createUserMessage({content:[{type:'text',text:'Begin'}],source:{kind:'user'}}))
+    await started.promise;agent.cancel({kind:'user'})
+    agent.followup(createUserMessage({content:[{type:'text',text:'Continue after cancel'}],source:{kind:'user'}}))
+    await agent.whenIdle()
+    const events=agent.session.snapshotEvents()
+    assert.ok(events.some(e=>e.type==='turn/end'&&e.data.reason.kind==='aborted'))
+    assert.ok(events.some(e=>e.type==='assistant/message'&&e.data.interrupted))
+    assert.equal(events.filter(e=>e.type==='turn/end').at(-1)?.data.reason.kind,'completed')
+    assert.deepEqual(errors,[])
+  } finally {await f.close()}
+})
+
+test('creation cancellation rolls back unpublished setup without waiting for its late completion', async () => {
+  const f=await fixture(),entered=deferred(),late=deferred(),abort=new AbortController()
+  try {
+    const pending=f.ctx.agents.create({sessionId:SessionId('kiokuko-setup-cancel'),signal:abort.signal,
+      async setup(){entered.resolve();await late.promise}})
+    await entered.promise;abort.abort(new Error('cancel fixture creation'))
+    const result=await Promise.race([pending.then(()=> 'published',()=> 'cancelled'),new Promise(resolve=>setTimeout(()=>resolve('still waiting'),30))])
+    assert.equal(result,'cancelled')
+    assert.equal(f.ctx.agents.get(SessionId('kiokuko-setup-cancel')),undefined)
+    assert.equal(f.ctx.sessions.get(SessionId('kiokuko-setup-cancel')),undefined)
+    late.resolve();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.requests.length,0)
+  } finally {late.resolve();await f.close()}
+})
+
+test('provider recovery uses the DSH request-error contract without duplicating accepted messages', async () => {
+  const f=await fixture();let first=true,recovered=0
+  try {
+    f.ctx.on('llm/stream',async function*(options,next){if(first){first=false;yield{type:'finish' as const,reason:{kind:'error' as const,failure:{code:'RATE_LIMIT',message:'Fixture provider unavailable'}}};return}yield*next()})
+    f.ctx.on('agent/request-error',async(event,next)=>{assert.equal(event.failure.code,'RATE_LIMIT');recovered++;return{kind:'retry'}})
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId('kiokuko-provider-recovery')})
+    agent.followup(createUserMessage({content:[{type:'text',text:'Continue after a transient provider failure'}],source:{kind:'user'}}))
+    await agent.whenIdle()
+    const events=agent.session.snapshotEvents()
+    assert.equal(recovered,1);assert.equal(events.filter(e=>e.type==='user/message').length,1)
+    assert.equal(events.filter(e=>e.type==='assistant/attempt').length,1)
+    assert.equal(events.filter(e=>e.type==='turn/end').at(-1)?.data.reason.kind,'completed')
+  } finally {await f.close()}
+})
+
+test('Kiokuko factory owns create, unpublished setup, queued turns and canonical session events without AgentLoop', async () => {
+  const f = await fixture()
+  try {
+    let setup = false
+    const handle = await f.ctx.agents.create({ sessionId: SessionId('kiokuko-root'), meta: { cwd: process.cwd() },
+      setup(_scope, agent) {
+        assert.equal(f.ctx.agents.get(agent.id), undefined)
+        assert.equal(f.ctx.sessions.get(agent.id), agent.session, 'native setup appends only to an entered Session')
+        setup = true
+        agent.followup(createUserMessage({ content: [{type:'text',text:'First task'}], source:{kind:'user'} }))
+      } })
+    assert.equal(setup, true)
+    assert.equal(handle.agent.constructor.name, 'KiokukoHarnessAgent')
+    await handle.agent.whenIdle()
+    assert.equal(f.requests.length, 1)
+    assert.equal(isAgentLoopRequest(f.requests[0] as any),true,'DSH middleware must recognize the session-derived request')
+    assert.equal(Object.isFrozen(f.requests[0]),true)
+    const events = handle.agent.session.snapshotEvents()
+    assert.deepEqual(events.filter(e => e.type === 'turn/start' || e.type === 'turn/end').map(e => e.type), ['turn/start','turn/end'])
+    assert.equal(events.filter(e => e.type === 'assistant/message').length, 1)
+    assert.equal(events.find(e => e.type === 'user/message')?.data.content[0]?.type, 'text')
+    assert.equal(handle.agent.status, 'idle')
+    await handle.dispose()
+    assert.equal(f.ctx.agents.get(SessionId('kiokuko-root')), undefined)
+    assert.equal(f.ctx.sessions.get(SessionId('kiokuko-root')), undefined)
+  } finally { await f.close() }
+})
+
+test('injected context parks until wake and child handles keep independent identity and ownership', async () => {
+  const f = await fixture()
+  try {
+    const parent = await f.ctx.agents.create({ sessionId:SessionId('kiokuko-parent') })
+    parent.agent.inject(createUserMessage({content:[{type:'text',text:'Advisory context'}],source:{kind:'user'}}))
+    await parent.agent.whenIdle()
+    assert.equal(f.requests.length, 0)
+    const child = await parent.agent.ctx.agents.create({ sessionId:SessionId('kiokuko-child'), parentAgent:parent.agent,
+      meta:{origin:'subagent',parentSession:parent.agent.id,delegationDepth:1} })
+    assert.equal(f.ctx.agents.isOwnedBy(child.agent.id,parent.agent), true)
+    let inherited:unknown='not observed'
+    f.factory.lifecycle.onStep(async(event,next)=>{if(event.agent===child.agent)inherited=currentTaskAuthority();return next()})
+    const callerLease={taskId:'parent-task',sessionId:parent.agent.id,repositoryRoot:'/workspace',revision:1,generation:1} as any
+    withTaskAuthority(callerLease,()=>child.agent.followup(createUserMessage({content:[{type:'text',text:'Inspect independently'}],source:{kind:'user'}})))
+    await child.agent.whenIdle()
+    assert.equal(inherited,undefined,'New child turns must not inherit the caller\'s ambient task lease')
+    assert.equal(f.requests.length,1)
+    assert.equal(parent.agent.inbox.nextStep.length,1)
+    parent.agent.steer(createUserMessage({content:[{type:'text',text:'Continue parent'}],source:{kind:'user'}}))
+    await parent.agent.whenIdle()
+    assert.equal(f.requests.length,2)
+    assert.equal(parent.agent.inbox.nextStep.length,0)
+    await child.dispose(); await parent.dispose()
+  } finally { await f.close() }
+})
+
+
+for(const protocol of ['single','batch'] as const)test(`${protocol==='batch'?'current batch':'legacy single'} tool API settles one call without replay`,async()=>{
+ const f=await fixture();let handle:any,executions=0;const received:any[]=[]
+ try{
+  await f.ctx.plugin({name:'tool-contract-fixture',apply(ctx:Context){ctx.provide('tools',{
+   ...(protocol==='batch'?{setExecutor(){}}:{}),
+   async execute(input:any){received.push(input);const call=protocol==='batch'?input.calls[0]:input
+    assert.equal(call.name,'fixture_call');executions++
+    const result={isError:false,content:[{type:'text',text:'effect confirmed'}]}
+    return protocol==='batch'?{results:[{callId:call.id,result}],additionalContexts:[],concluded:false}:result
+   }
+  } as any)}})
+  let first=true
+  f.ctx.on('llm/stream',async function*(options,next){if(!first){yield*next();return}first=false
+   yield{type:'block-start' as const,index:0,blockType:'tool-call' as const}
+   yield{type:'block-end' as const,index:0,block:{type:'tool-call' as const,id:'fixture-call' as any,name:'fixture_call',arguments:'{}'}}
+   yield{type:'finish' as const,reason:{kind:'tool-calls' as const}}
+  })
+  handle=await f.ctx.agents.create({sessionId:SessionId(`harness-${protocol}`)})
+  handle.agent.followup(createUserMessage({content:[{type:'text',text:'Run the fixture once'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+  const events=handle.agent.session.snapshotEvents()
+  assert.equal(executions,1);assert.equal(received.length,1)
+  assert.equal(events.filter((e:any)=>e.type==='tool/call').length,1)
+  const results=events.filter((e:any)=>e.type==='tool/result');assert.equal(results.length,1);assert.equal(results[0].data.message.isError,false)
+ }finally{await handle?.dispose();await f.close()}
+})
+
+test('batch dispatch failure remains a failed turn and never retries an uncertain effect',async()=>{
+ const f=await fixture(),errors:unknown[]=[];let handle:any,executions=0
+ try{
+  await f.ctx.plugin({name:'tool-failure-fixture',apply(ctx:Context){ctx.provide('tools',{setExecutor(){},async execute(){executions++;throw new Error('Fixture scheduler failed after possible effect')}} as any)}})
+  f.ctx.on('agent/error',event=>errors.push(event.error));let first=true
+  f.ctx.on('llm/stream',async function*(options,next){if(!first){yield*next();return}first=false
+   yield{type:'block-start' as const,index:0,blockType:'tool-call' as const}
+   yield{type:'block-end' as const,index:0,block:{type:'tool-call' as const,id:'uncertain-call' as any,name:'fixture_call',arguments:'{}'}}
+   yield{type:'finish' as const,reason:{kind:'tool-calls' as const}}
+  })
+  handle=await f.ctx.agents.create({sessionId:SessionId('uncertain-effect')});handle.agent.followup(createUserMessage({content:[{type:'text',text:'Execute once'}],source:{kind:'user'}}))
+  await handle.agent.whenIdle();await handle.agent.whenIdle()
+  assert.equal(executions,1);assert.equal(errors.length,1)
+  assert.equal(handle.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1).data.reason.kind,'error')
+ }finally{await handle?.dispose();await f.close()}
+})
+
+test('disposal exposes session persistence failure, cleans ownership and leaves another agent usable',async()=>{
+ const f=await fixture(),errors:any[]=[];let failed:any,other:any
+ const original=f.ctx.sessions.flush
+ try{
+  failed=await f.ctx.agents.create({sessionId:SessionId('disposal-failure')});other=await f.ctx.agents.create({sessionId:SessionId('disposal-independent')})
+  f.ctx.on('agent/error',event=>errors.push(event.error))
+  f.ctx.sessions.flush=async(session:any)=>{if(session===failed.agent.session)throw new Error('Synthetic session flush failure');return original.call(f.ctx.sessions,session)}
+  await assert.rejects(failed.dispose(),(error:any)=>error.code==='SESSION_PERSISTENCE_FAILED')
+  assert.equal(f.ctx.agents.get(failed.agent.id),undefined);assert.equal(f.ctx.sessions.get(failed.agent.id),undefined)
+  assert.ok(errors.some(error=>error.code==='SESSION_PERSISTENCE_FAILED'))
+  f.ctx.sessions.flush=original
+  other.agent.followup(createUserMessage({content:[{type:'text',text:'Independent work continues'}],source:{kind:'user'}}));await other.agent.whenIdle()
+  assert.equal(other.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1).data.reason.kind,'completed')
+ }finally{f.ctx.sessions.flush=original;await other?.dispose();await f.close()}
+})
+
+test('native batch termination does not dispatch another model request after a host refusal',async()=>{
+ const f=await fixture();let handle:any,calls=0
+ try{
+  await f.ctx.plugin({name:'terminal-tool-contract',apply(ctx:Context){ctx.provide('tools',{setExecutor(){},async execute(input:any){calls++;return{results:[{callId:input.calls[0].id,result:{isError:true,content:[{type:'text',text:'Host refused this request'}]}}],additionalContexts:[],concluded:true}}} as any)}})
+  let first=true
+  f.ctx.on('llm/stream',async function*(options,next){if(!first){yield*next();return}first=false
+   yield{type:'block-start' as const,index:0,blockType:'tool-call' as const}
+   yield{type:'block-end' as const,index:0,block:{type:'tool-call' as const,id:'host-refusal' as any,name:'fixture_call',arguments:'{}'}}
+   yield{type:'finish' as const,reason:{kind:'tool-calls' as const}}
+  })
+  handle=await f.ctx.agents.create({sessionId:SessionId('host-terminated-turn')});handle.agent.followup(createUserMessage({content:[{type:'text',text:'Observe the host decision'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+  assert.equal(calls,1);assert.equal(f.requests.length,0,'The executor owns the batch termination decision')
+  const results=handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result');assert.equal(results.length,1);assert.equal(results[0].data.message.isError,true)
+ }finally{await handle?.dispose();await f.close()}
+})

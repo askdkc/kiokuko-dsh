@@ -1,5 +1,17 @@
 # Kiokuko(記憶庫) DeepSeek Harness Plugin
 
+## Kiokuko 제어 하네스 (미출시)
+
+이 소스 버전의 bundle은 `kiokuko-dsh/harness` AgentFactory를 등록하고 기본 `agent-loop`를 끕니다. Kiokuko가 턴, 모델 요청, 기본 도구 호출을 제어하며 DSH의 Agent/Session API, 모델 어댑터, UI와 권한 검사를 사용합니다. 미출시 변경 검증에는 로컬 빌드 tarball을 사용하세요.
+
+```bash
+dsh plugin --profile dsh-cli add ./kiokuko-dsh-0.2.39.tgz --ignore-scripts
+dsh --profile dsh-cli --dump-config
+dsh-cli
+```
+
+설정에는 활성 `kiokuko-dsh/harness` 하나와 비활성 `agent-loop`가 있어야 합니다. 기존 플러그인 모드는 설치된 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`을 bundle 뒤에 적용합니다. 지원하는 CLI의 `dsh-cli --ignore-kiokuko`는 이번 실행에서만 Kiokuko를 제외합니다. 기억 생성·저장·검색·활용은 유지하며 보조 서비스 장애로 무관한 허용 작업을 막지 않습니다. 정리된 기억 저장에는 승인이 필요합니다. [설정과 검증 한계](docs/kiokuko-harness.md)에서 SBCL 전제와 고정 응답·실시간 AI 판단의 차이를 확인하세요.
+
 메모리 본문의 기본 한도는 Unicode 16,000자이며 관계 메타데이터에는 별도 한도가 적용됩니다. [메모리 전달 예산](docs/memory-delivery.md)을 참고하세요.
 
 [English](README.md) | [日本語](README.ja.md) | [简体中文](README.zh-CN.md) | 한국어
@@ -15,7 +27,7 @@ DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일
 
 선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 기본적으로 꺼져 있습니다(`modelAutoMode.mode: off`). `/kioku-model-auto on | observe | off | status`는 현재 세션만 바꿉니다. `observe`는 제안만 기록하고 실제 모델은 유지합니다. 일반 작업에서 준비된 Jev, Laya 또는 OpenAI, dsh-codex, DSH 모델 메타데이터와 token meter가 필요합니다. 판정에 실패하면 현재 모델을 유지하고 수동 선택을 우선합니다.
 
-메모리는 선택 기능입니다. 작업이 끝나면 Kiokuko가 기록된 경험을 정리할지 묻고 임시 미리보기를 보여 주며, 사용자가 승인한 정확한 수정본만 저장합니다. 자동 메모리 쓰기는 더 이상 사용하지 않습니다. [검토, 회상 및 잊기](docs/replay-memory-review.md).
+기억은 참고 정보입니다. 기본 턴 관찰과 저장소 학습은 유지하고, 정리된 기억은 사용자가 승인한 정확한 미리보기 수정본만 저장합니다. 검색·생성 장애로 무관한 허용 작업을 막거나 작업 권한을 부여하지 않습니다. [검토, 회상 및 잊기](docs/replay-memory-review.md).
 
 `/kioku-memory explain ENTRY_ID`로 출처와 정정 사항을 확인하고, `/kioku-memory forget ENTRY_ID --revision N`으로 특정 메모리를 명시적으로 잊을 수 있습니다. [증거, 설명 및 잊기](docs/memory-evidence.md).
 

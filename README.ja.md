@@ -6,7 +6,19 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、記憶・計画・検証・動作記録を追加するプラグインです。
 
-記憶は任意です。作業終了後に整理の許可を聞き、保存案を提示して、その内容への明示的な承認後だけ保存します。従来の自動保存は停止しています。[確認・検索・忘却の仕様](docs/replay-memory-review.md)。
+記憶は補助情報です。native turnの観察とリポジトリ学習を維持し、整理済み記憶は表示した案の承認済み改訂だけを保存します。検索・生成の障害で無関係な許可済み作業を止めず、記憶を操作権限として扱いません。[確認・検索・忘却の仕様](docs/replay-memory-review.md)。
+
+## Kiokukoが制御するハーネス（未公開）
+
+このソース版ではbundleが `kiokuko-dsh/harness` をDSHのAgentFactoryとして登録し、標準の `agent-loop` を無効にします。Kiokukoがターン・モデル呼び出し・native tool実行を制御し、DSHのAgent/Session API・モデル接続・UI・実権限判定を利用します。未公開の変更なので、検証にはビルド済みのローカルtarballを指定してください。
+
+```bash
+dsh plugin --profile dsh-cli add ./kiokuko-dsh-0.2.39.tgz --ignore-scripts
+dsh --profile dsh-cli --dump-config
+dsh-cli
+```
+
+dumpでは `kiokuko-dsh/harness` が1件だけ有効、`agent-loop` が無効であることを確認します。従来のpluginモードは、導入先の `kiokuko-dsh/dsh/cordis.legacy.patch.yml` をbundleの後に適用します。対応CLIの `dsh-cli --ignore-kiokuko` はその起動だけKiokukoを除外します。[設定・ライフサイクル・検証限界](docs/kiokuko-harness.md)に、SBCLの前提と固定応答・実AI判断経路の区別を記載しています。
 
 保存した記憶の根拠と訂正履歴は `/kioku-memory explain ENTRY_ID`、明示的な忘却は `/kioku-memory forget ENTRY_ID --revision N` で確認・操作できます。[根拠・説明・忘却の仕様](docs/memory-evidence.md)。
 

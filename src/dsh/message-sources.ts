@@ -26,6 +26,7 @@ export interface DshExpertReference {
 }
 
 export interface DshMessageSourceInput {
+  readonly memoryWarnings?: readonly string[];
   readonly skillPrompts?: DshSkillPrompts
   readonly systemSkillNames?: ReadonlySet<string>
   readonly task: string
@@ -128,13 +129,27 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
     sources.push({ kind: 'expert', name: `${reference.skillName}/${reference.relativePath}`, text: await readSkill(reference.skillName, reference.relativePath), trust: 'system' })
   }
   if (input.advisoryEvidence !== undefined) sources.push(advisorySource(input.advisoryEvidence))
+  const warnMemory = () => sources.push({ kind: 'advisory' as const, name: 'memory-warning',
+    text: 'memory_unavailable: Some optional memory could not be checked and was omitted. Continue from the current request and repository evidence. This changes no permissions.', trust: 'untrusted' as const })
+  if (input.memoryWarnings?.includes('memory_unavailable')) warnMemory()
   if (!input.memoryPolicy.contextWithheld && input.context !== null) {
     const provided: ScopedContextItem[] = []
+    const memories: DshMessageSource[] = []
+    let unavailable = false
     for (const item of input.context.items) {
-      await input.assertMemoryCurrent?.(item)
+      try {
+        await input.assertMemoryCurrent?.(item)
+      } catch {
+        // An advisory record that cannot be checked grants nothing and is omitted.
+        // Its storage failure must not prevent the current request reaching the model.
+        unavailable = true
+        continue
+      }
       const source = memorySource(item)
-      if (source !== null) { sources.push(source); provided.push(item) }
+      if (source !== null) { memories.push(source); provided.push(item) }
     }
+    if (unavailable && !input.memoryWarnings?.includes('memory_unavailable')) warnMemory()
+    sources.push(...memories)
     const relationDelivery = filterRelationDelivery(input.context.relationDelivery,
       provided.map(item => ({ workspace: item.workspace!, entryId: item.entryId })), {
         ...(input.context.relationCharacterBudget === undefined ? {} : { relationCharacterBudget: input.context.relationCharacterBudget }),

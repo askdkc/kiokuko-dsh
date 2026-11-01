@@ -13,6 +13,7 @@ import { recordEntry, updateCandidateEntry, readEntry } from '../../../src/memor
 import { resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
 import { queryScopedContextGated, type ScopedContextQuery } from '../../../src/context/scoped-broker.js'
 import { prepareAgentTask, refreshContinuedTaskContext } from '../../../src/dsh/task-intake.js'
+import { injectDshContext } from '../../../src/dsh/context-injection.js'
 import type { MemoryReuseRuntime } from '../../../src/memory/reuse.js'
 import { recallScopedMemory } from '../../../src/memory/scoped-memory.js'
 import { CoreTasks } from '../../../src/dsh/core/tasks.js'
@@ -116,7 +117,7 @@ test('project recall preserves its old response on fallback and scopes semantic 
   } finally { await f.cleanup() }
 })
 
-test('continued normal requests consume the same optional selector', async () => {
+test('initial and continued requests survive memory search outage and resume retrieval after recovery', async () => {
   const f = await setup()
   try {
     let called = 0
@@ -124,6 +125,26 @@ test('continued normal requests consume the same optional selector', async () =>
     const result = await refreshContinuedTaskContext({ database: f.db, prepared: f.prepared, task: 'SQLITE_BUSY', capabilities, memoryReuse: runtime,
       assertCurrent: () => {}, validateCapabilities: async () => {} })
     assert.equal(called, 1); assert.equal(result.context?.items.length, 0)
+    f.db.exec('ALTER TABLE entry_search_signals RENAME TO temporarily_unavailable_memory_signals')
+    try {
+      const continued = await refreshContinuedTaskContext({ database: f.db, prepared: f.prepared,
+        task: 'SQLITE_BUSY', capabilities, assertCurrent: () => {}, validateCapabilities: async () => {} })
+      assert.equal(continued.context, null)
+      assert.deepEqual(continued.memoryWarnings, ['memory_unavailable'])
+      const initial = await prepareAgentTask(f.db, { requestId: 'memory-offline', task: 'SQLITE_BUSY', cwd: f.root,
+        dshSessionId: 'memory-offline', executionSelection: true, profileHints: profile, capabilities, skillDiscoveryMode: 'off' })
+      assert.equal(initial.nextAction, 'proceed')
+      assert.equal(initial.context, null)
+      assert.deepEqual(initial.memoryWarnings, ['memory_unavailable'])
+      const messages = await injectDshContext({ prepared: initial, task: 'SQLITE_BUSY' })
+      assert.ok(messages.some(message => message.content.includes('memory_unavailable')))
+      await assert.rejects(refreshContinuedTaskContext({ database: f.db, prepared: f.prepared,
+        task: 'SQLITE_BUSY', capabilities, assertCurrent: () => { throw new Error('authority_changed') },
+        validateCapabilities: async () => {} }), /authority_changed/)
+    } finally { f.db.exec('ALTER TABLE temporarily_unavailable_memory_signals RENAME TO entry_search_signals') }
+    const recovered = await refreshContinuedTaskContext({ database: f.db, prepared: f.prepared,
+      task: 'SQLITE_BUSY', capabilities, assertCurrent: () => {}, validateCapabilities: async () => {} })
+    assert.ok(recovered.context!.items.length > 0)
   } finally { await f.cleanup() }
 })
 

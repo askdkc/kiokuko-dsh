@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -62,11 +62,13 @@ class Host {
     for (const fn of this.handlers.get(name) ?? []) fn(...args);
   }
 }
-async function fixture() {
+async function fixture(nestedLaunch = false) {
   const root = await mkdtemp(join(tmpdir(), "repo-learning-"));
   execFileSync("git", ["init", "-q", root]);
+  const launchCwd = nestedLaunch ? join(root, "nested") : root;
+  await mkdir(launchCwd, { recursive: true });
   let runtime = new DshCoreRuntime({
-    repositoryRoot: root,
+    repositoryRoot: launchCwd,
     databasePath: join(root, "memory.sqlite3"),
     autoRegisterRepository: true,
     migrationsDirectory: join(process.cwd(), "migrations"),
@@ -92,7 +94,7 @@ async function fixture() {
     };
     yield { type: "finish", reason: { kind: "stop" } };
   };
-  function agent(id: string, cwd = root) {
+  function agent(id: string, cwd = launchCwd) {
     const local = new Host(),
       events: any[] = [];
     const session: any = {
@@ -150,7 +152,7 @@ async function fixture() {
       },
     };
   }
-  memory = new DshLifecycleMemory(host as any, runtime, root);
+  memory = new DshLifecycleMemory(host as any, runtime, launchCwd);
   return {
     root,
     host,
@@ -168,13 +170,13 @@ async function fixture() {
       await memory.whenIdle();
       await runtime.close();
       runtime = new DshCoreRuntime({
-        repositoryRoot: root,
+        repositoryRoot: launchCwd,
         databasePath: join(root, "memory.sqlite3"),
         autoRegisterRepository: true,
         migrationsDirectory: join(process.cwd(), "migrations"),
       });
       await runtime.start();
-      memory = new DshLifecycleMemory(host as any, runtime, root);
+      memory = new DshLifecycleMemory(host as any, runtime, launchCwd);
     },
     async close() {
       memory.stop();
@@ -219,8 +221,9 @@ function turn(
   });
   a.append("turn/end", { turn: id, reason: { kind: outcome } });
 }
-test("normal lifecycle automatically reflects, persists and injects repository learning regardless of keywords, including restart", async () => {
-  const f = await fixture();
+for (const nestedLaunch of [false, true]) {
+test(`normal lifecycle reflects, persists and injects repository learning after restart (${nestedLaunch ? "nested cwd" : "root cwd"})`, async () => {
+  const f = await fixture(nestedLaunch);
   try {
     const first = f.agent("first");
     turn(first, 1);
@@ -255,6 +258,7 @@ test("normal lifecycle automatically reflects, persists and injects repository l
     await f.close();
   }
 });
+}
 test("no tools and cancelled turns are observed without being promoted to success; duplicate event is not resaved", async () => {
   const f = await fixture();
   try {

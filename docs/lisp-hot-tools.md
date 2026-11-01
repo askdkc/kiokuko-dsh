@@ -24,9 +24,11 @@ ZIP の試作をそのまま別の実行環境にするのではなく、既存�
 設定の `lisp.enabled: true` と SBCL が必要です。既存の選択画面で Lisp を選べば、
 共有関数をそのまま利用できます。選択肢の順序、番号キー・修飾キー・Enterによる操作、
 通常実行／役小角の選択とは別に、Lisp の選択をタスクと scopeVersion に保存します。新しい実装タスクでは再確認し、未回答・閉じる操作では起動しません。
-常駐Lispがある場合は、同じsession・agent・repoの評価枠を再利用します。
-PID・世代・既存定義を維持し、別SBCLの起動やmode切替はしません。評価中は `BUSY`、
-別ownerの場合は `REPOSITORY_IN_USE` です。常駐workerがない作業用modeでは従来の一回限りworkerを使います。
+`lisp_define`・`lisp_call`・`lisp_observe` は、Working taskや `enable-task` への切替を要求しません。
+同じsession・agentの保護済み常駐workerは再利用し、PID・世代・既存定義を維持します。
+開発用workerや別ownerのheapは借りず、リポジトリをマウントしない保護付きscratchで計算します。
+JSON schemaは任意Lispの安全性を証明しません。計算側のホストRPCを拒否し、実際の副作用には従来の承認・scope・証拠を要求します。
+親のworkerを停止・譲渡する必要はありません。同じownerの評価中は `BUSY` です。
 ワーカー枠がすべて使用中の場合は `WORKER_LIMIT` で停止します。
 
 次は任意の確認コマンドです。有効化の追加操作は不要です。
@@ -113,9 +115,11 @@ PID・世代・既存定義を維持し、別SBCLの起動やmode切替はしま
   各検証は新しいpackageで行います。常駐ownerがない場合は検証ごとにworkerを起動します。
 - 入力・結果はセッションとエージェントに束縛されます。共有関数の呼び出しは
   他人の `resultRef` の参照権限や、作業ファイルの書き込み権限を与えません。
-- 常駐workerを再利用する呼び出しは、新しいpackage・object参照表・専用結果scratchを使い、
-  host RPCを許可しません。同じownerのCommon Lisp heap全体を隔離する仕組みではないため、
-  明示的な依存関数と入力だけを使う純粋関数として記述してください。別ownerとはworkerを共有しません。
+- 保護済み常駐workerを再利用する呼び出しは、新しいpackage・object参照表・専用結果scratchを使い、host RPCを許可しません。
+  同じownerのheap全体を分離する仕組みではありませんが、外部への操作はOSの保護範囲に制限します。
+  別owner・開発用workerとはheapを共有せず、リポジトリマウントも渡しません。
+- nativeの生きた親子所有関係と同じ作業場所を確認できる子には、見えているLisp計算機能だけを準備します。
+  拒否済みのツールを子のローカル登録で復活させず、親のtask leaseや入力・結果参照も渡しません。
 
 再送は同一の操作 ID と同一の引数で行います。保存結果を返し、再実行しません。
 `UNKNOWN` は成功でも安全な再試行でもありません。
@@ -135,5 +139,6 @@ npm run test:skill-delivery
 ```
 
 通常の `npm test` は保護付き SBCL / ネイティブ DSH の任意テストを省略します。
+`hot-tools.test.ts` の常駐合成・親子scratch・読込時書込み拒否の実SBCL試験も、明示した必須実行で確認します。
 上記の必須実行を別途確認してください。ローカルテストの成功は、稼働中の
 DSH プロファイルの更新、別プラットフォームの実行、リモート CI の成功を意味しません。

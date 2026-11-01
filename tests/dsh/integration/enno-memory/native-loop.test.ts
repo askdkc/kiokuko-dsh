@@ -18,6 +18,7 @@ import { recordEntry } from '../../../../src/memory/entries.js'
 import { forgetMemory } from '../../../../src/memory/forget.js'
 import { resolveProjectWorkspace } from '../../../../src/memory/workspaces.js'
 import { readRefreshMetadata } from '../../../../src/dsh/enno-memory-refresh-store.js'
+import * as harness from '../../../../src/dsh/harness/index.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !packages) throw new Error('ennoMemory native coverage requires the pinned DSH package runtime')
@@ -30,9 +31,9 @@ function toolResult(messages: any[], callId: string): any {
 for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep and boundary worker: ${mode}, new failure, repeated call, compaction, invalidation and terminal`, {
   skip: packages ? false : 'requires pinned DSH packages', timeout: 60000,
 }, async t => {
-  const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill']
+  const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','skill']
     .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)))
-  const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skills] = modules
+  const [cordis, llm, session, projection, systemPrompt, tools, agents, skills] = modules
   const root = await realpath(await mkdtemp(join(tmpdir(), 'enno-refresh-native-')))
   await prepareRepeatedWorkspace(root)
   await writeFile(join(root, 'package.json'), JSON.stringify({ name: 'enno-memory-fixture', version: '1.0.0', devDependencies: { typescript: '5.9.3' } }))
@@ -49,7 +50,7 @@ for (const mode of ['off', 'observe', 'active'] as const) test(`native preStep a
   const ctx = new cordis.Context(), fibers: any[] = [], errors: string[] = [], script: any[] = []
   ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages!, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
-  fibers.push(await ctx.plugin(loop.default, { agents: [] }))
+  fibers.push(await ctx.plugin(harness))
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   ctx.llm.registerAdapter(['mock'], provider)
   let calls = 0, beforeFull = 0, runId = '', agent: any, invalidationBlocked = false
@@ -146,7 +147,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
   // Admission is a separate native request before any Enno stage or memory review.
   script.unshift(interpretedPreparation(mock,'prepare-refresh','new','change','debug'))
   try {
-    agent = await ctx.agentLoop.create(session.SessionId('refresh-parent'), { provider: 'mock', model: 'mock' }, { cwd: root })
+    agent = (await ctx.agents.create({sessionId:session.SessionId('refresh-parent'),agentOptions:{provider:'mock',model:'mock'},meta:{cwd:root}})).agent
+    assert.equal(agent.constructor.name,'KiokukoHarnessAgent')
     const task = '役小角を使って QUEUE_TEST_BASELINE のテストを修正してください。read paths: fixtures\nwrite paths: fixtures\n完了条件: 検証して報告'
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     await waitFor(() => {

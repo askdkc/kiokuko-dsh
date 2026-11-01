@@ -402,7 +402,7 @@ for (const selection of ["保存しない", "修正する"])
     }
   });
 
-test("approved save failure exposes safe diagnosis without saved memory or a changed task outcome", async () => {
+test("approved save failure stays visible and retries the same approval without repeating task work", async () => {
   const f = await fixture();
   try {
     await record(f);
@@ -442,6 +442,20 @@ test("approved save failure exposes safe diagnosis without saved memory or a cha
         .get()?.status,
       "completed",
     );
+    const questions = f.host.asked.length;
+    f.failStorage(undefined);
+    f.memory.completed("memory-task", "completed", f.session.id);
+    await f.memory.whenIdle();
+    assert.equal(((await f.memory.reviewStatus()).statuses[0] as { status: string })?.status, "saved");
+    assert.equal(count(f.database, "replay_memories"), 1);
+    assert.equal(count(f.database, "entries"), 1);
+    assert.equal(f.host.asked.length, questions, "the exact approved proposal is retained");
+    const context: any = await f.memory.context({ cwd: f.root, query: "parser", limit: 5 });
+    assert.equal(context.replay.length, 1, "the recovered memory is available to the next request");
+    f.memory.completed("memory-task", "completed", f.session.id);
+    await f.memory.whenIdle();
+    assert.equal(count(f.database, "entries"), 1, "completion redelivery cannot duplicate a save");
+    assert.equal(f.host.asked.length, questions);
   } finally {
     await f.close();
   }
