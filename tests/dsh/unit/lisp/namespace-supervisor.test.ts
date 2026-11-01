@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
 import { Duplex } from 'node:stream'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
@@ -19,15 +19,18 @@ async function until(check: () => boolean, message: string, ms = 2500) {
   const deadline = Date.now() + ms
   while (!check()) { assert.ok(Date.now() < deadline, message); await delay(10) }
 }
-async function fixture(reportDelay: number, options: { startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
+async function fixture(reportDelay: number, options: { coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'namespace-supervisor-'))
   const script = join(base, 'monitor.py')
   await writeFile(script, `import os,sys,time,json,subprocess,select
 def cancelled(seconds):
  return bool(select.select([6],[],[],seconds)[0])
+print('monitor:'+str(os.getpid()),flush=True)
+print('entered',flush=True)
+time.sleep(${options.coldStartDelay ?? 0})
 print('spawning',flush=True)
 ${options.lateSpawn ? `time.sleep(${options.startDelay ?? 0})` : `if cancelled(${options.startDelay ?? 0}): sys.exit(0)`}
-child=subprocess.Popen([sys.executable,'-I','-c',${JSON.stringify(`import time,select; time.sleep(${options.childStartDelay ?? 0}); select.select([6],[],[],30)`)}],start_new_session=True,pass_fds=(6,)${options.detachedStdio ? ',stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL' : ''})
+child=subprocess.Popen([sys.executable,'-I','-c',${JSON.stringify(`import time,select; time.sleep(${options.childStartDelay ?? 0}); select.select([6],[],[],30)`)}],start_new_session=False,pass_fds=(6,)${options.detachedStdio ? ',stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL' : ''})
 with open('spawned.tmp','w') as record: json.dump({'monitor':os.getpid(),'child':child.pid},record)
 os.replace('spawned.tmp','spawned.json')
 ${options.failBeforeAnnounce ? 'sys.exit(23)' : ''}
@@ -45,11 +48,13 @@ ${options.exitAfterReport ? 'sys.exit(0)' : ''}
 sys.exit(child.wait())
 `)
   const launch = { command: '/usr/bin/python3', args: ['-I', script], env: {}, cwd: base, protocol: false, namespaceInfo: true, ...(options.repository ? { repositoryRoot: base } : {}) }
-  // This pipe belongs to the fixture, independently of production Stop and
-  // stdout readiness. Even an unannounced or late-spawned child inherits EOF.
+  // Fixture EOF remains independent of production Stop. The owned session
+  // below also bounds teardown before an inheritor can cooperate with EOF.
+  // The fixture anchor is unref'ed and inherits no streams: it must neither
+  // hold the tested supervisor alive nor delay the host's close event.
   const lifetime = join(base, 'lifetime.mjs')
   await writeFile(lifetime, `import net from 'node:net';import cp from 'node:child_process';import{syncBuiltinESMExports}from'node:module';
-    const spawn=cp.spawn;cp.spawn=function(command,args,options){const stdio=[...options.stdio];stdio[6]=6;return spawn.call(this,command,args,{...options,stdio})};syncBuiltinESMExports();
+    const spawn=cp.spawn;const anchor=spawn(process.execPath,['-e','setInterval(()=>{},60000)'],{stdio:'ignore'});anchor.unref();console.log('anchor:'+anchor.pid);cp.spawn=function(command,args,options){const stdio=[...options.stdio];stdio[6]=6;return spawn.call(this,command,args,{...options,stdio})};syncBuiltinESMExports();
     const pipe=new net.Socket({fd:6,readable:true,writable:false});pipe.on('end',()=>process.kill(process.pid,'SIGKILL'));pipe.resume();pipe.unref()`)
   const args = ['--import', lifetime, supervisor, JSON.stringify(launch)]
   if (options.denyKill) {
@@ -69,7 +74,7 @@ sys.exit(child.wait())
     await writeFile(driver, `import {spawn} from 'node:child_process';const child=spawn(process.execPath,${JSON.stringify(args)},{stdio:['pipe','inherit','inherit','ignore','ignore','ignore',6]});console.log('helper:'+child.pid);setInterval(()=>{},1000)`)
     args.splice(0, args.length, driver)
   }
-  const host = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe', 'ignore', 'pipe'] })
+  const host = spawn(process.execPath, args, { detached: true, stdio: ['pipe', 'pipe', 'pipe', 'ignore', 'pipe', 'ignore', 'pipe'] })
   const cancellation = host.stdio.at(6)
   assert.ok(cancellation instanceof Duplex)
   const exited = once(host, 'exit'), closed = once(host, 'close')
@@ -79,10 +84,14 @@ sys.exit(child.wait())
   ;(host.stdio[4] as NodeJS.ReadableStream).on('data', chunk => { control += String(chunk) })
   void closed.then(() => { didClose = true })
   void exited.then(() => { didExit = true })
+  const hostIdentity = processIdentity(host.pid!)
+  let anchorPid: number | undefined, anchorIdentity: string | undefined
   let childPid: number | undefined, monitorPid: number | undefined, helperPid: number | undefined
   let childIdentity: string | undefined, monitorIdentity: string | undefined, helperIdentity: string | undefined
   let cleanedPids: number[] = []
   function observe() {
+    const anchor = Number(/anchor:(\d+)/.exec(output)?.[1])
+    if (anchor && !anchorPid) { anchorPid = anchor; anchorIdentity = processIdentity(anchor) }
     for (const name of ['child', 'monitor', 'helper'] as const) {
       const pid = Number(new RegExp(`${name}:(\\d+)`).exec(output)?.[1])
       if (!pid) continue
@@ -101,9 +110,16 @@ sys.exit(child.wait())
     async spawned() { return JSON.parse(await readFile(join(base, 'spawned.json'), 'utf8')) as {monitor: number; child: number} },
     async cleanup() {
       cancellation.end()
-      // Only direct children of the test are signalled here. Descendant
-      // cancellation does not depend on successful PID announcements.
-      if (host.exitCode === null && host.signalCode === null) host.kill('SIGKILL')
+      // A birth-identified anchor retains the fixture's private session even if
+      // the tested supervisor has already exited. It has no inherited stdio.
+      // Never use the sandbox's reported PID as signal authority.
+      const anchorAlive = anchorPid && anchorIdentity && sameProcess(anchorPid, anchorIdentity)
+      const owner = anchorAlive ? anchorPid! : host.pid!
+      const identity = anchorAlive ? anchorIdentity : hostIdentity
+      assert.ok(identity && processIdentity(owner) === identity, 'fixture group ownership unavailable')
+      const group = Number(execFileSync('/bin/ps', ['-p', String(owner), '-o', 'pgid='], { encoding: 'utf8' }).trim())
+      assert.equal(group, host.pid, 'fixture anchor left its owned process group')
+      process.kill(-group, 'SIGKILL')
       await until(() => didClose, 'fixture stdio cleanup did not finish')
       await closed
       // Every inheritor has now closed its lifetime fd, so no fixture process
@@ -113,13 +129,15 @@ sys.exit(child.wait())
         cleanedPids = [owned.monitor, owned.child]
         for (const pid of cleanedPids) await until(() => !sameProcess(pid, undefined), 'unannounced fixture process did not stop')
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-      for (const [pid, identity] of [[childPid, childIdentity], [monitorPid, monitorIdentity], [helperPid, helperIdentity]] as const) {
+      for (const [pid, identity] of [[anchorPid, anchorIdentity], [childPid, childIdentity], [monitorPid, monitorIdentity], [helperPid, helperIdentity]] as const) {
         if (pid && identity) await until(() => !sameProcess(pid, identity), 'fixture process cleanup did not finish')
       }
       await rm(base, { recursive: true, force: true })
     },
     run<T>(body: () => Promise<T>) { return withCleanup(body, () => f.cleanup()) },
   }
+  try { await until(() => !!anchorPid && !!anchorIdentity, 'fixture group anchor did not start', 5000) }
+  catch (primary) { await withCleanup(async () => { throw primary }, () => f.cleanup()) }
   return f
 }
 
@@ -128,7 +146,7 @@ async function withCleanup<T>(body: () => Promise<T>, cleanup: () => Promise<voi
   try { value = await body() }
   catch (primary) {
     try { await cleanup() }
-    catch (cleanupError) { throw new AggregateError([primary, cleanupError], 'fixture test and cleanup both failed') }
+    catch (cleanupError) { console.error('fixture primary failure:', primary); console.error('fixture cleanup failure:', cleanupError); throw new AggregateError([primary, cleanupError], 'fixture test and cleanup both failed') }
     throw primary
   }
   await cleanup()
@@ -140,12 +158,20 @@ async function withCleanup<T>(body: () => Promise<T>, cleanup: () => Promise<voi
 for (const mode of ['delayed monitor', 'late spawn', 'delayed announcement', 'delayed child', 'failed announcement'] as const) {
   test(`fixture cleanup owns partial startup: ${mode}`, { timeout: 10000 }, async () => {
     const f = await fixture(0.05, { startTimeout: 30,
-      ...(mode === 'delayed monitor' ? { startDelay: 0.4 }
+      ...(mode === 'delayed monitor' ? { coldStartDelay: 3.5 }
         : mode === 'late spawn' ? { startDelay: 0.2, lateSpawn: true }
         : mode === 'delayed child' ? { announceDelay: 0.4, childStartDelay: 0.4 }
         : mode === 'failed announcement' ? { failBeforeAnnounce: true } : { announceDelay: 0.4 }) })
+    let monitor: { pid: number; identity: string } | undefined
     let child: { pid: number; identity: string } | undefined
     await assert.rejects(f.run(async () => {
+      if (mode === 'delayed monitor') {
+        await until(() => f.output.includes('entered'), 'monitor did not enter pre-cooperation phase', 5000)
+        const pid = Number(/monitor:(\d+)/.exec(f.output)![1]), identity = processIdentity(pid)
+        assert.ok(identity); assert.equal(sameProcess(pid, identity), true)
+        monitor = { pid, identity }
+        await assert.rejects(f.spawned(), { code: 'ENOENT' })
+      }
       if (mode === 'late spawn') await until(() => f.output.includes('spawning'), 'monitor never reached delayed spawn')
       else if (mode !== 'delayed monitor') {
         let spawned: Awaited<ReturnType<typeof f.spawned>> | undefined
@@ -162,7 +188,8 @@ for (const mode of ['delayed monitor', 'late spawn', 'delayed announcement', 'de
       await f.started()
     }), { message: 'fixture child did not start' })
     assert.equal(f.didClose, true, 'all stdio, including every inherited lifetime fd, must close')
-    if (mode === 'late spawn') assert.equal(f.cleanedPids.length, 2, 'cancellation must also drain a later spawn')
+    if (mode === 'late spawn') assert.equal(f.cleanedPids.length, 0, 'cancellation before the delayed spawn must prevent child creation')
+    if (monitor) assert.equal(sameProcess(monitor.pid, monitor.identity), false, 'the entered non-cooperating monitor must be gone')
     if (child) assert.equal(sameProcess(child.pid, child.identity), false, 'even an unannounced child must be gone')
   })
 }
@@ -231,6 +258,8 @@ test('a foreign PID report never authorizes signalling an unrelated process', { 
   const exited = once(sentinel, 'exit')
   const sentinelPid = sentinel.pid
   assert.ok(sentinelPid)
+  const sentinelIdentity = processIdentity(sentinelPid)
+  assert.ok(sentinelIdentity)
   const f = await fixture(0.05, { reportPid: sentinelPid })
   try {
     await f.run(async () => {
@@ -242,6 +271,7 @@ test('a foreign PID report never authorizes signalling an unrelated process', { 
     assert.equal(f.didClose, false)
     assert.equal(sameProcess(sentinel.pid!, identity), true)
     })
+    assert.equal(sameProcess(sentinelPid, sentinelIdentity), true, 'fixture cleanup must not kill the foreign sentinel')
   } finally { sentinel.kill('SIGKILL'); await exited }
 })
 
