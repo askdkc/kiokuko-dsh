@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
@@ -138,6 +138,10 @@ test('synthetic transport fixtures require exactly three targets and reject miss
     assert.notEqual(selected().status,0,'extra native targets are not silently accepted');await rm(join(external,'linux-arm64'),{recursive:true});await rm(join(external,'darwin-arm64'),{recursive:true});
     const good=selected();assert.equal(good.status,0,good.stderr);const narrow=JSON.parse(await readFile(join(directory,'micro-judge/manifest.json'),'utf8'));assert.equal(narrow.artifacts.length,1);assert.equal(narrow.artifacts[0].arch,'x64');
     assert.equal(JSON.parse(await readFile(join(directory,'micro-judge/selection.json'),'utf8')).bundleScope,'representative');
+    const flat=await mkdtemp(join(tmpdir(),'micro-selected-flat-'));t.after(()=>rm(flat,{recursive:true,force:true}));
+    for(const file of await readdir(join(external,'linux-x64')))await cp(join(external,'linux-x64',file),join(flat,file),{recursive:true});
+    const flattened=spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),flat,`--ci-plan=${planFile}`],{encoding:'utf8'});
+    assert.equal(flattened.status,0,flattened.stderr);
     await assert.rejects(readFile(join(directory,'micro-judge/darwin-arm64/kiokuko-micro-judge')),'unselected stale binaries are removed');
     assert.notEqual(spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),external],{encoding:'utf8'}).status,0,'narrow test bundle is not complete release input');
     const wrapper=join(external,'linux-x64/selection.json'),saved=await readFile(wrapper,'utf8');const bad=JSON.parse(saved);bad.bundleScope='release-review';await writeFile(wrapper,JSON.stringify(bad));assert.notEqual(selected().status,0);await writeFile(wrapper,saved);

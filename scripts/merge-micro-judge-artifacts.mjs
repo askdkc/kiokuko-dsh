@@ -9,9 +9,14 @@ const selectedModule=selectedFile?await import('./ci-plan.mjs'):undefined
 const selection=selectedModule?.readCiPlan(root,selectedFile)
 assert.ok(input,'Pass the downloaded native artifact directory')
 const source=await sourceDigest(root), gathered=new Map()
-for(const folder of await readdir(input,{withFileTypes:true})) {
+const downloaded=await readdir(input,{withFileTypes:true}), rootManifest=downloaded.find(entry=>entry.name==='manifest.json')
+if(rootManifest)assert.ok(rootManifest.isFile()&&!rootManifest.isSymbolicLink(),'Expected a regular artifact manifest')
+const artifactPaths=rootManifest?[input]:downloaded.map(folder=>{
   assert.ok(folder.isDirectory()&&!folder.isSymbolicLink(),'Expected distinct artifact directories')
-  const path=join(input,folder.name), manifest=JSON.parse(await regular(join(path,'manifest.json')))
+  return join(input,folder.name)
+})
+for(const path of artifactPaths) {
+  const manifest=JSON.parse(await regular(join(path,'manifest.json')))
   assert.equal(manifest.version,'kiokuko-fd-v1');assert.equal(manifest.artifacts.length,1)
   const entry=manifest.artifacts[0], result=await validateNativeArtifact(path,entry,source)
   if(selection)assert.deepEqual(JSON.parse(await regular(join(path,'selection.json'))),selectedModule.nativeSelection(selection,entry),'Native artifact belongs to another selection/source/toolchain')
