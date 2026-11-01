@@ -181,6 +181,16 @@ test('selected coverage fails safe and retains the complete inventory in full mo
   assert.equal(core.filter(c=>c.id==='build').length,1);for(const id of ['ci-native-unit','ci-native-integration-1','ci-native-integration-2','lisp-native-1','lisp-native-2','owned-native'])assert.ok(core.some(c=>c.id===id),id);
   for(const id of ['consumer-npm','consumer-pnpm','dsh-lifecycle','dsh-cli-profile'])assert.ok(lanePlan(contract,representative,'consumer-linux-x64').checks.some(c=>c.id===id),id);
 });
+test('Depot CI selects one Linux native producer instead of relabeling unsupported macOS work',()=>{
+  const selection=createCiPlan(contract,{full:true},{...selectionIdentity,ciPlatform:'linux-x64'});
+  assert.equal(selection.mode,'representative');
+  assert.match(selection.reason,/linux-x64-only CI host/);
+  assert.deepEqual(selection.nativeTargets.map(target=>target.key),['linux-x64']);
+  assert.ok(selection.lanes.length>0);
+  assert.ok(selection.lanes.every(lane=>lane.key==='linux-x64'&&lane.runner==='ubuntu-24.04'));
+  assert.ok(selection.lanes.every(lane=>lane.release===false));
+  assert.throws(()=>createCiPlan(contract,{full:true},{...selectionIdentity,ciPlatform:'darwin-arm64'}),/Only the Linux x64 Depot CI platform is supported/);
+});
 test('PR merge-base and push-before diff parsing preserve rename/deletion and unavailable fail-safe',()=>{
   const before='a'.repeat(40),ancestor='b'.repeat(40);
   for(const pr of [true,false]){const calls=[];const parsed=readChangedFiles(root,pr?{pull_request:{base:{sha:before}}}:{before},args=>{calls.push(args);if(args[0]==='merge-base')return ancestor+'\n';if(args[0]==='cat-file')return '';return 'M\0src/dsh/task-state.ts\0R100\0docs/old.md\0docs/new.md\0D\0docs/deleted.md\0'});

@@ -4,6 +4,7 @@
 # Changes made:
 # - Removed unsupported trigger "release"
 # - Changed GitHub runs-on labels to their Depot equivalents
+# - Limited the selected plan to Linux x64 because Depot CI has no macOS sandbox
 
 name: CI
 # Removed unsupported trigger: release. Release events are not supported.
@@ -39,7 +40,7 @@ jobs:
         shell: bash
         run: node scripts/resolve-dsh-upstream.mjs
       - id: plan
-        run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json"
+        run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json" --ci-platform=linux-x64
       - uses: actions/upload-artifact@v7
         with:
           name: selected-ci-plan

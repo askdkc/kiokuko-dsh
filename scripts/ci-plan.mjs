@@ -68,11 +68,17 @@ export function lanePlan(contract, selection, id) {
 
 export function createCiPlan(contract, request, identity) {
   const chosen = selectChanges(request), lanes = [];
+  if(identity.ciPlatform&&chosen.mode!=='docs') {
+    assert.equal(identity.ciPlatform,'linux-x64','Only the Linux x64 Depot CI platform is supported');
+    chosen.mode='representative';
+    chosen.reason=`${chosen.reason}; ${identity.ciPlatform}-only CI host`;
+    chosen.platforms=[identity.ciPlatform];
+  }
   if(identity.validationPlatform) {
     assert.notEqual(chosen.mode, 'full', 'Local validation cannot claim a complete release bundle');
     chosen.platforms = [...new Set(chosen.platforms.map(key => key === 'linux-x64' ? identity.validationPlatform : key))].sort();
   }
-  const baseline = identity.validationPlatform ?? 'linux-x64';
+  const baseline = identity.validationPlatform ?? identity.ciPlatform ?? 'linux-x64';
   const select = (profile, partition) => ({ profile, ...(partition ? { partition } : {}) });
   const add = (id, key, selectors, release = false) => lanes.push({ id, key, ...ciPlatforms[key], selectors, release });
   if (chosen.mode === 'full') {
@@ -119,22 +125,27 @@ export function validateCiPlan(contract, selection, identity) {
   try { return same(selection, createCiPlan(contract, selection.request, identity)); }
   catch { return false; }
 }
-export function checkoutIdentity(root, validationPlatform) {
+export function checkoutIdentity(root, validationPlatform, ciPlatform) {
   const toolchain = { ...ciToolchain, node: process.version, npm: execFileSync('npm', ['--version'], { cwd: root, encoding: 'utf8' }).trim() };
   if(validationPlatform) {
     assert.notEqual(process.env.GITHUB_ACTIONS, 'true', 'Local validation plans cannot be used by GitHub CI');
     assert.equal(validationPlatform, `${process.platform}-${process.arch}`, 'Local validation host mismatch');
     toolchain.rust = execFileSync('rustc', ['--version'], {cwd:root,encoding:'utf8'}).trim();
   }
+  if(ciPlatform) {
+    assert.equal(ciPlatform,'linux-x64','Only the Linux x64 Depot CI platform is supported');
+    assert.equal(ciPlatform,`${process.platform}-${process.arch}`,'CI platform host mismatch');
+  }
   if (process.env.GITHUB_ACTIONS === 'true') assert.deepEqual(toolchain, ciToolchain, 'CI toolchain mismatch');
   return { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     sourceDigest: sourceDigest(root, { nativeTransport: false }),
-    contractDigest: digest(readFileSync(path.join(root, 'scripts/verification.json'))), toolchain, ...(validationPlatform ? {validationPlatform} : {}) };
+    contractDigest: digest(readFileSync(path.join(root, 'scripts/verification.json'))), toolchain,
+    ...(validationPlatform ? {validationPlatform} : {}), ...(ciPlatform ? {ciPlatform} : {}) };
 }
 export function readCiPlan(root, file) {
   const selection = JSON.parse(readFileSync(file, 'utf8'));
   const contract = JSON.parse(readFileSync(path.join(root, 'scripts/verification.json')));
-  assert.ok(validateCiPlan(contract, selection, checkoutIdentity(root, selection.identity?.validationPlatform)), 'Selected CI plan is stale, altered, or belongs to another source/contract');
+  assert.ok(validateCiPlan(contract, selection, checkoutIdentity(root, selection.identity?.validationPlatform,selection.identity?.ciPlatform)), 'Selected CI plan is stale, altered, or belongs to another source/contract');
   assert.equal(process.version, selection.identity.toolchain.node, 'Selected Node toolchain mismatch');
   assert.equal(execFileSync('npm', ['--version'], { cwd: root, encoding: 'utf8' }).trim(), selection.identity.toolchain.npm, 'Selected npm toolchain mismatch');
   return selection;
@@ -163,12 +174,13 @@ export function readChangedFiles(root, event, git = args => execFileSync('git', 
 }
 if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url) {
   const root = path.resolve(import.meta.dirname, '..'), output = process.argv[2];
+  const ciPlatform=process.argv.find(arg=>arg.startsWith('--ci-platform='))?.slice(14);
   assert.ok(output, 'Usage: ci-plan.mjs output.json');
   const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH)) : {};
   const request = { ...readChangedFiles(root, event), full: ['workflow_dispatch', 'release'].includes(process.env.GITHUB_EVENT_NAME)
     || String(process.env.GITHUB_REF ?? '').startsWith('refs/tags/') };
   execFileSync('git', request.base ? ['diff', '--check', request.base, 'HEAD'] : ['diff', '--check'], { cwd: root, stdio: 'inherit' });
-  const selection = createCiPlan(JSON.parse(readFileSync(path.join(root, 'scripts/verification.json'))), request, checkoutIdentity(root));
+  const selection = createCiPlan(JSON.parse(readFileSync(path.join(root, 'scripts/verification.json'))), request, checkoutIdentity(root,undefined,ciPlatform));
   assert.equal(process.version, ciToolchain.node); assert.equal(execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(), ciToolchain.npm);
   writeFileSync(output, JSON.stringify(selection, null, 2) + '\n');
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,

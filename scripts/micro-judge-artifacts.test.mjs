@@ -8,6 +8,7 @@ import { acceptanceSummary, compilerIdentity, nativeTargets, sourceDigest, valid
 const root=resolve(import.meta.dirname,'..')
 test('selected native consumers merge CI targets while preserving the supported runtime registry',async()=>{
   const workflow=parse(await readFile(join(root,'.github/workflows/ci.yml'),'utf8'));
+  const depotWorkflow=parse(await readFile(join(root,'.depot/workflows/ci.yml'),'utf8'));
   const {createCiPlan}=await import('./ci-plan.mjs');const c=JSON.parse(await readFile(join(root,'scripts/verification.json'),'utf8'));
   assert.deepEqual(Object.keys(nativeTargets).sort(),['darwin-arm64','linux-arm64','linux-x64']);
   const full=createCiPlan(c,{full:true},{});assert.deepEqual(full.nativeTargets.map(t=>t.key).sort(),['darwin-arm64','linux-x64']);
@@ -15,6 +16,7 @@ test('selected native consumers merge CI targets while preserving the supported 
   assert.ok(native.steps.some(s=>s.run?.includes('build-verify-micro-judge.mjs')&&s.run.includes('--ci-plan=')));
   const job=workflow.jobs.checks;assert.deepEqual(job.needs,['select','micro-judge-native']);const merge=job.steps.findIndex(s=>s.run?.includes('merge-micro-judge-artifacts.mjs'));assert.ok(merge>=0&&merge<job.steps.findIndex(s=>s.run==='npm ci'));
   assert.ok(workflow.jobs.verify.needs.includes('micro-judge-native'));assert.ok(workflow.jobs.verify.steps.some(s=>s.run?.includes('merge-micro-judge-artifacts.mjs')));
+  assert.ok(depotWorkflow.jobs.select.steps.some(s=>s.run?.includes('ci-plan.mjs')&&s.run.includes('--ci-platform=linux-x64')));
 });
 
 test('native acceptance rejects skipped, incomplete, empty and forged count-only logs',()=>{
