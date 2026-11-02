@@ -7,12 +7,13 @@ import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { answerTaskStartup } from '../tests/dsh/helpers/task-startup-fixture.ts'
 import { createInputBarrier, inputWasHandled, questionWasAnswered, createQuestionSelection } from './cli-input-barrier.mjs'
 import { completeVerification } from './verification-completion.mjs'
-import { execFile } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { createRequire } from 'node:module'
 import { appendFileSync, readFileSync, statSync } from 'node:fs'
 import { createConnection } from 'node:net'
-import { mkdir, mkdtemp, readFile, writeFile, realpath, copyFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile, realpath, copyFile, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import YAML from 'yaml'
@@ -54,11 +55,31 @@ if(process.env.KIOKUKO_CLI_TASK)await writeFile(join(workspace,'input.json'),JSO
 await writeFile(env.npm_config_userconfig, '', { mode: 0o600 })
 // Source-entry acceptance imports already installed packages and the current build.
 // Explicit patch overlays exercise source entries without a package-manager operation.
-let sourcePackages
+let sourcePackages, localRuntimeIdentity
 const sourcePatches = []
 if (stage === 'source') {
-  const selected = selectedDshRuntime(resolve(import.meta.dirname, '..'))
-  assert.equal(dsh, await realpath(join(selected.packageRoot, '@deepseek-ai/dsh/lib/bin.js')), 'CLI source acceptance must use the selected official executable')
+  const repoRoot = resolve(import.meta.dirname, '..')
+  let selected
+  if (process.env.KIOKUKO_CLI_LOCAL_RUNTIME === '1') {
+    assert.ok(!process.env.CI, 'Local development acceptance cannot replace the official CI runtime contract')
+    assert.ok(process.env.DSH_CLI_DSH_ROOT, 'Explicit DSH_CLI_DSH_ROOT is required for local development acceptance')
+    const sourceRoot = await realpath(resolve(process.env.DSH_CLI_DSH_ROOT))
+    assert.equal(JSON.parse(await readFile(join(sourceRoot, 'apps/cli/package.json'), 'utf8')).name, '@deepseek-ai/dsh')
+    assert.equal(dsh, await realpath(join(sourceRoot, 'apps/cli/lib/bin.js')), 'Local acceptance must execute the declared built checkout')
+    selected = { packageRoot: await realpath(process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(repoRoot, 'tests/fixtures/dsh-runtime/node_modules')) }
+    assert.equal(dsh, await realpath(join(selected.packageRoot, '@deepseek-ai/dsh/lib/bin.js')), 'Local package graph must match the selected CLI executable')
+    const git = args => execFileSync('git', ['-C', sourceRoot, ...args], { encoding: 'utf8' }).trim()
+    const modules = {}
+    for (const name of ['dsh', 'cordis', 'dsh-agent', 'dsh-session', 'dsh-tools', 'dsh-llm']) {
+      const entry = await realpath(join(selected.packageRoot, '@deepseek-ai', name, 'lib', name === 'dsh' ? 'bin.js' : 'index.js'))
+      modules[name] = { entry, sha256: createHash('sha256').update(await readFile(entry)).digest('hex') }
+    }
+    localRuntimeIdentity = { mode: 'explicit-local-development', sourceRoot, head: git(['rev-parse', 'HEAD']),
+      dirty: git(['status', '--porcelain=v1']), modules }
+    env.DSH_CLI_DSH_ROOT = sourceRoot
+    await writeFile(join(root, 'local-runtime-identity.json'), JSON.stringify(localRuntimeIdentity, null, 2) + '\n')
+  } else selected = selectedDshRuntime(repoRoot)
+  assert.equal(dsh, await realpath(join(selected.packageRoot, '@deepseek-ai/dsh/lib/bin.js')), 'CLI source acceptance must use its selected executable')
   const hostAnchor = join(selected.packageRoot, '..', 'package.json')
   const cli = JSON.parse(await readFile(cliPackage, 'utf8'))
   const plugin = JSON.parse(await readFile(kiokukoPackage, 'utf8'))
@@ -71,6 +92,13 @@ if (stage === 'source') {
     name: 'isolated-cli-source-acceptance', dependencies: { '@askdkc/dsh-cli': cli.version, 'kiokuko-dsh': plugin.version },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }) + '\n')
   await writeFile(join(profile, 'cordis.patch.yml'), '[]\n')
+  // The real launcher checks its physical package before boot. Populate only
+  // this disposable source profile, so it never enters network bootstrap.
+  for (const [name, directory] of Object.entries(sourcePackages)) {
+    const target = join(profile, 'node_modules', name)
+    await mkdir(dirname(target), { recursive: true })
+    await symlink(directory, target, 'dir')
+  }
   for (const [directory, manifest] of [[dirname(cliPackage), cli], [dirname(kiokukoPackage), plugin]]) {
     const patches = manifest.dsh?.bundle?.patch
     assert.ok(typeof patches === 'string' || Array.isArray(patches), 'A real bundle patch is required')
@@ -95,7 +123,7 @@ const exec = promisify(execFile), steps = []
 if(variant==='legacy')sourcePatches.push('--patch',resolve(dirname(kiokukoPackage),'dsh/cordis.legacy.patch.yml'))
 const cliLauncher=resolve(dirname(cliPackage),'bin/dsh-cli.js')
 const trace = resolve(import.meta.dirname, 'cli-profile-trace.mjs')
-if(launcher)env.NODE_OPTIONS=`--import=${trace}`
+if(launcher)env.NODE_OPTIONS=[`--import=${trace}`, ...(sourceHook ? [`--import=${sourceHook}`] : [])].join(' ')
 const entryArgs = args => launcher ? [cliLauncher,...(variant==='ignore'?['--ignore-kiokuko']:[]),...args.filter((arg,index)=>arg!=='--profile'&&args[index-1]!=='--profile')] : [dsh,...args]
 async function command(label, args, allowFailure = false) {
   console.log(`Starting ${label}`)
@@ -237,6 +265,11 @@ async function tui(resumeSessionId) {
         startupQuestions.add(request.requestSequence)
         ;(launch.startupChoices ??= []).push({ questionId: question.id, selected, requestSequence: request.requestSequence })
       })
+      return
+    }
+    if (question?.id === 'enno-execution-mode') {
+      assert.ok(question.options.some(option => option.label === '通常実行'), 'Expected the native ordinary execution choice')
+      selectQuestion(request, '通常実行')
       return
     }
     if (question?.detail !== 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
@@ -393,7 +426,7 @@ async function tui(resumeSessionId) {
     await wait(() => native('user/message').some(value => value.event.data.source?.kind === 'user' && value.event.data.content?.some(block => block.text === hello)), 'new native human input missing')
     const human = native('user/message').find(value => value.event.data.source?.kind === 'user' && value.event.data.content?.some(block => block.text === hello))
     await wait(() => fresh().some(value => value.type === 'fixture-request' && value.text === hello), 'new human input did not reach model')
-    await wait(() => native('assistant/message').some(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK')), 'new native answer missing', process.env.KIOKUKO_CLI_LIVE_BRIDGE?120000:30000)
+    await wait(() => native('assistant/message').some(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK')), 'new native answer missing', process.env.KIOKUKO_CLI_LIVE_BRIDGE?600000:30000)
     const answer = native('assistant/message').find(value => value.event.seq > human.event.seq && JSON.stringify(value.event.data).includes('PROFILE_FIXTURE_OK'))
     await wait(() => native('turn/end').some(value => value.event.seq > answer.event.seq && value.event.data.reason.kind === 'completed'), 'new answer turn did not complete')
     await wait(() => screen().includes('PROFILE_FIXTURE_OK'), 'answer did not render')
@@ -403,6 +436,14 @@ async function tui(resumeSessionId) {
     }
     let finalSessionId = created.sessionId
     if (!resumeSessionId) {
+      if (process.env.KIOKUKO_CLI_LIVE_BRIDGE && process.env.KIOKUKO_CLI_TASK && kiokukoEnabled) {
+        // A coding completion card can arrive after turn/end. Do not type the
+        // next command into that card's custom-answer field.
+        await wait(() => native('plugin:kiokuko-dsh/repository-learning').some(value =>
+          value.event.data.phase === 'capture' && value.event.data.status === 'saved'
+          && value.event.data.reflection === 'model') && declinedQuestions.size > 0 && enterReady() && composerText() === '',
+        'live development learning and native completion review did not settle', 120000)
+      }
       await line('profile-fixture-slow')
       await wait(() => fresh().some(value => value.type === 'fixture-slow-started'), 'slow fixture did not start')
       child.write('\x1b')
@@ -510,6 +551,7 @@ async function tui(resumeSessionId) {
 }
 console.log(`Isolated ${sourceHook ? 'source-entry profile' : 'installed profile'} at ${root}; starting actual PTY`)
 const runtimeInventory = () => [...new Map(events().filter(value => value.type === 'runtime-package').map(value => [value.manifest, value])).values()]
+const runtimeModules = () => [...new Map(events().filter(value => value.type === 'runtime-module').map(value => [value.entry, value])).values()]
 async function retainEvidence() {
   if (process.env.KIOKUKO_VERIFY_COMPLETION_FILE) {
     const evidence = dirname(process.env.KIOKUKO_VERIFY_COMPLETION_FILE)
@@ -519,21 +561,27 @@ async function retainEvidence() {
     }
   }
 }
-const baseReport = { root, scope, replacementHarness, ...(scope==='normal'?{lisp:'not exercised in normal scope; full scope requires real SBCL'}:{}), mode: sourceHook ? 'source-entry' : 'installed-package', ...(sourceHook ? { sourceHook, sourcePackages, installation: 'not exercised; no package operations attempted' } : {}), model: 'scripted offline fixture; no real model inference', readiness: 'real TUI socket and input echo; no Kiokuko registration wait', steps }
+const baseReport = { root, scope, replacementHarness, ...(localRuntimeIdentity ? {localRuntimeIdentity} : {}), ...(scope==='normal'?{lisp:'not exercised in normal scope; full scope requires real SBCL'}:{}), mode: sourceHook ? 'source-entry' : 'installed-package', ...(sourceHook ? { sourceHook, sourcePackages, installation: 'not exercised; no package operations attempted' } : {}), model: 'scripted offline fixture; no real model inference', readiness: 'real TUI socket and input echo; no Kiokuko registration wait', steps }
 if(process.env.KIOKUKO_CLI_LIVE_BRIDGE)baseReport.model='live assistant-in-loop transport; fresh assistant responses; no external API authentication; scripted cancellation stall only'
 Object.assign(baseReport,{variant,launcher})
 await writeFile(join(root, 'report.json'), JSON.stringify({ ...baseReport, status: 'running' }, null, 2) + '\n')
 try {
   const initial = await tui()
   const resumed = await tui(initial.sessionId)
-  const report = { ...baseReport, status: 'passed', initial, resumed, launches, runtimePackages: runtimeInventory() }
+  const report = { ...baseReport, status: 'passed', initial, resumed, launches, runtimePackages: runtimeInventory(), runtimeModules: runtimeModules() }
   const cliRuntime = report.runtimePackages.find(item => item.name === '@askdkc/dsh-cli')
   assert.ok(cliRuntime, 'Actual interactive CLI package load must be observed')
   if (stage === 'source') assert.equal(cliRuntime.version, JSON.parse(await readFile(cliPackage, 'utf8')).version)
+  if (stage === 'source' && replacementHarness) {
+    const factory = await realpath(join(dirname(kiokukoPackage), 'dist/dsh/harness/factory.js'))
+    const expectedHash = createHash('sha256').update(await readFile(factory)).digest('hex')
+    assert.ok(report.runtimeModules.some(module => module.entry === new URL(`file://${factory}`).href && module.sha256 === expectedHash),
+      'The actual CLI must execute the current built Kiokuko factory bytes')
+  }
   await writeFile(join(root, 'report.json'), JSON.stringify(report, null, 2) + '\n')
   await retainEvidence()
   completeVerification({ profile: 'dsh-cli', interactive: true, cliVersion: cliRuntime.version, sourceEntry: Boolean(sourceHook) })
-  console.log(JSON.stringify({ ...report, runtimePackages: `${report.runtimePackages.length} packages recorded in report.json` }))
+  console.log(JSON.stringify({ ...report, runtimePackages: `${report.runtimePackages.length} packages recorded in report.json`, runtimeModules: `${report.runtimeModules.length} module hashes recorded in report.json` }))
   process.exit(0)
 } catch (error) {
   await writeFile(join(root, 'report.json'), JSON.stringify({ ...baseReport, status: 'failed', launches, error: String(error.stack ?? error), runtimePackages: runtimeInventory() }, null, 2) + '\n')

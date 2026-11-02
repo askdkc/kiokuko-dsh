@@ -24,7 +24,7 @@ if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Erro
 
 for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for (const web of [false, true]) {
   test(`on-demand full native: ${fault} classifier with AgenticReplay recording permits ${web ? 'automatic web search' : 'an ordinary answer'} without purpose UI`, { skip: !installed, timeout: 30_000 }, async () => {
-    const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+    const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill',
     ].map(load))

@@ -28,7 +28,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
   const correction = scenario === 'finding' || scenario === 'tool-evidence' || scenario === 'paired-candidate'
   const [cordis,llm,session,projection,prompt,tools,agents,loop,skills] = await Promise.all(
     ['cordis','dsh-llm','dsh-session','dsh-session-projection','dsh-system-prompt','dsh-tools','dsh-agent','dsh-agent-loop','dsh-skill']
-      .map(name => import(pathToFileURL(join(packageRoot!,'@deepseek-ai',name,'lib/index.js')).href)))
+      .map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packageRoot!,'@deepseek-ai',name,'lib/index.js')).href))))
   const ctx = new cordis.Context(), fibers: any[] = []
   const root = await mkdtemp(join(tmpdir(),'kiokuko-answer-native-')), databasePath = join(root,'state.sqlite3')
   let dispose: (() => Promise<void>) | undefined, questions = 0, reviewCalls = 0, taskTypeCalls = 0
@@ -136,7 +136,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     ctx.llm.registerAdapter(['ordinary'],model)
     // This fixture only returns a constant observation; mark its native effect contract read-only.
     ctx.tools.register({[CODING_READ_ONLY]:true,name:'verify_sum',description:'Return a known sum.',parameters:{type:'object',properties:{}},output:{schema:{type:'string'},render:(_args:unknown,value:string)=>[{type:'text',text:value}]},execute:async()=>{toolCalls++;return 'Verified sum: four'}})
-    const agent = await ctx.agentLoop.create(session.SessionId(`answer-${host}`),{provider:'ordinary',model:'mock'},{cwd:root})
+    const agent = (await ctx.agents.create({sessionId:session.SessionId(`answer-${host}`),agentOptions:{provider:'ordinary',model:'mock'},meta:{cwd:root}})).agent
     if (scenario === 'superseded') onReview = () => queueMicrotask(() => agent.followup(llm.createUserMessage({content:[{type:'text',text:followupRequest}],source:{kind:'user'}})))
     if (scenario === 'queued-superseded' || scenario === 'claimed-superseded') {
       let injected = false

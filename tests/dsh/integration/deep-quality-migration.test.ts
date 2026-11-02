@@ -1,7 +1,9 @@
-import { CURRENT_MIGRATION_VERSIONS } from '../../fixtures/current-migrations.js'
+import {DeepStore} from '../../../src/deep-thinker/store.js'
+import {openConnection} from '../../../src/db/connection.js'
+import { CURRENT_MIGRATION_VERSIONS, CURRENT_SCHEMA_VERSION } from '../../fixtures/current-migrations.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { historicalDeepFixture as deepFixture } from '../helpers/historical-deep-fixture.js'
@@ -45,4 +47,36 @@ test('quality migration preserves a version 1 interrupted attempt byte-for-byte 
   } finally {
     await scheduler.dispose(); await f.close(); await rm(version16, { recursive: true, force: true })
   }
+})
+
+const historicalMigrations=resolve('migrations')
+for (const version of [16, 26]) test(`historical v${version} fixture owns its old schema and survives reopen plus forward migration`, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'historical-deep-contract-')), old = join(root, 'historicalMigrations')
+  let fixture:Awaited<ReturnType<typeof deepFixture>>|undefined
+  try {
+    await mkdir(old)
+    for (const name of await readdir(historicalMigrations)) if (/^\d+.*\.sql$/u.test(name) && Number(name.slice(0, 3)) <= version)
+      await copyFile(join(historicalMigrations, name), join(old, name))
+    t.mock.method(DeepStore.prototype, 'createIntent', async () => { throw new Error('Historical seed must not use current admission') })
+    t.mock.method(DeepStore.prototype, 'createRun', async () => { throw new Error('Historical seed must not use current admission') })
+    fixture = await deepFixture({}, {}, old)
+    const f = fixture
+    assert.equal(f.db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version, version)
+    assert.equal(f.db.prepare('PRAGMA table_info(ledger_runs)').all().some(row => row.name === 'task_owner_session_id'), false)
+    const state = await f.store.read(f.state.runId)
+    assert.equal(state.protocolVersion, 1)
+    assert.equal(state.nodes.length, 1)
+    assert.equal(f.db.prepare('SELECT run_id FROM dsh_execution_owners WHERE dsh_session_id=?').get(f.intent.sessionId)?.run_id, f.state.runId)
+    assert.deepEqual(f.db.prepare('PRAGMA foreign_key_check').all(), [])
+    const stored = f.db.prepare('SELECT * FROM dsh_deep_runs').get()
+    const reopened = openConnection(f.dbPath)
+    try {
+      assert.deepEqual(reopened.prepare('SELECT * FROM dsh_deep_runs').get(), stored)
+      assert.deepEqual(migrateDatabase(reopened, historicalMigrations).applied, CURRENT_MIGRATION_VERSIONS.filter(value => value > version))
+      assert.equal(reopened.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version, CURRENT_SCHEMA_VERSION)
+      assert.deepEqual(reopened.prepare('SELECT * FROM dsh_deep_runs').get(), stored)
+      assert.deepEqual(reopened.prepare('PRAGMA foreign_key_check').all(), [])
+    } finally { reopened.close() }
+    assert.deepEqual(await f.store.read(f.state.runId), state)
+  } finally { await fixture?.close(); await rm(root, { recursive: true, force: true }) }
 })

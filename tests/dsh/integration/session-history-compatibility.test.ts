@@ -59,7 +59,7 @@ function rows() {
 }
 
 async function fixture(compression: 'zstd' | 'none' = 'zstd') {
-  const [cordis, jsonlModule, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import(pathToFileURL(modulePath(name)).href)))
+  const [cordis, jsonlModule, session] = await Promise.all(['cordis', 'dsh-session-persistence-jsonl', 'dsh-session'].map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(modulePath(name)).href))))
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-legacy-history-'))
   const ctx = new cordis.Context()
   const jsonl = jsonlModule.default ?? jsonlModule
@@ -172,9 +172,9 @@ test('native Enno cancellation persists a hook cause and reopens without repair'
   try {
     const names = ['dsh-llm', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop']
     // Agent drivers use the built module graph, as the local DSH application does.
-    const [llm, projection, prompt, tools, agents, loop] = await Promise.all(names.map(name => import(pathToFileURL(
+    const [llm, projection, prompt, tools, agents, loop] = await Promise.all(names.map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(
       sourceRoot ? join(sourceRoot, sourceModules[name]!, 'lib/index.js') : modulePath(name),
-    ).href)))
+    ).href))))
     for (const [plugin, config] of [[(llm!.default ?? llm!), undefined], [(f.session.default ?? f.session), undefined], [(projection!.default ?? projection!), undefined],
       [(prompt!.default ?? prompt!), { persona: '' }], [(tools!.default ?? tools!), undefined], [(agents!.default ?? agents!), undefined], [(loop!.default ?? loop!), { agents: [] }]] as const) {
       const fiber = f.ctx.plugin(plugin, config)
@@ -188,7 +188,7 @@ test('native Enno cancellation persists a hook cause and reopens without repair'
     const composition = await mountDshComposition(f.ctx, { ennoController: new DshEnnoController({ readState: async () => { throw new Error('Fixture state unavailable') } }) })
     f.disposers.push(composition.dispose)
     await composition.historyCheck
-    const agent = await f.ctx.agentLoop.create(f.session.SessionId('native-hook-abort'), { provider: 'mock', model: 'mock' }, { cwd: f.root })
+    const agent = (await f.ctx.agents.create({sessionId:f.session.SessionId('native-hook-abort'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: f.root }})).agent
     f.disposers.push(async () => { agent.cancel({ kind: 'disposed' }) })
     agent.followup(llm!.createUserMessage({ content: [{ type: 'text', text: 'Finish this fixture.' }], source: { kind: 'user' } }))
     for (let count = 0; count < 500; count++) {

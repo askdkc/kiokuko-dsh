@@ -42,6 +42,8 @@ test('an adapter failure remains the primary cause rather than a fabricated term
   await assert.rejects(confirmation()('owned-job',async()=>{throw error}),cause=>cause===error)
 })
 
-test('completed orchestration without observed process stop cannot release a job',async()=>{
-  await assert.rejects(confirmation()('owned-job',async()=>({receipt:{...receipt('completed').receipt,processStopped:false}})),{code:'STOP_UNCONFIRMED'})
+for(const processStopped of [false,undefined])test(`completed orchestration without observed process stop (${processStopped}) cannot release a job`,async()=>{
+  const calls:boolean[]=[]
+  await assert.rejects(confirmation()('owned-job',async cancel=>{calls.push(cancel);return {receipt:{...receipt('completed').receipt,processStopped}}}),{code:'STOP_UNCONFIRMED'})
+  assert.deepEqual(calls,[true])
 })

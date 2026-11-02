@@ -24,7 +24,7 @@ for (const mode of modes as ('development'|'protected')[]) test(`code intelligen
   skip: packages && providerEntry ? false : 'requires optional built V1 provider fixture', timeout: 120000,
 }, async () => {
   const names = ['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','commands','fs-local','subprocess-local']
-  const [cordis,llm,session,projection,prompt,tools,agents,loop,commands,fs,subprocess] = await Promise.all(names.map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)))
+  const [cordis,llm,session,projection,prompt,tools,agents,loop,commands,fs,subprocess] = await Promise.all(names.map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href))))
   const lsp = await import(new URL('./lsp.js', pathToFileURL(providerEntry!)).href)
   const cli = process.env.KIOKUKO_CODE_CLI_HOST === '1'
     ? await import(pathToFileURL(join(packages!, '@askdkc/dsh-cli/lib/types/dsh-adapter/plugin-host.js')).href) : undefined

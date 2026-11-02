@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
 
-export const SKILL_COMPILER_VERSION = 1
+export const SKILL_COMPILER_VERSION = 2
 export const SkillPromptsConfig = z.object({ mode: z.enum(['full', 'compiled']).default('full') }).strict()
 export type SkillPromptMode = z.infer<typeof SkillPromptsConfig>['mode']
 export interface SkillSource { name: string; relativePath: string; content: string }

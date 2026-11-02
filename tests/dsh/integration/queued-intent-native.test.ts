@@ -37,7 +37,7 @@ const instructions = ['Fix `src/parser.ts` and add input validation.', 'Also fix
 
 for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-unavailable', 'core-off'] as const) for (const intakeMode of ['eager', 'on-demand'] as const) {
   test(`queued ${host} ${intakeMode}: preserve every request without purpose UI`, { skip: !installed, timeout: 30000 }, async () => {
-    const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+    const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills, commands] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-commands',
     ].map(load))

@@ -65,7 +65,7 @@ export async function waitFor(check: () => boolean | Promise<boolean>, label: st
 export async function repeatedNativeHost(root: string, inputMode: FinalizationInputMode, route: RepeatedRoute, options: { now?: () => string } = {}) {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT!
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills] = await Promise.all(
-    ['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill'].map(name => import(pathToFileURL(join(packages,'@deepseek-ai',name === 'cordis' ? name : `dsh-${name}`,'lib/index.js')).href)))
+    ['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill'].map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("./kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages,'@deepseek-ai',name === 'cordis' ? name : `dsh-${name}`,'lib/index.js')).href))))
   const ctx = new cordis.Context(), fibers: any[] = [], script: any[] = []
   const nativeErrors: string[] = []
   ctx.on('agent/error', (event: any) => { nativeErrors.push(String(event.error?.stack ?? event.error ?? 'native agent failed')) })
@@ -227,7 +227,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     activeRound = number; activeReadonly = readonly
     activeFault = fault; activeSession = sessionId
     let agent = liveAgents.get(sessionId)
-    if (!agent) { agent = await ctx.agentLoop.create(session.SessionId(sessionId), { provider: 'mock', model: 'mock' }, { cwd: root }); liveAgents.set(sessionId, agent) }
+    if (!agent) { agent = (await ctx.agents.create({sessionId:session.SessionId(sessionId),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: root }})).agent; liveAgents.set(sessionId, agent) }
     const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeReview = planReviewCalls, beforeTools = toolExecutions
     const prior = await database(db => db.prepare('SELECT run_id FROM ledger_runs').all<{run_id:string}>())
     const beforeApproved = await database(countApproved)

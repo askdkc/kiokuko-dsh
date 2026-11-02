@@ -29,7 +29,7 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
     import(modulePath('dsh-session', 'packages/core/session')), import(modulePath('dsh-session-projection', 'packages/session/session-projection')),
     import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-working-directory', 'packages/core/working-directory')),
     import(modulePath('dsh-tools', 'packages/core/tools')),
-    import(modulePath('dsh-agent', 'packages/core/agent')), import(modulePath('dsh-agent-loop', 'packages/core/agent-loop')),
+    import(modulePath('dsh-agent', 'packages/core/agent')), import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     import(modulePath('dsh-skill', 'packages/skill/skill')),
     import(modulePath('dsh-fs-local', 'packages/fs/fs-local')), import(modulePath('dsh-scope', 'packages/core/scope')), import(modulePath('dsh-tool-fs', 'packages/fs/tool-fs')),
   ])
@@ -101,7 +101,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
   let agentScope: any, otherScope: any, releaseNative: (() => void) | undefined, releaseOtherNative: (() => void) | undefined
 
   try {
-    const agent = await ctx.agentLoop.create(session.SessionId('execution-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
+    const agent = (await ctx.agents.create({sessionId:session.SessionId('execution-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
     agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
     const snapshots = () => adapter.host.runtime!.withDatabase(db => Object.fromEntries([
       'ledger_runs', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states',
@@ -135,7 +135,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.match(JSON.stringify(model.requests.at(-1)), /three times/)
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
-    const other = await ctx.agentLoop.create(session.SessionId('other-session'), { provider: 'execution-mock', model: 'mock' }, { cwd: root })
+    const other = (await ctx.agents.create({sessionId:session.SessionId('other-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
     otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx
     await settle(other, 'こんにちは', () => model.requests.length === pausedRequests + 1)
     expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })

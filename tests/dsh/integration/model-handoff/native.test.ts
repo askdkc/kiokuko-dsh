@@ -13,7 +13,7 @@ import { compactionBatch } from '../../../../src/dsh/semantic-compaction/policy.
 import { nativeMock } from '../../helpers/native-mock.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href))
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction] = await Promise.all(
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic'].map(load))
 

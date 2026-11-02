@@ -23,6 +23,12 @@ export class KiokukoInbox implements Inbox {
     if(cancelled)for(const message of removed)this.events.emit('agent/inbox/discarded',{message})
     return removed
   }
+  discardClaimed(messages:readonly UserMessage[]) {
+    for(const message of messages)for(const target of ['next-turn','next-step'] as const){
+      const index=this.pending[target].indexOf(message)
+      if(index>=0){this.mutate(target,index,1,[],true);break}
+    }
+  }
   clear() { this.mutate('next-step',0,Infinity,[],true); this.mutate('next-turn',0,Infinity,[],true) }
   append(target:InboxTarget,message:UserMessage) { this.splice(target,Infinity,0,[message]) }
   prepend(target:InboxTarget,message:UserMessage) { this.splice(target,0,0,[message]) }

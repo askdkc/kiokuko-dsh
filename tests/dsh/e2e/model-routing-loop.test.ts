@@ -30,7 +30,7 @@ async function harness() {
     import(modulePath('cordis', 'vendor/cordis')), import(modulePath('dsh-llm', 'packages/llm/llm')),
     import(modulePath('dsh-session', 'packages/core/session')), import(modulePath('dsh-session-projection', 'packages/session/session-projection')),
     import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-tools', 'packages/core/tools')),
-    import(modulePath('dsh-agent', 'packages/core/agent')), import(modulePath('dsh-agent-loop', 'packages/core/agent-loop')),
+    import(modulePath('dsh-agent', 'packages/core/agent')), import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     import(modulePath('dsh-skill', 'packages/skill/skill')), import(modulePath('dsh-subagent', 'packages/subagent/subagent')),
     import(modulePath('dsh-subagent-spawn-in-process', 'packages/subagent/subagent-spawn-in-process')),
     import(modulePath('dsh-fs-local', 'packages/fs/fs-local')),
@@ -67,7 +67,7 @@ return ({ answers: request.questions.map((q: any) => ({ id: q.id, selected: ['�
   const composition = await mountDshComposition(h.ctx, adapter.host)
   const model = new h.mock.MockAdapter([h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('verified')])
   h.ctx.llm.registerAdapter(['ordinary'], model)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('steering-claim'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('steering-claim'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
   let writes = 0
   const errors: unknown[] = []
   const observeError = h.ctx.on('agent/error', (event: any) => { errors.push(event.error) })
@@ -120,7 +120,7 @@ return ({ answers: request.questions.map((q: any) => {
     const model = new h.mock.MockAdapter(failure === 'insert' || failure === 'first-request' ? [h.mock.textResponse('verified')]
       : [h.mock.toolCallResponse('edit-1', 'edit_once', {}), h.mock.textResponse('unexpected replay')])
     h.ctx.llm.registerAdapter(['ordinary'], model)
-    const agent = await h.ctx.agentLoop.create(h.session.SessionId(`claim-failure-${failure}`), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+    const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId(`claim-failure-${failure}`),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
     const replayed: unknown[] = [], errors: unknown[] = []
     const steer = agent.steer.bind(agent)
     agent.steer = (message: unknown) => { replayed.push(message); steer(message) }
@@ -174,7 +174,7 @@ test('native routing delivers the full Japanese Skill to selected OSS models and
   const models = ['deepseek-chat','moonshotai/kimi-k2','z-ai/glm-4.6','qwen3-coder:30b','tencent/HY3-preview','xiaomi/MiMo-V2','MiniMaxAI/MiniMax-M2']
   const provider = new h.mock.MockAdapter([...models,'gpt-4.1'].map(()=>h.mock.textResponse('確認しました。')))
   h.ctx.llm.registerAdapter(['gateway'],provider)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('japanese-routing'), {provider:'gateway',model:'gpt-4.1'}, {cwd:h.root})
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('japanese-routing'),agentOptions:{provider:'gateway',model:'gpt-4.1'},meta:{cwd:h.root}})).agent
   let selection: ModelBinding | undefined
   const dispose = installDshModelRouting(agent, async()=>selection)
   const systemText = (request:any) => request.system ?? request.messages.filter((m:any)=>m.role==='system').flatMap((m:any)=>m.content).map((block:any)=>block.text??'').join('\n')
@@ -231,7 +231,7 @@ return ({ answers: request.questions.map((q: any) =>
   const composition = await mountDshComposition(h.ctx, adapter.host)
   const workspace = join(h.root, 'workspace')
   await mkdir(workspace)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-session'), { provider: 'ordinary', model: 'mock' }, { cwd: workspace })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('model-auto-session'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: workspace }})).agent
   const prompts: any[] = []
   const watch = agent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
     const result = await next(); prompts.push({variables:result.variables,selection:(_c as any).modelSelection}); return result
@@ -271,8 +271,7 @@ test('native model-auto command accepts its exact session in another workspace',
   const adapter = createDshHostAdapter(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
     migrationsDirectory: join(process.cwd(), 'migrations'), modelAutoMode: { mode: 'off' } })
   const composition = await mountDshComposition(h.ctx, adapter.host)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('model-auto-command'),
-    { provider: 'ordinary', model: 'mock' }, { cwd: workspace })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('model-auto-command'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: workspace }})).agent
   try {
     const signal = new AbortController().signal
     assert.equal(adapter.host.modelAuto!.validSession(agent.id, agent.session.id), true)
@@ -323,7 +322,7 @@ return ({ answers: request.questions.map((q: any) =>
   h.ctx.llm.registerAdapter(['ordinary'], new h.mock.MockAdapter([prepared[0]]))
   const core = await mountCore(h.ctx, { repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'),
     migrationsDirectory: join(process.cwd(), 'migrations'), modelAutoMode: { mode: 'auto' }, typedDecisions: { mode: 'auto' } })
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('core-model-auto-native'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('core-model-auto-native'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
   const prompts: any[] = []
   const errors: string[] = []
   const watchErrors = h.ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
@@ -387,7 +386,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('document-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('document-session'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
   const memoryOffered = async (count: number) => {
     const deadline = Date.now() + 2000
     while (memoryQuestions.length < count && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
@@ -459,7 +458,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)
-  const agent = await h.ctx.agentLoop.create(h.session.SessionId('normal-session'), { provider: 'ordinary', model: 'mock' }, { cwd: h.root })
+  const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('normal-session'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
   try {
     await turn(h, agent, 'feature.mjsを実装してください。')
     assert.equal(model.requests.length, 2, JSON.stringify(agent.session.snapshotEvents().slice(-5)))
@@ -494,8 +493,8 @@ test('native loop and spawn route every template role, freeze assembly, isolate 
   const script = new h.mock.MockAdapter(Array.from({ length: MODEL_TEMPLATES.length * MODEL_ROLES.length + 2 }, () => h.mock.textResponse('verified')))
   const providers = ['ordinary', ...MODEL_TEMPLATES.map(t => `route-${t.id}`)]
   h.ctx.llm.registerAdapter(providers, script)
-  const parent = await h.ctx.agentLoop.create(h.session.SessionId('matrix-parent'), { provider: 'ordinary', model: 'ordinary' }, { cwd: h.root })
-  const other = await h.ctx.agentLoop.create(h.session.SessionId('matrix-other'), { provider: 'ordinary', model: 'other' }, { cwd: h.root })
+  const parent = (await h.ctx.agents.create({sessionId:h.session.SessionId('matrix-parent'),agentOptions:{ provider: 'ordinary', model: 'ordinary' },meta:{ cwd: h.root }})).agent
+  const other = (await h.ctx.agents.create({sessionId:h.session.SessionId('matrix-other'),agentOptions:{ provider: 'ordinary', model: 'other' },meta:{ cwd: h.root }})).agent
   const route = installDshModelRouting(parent, async () => active)
   const observed: { provider: string; model: string }[] = []
   const assembly = parent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {

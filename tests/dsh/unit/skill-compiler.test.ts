@@ -36,6 +36,7 @@ test('current canonical Skills satisfy the unchanged CI efficiency budget withou
 test('compiler retains rules, excludes only documentation, preserves unannotated resources and is deterministic', () => {
   const result = compileSkillResource(source(contract))
   assert.match(result.content, /Never replay completed effects\./u)
+  assert.equal(result.content.split('\n\n').slice(1).join('\n\n'), 'Never replay completed effects.\n', 'Compact framing must preserve the complete author-classified runtime body')
   assert.doesNotMatch(result.content, /Long background/u)
   assert.deepEqual(result.blocks, ['core'])
   assert.equal(compileSkillResource(source('unchanged reference')).content, 'unchanged reference')

@@ -16,7 +16,7 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT
 for (const hostFence of [false, true]) test(`enabled development Lisp routes shell execution through Lisp until explicitly disabled (${hostFence ? 'CLI fence' : 'native fence'})`, {
   skip: packages ? false : 'requires native DSH', timeout: 30000,
 }, async () => {
-  const load = (name: string) => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)
+  const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href))
   const [cordis, prompt, tools, scope] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope'].map(load))
   const root = await realpath(await mkdtemp(join(tmpdir(), 'lisp-shell-routing-')))
   const db = new NodeSqliteAdapter(join(root, 'state.db'), new DatabaseSync(join(root, 'state.db')))
@@ -96,7 +96,7 @@ for (const hostFence of [false, true]) test(`enabled development Lisp routes she
 test('native model loop rejects direct Bash and continues through the selected Lisp tool', {
   skip: packages ? false : 'requires native DSH', timeout: 30000,
 }, async () => {
-  const load = (name: string) => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)
+  const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href))
   const [cordis, llm, sessions, projections, prompt, tools, agents, loop] = await Promise.all([
     'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop',
   ].map(load))

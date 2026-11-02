@@ -14,11 +14,11 @@ registerHooks({ resolve(specifier, context, next) {
   finally { resolving = false }
 } })
 
-const native = name => import('@deepseek-ai/' + name)
+const native = name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("./kiokuko-driver.mjs",import.meta.url).href : '@deepseek-ai/' + name))
 export async function recoveryRuntime(root) {
   const [{ Context }, llm, sessions, projections, prompt, tools, agents, loop, persistence, executor] = await Promise.all([
     native('cordis'), native('dsh-llm'), native('dsh-session'), native('dsh-session-projection'), native('dsh-system-prompt'),
-    native('dsh-tools'), native('dsh-agent'), native('dsh-agent-loop'), native('dsh-session-persistence-jsonl'), native('dsh-tool-executor-native'),
+    native('dsh-tools'), native('dsh-agent'), import(new URL("./kiokuko-driver.mjs",import.meta.url).href), native('dsh-session-persistence-jsonl'), native('dsh-tool-executor-native'),
   ])
   const ctx = new Context(), requests = []
   for (const plugin of [llm.default, sessions.default, projections.default, prompt.default, tools.default, agents.default]) await ctx.plugin(plugin)

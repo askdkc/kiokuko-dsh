@@ -12,7 +12,7 @@ const installed = existsSync(join(packages, '@deepseek-ai/dsh-tool-fs/lib/index.
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native file workflow requires the DSH fixture')
 
 test('native file workflow preserves sequential edits and reconciles metadata drift without disabling content protection', { skip: !installed }, async () => {
-  const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+  const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
   const [cordis, llm, sessions, projection, prompt, tools, agents, fs, directory, policy, files, loop] = await Promise.all([
     'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent',
     'dsh-fs-local', 'dsh-working-directory', 'dsh-fs-observation-policy', 'dsh-tool-fs', 'dsh-agent-loop',

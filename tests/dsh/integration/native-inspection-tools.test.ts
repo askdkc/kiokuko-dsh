@@ -72,11 +72,7 @@ for (const mode of ['unprepared', 'prepared', 'protected'] as const)
       })
       let writes = 0
       try {
-        const foreign = await f.ctx.agentLoop.create(
-          'foreign-inspection',
-          { provider: 'mock', model: 'qwen3-coder' },
-          { cwd: f.dir },
-        )
+        const foreign = (await f.ctx.agents.create({sessionId:'foreign-inspection',agentOptions:{ provider: 'mock', model: 'qwen3-coder' },meta:{ cwd: f.dir }})).agent
         const start = (owner: string, text: string) =>
           f.ctx.jobs.start({
             kind: 'fixture',

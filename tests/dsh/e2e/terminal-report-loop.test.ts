@@ -27,7 +27,7 @@ test('a terminal Enno tool result stays in the native turn until a visible assis
     import(dshModule('packages/core/system-prompt/lib/index.js', 'dsh-system-prompt')),
     import(dshModule('packages/core/tools/lib/index.js', 'dsh-tools')),
     import(dshModule('packages/core/agent/lib/index.js', 'dsh-agent')),
-    import(dshModule('packages/core/agent-loop/lib/index.js', 'dsh-agent-loop')),
+    import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     import(dshModule('packages/skill/skill/lib/index.js', 'dsh-skill')),
   ])
 
@@ -111,11 +111,7 @@ test('a terminal Enno tool result stays in the native turn until a visible assis
       },
     })
 
-    const agent = await ctx.agentLoop.create(
-      session.SessionId('terminal-report-session'),
-      { provider: 'terminal-report', model: 'mock' },
-      { cwd: process.cwd() },
-    )
+    const agent = (await ctx.agents.create({sessionId:session.SessionId('terminal-report-session'),agentOptions:{ provider: 'terminal-report', model: 'mock' },meta:{ cwd: process.cwd() }})).agent
     const idle = new Promise<void>((resolve) => {
       const dispose = ctx.on('agent/status', (payload: { agent: unknown; status: string }) => {
         if (payload.agent === agent && payload.status === 'idle') {

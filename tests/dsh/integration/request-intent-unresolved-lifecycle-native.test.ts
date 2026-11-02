@@ -22,7 +22,7 @@ const available = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js
 if (!available && (process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1')) {
   throw new Error('Unresolved lifecycle tests require the configured native DSH package root')
 }
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
 const signal = () => new AbortController().signal
 const firstRequest = 'Verify the contents of PLAN.md. Target: PLAN.md. Expected: a concise explanation. Do not modify files.'
 const nextRequest = 'Start a different change task for REPORT.md. Target: REPORT.md. Expected: revise the requested artifact. Its artifact scope still needs clarification.'

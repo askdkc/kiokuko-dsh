@@ -35,7 +35,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
   const [cordis, llm, sessions, projection, prompt, tools, agents, loop, skills, commands] = await Promise.all([
     load('cordis', 'vendor/cordis'), load('dsh-llm', 'packages/llm/llm'), load('dsh-session', 'packages/core/session'),
     load('dsh-session-projection', 'packages/session/session-projection'), load('dsh-system-prompt', 'packages/core/system-prompt'),
-    load('dsh-tools', 'packages/core/tools'), load('dsh-agent', 'packages/core/agent'), load('dsh-agent-loop', 'packages/core/agent-loop'),
+    load('dsh-tools', 'packages/core/tools'), load('dsh-agent', 'packages/core/agent'), import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     load('dsh-skill', 'packages/skill/skill'), load('dsh-commands', 'packages/core/commands'),
   ])
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'kiokuko-agenticreplay-native-')))
@@ -86,9 +86,9 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     }
     plugin = ctx.plugin({ name: 'agenticreplay-fixture-plugin', apply: (context: any) => apply(context, { efficiency: { observe: true }, finalization: { inputMode: 'bounded_evidence' }, agenticReplay: { enabled: true, askOnStart: true, shutdownDrainTimeoutMs: 1000 } }) })
     await plugin
-    const a = await ctx.agentLoop.create(sessions.SessionId('agenticreplay-a'), { provider: 'mock', model: 'mock' }, { cwd: root })
-    const b = await ctx.agentLoop.create(sessions.SessionId('agenticreplay-b'), { provider: 'mock', model: 'mock' }, { cwd: root })
-    const other = await ctx.agentLoop.create(sessions.SessionId('agenticreplay-other'), { provider: 'mock', model: 'mock' }, { cwd: otherRoot })
+    const a = (await ctx.agents.create({sessionId:sessions.SessionId('agenticreplay-a'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: root }})).agent
+    const b = (await ctx.agents.create({sessionId:sessions.SessionId('agenticreplay-b'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: root }})).agent
+    const other = (await ctx.agents.create({sessionId:sessions.SessionId('agenticreplay-other'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: otherRoot }})).agent
     const signal = new AbortController().signal
     const errors: unknown[] = []
     const results = new Map<string, any>()

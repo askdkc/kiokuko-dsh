@@ -14,7 +14,7 @@ const wait=async(fn:()=>boolean)=>{const end=Date.now()+10000;while(!fn()&&Date.
 const count=(db:any,table:string)=>db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)?db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n:0
 async function setup(){
   const f=await agenticReplayFixture({shutdownDrainTimeoutMs:3000});execFileSync('git',['init','-q',f.root])
-  const mods=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','user-questions'].map(n=>import(pathToFileURL(join(packages,'@deepseek-ai',n==='cordis'?n:`dsh-${n}`,'lib/index.js')).href)))
+  const mods=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','user-questions'].map(n=>import((['agent-loop','dsh-agent-loop'].includes(n) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages,'@deepseek-ai',n==='cordis'?n:`dsh-${n}`,'lib/index.js')).href))))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,questions]=mods
   const ctx=new cordis.Context(),fibers:any[]=[],asked:any[]=[],errors:any[]=[]
   for(const plugin of [llm,session,projection,systemPrompt,tools,agents,questions])fibers.push(await ctx.plugin(plugin.default,plugin===systemPrompt?{persona:''}:undefined))
@@ -24,7 +24,7 @@ async function setup(){
   class Provider extends llm.LlmAdapter{async listModels(provider:string){return[{provider,id:'mock',name:'mock'}]}async resolveModel(provider:string,id:string){return{provider,id,name:id}}async *stream(q:any){if(q.purpose==='compaction'&&String(q.system).startsWith('Extract compact repository-scoped learning')){assert.deepEqual(q.tools,[]);yield*mock.textResponse(JSON.stringify({lessons:[]}));return}mainCalls++;if(hold)await Promise.race([hold,new Promise((_,reject)=>q.signal.addEventListener('abort',()=>reject(q.signal.reason),{once:true}))]);yield*mock.textResponse('ordinary request completed')}}
   ctx.llm.registerAdapter(['mock'],new Provider());ctx.on('agent/error',(e:any)=>errors.push(e.error),{global:true})
   ctx.on('user-questions/request',(q:any)=>{asked.push(q);return answer(q)},{global:true})
-  const agent=await ctx.agentLoop.create(session.SessionId(f.binding.sessionId),{provider:'mock',model:'mock'},{cwd:f.root})
+  const agent=(await ctx.agents.create({sessionId:session.SessionId(f.binding.sessionId),agentOptions:{provider:'mock',model:'mock'},meta:{cwd:f.root}})).agent
   const runtime=new DshCoreRuntime({repositoryRoot:f.root,databasePath:join(f.root,'index.sqlite3'),autoRegisterRepository:true,migrationsDirectory:join(process.cwd(),'migrations')});await runtime.start()
   const workspace=f.database.prepare('SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?').get<any>(f.root).workspace
   const now=new Date().toISOString();f.database.prepare(`INSERT INTO ledger_runs(run_id,workspace,dsh_session_id,protocol_version,capture_profile,coverage_json,status,metadata_json,title,started_at,created_at,updated_at,task_state,task_repository_root) VALUES('native-task',?,?,'1','test','{}','completed','{}','parser inspection',?,?,?,'Done',?)`).run(workspace,agent.session.id,now,now,now,f.root)

@@ -10,7 +10,7 @@ import { withImmediateTransaction } from '../../../src/db/transaction.js';
 import { isolateSkillHome } from '../helpers/skill-home.js';
 isolateSkillHome();
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules');
-const available = existsSync(join(packages, '@deepseek-ai/dsh-agent-loop/lib/index.js'));
+const available = existsSync(join(packages, '@deepseek-ai/dsh-agent/lib/index.js'));
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !available)
     throw new Error('Pinned DSH runtime required');
 test('historical bridge citations remain readable through the native command without automatic request injection', { skip: !available, timeout: 60000 }, async () => {

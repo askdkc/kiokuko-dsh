@@ -1,7 +1,7 @@
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, copyFile, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -40,112 +40,136 @@ async function hasDshCommand(): Promise<boolean> {
 }
 
 test('dsh bundle manifest has one named Kiokuko Cordis row and no default export', async () => {
-  const packageManifest = JSON.parse(await readFile(packagePath, 'utf8')) as {
-    exports?: Record<string, unknown>
-    files?: string[]
-    peerDependencies?: Record<string, string>
-    dependencies?: Record<string, string>
-    name?: string
-    scripts?: Record<string, string>
-    dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
-  }
-  assert.equal(packageManifest.name, 'kiokuko-dsh')
-  assert.ok(packageManifest.scripts?.prepare?.trim(), 'source installs must declare a prepare hook')
-  assert.ok(packageManifest.files?.includes('scripts/prepare-build.mjs'), 'the prepare helper must ship with the package')
-  assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
-  assert.equal(packageManifest.exports?.['./package.json'], './package.json')
-  assert.equal(packageManifest.exports?.['./locale/*.json'], './dist/locale/*.json')
-  assert.deepEqual(packageManifest.exports?.['.'], {
-    types: './dist/index.d.ts',
-    default: './dist/index.js',
-  })
-  assert.deepEqual(packageManifest.exports?.['./client'], {
-    types: './dist/client.d.ts',
-    default: './dist/client.cjs',
-  })
-  assert.deepEqual(packageManifest.exports?.['./dsh'], {
-    types: './dist/dsh/index.d.ts',
-    default: './dist/dsh/index.js',
-  })
-  assert.equal(packageManifest.dsh?.bundle?.patch, './dsh/cordis.patch.yml')
-  assert.equal(packageManifest.dsh?.client?.platform, 'web')
-  assert.ok(packageManifest.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-session'))
-  assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml'))
-  const cordis = JSON.parse(await readFile(join(repositoryRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
-  const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
-  assert.ok(cordisRange && satisfies(cordis.version, cordisRange, { includePrerelease: true }), 'the published peer range must admit the Cordis version used by native tests')
-  for (const name of ['agenticreplay']) {
-    const range = packageManifest.dependencies?.[name]
-    assert.ok(range, `${name} must be installed as a runtime dependency`)
-    for (const version of ['0.1.2', '0.2.0']) {
-      assert.ok(satisfies(version, range), `${name} must admit ${version} without editing Kiokuko`)
-    }
-    assert.equal(satisfies('1.0.0', range), false, `${name} major API changes require an explicit review`)
-  }
-  assert.ok(!Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@agenticreplay/')),
-    'libraries are resolved from the published distribution, not independently installed')
-
-  const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
-    id?: string
-    disabled?: boolean
-    insert?: Array<{ id?: string; name?: string; inject?: string[]; config?: Config }>
-  }>
-  assert.equal(patch.length, 2)
-  assert.equal(patch[0]?.id, 'session-log-download')
-  assert.equal(patch[0]?.disabled, true)
-  assert.equal(patch[1]?.insert?.length, 2)
-  const modelRow = patch[1]?.insert?.[0], executionRow = patch[1]?.insert?.[1]
-  assert.deepEqual(modelRow, { id: 'kiokuko-models', name: 'kiokuko-dsh/models', inject: ['llm', 'commands'] })
-  assert.equal(executionRow?.id, 'kiokuko-dsh')
-  assert.equal(executionRow?.name, 'kiokuko-dsh')
-  assert.ok(!executionRow?.inject?.includes('connection'), 'Web connection must not gate TUI core startup')
-  assert.ok(executionRow?.inject?.includes('attachments'))
-  assert.ok(executionRow?.inject?.includes('sessionPersistence'))
-  assert.ok(executionRow?.inject?.includes('subagents'))
-  assert.equal(Config.parse({}).enabled, true)
-  assert.equal(Config.parse({}).agenticReplay.enabled, true)
-  const bundledConfig = executionRow?.config
-  assert.equal(bundledConfig?.agenticReplay?.enabled, true)
-  assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
-
-  const builtEntry = join(repositoryRoot, 'dist/dsh/index.js')
-  // Exercise the public hook and reject a successful no-op using stale dist.
-  await rm(builtEntry, { force: true })
-  await run('npm', ['run', 'prepare'], { KIOKUKO_CI_DEFER_PREPARE: '' })
-  await access(builtEntry)
-  assert.equal(plugin.name, 'kiokuko-dsh')
-  assert.equal('default' in plugin, false)
-
-  const packageOutput = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
-  const npmCache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-npm-cache-'))
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'kiokuko-bundle-source-'))
+  const files = (await run('git', ['ls-files', '-z'])).stdout.split('\0').filter(Boolean)
+  const packageCommand = (command: string, args: readonly string[], env?: NodeJS.ProcessEnv) =>
+    execFileAsync(command, [...args], { cwd: fixtureRoot, env: { ...process.env, ...env }, maxBuffer: 8 * 1024 * 1024, timeout: 60_000 })
   try {
-    const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', packageOutput], {
-      npm_config_cache: npmCache,
-      npm_config_dry_run: 'false',
-    })).stdout) as Array<{ filename?: string }>
-    const filename = packed[0]?.filename
-    assert.ok(filename)
-    const tarball = join(packageOutput, filename)
-    const archive = await run('tar', ['-tzf', tarball])
-    assert.match(archive.stdout, /package\/dist\/dsh\/index\.js\n/)
-    assert.match(archive.stdout, /package\/dist\/dsh\/index\.d\.ts\n/)
-    assert.match(archive.stdout, /package\/dist\/index\.js\n/)
-    assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
-    assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
-    assert.match(archive.stdout, /package\/scripts\/prepare-build\.mjs\n/)
-    const packedPrepare = await run('tar', ['-xOzf', tarball, 'package/scripts/prepare-build.mjs'])
-    assert.equal(packedPrepare.stdout, await readFile(join(repositoryRoot, 'scripts/prepare-build.mjs'), 'utf8'),
-      'the packed prepare helper must match the source exercised by this test')
-    const installedPatch = YAML.parse((await run('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
-    assert.deepEqual(installedPatch, patch, 'the installed bundle retains both independent provider and execution rows')
-    assert.ok(installedPatch[1]?.insert?.[1]?.inject?.includes('subagents'))
-    assert.equal(installedPatch[1]?.insert?.[1]?.config?.agenticReplay?.enabled, true)
-  } finally {
-    await Promise.all([
-      rm(packageOutput, { recursive: true, force: true }),
-      rm(npmCache, { recursive: true, force: true }),
-    ])
-  }
+    for (const name of files) {
+      const source = join(repositoryRoot, name), destination = join(fixtureRoot, name)
+      let info
+      try { info = await lstat(source) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue; throw error }
+      await mkdir(join(destination, '..'), { recursive: true })
+      if (info.isSymbolicLink()) await symlink(await readlink(source), destination)
+      else if (info.isFile()) await copyFile(source, destination)
+    }
+    await symlink(join(repositoryRoot, 'node_modules'), join(fixtureRoot, 'node_modules'), 'dir')
+    const packagePath = join(fixtureRoot, 'package.json'), patchPath = join(fixtureRoot, 'dsh/cordis.patch.yml')
+    const packageManifest = JSON.parse(await readFile(packagePath, 'utf8')) as {
+      exports?: Record<string, unknown>
+      files?: string[]
+      peerDependencies?: Record<string, string>
+      dependencies?: Record<string, string>
+      name?: string
+      scripts?: Record<string, string>
+      dsh?: { bundle?: { patch?: string }; client?: { platform?: string; inject?: string[] } }
+    }
+    assert.equal(packageManifest.name, 'kiokuko-dsh')
+    assert.ok(packageManifest.scripts?.prepare?.trim(), 'source installs must declare a prepare hook')
+    assert.ok(packageManifest.files?.includes('scripts/prepare-build.mjs'), 'the prepare helper must ship with the package')
+    assert.deepEqual(Object.keys(packageManifest.exports ?? {}), ['.', './client', './dsh', './core', './harness', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
+    assert.equal(packageManifest.exports?.['./package.json'], './package.json')
+    assert.equal(packageManifest.exports?.['./locale/*.json'], './dist/locale/*.json')
+    assert.deepEqual(packageManifest.exports?.['.'], {
+      types: './dist/index.d.ts',
+      default: './dist/index.js',
+    })
+    assert.deepEqual(packageManifest.exports?.['./client'], {
+      types: './dist/client.d.ts',
+      default: './dist/client.cjs',
+    })
+    assert.deepEqual(packageManifest.exports?.['./dsh'], {
+      types: './dist/dsh/index.d.ts',
+      default: './dist/dsh/index.js',
+    })
+    assert.equal(packageManifest.dsh?.bundle?.patch, './dsh/cordis.patch.yml')
+    assert.equal(packageManifest.dsh?.client?.platform, 'web')
+    assert.ok(packageManifest.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-session'))
+    assert.ok(packageManifest.files?.includes('dsh/cordis.patch.yml') || packageManifest.files?.includes('dsh/'), 'Bundle patch must be covered by the published file inventory')
+    const cordis = JSON.parse(await readFile(join(fixtureRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
+    const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
+    assert.ok(cordisRange && satisfies(cordis.version, cordisRange, { includePrerelease: true }), 'the published peer range must admit the Cordis version used by native tests')
+    for (const name of ['agenticreplay']) {
+      const range = packageManifest.dependencies?.[name]
+      assert.ok(range, `${name} must be installed as a runtime dependency`)
+      for (const version of ['0.1.2', '0.2.0']) {
+        assert.ok(satisfies(version, range), `${name} must admit ${version} without editing Kiokuko`)
+      }
+      assert.equal(satisfies('1.0.0', range), false, `${name} major API changes require an explicit review`)
+    }
+    assert.ok(!Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@agenticreplay/')),
+      'libraries are resolved from the published distribution, not independently installed')
+  
+    const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
+      id?: string
+      disabled?: boolean
+      insert?: Array<{ id?: string; name?: string; inject?: string[]; config?: Config }>
+    }>
+    assert.equal(patch.length, 3)
+    assert.equal(patch[0]?.id, 'session-log-download')
+    assert.equal(patch[0]?.disabled, true)
+    assert.equal(patch.find(row => row.id === 'agent-loop')?.disabled, true, 'The bundle must disable the stock factory')
+    const inserted = patch.flatMap(row => row.insert ?? [])
+    assert.equal(inserted.length, 3)
+    assert.equal(new Set(inserted.map(row => row.id)).size, 3)
+    const modelRow = inserted.find(row => row.id === 'kiokuko-models'), executionRow = inserted.find(row => row.id === 'kiokuko-dsh')
+    const harnessRow = inserted.find(row => row.id === 'kiokuko-harness')
+    assert.equal(harnessRow?.name, 'kiokuko-dsh/harness')
+    for (const service of ['agents', 'sessions', 'llm', 'sessionProjections']) assert.ok(harnessRow?.inject?.includes(service))
+    assert.ok(executionRow?.inject?.includes('kiokukoHarness'), 'Execution must use the replacement factory')
+    assert.deepEqual(modelRow, { id: 'kiokuko-models', name: 'kiokuko-dsh/models', inject: ['llm', 'commands'] })
+    assert.equal(executionRow?.id, 'kiokuko-dsh')
+    assert.equal(executionRow?.name, 'kiokuko-dsh')
+    assert.ok(!executionRow?.inject?.includes('connection'), 'Web connection must not gate TUI core startup')
+    assert.ok(executionRow?.inject?.includes('attachments'))
+    assert.ok(executionRow?.inject?.includes('sessionPersistence'))
+    assert.ok(executionRow?.inject?.includes('subagents'))
+    assert.equal(Config.parse({}).enabled, true)
+    assert.equal(Config.parse({}).agenticReplay.enabled, true)
+    const bundledConfig = executionRow?.config
+    assert.equal(bundledConfig?.agenticReplay?.enabled, true)
+    assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
+  
+    const builtEntry = join(fixtureRoot, 'dist/dsh/index.js')
+    // Exercise the public hook and reject a successful no-op using stale dist.
+    await rm(builtEntry, { force: true })
+    await packageCommand('npm', ['run', 'prepare'], { KIOKUKO_CI_DEFER_PREPARE: '' })
+    await access(builtEntry)
+    assert.equal(plugin.name, 'kiokuko-dsh')
+    assert.equal('default' in plugin, false)
+  
+    const packageOutput = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
+    const npmCache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-npm-cache-'))
+    try {
+      const packed = JSON.parse((await packageCommand('npm', ['pack', '--json', '--pack-destination', packageOutput], {
+        npm_config_cache: npmCache,
+        npm_config_dry_run: 'false',
+      })).stdout) as Array<{ filename?: string }>
+      const filename = packed[0]?.filename
+      assert.ok(filename)
+      const tarball = join(packageOutput, filename)
+      const archive = await packageCommand('tar', ['-tzf', tarball])
+      assert.match(archive.stdout, /package\/dist\/dsh\/index\.js\n/)
+      assert.match(archive.stdout, /package\/dist\/dsh\/index\.d\.ts\n/)
+      assert.match(archive.stdout, /package\/dist\/index\.js\n/)
+      assert.match(archive.stdout, /package\/dist\/client\.cjs\n/)
+      assert.match(archive.stdout, /package\/dsh\/cordis\.patch\.yml\n/)
+      assert.match(archive.stdout, /package\/scripts\/prepare-build\.mjs\n/)
+      const packedPrepare = await packageCommand('tar', ['-xOzf', tarball, 'package/scripts/prepare-build.mjs'])
+      assert.equal(packedPrepare.stdout, await readFile(join(fixtureRoot, 'scripts/prepare-build.mjs'), 'utf8'),
+        'the packed prepare helper must match the source exercised by this test')
+      const installedPatch = YAML.parse((await packageCommand('tar', ['-xOzf', tarball, 'package/dsh/cordis.patch.yml'])).stdout) as typeof patch
+      assert.deepEqual(installedPatch, patch, 'the installed bundle retains both independent provider and execution rows')
+      const installedExecution = installedPatch.flatMap(row => row.insert ?? []).find(row => row.id === 'kiokuko-dsh')
+      assert.ok(installedExecution?.inject?.includes('subagents'))
+      assert.equal(installedExecution?.config?.agenticReplay?.enabled, true)
+    } finally {
+      await Promise.all([
+        rm(packageOutput, { recursive: true, force: true }),
+        rm(npmCache, { recursive: true, force: true }),
+      ])
+    }
+  } finally { await rm(fixtureRoot, { recursive: true, force: true }) }
 })
 
 test('Cordis loads and unloads the bootstrap effect without residue', async () => {

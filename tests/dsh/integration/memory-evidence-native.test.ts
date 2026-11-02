@@ -25,7 +25,7 @@ if(process.env.KIOKUKO_REQUIRE_DSH_NATIVE==='1'&&!packages)throw new Error('Memo
 for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation owner survives prior execution and pre-send forget rebuilds once`, {skip:!packages,timeout:30000},async()=>{
   const [cordis,llm,session,projection,prompt,tools,agents,loop,skills,commands]=await Promise.all(
     ['cordis','dsh-llm','dsh-session','dsh-session-projection','dsh-system-prompt','dsh-tools','dsh-agent','dsh-agent-loop','dsh-skill','dsh-commands']
-      .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name,'lib/index.js')).href)))
+      .map(name=>import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!,'@deepseek-ai',name,'lib/index.js')).href))))
   const root=await mkdtemp(join(tmpdir(),'memory-native-core-')),databasePath=join(root,'state.sqlite3'),ctx=new cordis.Context(),fibers:any[]=[]
   let handle:{dispose():Promise<unknown>}|undefined
   const requests:any[]=[];const errors:unknown[]=[]
@@ -66,7 +66,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
     }
     ctx.llm.registerAdapter(['core-memory'],new Provider())
     ctx.on('agent/error',(event:any)=>errors.push({message:event.error?.message,stack:event.error?.stack}))
-    const agent=await ctx.agentLoop.create(session.SessionId('memory-core'),{provider:'core-memory',model:'fixed'},{cwd:root})
+    const agent=(await ctx.agents.create({sessionId:session.SessionId('memory-core'),agentOptions:{provider:'core-memory',model:'fixed'},meta:{cwd:root}})).agent
     const turn=async(text='CYCLEROOTの回答設定を説明して。')=>{agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text}]}));await agent.whenIdle();assert.deepEqual(errors,[])}
     await turn('保存されたCYCLEROOTの回答設定の根拠をツールで調べて説明して。')
     const preparation=agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result')

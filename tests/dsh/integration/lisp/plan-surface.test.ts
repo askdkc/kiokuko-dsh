@@ -25,7 +25,7 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
 }, async t => {
   const names = ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'commands', 'user-questions', 'tool-ask-user', 'plan-mode']
   const [cordis, llm, session, projections, prompt, tools, agents, loop, commands, questions, ask, plan] = await Promise.all(names.map(name =>
-    import(pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)))
+    import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href))))
   const root = await realpath(await mkdtemp(join(tmpdir(), 'lisp-plan-')))
   const db = new NodeSqliteAdapter(join(root, 'state.sqlite3'), new DatabaseSync(join(root, 'state.sqlite3')))
   migrateDatabase(db)

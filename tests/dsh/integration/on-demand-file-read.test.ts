@@ -20,7 +20,7 @@ const core = packageRoot ? await import(pathToFileURL(join(packageRoot, 'dist/ds
 
 for (const mode of ['full', 'core'] as const) for (const outcome of ['read', 'native-denial', 'unclear-target', 'stop'] as const) {
   test(`on-demand file ${mode}: first read ${outcome} uses native authority without memory admission`, { timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
-    const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+    const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
     const [cordis, llm, sessions, projection, prompt, tools, agents, skills, loop, fs, directory, policy, files] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-skill',
       'dsh-agent-loop', 'dsh-fs-local', 'dsh-working-directory', 'dsh-fs-observation-policy', 'dsh-tool-fs',

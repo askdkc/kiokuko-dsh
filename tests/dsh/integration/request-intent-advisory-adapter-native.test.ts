@@ -41,7 +41,7 @@ if (
 }
 const load = (name: string) =>
   import(
-    pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href
+    (['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
   )
 const signal = () => new AbortController().signal
 const resultText = (result: any) =>

@@ -15,7 +15,7 @@ import { approveFixtureMemory } from '../../helpers/approved-fixture-memory.js'
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 
 for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat stays unsaved until explicit approval, then retrieves and forgets':`${intakeMode} native: ordinary answers do not open a review execution`} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
-  const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
+  const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href))))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,commands]=modules
   const root=await mkdtemp(join(tmpdir(),'native-memory-review-'));await mkdir(join(root,'.git'))
   const ctx=new cordis.Context(),fibers:any[]=[]
@@ -77,10 +77,10 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-
         return next()
       },{prepend:true})
     }
-    const excluded=await ctx.agentLoop.create(session.SessionId('native-excluded'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
+    const excluded=(await ctx.agents.create({sessionId:session.SessionId('native-excluded'),agentOptions:{provider:'review-native',model:'fixed'},meta:{cwd:root,delegationDepth:0}})).agent
     assert.equal((await adapter.host.memoryReview!.command(excluded.session,'exclude session')).state,'excluded')
     assert.equal(((await adapter.host.memoryReview!.command(excluded.session,'status')).capture as {mode:string}).mode,'excluded')
-    const agent=await ctx.agentLoop.create(session.SessionId('native-review'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
+    const agent=(await ctx.agents.create({sessionId:session.SessionId('native-review'),agentOptions:{provider:'review-native',model:'fixed'},meta:{cwd:root,delegationDepth:0}})).agent
     const wait=async(check:()=>boolean|Promise<boolean>)=>{const until=Date.now()+10000;while(Date.now()<until){if(await check())return;await new Promise(r=>setTimeout(r,10))}assert.fail('native review condition timed out: '+JSON.stringify(errors))}
     for(let turn=1;turn<=8;turn++){
       agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:`EMBERLANGプロジェクトでは回答に日本語を使う。 ${turn}`}]}))
@@ -123,7 +123,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-
     // Explaining stored evidence is independently requested tool-backed work.
     // Exclude further capture before preparing it; the saved memory remains usable.
     assert.equal((await adapter.host.memoryReview!.command(agent.session,'exclude session')).state,'excluded')
-    const inspector=await ctx.agentLoop.create(session.SessionId('native-inspector'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
+    const inspector=(await ctx.agents.create({sessionId:session.SessionId('native-inspector'),agentOptions:{provider:'review-native',model:'fixed'},meta:{cwd:root,delegationDepth:0}})).agent
     assert.equal((await adapter.host.memoryReview!.command(inspector.session,'exclude session')).state,'excluded')
     explainNext=saved.id;prepareExplanation=true
     inspector.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'保存した根拠を確認して。'}]}))
@@ -142,7 +142,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-
     const command=await adapter.host.memoryReview!.command(agent.session,'exclude session')
     assert.equal(command.state,'excluded')
     assert.equal(reviewCalls,0)
-    const held=await ctx.agentLoop.create(session.SessionId('native-held'),{provider:'review-native',model:'fixed'},{cwd:root,delegationDepth:0})
+    const held=(await ctx.agents.create({sessionId:session.SessionId('native-held'),agentOptions:{provider:'review-native',model:'fixed'},meta:{cwd:root,delegationDepth:0}})).agent
     held.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Please do not remember this example.'}]}))
     await wait(()=>held.status==='idle'&&mainCalls===12)
     const notice=await adapter.host.runtime!.withDatabase(db=>db.prepare("SELECT text FROM dsh_session_notices WHERE dsh_session_id=? AND kind='status'").get<{text:string}>(held.session.id))

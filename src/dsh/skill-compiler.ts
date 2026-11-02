@@ -52,7 +52,7 @@ export function compileSkillResource(source: SkillSource): CompiledSkillResource
       }
     }
     if (block || fence || !blocks.length || runtime.some(text => !text.trim())) throw new Error(`Incomplete Skill contract: ${skillResourceId(source)}`)
-    content = `Skill: ${source.name}. Complete runtime guidance follows; no full-file reread is required.\n\n${runtime.join('\n\n')}\n`
+    content = `Skill: ${source.name}. All runtime guidance; reread optional.\n\n${runtime.join('\n\n')}\n`
   }
   return { id: skillResourceId(source), sourceDigest: skillDigest(source.content), contentDigest: skillDigest(content),
     sourceBytes: Buffer.byteLength(source.content), contentBytes: Buffer.byteLength(content), blocks,

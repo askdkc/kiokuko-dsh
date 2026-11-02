@@ -24,7 +24,7 @@ const mountDshComposition: typeof sourceComposition = packed?.mountDshCompositio
 
 const sourceRoot = process.env.KIOKUKO_DSH_SOURCE_ROOT
 const packageRoot = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const nativeAvailable = sourceRoot !== undefined || existsSync(join(packageRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
+const nativeAvailable = sourceRoot !== undefined || existsSync(join(packageRoot, '@deepseek-ai/dsh-agent/lib/index.js'))
 if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1' && !nativeAvailable) throw new Error('Mandatory native tool-exposure coverage requires the pinned DSH runtime')
 const runtimeVersion = nativeAvailable ? (JSON.parse(await readFile(join(packageRoot, '@deepseek-ai/dsh/package.json'), 'utf8')) as { version?: string }).version ?? 'unknown' : 'unavailable'
 const expectedRuntimeVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
@@ -38,7 +38,7 @@ async function harness() {
     import(modulePath('cordis', 'vendor/cordis')), import(modulePath('dsh-llm', 'packages/llm/llm')),
     import(modulePath('dsh-session', 'packages/core/session')), import(modulePath('dsh-session-projection', 'packages/session/session-projection')),
     import(modulePath('dsh-system-prompt', 'packages/core/system-prompt')), import(modulePath('dsh-tools', 'packages/core/tools')),
-    import(modulePath('dsh-agent', 'packages/core/agent')), import(modulePath('dsh-agent-loop', 'packages/core/agent-loop')),
+    import(modulePath('dsh-agent', 'packages/core/agent')), import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     import(modulePath('dsh-skill', 'packages/skill/skill')), import(modulePath('dsh-subagent', 'packages/subagent/subagent')),
     import(modulePath('dsh-subagent-spawn-in-process', 'packages/subagent/subagent-spawn-in-process')),
   ])

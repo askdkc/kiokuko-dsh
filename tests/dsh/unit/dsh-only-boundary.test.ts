@@ -52,6 +52,7 @@ test('every active source is reachable from a declared DSH package entrypoint', 
     visit(path.join(root, 'src/client.ts')),
     visit(path.join(root, 'src/dsh/index.ts')),
     visit(path.join(root, 'src/dsh/core/index.ts')),
+    visit(path.join(root, 'src/dsh/harness/index.ts')),
     visit(path.join(root, 'src/dsh/modules/enno.ts')),
     visit(path.join(root, 'src/dsh/modules/lisp.ts')),
     visit(path.join(root, 'src/dsh/models/index.ts')),
@@ -96,7 +97,7 @@ test('migrations preserve the immutable baseline and append forward-only evoluti
 
 test('package exposes compatibility entries and explicit core/module entries without restoring generic clients', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './harness', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
   assert.equal(manifest.bin, undefined)
   assert.equal(manifest.dependencies?.commander, undefined)
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)

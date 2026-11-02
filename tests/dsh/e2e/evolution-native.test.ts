@@ -21,7 +21,7 @@ test('native result DTOs survive text-only logs without automatic episode extrac
   skip:!packageRoot&&!sourceRoot?'requires the pinned DSH runtime':false,timeout:30000,
 },async()=>{
   const modules=[['cordis','vendor/cordis'],['dsh-llm','packages/llm/llm'],['dsh-session','packages/core/session'],['dsh-session-projection','packages/session/session-projection'],['dsh-system-prompt','packages/core/system-prompt'],['dsh-tools','packages/core/tools'],['dsh-agent','packages/core/agent'],['dsh-agent-loop','packages/core/agent-loop'],['dsh-skill','packages/skill/skill']]
-  const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills]=await Promise.all(modules.map(([name,source])=>import(pathToFileURL(packageRoot?join(packageRoot,'@deepseek-ai',name!,'lib/index.js'):join(sourceRoot!,source!,'lib/index.js')).href)))
+  const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills]=await Promise.all(modules.map(([name,source])=>import((['agent-loop','dsh-agent-loop'].includes(name!) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(packageRoot?join(packageRoot,'@deepseek-ai',name!,'lib/index.js'):join(sourceRoot!,source!,'lib/index.js')).href))))
   const root=await mkdtemp(join(tmpdir(),'evolution-native-'));await mkdir(join(root,'.git'))
   const ctx=new cordis.Context(),fibers:any[]=[]
   let adapter:ReturnType<typeof createDshHostAdapter>|undefined,composition:Awaited<ReturnType<typeof mountDshComposition>>|undefined,disposeTool:(()=>void)|undefined
@@ -44,7 +44,7 @@ test('native result DTOs survive text-only logs without automatic episode extrac
     }}})
     composition=await mountDshComposition(ctx,adapter.host)
     const settingsBefore=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT mode,generation FROM memory_evolution_settings').get())
-    const agent=await ctx.agentLoop.create(session.SessionId('evolution-native'),{provider:'evolution-test',model:'mock'},{cwd:root,delegationDepth:0})
+    const agent=(await ctx.agents.create({sessionId:session.SessionId('evolution-native'),agentOptions:{provider:'evolution-test',model:'mock'},meta:{cwd:root,delegationDepth:0}})).agent
     agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'検証結果を調査して、失敗と成功を報告してください。'}]}))
     const deadline=Date.now()+15000
     while(Date.now()<deadline) {

@@ -1,6 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type AgentHandle, type AgentOptions,
-  type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type SessionStartSource } from '@deepseek-ai/dsh-agent'
+  type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { AssistantStreamAccumulator, BlockAssembler, LlmError, markAgentLoopRequest, createAssistantMessage, createSystemMessage, createUserMessage,
   createToolResultMessage, type UserMessage, type LlmCallConfig, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
@@ -28,20 +28,52 @@ async function duringSetup<T>(operation:Promise<T>|T,signal:AbortSignal):Promise
   finally {if(onAbort)signal.removeEventListener('abort',onAbort)}
 }
 
+function sameSelection(left:ModelSelection|undefined,right:Readonly<ModelSelection>) {
+  return left?.provider===right.provider&&left.model===right.model&&left.reasoningEffort===right.reasoningEffort
+}
+function detachedSelection(value:{provider?:unknown;model?:unknown;reasoningEffort?:unknown}|undefined):ModelSelection|undefined {
+  if(typeof value?.provider!=='string'||!value.provider||typeof value.model!=='string'||!value.model)return undefined
+  return {provider:value.provider,model:value.model,...(value.reasoningEffort===undefined?{}:{reasoningEffort:value.reasoningEffort as Exclude<ModelSelection['reasoningEffort'],undefined>})}
+}
+/** Durable model-selection facade for the replacement harness. */
+class KiokukoHarnessModel {
+  constructor(private readonly session:Session,private readonly options:AgentOptions) {}
+  private recorded():ModelSelection|undefined {
+    let used:ModelSelection|undefined,pending:ModelSelection|undefined
+    for(const event of this.session.snapshotEvents() as readonly {type:string;data:any}[]) {
+      if(event.type==='model/selection')pending=detachedSelection(event.data)
+      else if(event.type==='request/header') {
+        used=detachedSelection({...event.data?.header?.config,...(event.data?.header?.adapterDefaults?.reasoningEffort===true?{reasoningEffort:undefined}:{})})
+        if(used&&sameSelection(pending,used))pending=undefined
+      }
+    }
+    return pending??used
+  }
+  current():Readonly<ModelSelection>|undefined {
+    const selection=this.recorded()??detachedSelection(this.options)
+    return selection&&{...selection}
+  }
+  select(selection:Readonly<ModelSelection>) {
+    if(sameSelection(this.recorded(),selection))return
+    Reflect.apply(this.session.append,this.session,['model/selection',{provider:selection.provider,model:selection.model,...(selection.reasoningEffort===undefined?{}:{reasoningEffort:selection.reasoningEffort})}])
+  }
+}
+
 /** Kiokuko owns scheduling and request/tool boundaries; DSH supplies the services. */
 export class KiokukoHarnessAgent implements Agent {
   readonly id: Agent['id']; readonly ctx: Context; readonly scope: ReturnType<typeof createScope>
-  readonly inbox: KiokukoInbox; readonly options: AgentOptions
+  readonly inbox: KiokukoInbox; readonly model: KiokukoHarnessModel; readonly options: AgentOptions
   private readonly dispatch: ReturnType<typeof agentEvents>
   private driver: Promise<void>|undefined; private maintenance: Promise<unknown>|undefined; private abort: AbortController|undefined
   private ready=false; private disposed=false; private wake=false; private turn=0; private step=0; private streamRevision=0
+  private claimedInputs:readonly UserMessage[]=[]
   private headerSeen=false
   private systemSeq:SessionSeq|undefined;private systemText:string|undefined
   private attemptedProvider:string|undefined;private retryPolicy:import('@deepseek-ai/dsh-llm').ResolvedRetryPolicy|undefined
   constructor(private readonly ownerCtx:Context, readonly session:Session, options:HarnessOptions,
     private readonly lifecycle:KiokukoHarnessLifecycle, seed:readonly SessionEvent[], callerCtx=ownerCtx) {
     const parent=scopeOf(callerCtx)
-    this.id=session.id;this.options={...options};this.scope=createScope(ownerCtx,this,parent?{parent}:{});this.ctx=this.scope.ctx
+    this.id=session.id;this.options={...options};this.model=new KiokukoHarnessModel(session,this.options);this.scope=createScope(ownerCtx,this,parent?{parent}:{});this.ctx=this.scope.ctx
     this.dispatch=agentEvents(this.ctx,this);this.inbox=new KiokukoInbox(session,this.dispatch,seed)
     for(const e of seed){if(e.type==='turn/start')this.turn=e.data.turn;if(e.type==='request/header')this.headerSeen=true}
     const head=seed.find(e=>e.seq===session.surface.nodes[0]);if(head?.type==='system/message'){this.systemSeq=head.seq;this.systemText=head.data.message.content.map(b=>b.type==='text'?b.text:'').join('')}
@@ -62,7 +94,8 @@ export class KiokukoHarnessAgent implements Agent {
   inject(message:UserMessage) { this.send(message,'next-step',false) }
   cancel(cause:AgentCancelCause,options:CancelOptions={}) {
     if(!this.abort&&!this.driver&&!this.maintenance)return
-    if(!options.keepInbox)this.inbox.clear()
+    if(options.keepInbox)this.inbox.discardClaimed(this.claimedInputs)
+    else this.inbox.clear()
     if(cause.kind==='disposed'){this.disposed=true;this.wake=false}
     this.audit('cancel',cause.kind);this.abort?.abort(cause)
   }
@@ -102,21 +135,34 @@ export class KiokukoHarnessAgent implements Agent {
           // Existing routing observes the claimed input while assembling the
           // step. Keep the durable inbox until admission or explicit handoff.
           for(const message of payload.messages)this.dispatch.emit('agent/inbox/claimed',{message,turn:this.turn})
-          const prompt=this.ctx.get('systemPrompt',false) as any
-          const assembly=prompt?await prompt.assemble(assembleContextFor(this,signal)):undefined
-          const internal=await this.lifecycle.preStep(payload)
-          const decision=internal.kind==='enter'?await this.dispatch.waterfall('agent/pre-step',{...payload,messages:internal.messages},async()=>internal):internal
-          if(decision.kind==='reject'&&!handled){reason={kind:'blocked'};blocked=true;break}
-          // Intake rejection retains inputs; commit the claim only after admission.
-          if(first&&ordinary.length)this.inbox.splice('next-turn',0,ordinary.length,[])
-          if(steering.length)this.inbox.splice('next-step',0,steering.length,[])
-          if(decision.kind==='reject'){reason={kind:'blocked'};blocked=true;this.audit('intake','handoff');break}
-          if(first&&!decision.messages.length)break
+          let assembly:any,decision:Awaited<ReturnType<KiokukoHarnessLifecycle['preStep']>>,modelSelection:Readonly<ModelSelection>
+          this.claimedInputs=payload.messages
+          try {
+            const prompt=this.ctx.get('systemPrompt',false) as any
+            const selectedModel=this.model.current()
+            if(!selectedModel)throw new Error(`agent "${this.id}" has no provider/model`)
+            modelSelection=selectedModel
+            const assemblyContext={...assembleContextFor(this,signal),modelSelection}
+            assembly=prompt?await prompt.assemble(assemblyContext):undefined
+            const internal=await this.lifecycle.preStep(payload)
+            decision=internal
+            if(internal.kind==='enter') {
+              const stepPayload={...payload,messages:internal.messages,modelSelection}
+              decision=await this.dispatch.waterfall('agent/pre-step',stepPayload,async()=>internal)
+            }
+            signal.throwIfAborted()
+            if(decision.kind==='reject'&&!handled){reason={kind:'blocked'};blocked=true;break}
+            // Intake rejection retains inputs; commit the claim only after admission.
+            if(first&&ordinary.length)this.inbox.splice('next-turn',0,ordinary.length,[])
+            if(steering.length)this.inbox.splice('next-step',0,steering.length,[])
+            if(decision.kind==='reject'){reason={kind:'blocked'};blocked=true;this.audit('intake','handoff');break}
+            if(first&&!decision.messages.length)break
+          } finally {this.claimedInputs=[]}
           first=false;this.session.append('step/start',{turn:this.turn,step:this.step})
-          try { again=await this.modelStep(decision.messages,signal,assembly) }
+          try { again=await this.modelStep(decision.messages,signal,assembly,modelSelection) }
           finally { this.session.append('step/end',{turn:this.turn,step:this.step}) }
           if(!again&&!this.inbox.nextStep.length){await this.lifecycle.turnStopping({agent:this,turn:this.turn,signal});
-            await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal})}
+            await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal});signal.throwIfAborted()}
           again=again||this.inbox.nextStep.length>0
           if(again&&this.step>=(this.options as HarnessOptions).maxSteps!){throw new Error('Kiokuko step budget reached; inspect the recorded work before continuing')}
         }
@@ -129,20 +175,19 @@ export class KiokukoHarnessAgent implements Agent {
       if(blocked||signal.aborted&&!this.wake)break
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
   }
-  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any):Promise<boolean> {
+  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>):Promise<boolean> {
     if(this.systemSeq===undefined){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage('')},{surfaceOp:'append'});this.systemSeq=event.seq;this.systemText=''}
     // Accepted input must survive even provider/prompt preparation failure.
     for(const message of messages)this.session.append('user/message',message,{surfaceOp:'append'})
-    for(;;){try{return await this.requestAttempt(signal,assembly)}catch(error){
+    for(;;){try{return await this.requestAttempt(signal,assembly,modelSelection)}catch(error){
       if(signal.aborted||!(error instanceof LlmError))throw error
       const recovery=await this.dispatch.waterfall('agent/request-error',{turn:this.turn,step:this.step,provider:this.attemptedProvider??'',failure:error.failure,retryPolicy:this.retryPolicy,signal},async()=>undefined)
       if(recovery?.kind!=='retry')throw error
       this.audit('model','retry')
     }}
   }
-  private async requestAttempt(signal:AbortSignal,assembly:any):Promise<boolean> {
-    const proposed:LlmCallConfig={provider:this.options.provider??'',model:this.options.model??'',
-      ...(this.options.reasoningEffort?{reasoningEffort:this.options.reasoningEffort}:{}),...(this.options.maxTokens?{maxTokens:this.options.maxTokens}:{})}
+  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>):Promise<boolean> {
+    const proposed:LlmCallConfig={...modelSelection,...(this.options.maxTokens?{maxTokens:this.options.maxTokens}:{})}
     const config=await this.dispatch.waterfall('agent/request',{turn:this.turn,step:this.step,signal},async()=>proposed)
     this.attemptedProvider=config.provider;this.retryPolicy=undefined
     const prepared=await this.ctx.llm.prepareCall(config,signal)
@@ -170,8 +215,8 @@ export class KiokukoHarnessAgent implements Agent {
       }
       signal.throwIfAborted()
       const content=assembler.blocks(), stream=[...accumulator.snapshot()]
-      if(assembler.finish.kind==='error'||assembler.finish.kind==='aborted')throw new LlmError(memoryFailureDiagnostic(assembler.finish.failure).message,assembler.finish.failure.code)
-      const event=content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:assembler.message({provider:prepared.config.provider,model:prepared.config.model}),stream,...(assembler.usage?{usage:assembler.usage}:{})},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})
+      if(assembler.finish.kind==='error'||assembler.finish.kind==='aborted')throw new LlmError(memoryFailureDiagnostic(assembler.finish.failure).message,assembler.finish.failure.code,assembler.finish.failure)
+      const event=content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:assembler.message({provider:prepared.config.provider,model:prepared.config.model,...(assembler.replayState?{replayState:assembler.replayState}:{})}),stream,...(assembler.usage?{usage:assembler.usage}:{})},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})
       settled=true;this.dispatch.emit('agent/assistant-stream',{frame:{type:'end',attemptId,revision,index:count,outcome:{kind:'committed',eventType:event.type as 'assistant/message'|'assistant/attempt',seq:event.seq}}})
       this.audit('model','result')
       const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
@@ -180,7 +225,7 @@ export class KiokukoHarnessAgent implements Agent {
       return calls.length>0&&!concludesTurn
     } catch(error) {
       if(!settled){const content=assembler.interruptedBlocks(),stream=[...accumulator.snapshot()]
-        const event=signal.aborted&&content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:createAssistantMessage({content,source:{provider:prepared.config.provider,model:prepared.config.model}}),stream,interrupted:true},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})
+        const event=signal.aborted&&content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:createAssistantMessage({content,source:{provider:prepared.config.provider,model:prepared.config.model,...(assembler.replayState?{replayState:assembler.replayState}:{})}}),stream,interrupted:true},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})
         this.dispatch.emit('agent/assistant-stream',{frame:{type:'end',attemptId,revision,index:count,outcome:{kind:'committed',eventType:event.type as 'assistant/message'|'assistant/attempt',seq:event.seq}}})}
       this.audit('model',signal.aborted?'cancel':'error');throw error
     }

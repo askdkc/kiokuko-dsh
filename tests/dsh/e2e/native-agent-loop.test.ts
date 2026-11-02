@@ -54,7 +54,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     import(dshModule('packages/core/system-prompt/lib/index.js')),
     import(dshModule('packages/core/tools/lib/index.js')),
     import(dshModule('packages/core/agent/lib/index.js')),
-    import(dshModule('packages/core/agent-loop/lib/index.js')),
+    import(new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href),
     import(dshModule('packages/skill/skill/lib/index.js')),
     import(dshModule('packages/fs/fs-local/lib/index.js')),
     import(dshModule('packages/session/working-directory/lib/index.js')),
@@ -337,11 +337,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
     await adapter.host.boundaryWorker!.whenIdle()
   }) : undefined
   try {
-    liveAgent = await ctx.agentLoop.create(
-      session.SessionId('real-loop-session'),
-      { provider: 'mock', model: 'mock' },
-      { cwd: fixtureRoot },
-    )
+    liveAgent = (await ctx.agents.create({sessionId:session.SessionId('real-loop-session'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: fixtureRoot }})).agent
     liveScope = scope.createScope(ctx, liveAgent); liveAgent.ctx = liveScope.ctx;
     const signal = new AbortController().signal
     const nativeSkillSnapshot = await ctx.skills.snapshot({ scope: liveAgent, cwd: fixtureRoot, signal })

@@ -11,17 +11,17 @@ import { answerTaskStartup, type StartupFixtureChoice } from './task-startup-fix
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
 export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; driver?: 'kiokuko'|'legacy'; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; prompts?: DshSkillPrompts; decisions?: DecisionService; startupChoice?: StartupFixtureChoice; startupChoices?: readonly StartupFixtureChoice[] }) {
-  const { packages, packageRoot, explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', hostPlugin, nativeAnswer, prompts, decisions } = options
+  const { packages, packageRoot, driver: driverMode = 'kiokuko', explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', hostPlugin, nativeAnswer, prompts, decisions } = options
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
     ? pathToFileURL(join(packageRoot, 'dist/index.js')).href : '../../../src/dsh/index.js')
   const modules = await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','skill','tool-skill','commands','subagent','subagent-spawn-in-process','fs-local','working-directory']
     .map(name=>import(pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href)))
   const [cordis,llm,session,projection,prompt,tools,agents,skills,skillTool,commands,subagents,spawn,fsLocal,workingDirectory]=modules
-  const loop = options.driver === 'kiokuko'
+  const loop = driverMode === 'kiokuko'
     ? await import(packageRoot ? pathToFileURL(join(packageRoot,'dist/dsh/harness/index.js')).href : '../../../src/dsh/harness/index.js')
     : await import(pathToFileURL(join(packages,'@deepseek-ai/dsh-agent-loop/lib/index.js')).href)
-  const driver=options.driver==='kiokuko'?loop:loop.default
+  const driver=driverMode==='kiokuko'?loop:loop.default
   const dir = await realpath(await mkdtemp(join(tmpdir(),'skill-delivery-'))), previousData = process.env.KIOKUKO_DATA_DIR
   process.env.KIOKUKO_DATA_DIR = dir
   const ctx = new cordis.Context(), fibers: any[] = [], mock = nativeMock(llm)
@@ -110,7 +110,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   }
   if (skillToolPlacement === 'late') fibers.push(await ctx.plugin(skillTool.default ?? skillTool))
   const {agent} = await ctx.agents.create({sessionId:session.SessionId('skill-main'),agentOptions:{provider:'mock',model:'qwen3-coder'},meta:{cwd:workspace}})
-  if(options.driver==='kiokuko')assert.equal(agent.constructor.name,'KiokukoHarnessAgent')
+  if(driverMode==='kiokuko')assert.equal(agent.constructor.name,'KiokukoHarnessAgent')
   if (skillToolPlacement === 'agent') fibers.push(await agent.ctx.plugin(skillTool.default ?? skillTool))
   offQuestions = nativeAnswer ? agent.ctx.on('user-questions/request', async (request: any) => {
     if (request.questions[0]?.id.startsWith('task-startup:') && (options.startupChoice || options.startupChoices)) {

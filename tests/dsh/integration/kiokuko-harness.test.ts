@@ -5,6 +5,7 @@ import YAML from 'yaml'
 import { Context } from '@deepseek-ai/cordis'
 import Agents from '@deepseek-ai/dsh-agent'
 import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
+import Projections from '@deepseek-ai/dsh-session-projection'
 import Llm, { LlmAdapter, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { KiokukoAgentFactory } from '../../../src/dsh/harness/factory.js'
 import {currentTaskAuthority,withTaskAuthority} from '../../../src/dsh/task-authority-context.js'
@@ -21,7 +22,7 @@ test('legacy compatibility overlay restores one stock factory and removes its Ki
 
 async function fixture() {
   const ctx = new Context(), requests: unknown[] = []
-  for (const plugin of [Llm, Sessions, Agents]) await ctx.plugin(plugin)
+  for (const plugin of [Llm, Sessions, Projections, Agents]) await ctx.plugin(plugin)
   ctx.llm.registerAdapter(['harness-fixture'], new class extends LlmAdapter {
     async *stream(options: any) {
       requests.push(options)
@@ -52,6 +53,21 @@ test('rejected intake retains input and waits for another wake instead of silent
     await agent.whenIdle()
     assert.equal(f.requests.length,1);assert.equal(agent.inbox.nextTurn.length,0)
   } finally {await f.close()}
+})
+
+test('harness captures its durable model selection for pre-step and the matching request', async () => {
+  const f=await fixture();let handle:any
+  try {
+    const selections:any[]=[]
+    f.ctx.on('agent/pre-step',async(payload:any,next)=>{selections.push(payload.modelSelection);return next()})
+    handle=await f.ctx.agents.create({sessionId:SessionId('kiokuko-model-selection')})
+    assert.deepEqual(handle.agent.model.current(),{provider:'harness-fixture',model:'contract-model'})
+    handle.agent.model.select({provider:'harness-fixture',model:'selected-model'})
+    handle.agent.followup(createUserMessage({content:[{type:'text',text:'Use the selected model'}],source:{kind:'user'}}))
+    await handle.agent.whenIdle()
+    assert.deepEqual(selections,[{provider:'harness-fixture',model:'selected-model'}])
+    assert.equal((f.requests[0] as any).model,'selected-model')
+  } finally {await handle?.dispose();await f.close()}
 })
 
 test('context preparation failure parks retained input and only a new wake retries it',async()=>{
@@ -261,4 +277,58 @@ test('native batch termination does not dispatch another model request after a h
   assert.equal(calls,1);assert.equal(f.requests.length,0,'The executor owns the batch termination decision')
   const results=handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='tool/result');assert.equal(results.length,1);assert.equal(results[0].data.message.isError,true)
  }finally{await handle?.dispose();await f.close()}
+})
+
+for(const ignoresAbort of [false,true])test(`cancel during intake discards only claimed input and preserves pending work (${ignoresAbort?'late admission':'abort-aware'})`,async()=>{
+  const f=await fixture(),entered=deferred(),release=deferred(),seen:string[]=[]
+  let first=true
+  try{
+    f.factory.lifecycle.onStep(async(event,next)=>{
+      seen.push(...event.messages.map(message=>message.content.filter(b=>b.type==='text').map(b=>b.text).join('')))
+      if(first){first=false;entered.resolve();await release.promise;if(!ignoresAbort)event.signal.throwIfAborted()}
+      return next()
+    })
+    const handle=await f.ctx.agents.create({sessionId:SessionId(`intake-cancel-${ignoresAbort}`)})
+    const agent=handle.agent,msg=(text:string)=>createUserMessage({content:[{type:'text',text}],source:{kind:'user'}})
+    agent.followup(msg('old'));await entered.promise
+    agent.followup(msg('queued'));agent.inject(msg('pending-steer'))
+    agent.cancel({kind:'user'},{keepInbox:true});release.resolve();await agent.whenIdle()
+    agent.followup(msg('new'));await agent.whenIdle()
+    assert.deepEqual(seen,['old','queued','pending-steer','new'])
+    const accepted=agent.session.snapshotEvents().filter(e=>e.type==='user/message').flatMap(e=>e.data.content.filter(b=>b.type==='text').map(b=>b.text))
+    assert.deepEqual(accepted,['queued','pending-steer','new'],'aborted admission must not execute; pending messages are accepted once')
+    assert.equal(agent.session.snapshotEvents().filter(e=>e.type==='turn/end'&&e.data.reason.kind==='aborted').length,1)
+    assert.equal(agent.inbox.nextTurn.length+agent.inbox.nextStep.length,0)
+    await handle.dispose()
+  }finally{release.resolve();await f.close()}
+})
+
+test('provider failure retains retry and request identity facts at the request-error seam',async()=>{
+  const f=await fixture();let observed:any
+  try{
+    f.ctx.on('llm/stream',async function*(){yield{type:'finish' as const,reason:{kind:'error' as const,failure:{code:'RATE_LIMIT',message:'Bounded fixture failure',status:429,providerRetryAfterMs:12,requestId:'fixture-request' as any}}}})
+    f.ctx.on('agent/request-error',async(event,next)=>{observed=event.failure;return next()})
+    const handle=await f.ctx.agents.create({sessionId:SessionId('provider-failure-facts')})
+    handle.agent.followup(createUserMessage({content:[{type:'text',text:'Observe the failure without retry'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+    assert.equal(observed.status,429);assert.equal(observed.providerRetryAfterMs,12);assert.equal(observed.requestId,'fixture-request')
+    await handle.dispose()
+  }finally{await f.close()}
+})
+for(const interrupted of [false,true])test(`assembled replay state survives ${interrupted?'interruption':'completion'}`,async()=>{
+  const f=await fixture(),yielded=deferred(),replay={response:{id:'opaque-fixture'},blocks:[{part:'one'}]}
+  try{
+    f.ctx.on('llm/stream',async function*(options){
+      yield{type:'block-start' as const,index:0,blockType:'text' as const};yield{type:'block-end' as const,index:0,block:{type:'text' as const,text:'Replay-bound content'}}
+      yield{type:'finish' as const,reason:{kind:'stop' as const},replayState:replay};yielded.resolve()
+      if(interrupted)await new Promise((_,reject)=>options.signal!.addEventListener('abort',()=>reject(options.signal!.reason),{once:true}))
+    })
+    const handle=await f.ctx.agents.create({sessionId:SessionId(`replay-state-${interrupted}`)})
+    handle.agent.followup(createUserMessage({content:[{type:'text',text:'Retain adapter replay state'}],source:{kind:'user'}}));await yielded.promise
+    if(interrupted)handle.agent.cancel({kind:'user'})
+    await handle.agent.whenIdle()
+    const event=handle.agent.session.snapshotEvents().find(e=>e.type==='assistant/message') as any
+    assert.deepEqual(event.data.message.source.replayState,replay)
+    assert.equal(event.data.interrupted===true,interrupted)
+    await handle.dispose()
+  }finally{await f.close()}
 })

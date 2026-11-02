@@ -14,7 +14,7 @@ import { decisions } from '../../helpers/semantic-compaction.js'
 import { nativeMock } from '../../helpers/native-mock.js'
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href))
 const [cordis, llm, sessions, projection, prompt, workingDirectory, scope, tools, registry, loop, meter, compaction, fsLocal, fsTools] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'working-directory', 'scope', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'fs-local', 'tool-fs'].map(load))
 
 for (const shape of ['lines','single-line'] as const) for (const mode of ['auto', 'off'] as const) test(`native ${shape} -> two full requests -> conditional pack -> actual write (${mode})`, async t => {

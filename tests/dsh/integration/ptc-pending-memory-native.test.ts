@@ -27,7 +27,7 @@ async function runPendingMemory(hostMode: 'core' | 'full') {
   const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
     ?? JSON.parse(await readFile(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
   assert.equal(version, expectedVersion)
-  const load = (name: string) => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)
+  const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href))
   const [cordis, llm, sessions, projections, prompt, tools, agents, loop, skills, commands] = await Promise.all([
     'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-commands',
   ].map(load))

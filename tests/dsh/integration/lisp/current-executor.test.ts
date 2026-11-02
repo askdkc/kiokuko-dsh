@@ -181,7 +181,7 @@ for (const executionMode of ['development', 'protected'] as const) test(`current
   const [cordis, llm, sessions, projections, prompt, tools, native, agents, loop] = await Promise.all([
     load('vendor/cordis'), load('packages/llm/llm'), load('packages/core/session'), load('packages/session/session-projection'),
     load('packages/core/system-prompt'), load('packages/core/tools'), load('packages/core/tool-executor-native'),
-    load('packages/core/agent'), load('packages/core/agent-loop'),
+    load('packages/core/agent'), import(new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href),
   ])
   const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
   const root = await mkdtemp(join(tmpdir(), 'current-turn-'))

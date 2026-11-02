@@ -1,12 +1,19 @@
 /** Test-only transport. Each response is chosen live by the executing assistant. */
-import {mkdirSync,writeFileSync} from 'node:fs'
+import {mkdirSync,writeFileSync,realpathSync} from 'node:fs'
 import {readFile} from 'node:fs/promises'
-import {join,resolve} from 'node:path'
+import {join,resolve,relative,isAbsolute} from 'node:path'
+import {tmpdir} from 'node:os'
 let sequence=0
 export async function* liveAssistantStream(directory,options) {
-  const root=resolve(directory)
-  if(!root.startsWith('/workspace/'))throw new Error('Live acceptance bridge must be inside the cloud workspace')
-  mkdirSync(root,{recursive:true,mode:0o700})
+  const requested=resolve(directory)
+  // A private OS temporary directory is the Mac developer path. Canonicalize
+  // before accepting it so a symlink cannot redirect requests outside it.
+  const roots=[realpathSync(tmpdir()),realpathSync('/tmp'),'/workspace']
+  const within=(parent,child)=>{const r=relative(parent,child);return r!==''&&!r.startsWith('..')&&!isAbsolute(r)}
+  if(![...roots,resolve(tmpdir()),'/tmp'].some(parent=>within(parent,requested)))throw new Error('Live acceptance bridge must be inside a private temporary or cloud workspace directory')
+  mkdirSync(requested,{recursive:true,mode:0o700})
+  const root=realpathSync(requested)
+  if(!roots.some(parent=>within(parent,root)))throw new Error('Live acceptance bridge escaped its private directory')
   const id=`${process.pid}-${++sequence}`
   const messages=options.messages.map(message=>({role:message.role,...(message.id?{id:message.id}:{}),content:message.content,
     ...(message.toolCallId?{toolCallId:message.toolCallId}:{}),...(message.isError?{isError:true}:{}),

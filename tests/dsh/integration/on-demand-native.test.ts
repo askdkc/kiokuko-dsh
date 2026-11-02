@@ -51,7 +51,7 @@ const implementation = ownedPackageRoot ? {
   mountDshComposition: (await import(pathToFileURL(join(baselineCheckout, 'src/dsh/composition.ts')).href)).mountDshComposition,
 } : { mountCore, createDshHostAdapter, mountDshComposition }
 
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
 const [cordis, llm, session, projections, prompt, tools, agents, loop, skills, approval, commands] = nativeAvailable ? await Promise.all([
   'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-user-approval', 'dsh-commands',
 ].map(load)) : Array(11).fill(undefined)

@@ -12,7 +12,7 @@ import { nativeMock } from '../../helpers/native-mock.js'
 
 // This suite is mandatory: a missing pinned fixture is a failure, never a skip.
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')).href))
 const [cordis, llm, sessions, projection, prompt, tools, registry, loop, meter, compaction, pruner] = await Promise.all(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'token-meter', 'compaction-basic', 'compaction-tool-result-pruner'].map(load))
 const version = JSON.parse(await readFile(join(packages, '@deepseek-ai/dsh-compaction-basic/package.json'), 'utf8')).version
 const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION

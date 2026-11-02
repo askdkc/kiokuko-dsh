@@ -20,7 +20,7 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const expected = process.env.KIOKUKO_EXPECTED_DSH_VERSION
   ?? JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
 assert.equal(JSON.parse(readFileSync(join(packages, '@deepseek-ai/dsh/package.json'), 'utf8')).version, expected)
-const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
 
 for (const mode of ['full-nested', 'core-nested', 'full-non-git-binding'] as const) test(`${mode}: admitted native reads retain canonical task ownership`, { timeout: 30_000 }, async () => {
   const [cordis, llm, session, projection, prompt, tools, agents, loop, skills, fsLocal, workingDirectory, scope, fsTools] = await Promise.all([
@@ -65,7 +65,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       migrationsDirectory: join(process.cwd(), 'migrations'), typedDecisions: { mode: 'off' as const } }
     if (mode === 'core-nested') core = await mountCore(ctx, options)
     else { adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host) }
-    const agent = await ctx.agentLoop.create(session.SessionId('nested-owner-session'), { provider: 'nested-mock', model: 'mock' }, { cwd })
+    const agent = (await ctx.agents.create({sessionId:session.SessionId('nested-owner-session'),agentOptions:{ provider: 'nested-mock', model: 'mock' },meta:{ cwd }})).agent
     local = scope.createScope(ctx, agent); agent.ctx = local.ctx
     const off = ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
     try {
