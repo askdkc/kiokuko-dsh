@@ -176,21 +176,22 @@ test('real Lisp cancel cannot report success while an owned admission is unresol
   assert.equal(manager.taskJobsIdle(owner),false)
  }finally{release.resolve();await evaluation;await manager.dispose();assert.ok(cancels>=1,'late receipt is reconciled instead of lost');db.close();await rm(base,{recursive:true,force:true})}
 })
-test('ephemeral development Lisp cancels owned run and CI jobs before releasing its task state', {
+test('ephemeral Lisp refuses host RPC and leaves no native jobs to cancel', {
  skip:process.env.KIOKUKO_REQUIRE_LISP_RUNTIME!=='1'?'requires actual SBCL':false,timeout:120000,
 },async()=>{
  const base=await realpath(await mkdtemp(join(tmpdir(),'lisp-task-owned-'))),root=join(base,'workspace');await mkdir(root)
  const db=new NodeSqliteAdapter(':memory:',new DatabaseSync(':memory:')),owner={sessionId:'task-owned',agentId:'agent',root};workingLispTask(db,owner)
- const cancelled:string[]=[]
+ const cancelled:string[]=[];let toolCalls=0,ciCalls=0
  const manager=new LispManager({store:new LispStore(async fn=>fn(db)),dataRoot:join(base,'runtime'),config:LispConfig.parse({enabled:true,executionMode:'development',startupTimeoutMs:60000}),
- toolCall:async(_owner,name,args)=>{if(name==='kioku_exec')return {receipt:{operationId:'task-job',state:'started'}};cancelled.push(String(args.operationId));return {receipt:{operationId:args.operationId,state:'completed',processStopped:true}}},
- ciCall:async()=>({code:1,state:'FAILED',receipt:{operationId:'ci-job',state:'completed',processStopped:false}})})
+ toolCall:async(_owner,name,args)=>{toolCalls++;if(name==='kioku_exec')return {receipt:{operationId:'task-job',state:'started'}};cancelled.push(String(args.operationId));return {receipt:{operationId:args.operationId,state:'completed',processStopped:true}}},
+ ciCall:async()=>{ciCalls++;return{code:1,state:'FAILED',receipt:{operationId:'ci-job',state:'completed',processStopped:false}}}})
  try{
   await manager.start();await manager.enableTask(owner)
   const run=await manager.execute(owner,'lisp_eval',{operationId:'task-run',code:'(kioku.process:start-job "node" (list "--version"))'}) as any
-  assert.equal(run.ok,true,JSON.stringify(run));assert.ok(cancelled.includes('task-job'),'ephemeral cleanup confirms the owned job before dropping its state')
+  assert.equal(run.ok,false,JSON.stringify(run));assert.equal(run.code,'TASK_EVAL_FAILED')
   const ci=await manager.execute(owner,'lisp_eval',{operationId:'task-ci',code:'(kioku.ci:verify :test)'}) as any
-  assert.equal(ci.ok,true,JSON.stringify(ci));assert.ok(cancelled.includes('ci-job'),'CI receipt shares the same owned stop boundary')
+  assert.equal(ci.ok,false,JSON.stringify(ci));assert.equal(ci.code,'TASK_EVAL_FAILED')
+  assert.equal(toolCalls,0);assert.equal(ciCalls,0);assert.deepEqual(cancelled,[],'a pure task evaluator cannot acquire native effect authority')
   assert.equal(manager.taskJobsIdle(owner),true)
  }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

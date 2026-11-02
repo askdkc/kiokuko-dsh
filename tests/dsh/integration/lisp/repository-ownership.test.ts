@@ -75,7 +75,7 @@ test('persistent hot install reuses only its owner and preserves PID, heap, repl
   let catalogs=0
   const manager=new LispManager({store:new LispStore(async fn=>fn(f.dbs[0]!)),dataRoot:join(f.homes[0]!,'data'),
     toolCatalog:()=>{catalogs++;return []},
-    config:LispConfig.parse({enabled:true,executionMode:'development',maxWorkers:1,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}),
+    config:LispConfig.parse({enabled:true,executionMode:'protected',maxWorkers:1,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}),
     questions:{ask:async q=>({answers:[{id:q.questions[0].id,selected:[q.questions[0].intent!.approve]}]})}})
   t.after(async()=>{await manager.dispose();await f.close()})
   await manager.start();const status=await manager.enable(owner) as any
@@ -93,12 +93,13 @@ test('persistent hot install reuses only its owner and preserves PID, heap, repl
   assert.equal(wrong.code,'HOT_PROPERTY_FAILED')
   const rpc=await manager.execute(owner,'lisp_hot_install',{...install,operationId:'rpc-update',expectedRevision:1,source:'(lambda (x) (kioku.tools:available-tools) (+ x 1))'}) as any
   assert.equal(rpc.code,'TASK_EXECUTION_FAILED');assert.equal(catalogs,0,'resident hot code cannot invoke host RPC')
-  assert.equal((await manager.execute({...owner,agentId:'other-agent'},'lisp_hot_call',{operationId:'other-agent-call',name:'add-one',input:41}) as any).code,'REPOSITORY_IN_USE')
+  // A foreign caller gets private scratch, never this protected heap; with one occupied slot it must be refused before execution.
+  assert.equal((await manager.execute({...owner,agentId:'other-agent'},'lisp_hot_call',{operationId:'other-agent-call',name:'add-one',input:41}) as any).code,'WORKER_LIMIT')
   assert.equal((await manager.execute(owner,'lisp_hot_call',{operationId:'call-after-failure',name:'add-one',input:41}) as any).value,42)
   const another={...owner,sessionId:'other-session',agentId:'other-agent'}
   workingLispTask(f.dbs[0]!,another);await manager.enableTask(another)
   const rejected=await manager.execute(another,'lisp_hot_call',{operationId:'other-call',name:'add-one',input:41}) as any
-  assert.equal(rejected.code,'REPOSITORY_IN_USE','a different owner cannot borrow the persistent heap')
+  assert.equal(rejected.code,'WORKER_LIMIT','a different owner cannot borrow the persistent heap or evict its occupied slot')
   const after=await manager.status(owner) as any
   assert.equal(after.runtimePid,status.runtimePid);assert.equal(after.supervisorPid,status.supervisorPid);assert.equal(after.generation,status.generation)
   assert.equal((await manager.execute(owner,'lisp_eval',{operationId:'read-kept-heap',code:'*repo-token*'}) as any).value.printed,'(17)')
@@ -173,7 +174,7 @@ test('busy and cancelled resident hot calls keep another repository alive',nativ
   const f=await fixture(t),owner=f.owners[0]!,other=f.owners[1]!
   workingLispTask(f.dbs[0]!,other)
   const manager=new LispManager({store:new LispStore(async fn=>fn(f.dbs[0]!)),dataRoot:join(f.homes[0]!,'data'),
-    config:LispConfig.parse({enabled:true,executionMode:'development',maxWorkers:2,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}),
+    config:LispConfig.parse({enabled:true,executionMode:'protected',maxWorkers:2,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}),
     questions:{ask:async q=>({answers:[{id:q.questions[0].id,selected:[q.questions[0].intent!.approve]}]})}})
   t.after(async()=>{await manager.dispose();await f.close()})
   await manager.start();await manager.enable(owner);const otherStatus=await manager.enable(other) as any

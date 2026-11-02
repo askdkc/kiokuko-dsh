@@ -9,7 +9,7 @@ import test from 'node:test'
 test('a real process crash after an effect resumes without re-executing that unknown operation', async () => {
   const helper = new URL('../helpers/session-recovery-runtime.mjs', import.meta.url)
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'kiokuko-native-recovery-')))
-  const child = spawnSync(process.execPath, [fileURLToPath(helper), '--crash', root], { encoding: 'utf8', timeout: 15000 })
+  const child = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(helper), '--crash', root], { encoding: 'utf8', timeout: 15000 })
   assert.equal(child.status, 73, child.stdout + child.stderr)
   assert.equal(readFileSync(join(root, 'effect-count.txt'), 'utf8'), '1')
   const { recoveryRuntime } = await import(helper.href)

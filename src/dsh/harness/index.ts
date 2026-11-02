@@ -16,7 +16,7 @@ export async function apply(ctx:Context,raw:z.input<typeof Config>={}) {
   const projections=ctx.get('sessionProjections',false)
   projections?.register(kiokukoTurnBoundaries)
   projections?.register(kiokukoInboxProjection)
-  ctx.systemPrompt.variable('provider',context=>context.agent?.options.provider)
-  ctx.systemPrompt.variable('model',context=>context.agent?.options.model)
+  ctx.systemPrompt.variable('provider',context=>(context as any).modelSelection?.provider??context.agent?.options.provider)
+  ctx.systemPrompt.variable('model',context=>(context as any).modelSelection?.model??context.agent?.options.model)
   ctx.effect(function*(){yield ctx.agents.setFactory(factory);yield()=>factory.dispose()},'Kiokuko harness factory')
 }
