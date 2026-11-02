@@ -15,7 +15,7 @@ A separately supplied custom execution host can use the exported `createDshHostA
 
 ## Conversation before execution
 
-The native model receives the complete original user messages and may answer or ask a concrete clarification without opening Akinator's generic purpose question. The initial answer path does not fabricate a chat profile, ready intake, active ledger run, or completed task. Laya's result is provisional intent only; an abstention does not prevent conversation. A queued human request after a normal turn is classified independently rather than inheriting that stale turn's execution readiness. 
+The native model receives the complete original user messages and may answer or ask a concrete clarification without opening Akinator's generic purpose question. The initial answer path does not fabricate a chat profile, ready intake, active ledger run, or completed task. Laya's result is provisional intent only; an abstention does not prevent conversation. A queued human request after a normal turn is classified independently rather than inheriting that stale turn's execution readiness.
 
 Research, writing and action requests remain work requests. The host guidance tells the assistant to prepare requested tool-backed work rather than silently substitute a text answer or claim unperformed work.
 

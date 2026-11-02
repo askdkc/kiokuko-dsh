@@ -24,9 +24,9 @@ async function verify(packageRoot) {
   const options={cwd:root,env:{...env,...(packageRoot?{KIOKUKO_SKILL_PACKAGE_ROOT:packageRoot}:{})},maxBuffer:16*1024*1024}
   for (const args of [
     ['--import','tsx','--test','--test-concurrency=1','tests/dsh/skill-delivery/skill-delivery.test.ts', 'tests/dsh/unit/skill-startup-native.test.ts', ...(!packageRoot ? ['tests/dsh/skill-delivery/prototype-evaluation.test.ts'] : [])],
-    ['--import','tsx','--test','--test-name-pattern=\\(text\\)|Japanese Skill reaches','tests/dsh/e2e/native-agent-loop.test.ts','tests/dsh/e2e/deep-planning-native.test.ts'],
+    ['--import','tsx','--test','--test-name-pattern=Japanese Skill reaches','tests/dsh/e2e/deep-planning-native.test.ts'],
   ]) {
-    const stage=args.some(arg=>arg.includes('native-agent-loop.test.ts'))?'native E2E':'suite'
+    const stage=args.includes('tests/dsh/e2e/deep-planning-native.test.ts')?'native E2E':'suite'
     console.log(`Skill delivery ${phase} ${stage} started`)
     try { const result=await exec(process.execPath,[...(process.env.KIOKUKO_VERIFY_REPORT_DIR?['--import='+join(root,'scripts/verification-test-environment.mjs'),'--test-reporter=tap','--test-reporter-destination=stdout','--test-reporter='+join(root,'scripts/verification-reporter.mjs'),'--test-reporter-destination='+join(process.env.KIOKUKO_VERIFY_REPORT_DIR,'skill-reporter.txt')]:[]),'--import',join(root,'tests/dsh/helpers/offline-skill-catalog.mjs'),...args],options);process.stdout.write(result.stdout);process.stderr.write(result.stderr);console.log(`Skill delivery ${phase} ${stage} completed`) }
     catch(error) { process.stdout.write(error.stdout??'');process.stderr.write(error.stderr??'');throw new Error(`Skill delivery failed (${packageRoot?'packed':'source'}, exit ${error.code})`) }

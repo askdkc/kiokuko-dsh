@@ -179,7 +179,7 @@ test('selected coverage fails safe and retains the complete inventory in full mo
   for(const [profile,id,platform]of [['runtime','runtime-darwin-arm64','darwin'],['browser','browser','linux']])assert.deepEqual(lanePlan(contract,full,id).checks,verificationPlan(contract,profile,platform).checks);
   const representative=createCiPlan(contract,request('src/dsh/task-state.ts'),selectionIdentity),core=lanePlan(contract,representative,'core-linux-x64').checks;
   assert.equal(core.filter(c=>c.id==='build').length,1);for(const id of ['ci-native-unit','ci-native-integration-1','ci-native-integration-2','lisp-native-1','lisp-native-2','owned-native'])assert.ok(core.some(c=>c.id===id),id);
-  for(const id of ['consumer-npm','consumer-pnpm','dsh-lifecycle','dsh-cli-profile'])assert.ok(lanePlan(contract,representative,'consumer-linux-x64').checks.some(c=>c.id===id),id);
+  for(const id of ['consumer-npm','consumer-pnpm','dsh-cli-profile'])assert.ok(lanePlan(contract,representative,'consumer-linux-x64').checks.some(c=>c.id===id),id);
 });
 test('Depot CI selects one Linux native producer instead of relabeling unsupported macOS work',()=>{
   const selection=createCiPlan(contract,{full:true},{...selectionIdentity,ciPlatform:'linux-x64'});

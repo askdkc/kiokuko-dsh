@@ -78,8 +78,7 @@ export async function stageModules(output) {
   const microJudgeAssets=(await walk(join(root,'micro-judge'))).map(file=>`micro-judge/${file}`)
   const guardrailAssets = [...microJudgeAssets,'scripts/verify-micro-judge.mjs','docs/micro-judge.md',...guardrailLicenses,...(await walk(join(root, 'guardrail'))).map(file => `guardrail/${file}`), 'scripts/guardrail-artifacts.mjs', 'scripts/guardrail-artifacts.d.mts', 'docs/guardrail.md']
   for (const file of sharedAssets) { await stat(join(root, file)); graphs.core.files.add(file) }
-  // Identical optional host interfaces may be shared by the two add-ons, never by core.
-  const shared: string[] = []
+  const shared = []
   const { coreSkills, codingSkills } = await import(pathToFileURL(join(root, 'dist/dsh/modules/resources.js')))
   const { lispModule } = await import(pathToFileURL(join(root, entries.lisp)))
   const resources = { core: [...coreSkills.resources, ...codingSkills.resources], lisp: [...codingSkills.resources, ...lispModule.resources] }

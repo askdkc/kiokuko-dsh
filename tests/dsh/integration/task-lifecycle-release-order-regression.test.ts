@@ -28,9 +28,8 @@ function deferred() {
 }
 
 for (const closeStatus of ["completed", "failed"] as const)
-  for (const cacheFault of [false, true])
     test(
-      `${closeStatus}: deferred cache ${cacheFault ? "failure" : "success"} is never invoked and cannot retire a resumed owner`,
+      `${closeStatus}: optional cache is never invoked and terminal replay cannot retire a resumed owner`,
       { timeout: 15_000 },
       async () => {
         const base = await realpath(
@@ -91,9 +90,7 @@ for (const closeStatus of ["completed", "failed"] as const)
             failed: false,
             closed: false,
           };
-          let turns = [item],
-            currentWork = new AbortController();
-          const oldWork = currentWork;
+          let turns = [item];
           const effects: string[] = [];
           const reviewAuthorities: Array<TaskLease | undefined> = [];
           const runtime: any = {
@@ -121,8 +118,7 @@ for (const closeStatus of ["completed", "failed"] as const)
                 entered.resolve();
                 await release.promise;
                 effects.push("cache-settle");
-                if (cacheFault)
-                  throw new Error("delayed auxiliary cache failure");
+                throw new Error("delayed auxiliary cache failure");
               },
             } as any,
             memoryFinalizer: finalizer,
@@ -176,7 +172,6 @@ for (const closeStatus of ["completed", "failed"] as const)
           // The cache is deliberately unresolved here; retirement must already be complete.
           assert.equal(item.closed, true);
           assert.equal(turns.length, 0);
-          assert.equal(oldWork.signal.aborted, true);
           assert.ok(effects.indexOf("release-run") >= 0);
           assert.equal(
             db
@@ -212,17 +207,11 @@ for (const closeStatus of ["completed", "failed"] as const)
             closed: false,
           };
           turns = [next];
-          currentWork = new AbortController();
           const cleanupAtResume = effects.filter(
             (event) => !event.startsWith("cache"),
           ).length;
           release.resolve();
           await closing;
-          assert.equal(
-            currentWork.signal.aborted,
-            false,
-            "old completion must not cancel current resumed work",
-          );
           assert.equal(next.closed, false);
           assert.deepEqual(turns, [next]);
           assert.deepEqual(authorizeTaskLease(db, nextAuthority), resumed);

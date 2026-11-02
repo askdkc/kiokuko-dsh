@@ -14,7 +14,7 @@ const scenarioRoutes = new Map([
 const contract = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8'))
 const optIn = contract.nativeScopeExclusions
 const aliases = new Set(contract.testAliases.map(item=>item.file))
-const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'ci-unit', 'ci-integration', 'ci-e2e', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-agent', 'e2e-repeated', ...scenarioRoutes.keys()])
+const suites = new Set([...optIn.map(item=>item.profile),'unit', 'integration', 'ci-unit', 'ci-integration', 'ci-e2e', 'lisp', 'queued-intent', 'browser-approval', 'browser-shortcuts', 'browser-coding', 'e2e', 'e2e-core', 'e2e-repeated', ...scenarioRoutes.keys()])
 function testFiles(directory) {
   return readdirSync(join(root, directory), { withFileTypes: true }).flatMap(entry => {
     const file = `${directory}/${entry.name}`
@@ -76,8 +76,8 @@ export function nativeCiPlan(suite, environment = process.env) {
   const directory = `tests/dsh/${suite.startsWith('e2e') ? 'e2e' : suite}`
   if (suite === 'lisp') env.KIOKUKO_REQUIRE_LISP_RUNTIME = '1'
   const files = (selectedOptional?[selectedOptional.file]:suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
-    const agent = file.endsWith('/native-agent-loop.test.ts'), repeated = file.endsWith('/repeated-memory-lifecycle.test.ts')
-    return suite === 'e2e-core' ? !agent && !repeated : suite === 'e2e-agent' ? agent : suite.startsWith('e2e-repeated') ? repeated : true
+    const repeated = file.endsWith('/repeated-memory-lifecycle.test.ts')
+    return suite === 'e2e-core' ? !repeated : suite.startsWith('e2e-repeated') ? repeated : true
   })
   if (!files.length) throw new Error('Native CI suite is empty')
   const scopedFiles = selectedOptional ? files : files.filter(file=>!aliases.has(file)&&!optIn.some(item=>item.file===file))

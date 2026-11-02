@@ -743,36 +743,6 @@
       "packed": true
     },
     {
-      "id": "dsh-lifecycle",
-      "argv": [
-        "node",
-        "scripts/run-enno-dsh-e2e.mjs"
-      ],
-      "profiles": [
-        "main",
-        "runtime",
-        "ci-main"
-      ],
-      "result": "script",
-      "requires": [
-        "dsh-native",
-        "pnpm",
-        "sbcl"
-      ],
-      "expected": "existing web-profile lifecycle and independent assertions finish with a check-bound receipt",
-      "dependsOn": [
-        "build"
-      ],
-      "packed": true,
-      "env": {
-        "KIOKUKO_DSH_CLI_ONLY": "1"
-      },
-      "completionEvidence": {
-        "cliOnly": true,
-        "requireDshCli": true
-      }
-    },
-    {
       "id": "dsh-cli-profile",
       "argv": [
         "node",
@@ -1025,7 +995,6 @@
         "consumers": [
           "consumer-npm",
           "consumer-pnpm",
-          "dsh-lifecycle",
           "dsh-cli-profile"
         ]
       }

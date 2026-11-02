@@ -479,8 +479,10 @@ export function createLifecycle(deps: LifecycleDependencies) {
           prior.taskId === task.taskId &&
           prior.sessionId === task.sessionId &&
           prior.repositoryRoot === task.repositoryRoot &&
-          prior.revision === task.revision &&
-          prior.generation === task.generation
+          ((prior.revision === task.revision &&
+            prior.generation === task.generation) ||
+            (prior.revision + 1 === task.revision &&
+              prior.generation + 1 === task.generation))
         );
       };
       if (!matches(item)) return undefined;
