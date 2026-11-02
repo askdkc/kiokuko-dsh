@@ -15,7 +15,7 @@ if(!['source','packed','both'].includes(phase))throw new Error('Unknown Skill de
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const selected = selectedDshRuntime(root)
 const native = selected.packageRoot
-await access(join(native, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
+await access(join(native, '@deepseek-ai/dsh-agent/lib/index.js')) // Kiokuko owns the driver; DSH supplies the agent registry.
 const env = {...selected.environment, NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(join(root,'tests/dsh/helpers/offline-skill-catalog.mjs')).href}`, KIOKUKO_DSH_PACKAGE_ROOT:native, KIOKUKO_REQUIRE_DSH_NATIVE:'1', KIOKUKO_REQUIRE_LISP_RUNTIME:'1', KIOKUKO_TEST_COMPILED_SKILLS:'1'}
 delete env.KIOKUKO_SKILL_PACKAGE_ROOT
 delete env.NODE_TEST_CONTEXT

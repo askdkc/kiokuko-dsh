@@ -24,7 +24,9 @@ const core = legacy ? undefined : await import(pathToFileURL(join(packageRoot, '
 if (combination === 'core') assert.ok(![...loaded].some(url => /\/(enno-oduno|lisp|deep-thinker)\//.test(url)), 'core entry imports no optional implementation')
 const imported = [...loaded].filter(url => url.startsWith(pathToFileURL(packageRoot).href))
 const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skills, commands, tokenMeter, compaction] = await Promise.all(
-  ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic'].map(name => import(pathToFileURL(join(nativeRoot, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')))))
+  ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic'].map(async name => name === 'agent-loop' && combination === 'full'
+    ? { default: await import(pathToFileURL(join(packageRoot, 'dist/dsh/harness/index.js')).href) }
+    : import(pathToFileURL(join(nativeRoot, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')))))
 class FixtureModel extends llm.LlmAdapter {
   requests = []
   script = []
@@ -109,7 +111,8 @@ try {
   for (const name of ['coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion']) assert.ok(names.includes(name), `Packed coding Skill missing: ${name}`)
   assert.equal(names.includes('kiokuko-enno-oduno'), legacy || combination.includes('enno'))
   assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
-  const parent = await ctx.agentLoop.create(session.SessionId('module-fixture'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const parent = (await ctx.agents.create({ sessionId: session.SessionId('module-fixture'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory } })).agent
+  if (combination === 'full') assert.equal(parent.constructor.name, 'KiokukoHarnessAgent', 'The current full package must execute its replacement factory')
   const hasTypeSafe = true
   assert.equal(ctx.commands.list(parent).filter(command => command.name === 'kioku-typesafe-key').length, hasTypeSafe ? 1 : 0)
   assert.equal(ctx.commands.list(parent).filter(command => command.name === 'kioku-decisions').length, 1)

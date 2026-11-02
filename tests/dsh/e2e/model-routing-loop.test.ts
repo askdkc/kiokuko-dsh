@@ -44,7 +44,7 @@ async function harness() {
       const fiber = ctx.plugin(plugin, config); fibers.push(fiber); await fiber
   }
   const scopeListener = ctx.on('agent/created', ({ agent }: { agent: any }) => {
-    const local = scope.createScope(ctx, agent); scopes.push(local); agent.ctx = local.ctx
+    assert.equal(agent.constructor.name, 'KiokukoHarnessAgent'); assert.equal(scope.scopeOf(agent.ctx), agent)
 
   }, { global: true, prepend: true })
   return { ctx, llm, session, root, mock: nativeMock(llm), dispose: async () => { scopeListener(); for (const local of scopes.reverse()) await local.dispose(); for (const f of fibers.reverse()) await f.dispose(); await rm(root, { recursive: true, force: true }) } }

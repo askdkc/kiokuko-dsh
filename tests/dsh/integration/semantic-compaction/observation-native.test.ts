@@ -67,7 +67,7 @@ for (const shape of ['lines','single-line'] as const) for (const mode of ['auto'
   const d = decisions({ mode: 'off' }), coordinator = new SemanticCompactionCoordinator(ctx, d.service, root, { mode })
   const agentHandle = await ctx.agents.create({ sessionId: sessions.SessionId('observation-native'), agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: root } })
   const agent = agentHandle.agent
-  const agentScope = scope.createScope(ctx, agent); scopes.push(agentScope); agent.ctx = agentScope.ctx
+  assert.equal(scope.scopeOf(agent.ctx), agent)
   const run = async () => {
     agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Continue.' }], source: { kind: 'user' } })); await agent.whenIdle()
     const end = agent.session.snapshotEvents().filter((e: any) => e.type === 'turn/end').at(-1)

@@ -66,7 +66,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     if (mode === 'core-nested') core = await mountCore(ctx, options)
     else { adapter = createDshHostAdapter(ctx, options); composition = await mountDshComposition(ctx, adapter.host) }
     const agent = (await ctx.agents.create({sessionId:session.SessionId('nested-owner-session'),agentOptions:{ provider: 'nested-mock', model: 'mock' },meta:{ cwd }})).agent
-    local = scope.createScope(ctx, agent); agent.ctx = local.ctx
+    assert.equal(scope.scopeOf(agent.ctx), agent)
     const off = ctx.on('agent/error', (event: any) => errors.push(String(event.error?.stack ?? event.error)))
     try {
       agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: `Verify the marker in the exact file ${target}. Read that file only; do not modify files.\nread paths: ${cwd}\n完了条件: report the marker from this file.` }], source: { kind: 'user' } }))

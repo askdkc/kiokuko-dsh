@@ -338,7 +338,7 @@ test(`real DSH agent loop: persisted resume, verification retry, completion (${f
   }) : undefined
   try {
     liveAgent = (await ctx.agents.create({sessionId:session.SessionId('real-loop-session'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: fixtureRoot }})).agent
-    liveScope = scope.createScope(ctx, liveAgent); liveAgent.ctx = liveScope.ctx;
+    assert.equal(scope.scopeOf(liveAgent.ctx), liveAgent)
     const signal = new AbortController().signal
     const nativeSkillSnapshot = await ctx.skills.snapshot({ scope: liveAgent, cwd: fixtureRoot, signal })
     const nativeToolSnapshot = await ctx.tools.schemas(liveAgent)

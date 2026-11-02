@@ -13,6 +13,11 @@ import { composeModules } from './compose-modules.mjs'
 const exec = promisify(execFile), root = resolve(import.meta.dirname, '..')
 const selected = selectedDshRuntime(root)
 const nativeRoot = selected.packageRoot
+await access(join(nativeRoot, '@deepseek-ai/dsh-agent/lib/index.js'))
+await access(join(root, 'dist/dsh/harness/index.js'))
+// Standalone core-module compositions and the optional historical baseline are
+// explicit upstream-host compatibility cases. The current full package below
+// uses its own packaged Kiokuko factory instead.
 await access(join(nativeRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-module-pack-'))
 const env = { ...selected.environment, npm_config_cache: join(work, 'cache') }

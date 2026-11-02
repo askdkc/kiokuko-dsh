@@ -6,7 +6,7 @@ import { createDshAgenticReplayHost } from '../../../src/dsh/agenticreplay-host.
 import { agenticReplayFixture, chunks, collect, request, response } from '../helpers/agenticreplay-fixture.js'
 
 type Listener = (...args: any[]) => any
-const observerNames = ['agent/pre-step', 'agent/session-start', 'session/disposed', 'llm/stream',
+const observerNames = ['agent/pre-step', 'agent/session-start', 'session/disposed', 'session/event', 'llm/stream',
   'agent/error', 'tools/pre-execute', 'tools/execute', 'tools/result'].sort()
 
 async function verifyRecordingScope(profile: string | undefined, scoped: boolean, askOnStart: boolean) {

@@ -39,6 +39,8 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
   await writeFile(join(root, 'src/facts.md'), '根拠となるデータ\n第二行\n')
   const databasePath = join(root, 'state.sqlite3')
   const ctx = new cordis.Context()
+  const nativeErrors:string[]=[]
+  ctx.on('agent/error',(event:any)=>nativeErrors.push(String(event.error?.stack??event.error)),{global:true})
   const fibers: any[] = []
   for (const [plugin, config] of [[llm.default], [session.default], [projection.default], [systemPrompt.default, { persona: '' }],
     [workingDirectory.default, { defaultDirectory: root }], [fsLocal.default, { cwd: root }], [tools.default], [agents.default], [skills.default], [loop.default, { agents: [] }]]) {
@@ -85,7 +87,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
 
   try {
     const agent = (await ctx.agents.create({sessionId:session.SessionId('execution-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
-    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
+    assert.equal(scope.scopeOf(agent.ctx), agent, 'The replacement harness owns its dependency context')
     const snapshots = () => adapter.host.runtime!.withDatabase(db => Object.fromEntries([
       'ledger_runs', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states',
     ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['title', 'metadata_json'].includes(key))))])))
@@ -94,6 +96,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       const deadline = Date.now() + 12_000
       while (Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 20))
+        if(nativeErrors.length)throw new Error('Native continuity failure: '+JSON.stringify(nativeErrors))
         if (target.status === 'idle' && await ready()) return
       }
       throw new Error('Native execution path timed out: ' + JSON.stringify({ state: await snapshots(),
@@ -117,7 +120,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = (await ctx.agents.create({sessionId:session.SessionId('other-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
-    otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx
+    assert.equal(scope.scopeOf(other.ctx), other)
     await settle(other, 'こんにちは', () => model.requests.length === 9)
     expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')
@@ -154,7 +157,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       assert.match(lastRequest, /Current request presentation is unknown/)
       const observations = adapter.host.efficiency!.snapshot().continuity
       assert.ok(observations.length > 0)
-      assert.ok(observations.every((value: any) => value.bytes <= 4096 && value.copiesInRequest === 1))
+      assert.ok(observations.every((value: any) => value.bytes <= 4096 && value.copiesInRequest === 1), JSON.stringify(observations))
     } else assert.doesNotMatch(lastRequest, /Continuity \(host projection/)
 
     const evidence = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT evidence_json AS json FROM dsh_execution_evidence').all<{ json: string }>())

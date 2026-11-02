@@ -104,7 +104,7 @@ test('native-enabled verification does not import the native planner for indepen
  assert.equal(report.checks[1].status,'scope-excluded');assert.equal(report.completionReady,true);
 });
 test('required DSH fixture failures are recorded without running the native check',()=>{
- for(const capabilityKey of ['requires','testCapabilities'])for(const state of ['missing','invalid','stale','lock-mismatch','agent-loop-missing']){
+ for(const capabilityKey of ['requires','testCapabilities'])for(const state of ['missing','invalid','stale','lock-mismatch','agent-registry-missing']){
   const root=nativeFixture([{...check,id:'independent',argv:['node','--eval',''],result:'command'},
    {...check,argv:['node','must-not-run.mjs'],result:'command',[capabilityKey]:['dsh-native']}]);
   if(state!=='missing'){
@@ -118,10 +118,10 @@ test('required DSH fixture failures are recorded without running the native chec
   assert.equal(child.status,1,child.stderr);assert.equal(report.checks[0].status,'passed');
   assert.equal(report.checks[1].status,'prerequisite-missing',state);
   assert.deepEqual(report.checks[1][capabilityKey==='requires'?'missing':'missingTestCapabilities'],['dsh-native']);
-  assert.match(report.checks[1].reason,/dsh-native.*(?:fixture|agent-loop)/i);
+  assert.match(report.checks[1].reason,/dsh-native.*(?:fixture|agent)/i);
   if(state==='stale')assert.match(report.checks[1].reason,/node_modules is stale.*npm ci --prefix/);
   if(state==='lock-mismatch')assert.match(report.checks[1].reason,/declaration\/lock mismatch.*Reconcile/);
-  if(state==='agent-loop-missing')assert.match(report.checks[1].reason,/agent-loop/);
+  if(state==='agent-registry-missing')assert.match(report.checks[1].reason,/agent/);
   assert.equal(report.completionReady,false);assert.equal(existsSync(path.join(root,'executed')),false);
  }
 });
@@ -129,8 +129,8 @@ test('required native checks retain the selected fixture environment and CLI pat
  for(const capabilityKey of ['requires','testCapabilities']){
   const root=nativeFixture(['first','second'].map(id=>({...check,id,argv:['node','assert-native.mjs'],result:'command',[capabilityKey]:['dsh-native']})));
   const packageRoot=selectedNativeMetadata(root);
-  mkdirSync(path.join(packageRoot,'@deepseek-ai/dsh-agent-loop/lib'),{recursive:true});
-  writeFileSync(path.join(packageRoot,'@deepseek-ai/dsh-agent-loop/lib/index.js'),'// capability presence only\n');
+  mkdirSync(path.join(packageRoot,'@deepseek-ai/dsh-agent/lib'),{recursive:true});
+  writeFileSync(path.join(packageRoot,'@deepseek-ai/dsh-agent/lib/index.js'),'// capability presence only\n');
   writeFileSync(path.join(root,'assert-native.mjs'),`import assert from 'node:assert/strict';import path from 'node:path';
    const root=${JSON.stringify(packageRoot)};assert.equal(process.env.KIOKUKO_DSH_PACKAGE_ROOT,root);
    assert.equal(process.env.KIOKUKO_EXPECTED_DSH_VERSION,'test-fixture');

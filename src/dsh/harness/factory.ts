@@ -3,10 +3,10 @@ import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type Ag
   type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { AssistantStreamAccumulator, BlockAssembler, LlmError, markAgentLoopRequest, createAssistantMessage, createSystemMessage, createUserMessage,
-  createToolResultMessage, type UserMessage, type LlmCallConfig, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
+  createToolResultMessage, type UserMessage, type ContextFormed, type LlmCallConfig, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, interruptedTurnClosers, ToolCallRecovery, type Session, type SessionEvent,
   type TurnEndReason, type SessionSeq } from '@deepseek-ai/dsh-session'
-import { renderPrompt, renderContextSnapshot } from '@deepseek-ai/dsh-system-prompt'
+import { renderPrompt, renderContextSections, joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { KiokukoInbox } from './inbox.js'
 import { KiokukoHarnessLifecycle } from './lifecycle.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
@@ -17,7 +17,7 @@ import {withoutInheritedTaskAuthority} from '../task-authority-context.js'
 declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap { 'plugin:kiokuko-dsh/harness-action': { action:string; phase:string; turn:number; step:number; parentSession?:string; callId?:string } }
 }
-declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'plugin:kiokuko-dsh': {kind:typeof KIOKUKO_DSH_SOURCE_KIND;form:'instructions'|'snapshot';sections?:readonly {name:string;text:string}[]} } }
+declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'runtime-context': {kind:'runtime-context'} & ContextFormed; 'plugin:kiokuko-dsh': {kind:typeof KIOKUKO_DSH_SOURCE_KIND;form:'instructions'|'snapshot';sections?:readonly {name:string;text:string}[]} } }
 export interface HarnessOptions extends AgentOptions { maxSteps?: number }
 type PersistenceHandle = { header: any; inheritedEventCount: any; read(from:number,to?:number,options?:unknown):Promise<{events:SessionEvent[];eventState:any}>;
   append(events:readonly SessionEvent[]):Promise<void>;close():Promise<void> }
@@ -144,7 +144,10 @@ export class KiokukoHarnessAgent implements Agent {
             modelSelection=selectedModel
             const assemblyContext={...assembleContextFor(this,signal),modelSelection}
             assembly=prompt?await prompt.assemble(assemblyContext):undefined
-            const internal=await this.lifecycle.preStep(payload)
+            const sections=assembly?renderContextSections(assembly):[]
+            const context=joinContextSections(sections)
+            const admittedPayload=context?{...payload,messages:[...payload.messages,createUserMessage({content:[{type:'text',text:context}],source:{kind:'runtime-context',form:'snapshot',sections}})]}:payload
+            const internal=await this.lifecycle.preStep(admittedPayload)
             decision=internal
             if(internal.kind==='enter') {
               const stepPayload={...payload,messages:internal.messages,modelSelection}
@@ -199,7 +202,8 @@ export class KiokukoHarnessAgent implements Agent {
     if(this.systemText!==text){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage(text)},
       this.systemSeq!==undefined?{surfaceOp:{op:'replace',startSeq:this.systemSeq,endSeq:this.systemSeq},sourceEventSeqs:[this.systemSeq]}:{surfaceOp:'append'})
       this.systemSeq=event.seq;this.systemText=text}
-    if(assembly){const context=renderContextSnapshot(assembly);if(context)this.session.append('user/message',createUserMessage({content:[{type:'text',text:context}],source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'instructions'}}),{surfaceOp:'append'})}
+    // Admission already owns the assembled snapshot, including any host updates.
+    // Appending the pre-admission assembly again would duplicate continuity.
     await this.ctx.sessions.flush(this.session)
     const assembler=new BlockAssembler(),accumulator=new AssistantStreamAccumulator(),revision=++this.streamRevision
     const attemptId=`kiokuko:${this.id}:${this.turn}:${this.step}:${revision}` as any

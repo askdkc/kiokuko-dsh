@@ -99,7 +99,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     }
     assert.ok(!Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@agenticreplay/')),
       'libraries are resolved from the published distribution, not independently installed')
-  
+
     const patch = YAML.parse(await readFile(patchPath, 'utf8')) as Array<{
       id?: string
       disabled?: boolean
@@ -129,7 +129,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     const bundledConfig = executionRow?.config
     assert.equal(bundledConfig?.agenticReplay?.enabled, true)
     assert.equal(Config.parse(bundledConfig).agenticReplay.storage, 'project')
-  
+
     const builtEntry = join(fixtureRoot, 'dist/dsh/index.js')
     // Exercise the public hook and reject a successful no-op using stale dist.
     await rm(builtEntry, { force: true })
@@ -137,7 +137,7 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     await access(builtEntry)
     assert.equal(plugin.name, 'kiokuko-dsh')
     assert.equal('default' in plugin, false)
-  
+
     const packageOutput = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
     const npmCache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-npm-cache-'))
     try {

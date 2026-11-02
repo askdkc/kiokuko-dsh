@@ -180,7 +180,7 @@ export async function runPrototypeEvaluation({ config, output, packages, request
   const selected = selectedDshRuntime(root, { ...process.env, ...(packages ? { KIOKUKO_DSH_PACKAGE_ROOT: packages } : {}) })
   packages = selected.packageRoot
   if (config) config = parseEvaluationConfig(config)
-  await access(join(packages, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
+  await access(join(packages, '@deepseek-ai/dsh-agent/lib/index.js')) // Kiokuko owns the driver; DSH supplies the agent registry.
   if (config && !process.env[config.apiKeyEnv]) throw new Error('evaluation_credential_unavailable')
   const source = await loadSkillSources(), baselineText = await readFile(join(root, 'tests/fixtures/lisp-prototype-planning/before.json'), 'utf8'), baseline = JSON.parse(baselineText)
   for (const item of baseline.resources) assert.equal(digest(item.content), item.sha256, 'frozen baseline identity')

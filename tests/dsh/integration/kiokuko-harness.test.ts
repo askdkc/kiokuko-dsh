@@ -6,6 +6,7 @@ import { Context } from '@deepseek-ai/cordis'
 import Agents from '@deepseek-ai/dsh-agent'
 import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
 import Projections from '@deepseek-ai/dsh-session-projection'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Llm, { LlmAdapter, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { KiokukoAgentFactory } from '../../../src/dsh/harness/factory.js'
 import {currentTaskAuthority,withTaskAuthority} from '../../../src/dsh/task-authority-context.js'
@@ -329,6 +330,26 @@ for(const interrupted of [false,true])test(`assembled replay state survives ${in
     const event=handle.agent.session.snapshotEvents().find(e=>e.type==='assistant/message') as any
     assert.deepEqual(event.data.message.source.replayState,replay)
     assert.equal(event.data.interrupted===true,interrupted)
+    await handle.dispose()
+  }finally{await f.close()}
+})
+
+test('admission receives assembled context and commits the host-updated snapshot once',async()=>{
+  const f=await fixture();let admitted=0
+  try{
+    await f.ctx.plugin(SystemPrompt,{persona:''})
+    f.ctx.systemPrompt.context({name:'fixture:frame',order:1,text:'CURRENT_FRAME'})
+    f.factory.lifecycle.onStep(async(event,next)=>{
+      const result=await next(),contexts=result.kind==='enter'?result.messages.filter(m=>m.source.kind==='runtime-context'):[]
+      admitted=contexts.length
+      if(result.kind!=='enter'||contexts.length)return result
+      return {...result,messages:[...result.messages,createUserMessage({content:[{type:'text',text:'CURRENT_FRAME'}],source:{kind:'runtime-context',form:'snapshot',sections:[{name:'fixture:frame',text:'CURRENT_FRAME'}]} as any})]}
+    })
+    const handle=await f.ctx.agents.create({sessionId:SessionId('runtime-context-admission')})
+    handle.agent.followup(createUserMessage({content:[{type:'text',text:'Inspect the current frame'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+    assert.equal(admitted,1,'Host admission must receive the same assembled runtime-context contract as a native request')
+    const request=f.requests[0] as any
+    assert.equal(request.messages.filter((m:any)=>m.content?.some((b:any)=>b.text?.includes('CURRENT_FRAME'))).length,1,'The host-updated frame is committed once')
     await handle.dispose()
   }finally{await f.close()}
 })

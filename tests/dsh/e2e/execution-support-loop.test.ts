@@ -102,7 +102,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
 
   try {
     const agent = (await ctx.agents.create({sessionId:session.SessionId('execution-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
-    agentScope = scope.createScope(ctx, agent); agent.ctx = agentScope.ctx
+    assert.equal(scope.scopeOf(agent.ctx), agent)
     const snapshots = () => adapter.host.runtime!.withDatabase(db => Object.fromEntries([
       'ledger_runs', 'dsh_turn_receipts', 'dsh_boundary_jobs', 'dsh_exploration_states',
     ].map(table => [table, db.prepare(`SELECT * FROM ${table}`).all().map((row: any) => Object.fromEntries(Object.entries(row).filter(([key]) => !['title', 'metadata_json'].includes(key))))])))
@@ -136,7 +136,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     const running = await adapter.host.runtime!.withDatabase(db => db.prepare("SELECT run_id AS id FROM ledger_runs WHERE status = 'active' AND dsh_session_id = 'execution-session'").get<{ id: string }>())
     assert.ok(running)
     const other = (await ctx.agents.create({sessionId:session.SessionId('other-session'),agentOptions:{ provider: 'execution-mock', model: 'mock' },meta:{ cwd: root }})).agent
-    otherScope = scope.createScope(ctx, other); other.ctx = otherScope.ctx
+    assert.equal(scope.scopeOf(other.ctx), other)
     await settle(other, 'こんにちは', () => model.requests.length === pausedRequests + 1)
     expectedQuestions.push({ id: 'kioku-agenticreplay-recording', agentId: other.id })
     assert.deepEqual(questions, expectedQuestions, 'each session asks once, without task clarification or approval')

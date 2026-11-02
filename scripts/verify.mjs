@@ -103,9 +103,9 @@ async function missingCapabilities(check, record) {
     if(capability==='sqlite-vec'){try{require.resolve('sqlite-vec');}catch{missing.push(capability);}continue;}
     if(capability==='dsh-native'){
       const failure=contract.native?await prepareNativeEnvironment():null;
-      if(failure||!existsSync(path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT??'','@deepseek-ai/dsh-agent-loop/lib/index.js'))){
+      if(failure||!existsSync(path.join(baseEnv.KIOKUKO_DSH_PACKAGE_ROOT??'','@deepseek-ai/dsh-agent/lib/index.js'))){
         missing.push(capability);
-        record.reason=failure??'dsh-native fixture is missing @deepseek-ai/dsh-agent-loop/lib/index.js';
+        record.reason=failure??'dsh-native fixture is missing @deepseek-ai/dsh-agent/lib/index.js';
       }
       continue;
     }
