@@ -112,10 +112,6 @@ Node/ABI or native dependency is reused across platforms.
 Import-only convenience entrypoints remain usable explicitly. Recursive discovery
 excludes these aliases and executes each declared leaf exactly once:
 
-- `tests/dsh/integration/capability.test.ts`: `tests/dsh/integration/akinator-gate.test.ts`, `tests/dsh/integration/pre-step/gate.test.ts`, `tests/dsh/unit/capability-catalog.test.ts`.
-- `tests/dsh/integration/close-resume.test.ts`: `tests/dsh/integration/run-close.test.ts`, `tests/dsh/integration/run-resume.test.ts`, `tests/dsh/integration/run-resume/exact-route.test.ts`.
-- `tests/dsh/integration/enno-turn-stopping.test.ts`: `tests/dsh/integration/turn-stopping-gate.test.ts`, `tests/dsh/integration/enno-role-loop.test.ts`.
-- `tests/dsh/integration/provider.test.ts`: `tests/dsh/integration/skill-provider.test.ts`.
 
 ## Explicit optional lanes
 
@@ -143,3 +139,5 @@ Native Lisp integration requires `protected-python3`: a real sandbox subprocess
 probe. An Apple launcher that only reports its version outside the sandbox does
 not satisfy this capability. Local/CI environment preparation must select a real
 installed Python interpreter; the repository never changes the global PATH.
+
+`full` runs unit/integration/e2e through the existing CI ownership split when the protected Lisp lane is required. Lisp and explicitly owned package/Skill cases run in their dedicated checks once. Standalone `main` remains complete. The import-only aliases and manual duplicate suite launchers have been removed; use the canonical check plan.

@@ -16,9 +16,9 @@ export class KiokukoHarnessLifecycle {
   onStep(fn: (event: HarnessStep, next: () => Promise<PreStepDecision>) => Promise<PreStepDecision>) { return this.add(this.steps,fn) }
   onStopping(fn: (event: Omit<HarnessStep,'messages'|'step'>) => Promise<void> | void) { return this.add(this.stopping,fn) }
   onIdle(fn: (agent: Agent) => void) { return this.add(this.idle,fn) }
-  preStep(event: HarnessStep): Promise<PreStepDecision> {
+  preStep(event: HarnessStep, admit: () => Promise<PreStepDecision> = () => Promise.resolve({kind:'enter',messages:event.messages})): Promise<PreStepDecision> {
     let i=0
-    const next = (): Promise<PreStepDecision> => this.steps[i++]?.(event,next) ?? Promise.resolve({kind:'enter',messages:event.messages})
+    const next = (): Promise<PreStepDecision> => this.steps[i++]?.(event,next) ?? admit()
     return next()
   }
   async turnStopping(event: Omit<HarnessStep,'messages'|'step'>) { for(const fn of [...this.stopping])await fn(event) }

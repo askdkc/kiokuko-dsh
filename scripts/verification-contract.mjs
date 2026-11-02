@@ -28,7 +28,10 @@ export function verificationPlan(contract, profile='full', platform=process.plat
     for(const dep of check.dependsOn??[])if(!ids.has(dep))throw new Error(`Missing dependency ${dep}: ${check.id}`);
     if((check.platforms||check.optIn) && !check.exclusionReason)throw new Error(`Missing platform exclusion declaration: ${check.id}`);
   }
-  return {schema:'verification-plan-v1',package:contract.package,profile,platform,completeScope:profile==='full',checks:selected.map(c=>({...c,status:profile==='full'&&c.optIn?'scope-excluded':c.profileExclusions?.[profile]?.platforms.includes(platform)?'scope-excluded':c.platforms&&!c.platforms.includes(platform)?'platform-excluded':'required',exclusionReason:c.profileExclusions?.[profile]?.platforms.includes(platform)?c.profileExclusions[profile].reason:c.exclusionReason}))};
+  // Full includes the dedicated protected-Lisp owner. Reuse the existing CI
+  // partition there; main by itself keeps its complete standalone source scope.
+  const splitNative = profile==='full' && selected.some(c=>c.id==='lisp-native'&&!c.optIn&&(!c.platforms||c.platforms.includes(platform)));
+  return {schema:'verification-plan-v1',package:contract.package,profile,platform,completeScope:profile==='full',checks:selected.map(c=>({...c,argv:splitNative&&c.argv.length===3&&c.argv[0]==='node'&&c.argv[1]==='scripts/run-ci-native.mjs'&&['unit','integration','e2e'].includes(c.argv[2])?['node',c.argv[1],'ci-'+c.argv[2]]:c.argv,status:profile==='full'&&c.optIn?'scope-excluded':c.profileExclusions?.[profile]?.platforms.includes(platform)?'scope-excluded':c.platforms&&!c.platforms.includes(platform)?'platform-excluded':'required',exclusionReason:c.profileExclusions?.[profile]?.platforms.includes(platform)?c.profileExclusions[profile].reason:c.exclusionReason}))};
 }
 // CI partitions change scheduling only. Validate the entire ownership map before
 // selecting one lane, so a typo, duplicate or newly added unowned check fails closed.

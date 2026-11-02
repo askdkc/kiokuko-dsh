@@ -136,18 +136,25 @@ export class KiokukoHarnessAgent implements Agent {
           // step. Keep the durable inbox until admission or explicit handoff.
           for(const message of payload.messages)this.dispatch.emit('agent/inbox/claimed',{message,turn:this.turn})
           let assembly:any,decision:Awaited<ReturnType<KiokukoHarnessLifecycle['preStep']>>,modelSelection:Readonly<ModelSelection>
+          let toolSet:any
+          try {
           this.claimedInputs=payload.messages
           try {
             const prompt=this.ctx.get('systemPrompt',false) as any
             const selectedModel=this.model.current()
             if(!selectedModel)throw new Error(`agent "${this.id}" has no provider/model`)
             modelSelection=selectedModel
-            const assemblyContext={...assembleContextFor(this,signal),modelSelection}
+            const tools=this.ctx.get('tools',false) as any
+            toolSet=typeof tools?.resolve==='function'?await tools.resolve({agent:this,modelSelection,signal}):undefined
+            signal.throwIfAborted()
+            const assemblyContext={...assembleContextFor(this,signal),modelSelection,...(toolSet===undefined?{}:{toolSet})}
             assembly=prompt?await prompt.assemble(assemblyContext):undefined
             const sections=assembly?renderContextSections(assembly):[]
             const context=joinContextSections(sections)
-            const admittedPayload=context?{...payload,messages:[...payload.messages,createUserMessage({content:[{type:'text',text:context}],source:{kind:'runtime-context',form:'snapshot',sections}})]}:payload
-            const internal=await this.lifecycle.preStep(admittedPayload)
+            // Observers receive only claimed inbox input. The terminal admission
+            // adds generated context, matching the native pre-step contract.
+            const messages=context?[...payload.messages,createUserMessage({content:[{type:'text',text:context}],source:{kind:'runtime-context',form:'snapshot',sections}})]:payload.messages
+            const internal=await this.lifecycle.preStep(payload,async()=>({kind:'enter',messages}))
             decision=internal
             if(internal.kind==='enter') {
               const stepPayload={...payload,messages:internal.messages,modelSelection}
@@ -162,12 +169,13 @@ export class KiokukoHarnessAgent implements Agent {
             if(first&&!decision.messages.length)break
           } finally {this.claimedInputs=[]}
           first=false;this.session.append('step/start',{turn:this.turn,step:this.step})
-          try { again=await this.modelStep(decision.messages,signal,assembly,modelSelection) }
+          try { again=await this.modelStep(decision.messages,signal,assembly,modelSelection,toolSet) }
           finally { this.session.append('step/end',{turn:this.turn,step:this.step}) }
           if(!again&&!this.inbox.nextStep.length){await this.lifecycle.turnStopping({agent:this,turn:this.turn,signal});
             await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal});signal.throwIfAborted()}
           again=again||this.inbox.nextStep.length>0
           if(again&&this.step>=(this.options as HarnessOptions).maxSteps!){throw new Error('Kiokuko step budget reached; inspect the recorded work before continuing')}
+          } finally {toolSet?.dispose()}
         }
       } catch(error) {
         blocked=true // Retained input must not turn a preparation failure into a retry loop.
@@ -178,18 +186,18 @@ export class KiokukoHarnessAgent implements Agent {
       if(blocked||signal.aborted&&!this.wake)break
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
   }
-  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>):Promise<boolean> {
+  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<boolean> {
     if(this.systemSeq===undefined){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage('')},{surfaceOp:'append'});this.systemSeq=event.seq;this.systemText=''}
     // Accepted input must survive even provider/prompt preparation failure.
     for(const message of messages)this.session.append('user/message',message,{surfaceOp:'append'})
-    for(;;){try{return await this.requestAttempt(signal,assembly,modelSelection)}catch(error){
+    for(;;){try{return await this.requestAttempt(signal,assembly,modelSelection,toolSet)}catch(error){
       if(signal.aborted||!(error instanceof LlmError))throw error
       const recovery=await this.dispatch.waterfall('agent/request-error',{turn:this.turn,step:this.step,provider:this.attemptedProvider??'',failure:error.failure,retryPolicy:this.retryPolicy,signal},async()=>undefined)
       if(recovery?.kind!=='retry')throw error
       this.audit('model','retry')
     }}
   }
-  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>):Promise<boolean> {
+  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<boolean> {
     const proposed:LlmCallConfig={...modelSelection,...(this.options.maxTokens?{maxTokens:this.options.maxTokens}:{})}
     const config=await this.dispatch.waterfall('agent/request',{turn:this.turn,step:this.step,signal},async()=>proposed)
     this.attemptedProvider=config.provider;this.retryPolicy=undefined
@@ -225,7 +233,7 @@ export class KiokukoHarnessAgent implements Agent {
       this.audit('model','result')
       const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
       let concludesTurn=false
-      for(const call of calls)concludesTurn=await this.executeTool(call,signal,assembly?.toolSet)||concludesTurn
+      for(const call of calls)concludesTurn=await this.executeTool(call,signal,toolSet)||concludesTurn
       return calls.length>0&&!concludesTurn
     } catch(error) {
       if(!settled){const content=assembler.interruptedBlocks(),stream=[...accumulator.snapshot()]
@@ -236,9 +244,13 @@ export class KiokukoHarnessAgent implements Agent {
   }
   private async executeTool(call:ToolCallBlock,signal:AbortSignal,toolSet?:unknown) {
     const recovery=new ToolCallRecovery();const off=this.ctx.on('session/event',(session:Session,event:SessionEvent)=>{if(session===this.session)recovery.observe(event)})
-    const record=(result:any)=>this.session.append('tool/result',{turn:this.turn,step:this.step,message:createToolResultMessage({callId:call.id,content:result.content??[],isError:result.isError===true})},{surfaceOp:'append'})
+    let callSeq!:SessionSeq
+    const record=(result:any)=>this.session.append('tool/result',{turn:this.turn,step:this.step,
+      message:createToolResultMessage({callId:call.id,content:result.content??[],isError:result.isError===true}),
+      ...(result.error?.info?{error:result.error.info}:{}),...(result.meta===undefined?{}:{meta:result.meta})
+    },{surfaceOp:'append',sourceEventSeqs:[callSeq]})
     try {
-      this.session.append('tool/call',{turn:this.turn,step:this.step,callId:call.id,name:call.name,arguments:call.arguments})
+      callSeq=this.session.append('tool/call',{turn:this.turn,step:this.step,callId:call.id,name:call.name,arguments:call.arguments}).seq
       this.audit('tool','start',call.id);await this.ctx.sessions.flush(this.session)
       const tools=this.ctx.get('tools',false) as any
       if(!tools)throw new Error('Tool runtime unavailable')

@@ -485,3 +485,14 @@ test('prepare reproducibility installs its build dependencies even under NODE_EN
 import './code-intelligence-host.test.mjs';
 
 import './prepare-build.test.mjs';
+
+test('full verification uses the existing CI ownership split instead of running Lisp source tests twice',()=>{
+ const declaration=JSON.parse(readFileSync(new URL('verification.json',import.meta.url),'utf8'));
+ const full=verificationPlan(declaration,'full','darwin');
+ for(const suite of ['unit','integration','e2e']) {
+  assert.deepEqual(full.checks.find(c=>c.id==='native-'+suite).argv,['node','scripts/run-ci-native.mjs','ci-'+suite]);
+  assert.deepEqual(verificationPlan(declaration,'main','darwin').checks.find(c=>c.id==='native-'+suite).argv,['node','scripts/run-ci-native.mjs',suite],'main alone must still cover Lisp');
+ }
+ assert.equal(full.checks.find(c=>c.id==='lisp-native').status,'required');
+ for(const id of ['owned-native','modules','skill-delivery'])assert.equal(full.checks.find(c=>c.id===id).status,'required');
+});

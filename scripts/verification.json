@@ -968,48 +968,7 @@
       "reason": "The old --offline invocation read no model manifest; DSH ships no preset manifest. Explicit --model-dir checksum/inference remains available."
     }
   ],
-  "testAliases": [
-    {
-      "file": "tests/dsh/integration/capability.test.ts",
-      "coveredFiles": [
-        "tests/dsh/integration/akinator-gate.test.ts",
-        "tests/dsh/integration/pre-step/gate.test.ts",
-        "tests/dsh/unit/capability-catalog.test.ts"
-      ],
-      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
-    },
-    {
-      "file": "tests/dsh/integration/close-resume.test.ts",
-      "coveredFiles": [
-        "tests/dsh/integration/run-close.test.ts",
-        "tests/dsh/integration/run-resume.test.ts",
-        "tests/dsh/integration/run-resume/exact-route.test.ts"
-      ],
-      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
-    },
-    {
-      "file": "tests/dsh/integration/enno-turn-stopping.test.ts",
-      "coveredFiles": [
-        "tests/dsh/integration/turn-stopping-gate.test.ts",
-        "tests/dsh/integration/enno-role-loop.test.ts"
-      ],
-      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
-    },
-    {
-      "file": "tests/dsh/integration/provider.test.ts",
-      "coveredFiles": [
-        "tests/dsh/integration/skill-provider.test.ts"
-      ],
-      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
-    },
-    {
-      "file": "tests/dsh/integration/pre-step.test.ts",
-      "coveredFiles": [
-        "tests/dsh/integration/pre-step/gate.test.ts"
-      ],
-      "reason": "Import-only convenience alias; recursive discovery executes the actual leaf once."
-    }
-  ],
+  "testAliases": [],
   "capabilities": {
     "protected-python3": {
       "environment": "KIOKUKO_PYTHON_BIN",

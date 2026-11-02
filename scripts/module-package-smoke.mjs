@@ -223,7 +223,7 @@ try {
     return result.value
   }
   intentReady=true
-  const coding = await ctx.agentLoop.create(session.SessionId('packed-coding'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const coding = (await ctx.agents.create({ sessionId: session.SessionId('packed-coding'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory } })).agent
   const command = 'node --test --test-reporter=tap module-entry.test.mjs'
   const criterion = id => ({criterionId:id,revision:1,outcome:'Public entry returns 42',procedure:'Run actual public entry assertions',expected:'All selected assertions pass',evidence:'selected_tests'})
   provider.script.push(prepare('coding-prepare','change','implementation'),request=>{const result=nativeResult(request,'coding-prepare');assert.equal(result?.isError,false,JSON.stringify(result));assert.equal(JSON.parse(result.content[0].text).prepared,true,JSON.stringify(result));return call('coding-status','coding_workflow',{action:'status'})},()=>call('coding-propose','coding_workflow',{action:'propose',expectedRevision:checkedToolValue('coding-status').revision,definition:{
@@ -245,7 +245,7 @@ try {
     assert.equal((await exec(process.execPath,['module-entry.mjs','41'],{cwd:directory})).stdout.trim(),'42')
   }
   // Start with a web demand against the installed package, without a prepare call.
-  const webParent = await ctx.agentLoop.create(session.SessionId('packed-web-first'), { provider: 'fixture', model: 'fixture' }, { cwd: directory })
+  const webParent = (await ctx.agents.create({ sessionId: session.SessionId('packed-web-first'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory } })).agent
   const webBodies = []
   const releaseWeb = ctx.tools.register({ name: 'web_search', description: 'Harmless web search fixture.', parameters: { queries: { type: 'array', items: { type: 'string' }, required: true } }, output: { schema: {}, render: () => [] }, execute(args, execution) {
     assert.equal(execution.agent, webParent)

@@ -206,13 +206,14 @@ test('injected context parks until wake and child handles keep independent ident
 
 
 for(const protocol of ['single','batch'] as const)test(`${protocol==='batch'?'current batch':'legacy single'} tool API settles one call without replay`,async()=>{
- const f=await fixture();let handle:any,executions=0;const received:any[]=[]
+ const f=await fixture();let handle:any,executions=0;const received:any[]=[],resolved:any[]=[],disposed=new Set<any>()
  try{
   await f.ctx.plugin({name:'tool-contract-fixture',apply(ctx:Context){ctx.provide('tools',{
-   ...(protocol==='batch'?{setExecutor(){}}:{}),
+   ...(protocol==='batch'?{setExecutor(){},async resolve(input:any){assert.equal(input.agent.session.id,'harness-batch');const token={dispose(){disposed.add(token)}};resolved.push(token);return token}}:{}),
    async execute(input:any){received.push(input);const call=protocol==='batch'?input.calls[0]:input
+    if(protocol==='batch'){assert.equal(input.toolSet,resolved[0],'Dispatch must use this step’s admitted native tool set');assert.equal(disposed.has(input.toolSet),false)}
     assert.equal(call.name,'fixture_call');executions++
-    const result={isError:false,content:[{type:'text',text:'effect confirmed'}]}
+    const result={isError:false,content:[{type:'text',text:'effect confirmed'}],meta:{fixture:'retained-native-result'}}
     return protocol==='batch'?{results:[{callId:call.id,result}],additionalContexts:[],concluded:false}:result
    }
   } as any)}})
@@ -226,8 +227,11 @@ for(const protocol of ['single','batch'] as const)test(`${protocol==='batch'?'cu
   handle.agent.followup(createUserMessage({content:[{type:'text',text:'Run the fixture once'}],source:{kind:'user'}}));await handle.agent.whenIdle()
   const events=handle.agent.session.snapshotEvents()
   assert.equal(executions,1);assert.equal(received.length,1)
+  if(protocol==='batch'){assert.equal(resolved.length,2);assert.equal(disposed.size,2,'Every admitted step releases its exact tool set')}
   assert.equal(events.filter((e:any)=>e.type==='tool/call').length,1)
   const results=events.filter((e:any)=>e.type==='tool/result');assert.equal(results.length,1);assert.equal(results[0].data.message.isError,false)
+  assert.deepEqual(results[0].sourceEventSeqs,[events.find((event:any)=>event.type==='tool/call')!.seq],'The result keeps its exact originating call')
+  assert.deepEqual(results[0].data.meta,{fixture:'retained-native-result'},'Host result metadata is preserved')
  }finally{await handle?.dispose();await f.close()}
 })
 
@@ -335,11 +339,12 @@ for(const interrupted of [false,true])test(`assembled replay state survives ${in
 })
 
 test('admission receives assembled context and commits the host-updated snapshot once',async()=>{
-  const f=await fixture();let admitted=0
+  const f=await fixture();let admitted=0,pendingKinds:string[]=[]
   try{
-    await f.ctx.plugin(SystemPrompt,{persona:''})
+    await f.ctx.plugin(SystemPrompt)
     f.ctx.systemPrompt.context({name:'fixture:frame',order:1,text:'CURRENT_FRAME'})
     f.factory.lifecycle.onStep(async(event,next)=>{
+      pendingKinds=event.messages.map(message=>message.source.kind)
       const result=await next(),contexts=result.kind==='enter'?result.messages.filter(m=>m.source.kind==='runtime-context'):[]
       admitted=contexts.length
       if(result.kind!=='enter'||contexts.length)return result
@@ -347,9 +352,23 @@ test('admission receives assembled context and commits the host-updated snapshot
     })
     const handle=await f.ctx.agents.create({sessionId:SessionId('runtime-context-admission')})
     handle.agent.followup(createUserMessage({content:[{type:'text',text:'Inspect the current frame'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+    assert.deepEqual(pendingKinds,['user'],'Generated runtime context is admission output, never pending input')
     assert.equal(admitted,1,'Host admission must receive the same assembled runtime-context contract as a native request')
     const request=f.requests[0] as any
     assert.equal(request.messages.filter((m:any)=>m.content?.some((b:any)=>b.text?.includes('CURRENT_FRAME'))).length,1,'The host-updated frame is committed once')
     await handle.dispose()
   }finally{await f.close()}
+})
+
+for(const outcome of ['reject','provider-error'] as const)test(`native step tool set is released after ${outcome}`,async()=>{
+ const f=await fixture();let handle:any,resolved=0,disposed=0
+ try{
+  await f.ctx.plugin({name:'tool-set-cleanup',apply(ctx:Context){ctx.provide('tools',{async resolve(){resolved++;return{dispose(){disposed++}}}} as any)}})
+  if(outcome==='reject')f.factory.lifecycle.onStep(async()=>({kind:'reject'}))
+  else f.ctx.on('llm/stream',async function*(){throw new Error('Fixture provider failed')})
+  handle=await f.ctx.agents.create({sessionId:SessionId('tool-set-'+outcome)})
+  handle.agent.followup(createUserMessage({content:[{type:'text',text:'Inspect this step'}],source:{kind:'user'}}));await handle.agent.whenIdle()
+  assert.equal(resolved,1);assert.equal(disposed,1)
+  assert.equal(handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='turn/end').at(-1).data.reason.kind,outcome==='reject'?'blocked':'error')
+ }finally{await handle?.dispose();await f.close()}
 })
