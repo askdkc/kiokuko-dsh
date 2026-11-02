@@ -74,10 +74,6 @@
       "types": "./dist/dsh/harness/index.d.ts",
       "default": "./dist/dsh/harness/index.js"
     },
-    "./modules/enno": {
-      "types": "./dist/dsh/modules/enno.d.ts",
-      "default": "./dist/dsh/modules/enno.js"
-    },
     "./modules/lisp": {
       "types": "./dist/dsh/modules/lisp.d.ts",
       "default": "./dist/dsh/modules/lisp.js"
@@ -198,7 +194,6 @@
     "test:benchmark": "npm run build && node scripts/run-retrieval-benchmark.mjs",
     "test:benchmark:dsh-log": "npm run build && node scripts/run-dsh-million-event-benchmark.mjs",
     "test:efficiency": "node --import tsx scripts/run-token-efficiency-evaluation.mjs",
-    "test:e2e:dsh": "npm run build && node scripts/run-enno-dsh-e2e.mjs",
     "test:cli-profile": "node scripts/verify-cli-profile.mjs",
     "verify:prepare": "node scripts/verify-prepare-reproducibility.mjs",
     "sampledb:generate": "node --import tsx tests/fixtures/sample-database.ts tests/sampledb/kiokuko-dsh.sqlite3",
@@ -218,9 +213,6 @@
     "test:benchmark:akinator": "npm run build && node scripts/run-akinator-memory-benchmark.mjs",
     "test:continuity": "node scripts/run-tests.mjs tests/dsh/unit/continuity tests/dsh/integration/continuity",
     "test:evaluation:continuity": "node --import tsx scripts/run-continuity-evaluation.mjs",
-    "test:enno-memory": "node scripts/run-tests.mjs tests/dsh/unit/enno-memory tests/dsh/integration/enno-memory",
-    "test:benchmark:enno-memory": "node --import tsx scripts/run-enno-memory-benchmark.ts",
-    "test:evaluation:enno-memory": "node scripts/run-enno-memory-evaluation.mjs",
     "verify:lisp:vendor": "node scripts/verify-lisp-vendor.mjs",
     "test:packages:live": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 KIOKUKO_PACKAGE_LIVE=1 node scripts/run-tests.mjs tests/dsh/integration/lisp/packages-live.test.ts",
     "test:packages": "KIOKUKO_REQUIRE_LISP_RUNTIME=1 node scripts/run-tests.mjs tests/dsh/unit/lisp/packages.test.ts tests/dsh/integration/lisp/packages-runtime.test.ts tests/dsh/integration/lisp/packages-update.test.ts",
@@ -259,9 +251,6 @@
     "test:ci:e2e:repeated": "node scripts/run-ci-native.mjs e2e-repeated",
     "test:ci:repeated:deep": "node scripts/run-ci-native.mjs e2e-repeated-deep",
     "test:ci:repeated:normal": "node scripts/run-ci-native.mjs e2e-repeated-normal",
-    "test:ci:repeated:enno": "node scripts/run-ci-native.mjs e2e-repeated-enno",
-    "test:ci:repeated:enno:prefix": "node scripts/run-ci-native.mjs e2e-repeated-enno-prefix",
-    "test:ci:repeated:enno:bounded": "node scripts/run-ci-native.mjs e2e-repeated-enno-bounded",
     "test:ci:lisp": "node scripts/run-ci-native.mjs lisp",
     "test:ci:prepare": "npm run verify:prepare",
     "test:ci:embedding": "node scripts/run-local-embedding-smoke.mjs --offline",

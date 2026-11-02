@@ -1,13 +1,6 @@
 import * as z from 'zod/v4';
 import { memoryCheckpointInputSchema } from '../memory/checkpoint-contract.js';
 import { absoluteCwdSchema } from '../repository/cwd-schema.js';
-import {
-  finishSchema,
-  idealSubmissionSchema,
-  meditationSubmissionSchema,
-  planSubmissionSchema,
-  workReportSchema,
-} from '../enno-oduno/schemas.js';
 import { type ModelToolOperationName } from './names.js';
 export { MODEL_TOOL_OPERATION_NAMES, type ModelToolOperationName } from './names.js';
 
@@ -37,20 +30,8 @@ export interface ModelToolContract {
   readonly hostOwnedFields: readonly string[];
 }
 
-const commonIdentityFields = ['runId', 'workspace', 'orchestrationId', 'resumeToken', 'expectedRevision', 'idempotencyKey'] as const;
 
 export const MODEL_TOOL_CONTRACTS = [
-  { name: 'enno_plan_review', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: planSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest', 'recoveryAction', 'capabilities'] },
-  { name: 'enno_plan_submit', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: planSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest', 'recoveryAction', 'capabilities'] },
-  { name: 'enno_ideal_submit', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: idealSubmissionSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest'] },
-  { name: 'enno_work_report', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: workReportSchema, hostOwnedFields: [...commonIdentityFields, 'leaseToken', 'routeEpoch', 'workUnitId'] },
-  { name: 'enno_delegate', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: z.object({
-    ...workReportSchema.shape,
-    result: z.never().optional(),
-    instruction: z.string().trim().min(1).max(16_384),
-  }).omit({ result: true }).strict(), hostOwnedFields: [...commonIdentityFields, 'leaseToken', 'routeEpoch', 'workUnitId'] },
-  { name: 'enno_finish', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: finishSchema, hostOwnedFields: [...commonIdentityFields, 'advisoryRoundDigest'] },
-  { name: 'enno_meditation_submit', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: meditationSubmissionSchema, hostOwnedFields: [...commonIdentityFields] },
   { name: 'curator_check', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: curatorCheckInputSchema, hostOwnedFields: ['cwd', 'workspace'] },
   { name: 'memory_checkpoint', owner: 'kiokuko-core', exposure: 'model-facing', inputSchema: memoryCheckpointInputSchema, hostOwnedFields: ['cwd', 'runId', 'deliveryId'] },
 ] as const satisfies readonly ModelToolContract[];

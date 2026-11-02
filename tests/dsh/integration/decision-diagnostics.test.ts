@@ -14,12 +14,11 @@ import { DshRunIntakeService } from '../../../src/dsh/run-intake-service.js'
 import { AkinatorMemoryConfig } from '../../../src/akinator/memory-probe-types.js'
 import { bindTaskRepository,transitionTask,transferTaskOwner,readTaskSnapshot } from '../../../src/dsh/task-state.js'
 import { createDiagnosticAttempt,appendDiagnosticEvent,diagnosticId,diagnosticEventId,captureDiagnosticBinding,readDecisionDiagnostics,
-  bestEffortDiagnostic,reviewDiagnosticStop,createIntakeDiagnosticSink,recordDiagnosticAdmission,recordDiagnosticTurn } from '../../../src/dsh/decisions/diagnostics.js'
+  bestEffortDiagnostic,reviewDiagnosticStop,createIntakeDiagnosticSink,recordDiagnosticAdmission } from '../../../src/dsh/decisions/diagnostics.js'
 import { DecisionService,databaseDecisionStore } from '../../../src/dsh/decisions/service.js'
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { TypeSafeDecisionProvider } from '../../../src/dsh/decisions/providers.js'
 import { mountDecisionCommand } from '../../../src/dsh/decisions/host.js'
-import { enqueueUnsubmittedTurn } from '../../../src/dsh/turn-process.js'
 import { classifyRequestIntent,createRequestIntentContext,rebindRequestIntentDecision } from '../../../src/dsh/decisions/request-intent.js'
 import { requestIntentDiagnosticId } from '../../../src/dsh/decisions/diagnostic-correlation.js'
 
@@ -191,38 +190,6 @@ for(const fault of [false,true])test(`explicit task resume preserves authority w
   assert.equal(view.metrics.falseStopRate,null)
   if(fault)assert.ok(view.completeness.persistedGaps>0)
   else assert.ok(view.attempts[0]!.events.some(e=>e.kind==='resume' && e.binding?.sourceEpoch===2))
-})
-
-test('receipt and outbox references come from committed host rows and disappear on outer rollback',t=>{
-  const f=fixture(t),id=f.attempt()
-  const input={runId:f.identity.taskId,dshSessionId:f.identity.sessionId,nativeTurn:1,phase:'ideal' as const,contractRevision:1,inputDigest:hash('phase-input'),nextAction:'submit_ideal',operation:'ideal_submit' as const,idempotencyKey:'host-ideal-attempt'}
-  assert.throws(()=>withImmediateTransaction(f.db,()=>{enqueueUnsubmittedTurn(f.db,input);assert.ok(f.db.prepare("SELECT 1 FROM dsh_diagnostic_events WHERE kind='receipt'").get());throw new Error('cut before commit')}),/cut before commit/)
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get()!.n,0)
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_diagnostic_events').get()!.n,0)
-  enqueueUnsubmittedTurn(f.db,input)
-  const receipt=String(f.db.prepare('SELECT receipt_id FROM dsh_turn_receipts').get()!.receipt_id)
-  recordDiagnosticTurn(f.db,receipt)
-  const events=readDecisionDiagnostics(f.db,f.identity.sessionId,id).attempts[0]!.events
-  assert.ok(events.some(e=>e.receiptId===receipt));assert.ok(events.some(e=>e.continuationId))
-  assert.throws(()=>appendDiagnosticEvent(f.db,id,event(id,'fake'),{kind:'receipt',status:'observed',reason:'receipt_observed',receiptId:hash('made-up'),targetSessionId:f.identity.sessionId}),/causal_conflict/)
-})
-
-test('diagnostic failure does not veto a real receipt/outbox commit, and missing links remain observable after restart',t=>{
-  const f=fixture(t),id=f.attempt()
-  f.db.exec("CREATE TRIGGER diagnostic_test_failure BEFORE INSERT ON dsh_diagnostic_events BEGIN SELECT RAISE(ABORT,'not persisted'); END;")
-  enqueueUnsubmittedTurn(f.db,{runId:f.identity.taskId,dshSessionId:f.identity.sessionId,nativeTurn:1,phase:'ideal',contractRevision:1,inputDigest:hash('phase-input'),nextAction:'submit_ideal',operation:'ideal_submit',idempotencyKey:'host-attempt'})
-  f.reopen()
-  const view=readDecisionDiagnostics(f.db,f.identity.sessionId,id)
-  assert.equal(view.attempts[0]!.authoritativeLinks.receipts.length,1);assert.equal(view.attempts[0]!.authoritativeLinks.outbox.length,1)
-  assert.equal(view.completeness.missingReceiptLinks,1);assert.equal(view.completeness.missingContinuationLinks,1)
-  assert.ok(view.completeness.persistedGaps>0);assert.equal(readTaskSnapshot(f.db,f.identity).state,'ToDo')
-})
-
-test('an existing receipt from another native turn cannot be attached to this decision',t=>{
-  const f=fixture(t),id=f.attempt()
-  enqueueUnsubmittedTurn(f.db,{runId:f.identity.taskId,dshSessionId:f.identity.sessionId,nativeTurn:2,phase:'ideal',contractRevision:1,inputDigest:hash('other-turn'),nextAction:'submit_ideal',operation:'ideal_submit',idempotencyKey:'other-turn'})
-  const receipt=String(f.db.prepare('SELECT receipt_id FROM dsh_turn_receipts').get()!.receipt_id)
-  assert.throws(()=>appendDiagnosticEvent(f.db,id,event(id,'wrong-turn'),{kind:'receipt',status:'observed',reason:'receipt_observed',receiptId:receipt,targetSessionId:f.identity.sessionId}),/causal_conflict/)
 })
 
 test('provider observations persist real cache/Choice metadata; secrets and raw errors never enter diagnostics',async t=>{

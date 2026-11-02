@@ -116,7 +116,7 @@ export interface DshSessionLifecycleContext {
   on(name: 'session/disposed', listener: (session: DshNativeSession) => unknown): () => void
 }
 
-/** Flush the exact DSH session only after Enno reports a terminal state. */
+/** Flush the exact DSH session only after a run reaches a terminal state. */
 export function mountDshIdleLifecycle(
   ctx: DshIdleLifecycleContext,
   lifecycle: DshRunLifecycle,

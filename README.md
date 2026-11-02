@@ -25,7 +25,7 @@ Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitl
 ## Features
 
 - **Kiokuko Models** — Connect and authenticate from Web Settings or `/kiokuko model`, independently of native Models settings. Includes Infron Standard/Flex. [Setup and shared credentials](docs/kiokuko-models.md)
-- **Execution modes** — Choose normal execution or 役小角(enno-oduno) for role-based planning and verification. [Details](docs/model-selection.md)
+- **Execution modes** — Normal execution with optional head/worker model pairs. [Details](docs/model-selection.md)
 - **Project memory** — Retrieve useful project knowledge for later work. [Concepts](docs/concepts.md)
 - **Deep planning** — Run bounded, read-only investigation with four roles. [Usage](docs/deep-planning.md)
 - **DSH subagents** — The standard preset provides `subagent` and `subagent_fork`; native children do not repeat Kiokuko's execution-mode choice. [Configuration](docs/dsh-plugin.md#subagents)
@@ -98,7 +98,7 @@ installs and updates as well. Restart DSH after the update succeeds.
 
 At startup, all seventeen bundled Skills (including Japanese output) and their references are synchronized to `~/.agents/skills/`. Missing files are created and managed copies are updated; unmanaged files are preserved. Other agents must reload their Skill catalog.
 
-These are the full-package defaults. The [configured core and optional modules](docs/core-modules.md) build ships only selected resources; core alone provides conversation, research, writing and project memory without Enno/Lisp runtimes.
+These are the full-package defaults. The [configured core and optional modules](docs/core-modules.md) build ships only selected resources; core alone provides conversation, research, writing and project memory without the Lisp runtime.
 
 Startup also refreshes an existing Kiokuko managed block in the startup directory’s `AGENTS.md`, preserving your other instructions. Restart DSH after updating the package. See [setup and verification](docs/dsh-plugin.md#what-setup-updates-and-when) for another workspace or stale copies; `kiokuko use` is not the DSH setup command.
 
@@ -137,7 +137,7 @@ Check it with `dsh --profile <profile> --dump-config`, using the same profile na
 ```
 
 The default development mode does not require Bubblewrap. The explicit protected compatibility mode does on Linux.
-Choose “使う” to use Lisp, “使わない” to use ordinary tools, or “取消・作業を保持” to cancel while preserving prepared work. Closing the question leaves implementation pending. Lisp choice and normal/Enno selection are separate. A failed Lisp startup remains a recoverable blocker until the selected route works or you explicitly change it.
+Choose “使う” to use Lisp, “使わない” to use ordinary tools, or “取消・作業を保持” to cancel while preserving prepared work. Closing the question leaves implementation pending. The Lisp choice is recorded per task. A failed Lisp startup remains a recoverable blocker until the selected route works or you explicitly change it.
 
 A Lisp default does not have to be chosen again for every task. Set `startupDefaults.lisp` to preselect it; the task card then marks that answer and still lets you change it. See [Startup defaults](#startup-defaults).
 Ordinary edits and tests run without further confirmation after that choice. Source/data deletion and existing durable user database mutation require a concrete review. Lisp and ordinary tools coexist. Completion requires current item evidence and a fresh final check through the user’s entry point. See [Goal-driven coding](docs/coding-workflow.md) and [owned execution, receipts and memory reuse](docs/owned-execution.md).
@@ -268,7 +268,7 @@ are optional; `memoryReuse.mode: off` disables this additional selection.
 
 ### Semantic compaction
 
-ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal, Enno and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`. Results whose complete-line excerpt would contain no source text are retained in full instead of being packed. Existing v1 packs and handles remain readable and restorable.
+ObservationPack (`observationPack: { mode: auto }`) preserves large successful native tool results for two model calls, then replaces them with excerpts and an `observation_read` handle. [Semantic compaction](docs/semantic-compaction.md) evaluates TODO completion boundaries and selectively shortens old tool results before native automatic compaction in normal and Lisp modes. It defaults to `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` and requires a ready typed-decision backend and supported native services. Inspect activation and the last outcome with `/kioku-decisions status`. Results whose complete-line excerpt would contain no source text are retained in full instead of being packed. Existing v1 packs and handles remain readable and restorable.
 
 Laya compaction separately defaults to `typedDecisions.laya-coreml.compaction.mode: off`. Explicit `shadow` evaluates without changing history; `auto` remains `experimental_not_qualified`. This switch preserves ObservationPack and native summaries. Akinator uses only the verified debug/research/writing range, and optional Skill selection uses up to four complete candidates with at most one model-selected addition. See [Laya settings and evaluation](docs/semantic-compaction.md#local-laya).
 

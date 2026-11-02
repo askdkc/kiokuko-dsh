@@ -22,8 +22,7 @@ node scripts/compose-modules.mjs "$module_stage" "$module_package" lisp
 (cd "$module_package" && npm pack --ignore-scripts)
 ```
 
-Omit `lisp` for core alone; use `enno`, or `enno lisp`, for the other
-combinations. Each output directory must be empty. `npm run build:modules`
+Omit `lisp` for core alone; add `lisp` for the Lisp add-on. Each output directory must be empty. `npm run build:modules`
 builds and stages into a fresh directory below `.artifacts/`, printing its path.
 Add-on artifacts are overlays for the matching core version, not standalone
 installations. The composer checks identity, contract version and file/Skill
@@ -44,18 +43,14 @@ modules:
     enabled: true
 ```
 
-Lisp remains disabled by default. Enno accepts its intake/model-route,
-efficiency, continuity, Enno-memory and finalization settings under
-`modules.enno`. Unknown module IDs and invalid module settings fail before
-Skill deployment. Enno and Lisp may be installed together; existing host
-selection and execution ownership still prohibit using both for one request.
+Lisp remains disabled by default. Unknown module IDs and invalid module
+settings fail before Skill deployment.
 
 ## Ownership and delivery
 
 | Artifact | Executable responsibility | Bundled Skill inventory |
 | --- | --- | --- |
 | core | Native identity, Akinator, ledger, scoped memory, shared database lifecycle, configured Skill provider | SOUL, memory reasoning, Japanese output |
-| Enno add-on | Existing role, lease, verification and continuation adapter | Five coding Skills plus Enno |
 | Lisp add-on | Protected runtime, capability fences, approvals, journals, recovery and vendor assets | Five coding Skills plus Lisp |
 | Full compatibility package | Existing setup, commands, browser client, AgenticReplay, Deep and advanced memory workflows | Existing complete inventory |
 
@@ -73,21 +68,15 @@ collisions, and never removes old Skills just because a module was omitted.
 Unlike the full compatibility setup, this entry does not rewrite `AGENTS.md`.
 Reload the plugin and other agents' Skill catalogs after changing composition.
 
-The core runtime graph excludes Enno, Lisp, Deep, the full host adapter and
+The core runtime graph excludes Lisp, Deep, the full host adapter and
 the full router. Migration files remain a shared compatibility asset owned
 by core: `scripts/module-compatibility-assets.json` is their explicit allowlist.
 Existing history and checksums are preserved, including tables for absent
 features. Small declaration-only dependencies and passive memory eligibility
 readers are retained; they do not start advanced-memory workers. Persisted
-Enno/Lisp ownership is read by `modules/legacy-bindings.ts` before ordinary
+Lisp ownership is read by `modules/legacy-bindings.ts` before ordinary
 admission, so removing a module cannot turn protected work into native work.
 
-Enno currently wraps the existing host adapter. Its artifact therefore still
-contains compatibility implementations for Deep, AgenticReplay and advanced memory;
-those features are disabled in the module configuration. They remain available
-through the full distribution. The add-on is not yet an independently minimal
-Enno implementation. Shared optional interfaces between Enno and Lisp are
-byte-checked when combined; neither artifact copies core implementation files.
 
 ## Local extension contract
 

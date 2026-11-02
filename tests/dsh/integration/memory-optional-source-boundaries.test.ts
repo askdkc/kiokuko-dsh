@@ -85,12 +85,11 @@ test('superseded completion flushes the native session but ignores mirror and op
     sessionMirror: { checkpointAfterNativeFlush: async () => { mirrorCalls++; throw new Error('optional mirror failed') } } as any,
     memoryFinalizer: { scheduleInTransaction() { throw new Error('must not schedule memory') } } as any,
     autoReview: { worker: { abort() {} } } as any, answerReview: { finish: async () => {} } as any,
-    ennoController: { retire() {} } as any, ennoMemory: { clear() {} } as any,
     executionSupport: { clear() {} } as any, gate: { clearTurn() {} } as any,
     turnState: { allTurns: () => [item], releaseRun() { releases++ } } as any,
     getSelection: () => undefined, currentSession: () => item, currentForAgentEvent: () => item,
-    stateForRun: () => ({ status: 'completed' } as any), deliverCompletionReport: async () => {},
-    reviewBinding: () => ({} as any), evolutionConfig: { mode: 'active' } as any, clearToolRun() {},
+    deliverCompletionReport: async () => {},
+    reviewBinding: () => ({} as any), evolutionConfig: { mode: 'active' } as any,
     sessionEventSource: () => { throw new Error('optional memory range unavailable') } })
   try {
     f.rejectMemory()

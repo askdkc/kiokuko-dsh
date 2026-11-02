@@ -3,7 +3,6 @@ import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
-import { stateForSnapshot } from '../../../src/enno-oduno/service.js'
 import { createDshCapabilityCatalog, DSH_CAPABILITY_CATALOG_VERSION } from '../../../src/dsh/capability-catalog.js'
 import { MODEL_TOOL_OPERATION_NAMES } from '../../../src/model-tools/contracts.js'
 import { STANDARD_SKILL_MANIFESTS } from '../../../src/dsh/standard-skills.js'
@@ -53,7 +52,6 @@ test('every active source is reachable from a declared DSH package entrypoint', 
     visit(path.join(root, 'src/dsh/index.ts')),
     visit(path.join(root, 'src/dsh/core/index.ts')),
     visit(path.join(root, 'src/dsh/harness/index.ts')),
-    visit(path.join(root, 'src/dsh/modules/enno.ts')),
     visit(path.join(root, 'src/dsh/modules/lisp.ts')),
     visit(path.join(root, 'src/dsh/models/index.ts')),
   ])
@@ -97,56 +95,16 @@ test('migrations preserve the immutable baseline and append forward-only evoluti
 
 test('package exposes compatibility entries and explicit core/module entries without restoring generic clients', async () => {
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'))
-  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './harness', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])
+  assert.deepEqual(Object.keys(manifest.exports), ['.', './client', './dsh', './core', './harness', './modules/lisp', './package.json', './locale/*.json', './models'])
   assert.equal(manifest.bin, undefined)
   assert.equal(manifest.dependencies?.commander, undefined)
   assert.equal(manifest.dependencies?.['@modelcontextprotocol/sdk'], undefined)
   assert.equal(manifest.files.includes('templates/'), false)
   assert.equal(DSH_CAPABILITY_CATALOG_VERSION, 3)
-  assert.equal(MODEL_TOOL_OPERATION_NAMES.length, 9)
+  assert.equal(MODEL_TOOL_OPERATION_NAMES.length, 2)
   const catalog = createDshCapabilityCatalog({
     skills: STANDARD_SKILL_MANIFESTS.map(({ name }) => ({ kind: 'skill', name })),
     tools: [{ kind: 'tool', name: 'native' }],
   })
   assert.equal(catalog.tools[0]?.kind, 'tool')
-})
-
-test('model-visible Enno state has no generic client or harness projection', () => {
-  const state = stateForSnapshot({
-    runId: 'run',
-    workspace: 'workspace',
-    orchestrationId: 'orchestration',
-    dshSessionId: 'dsh-session',
-    repositoryRoot: root,
-    taskType: 'build',
-    userFacingLanguage: 'en',
-    status: 'completed',
-    revision: 1,
-    confirmationState: 'not_required',
-    attempts: 0,
-    mutationRevision: 0,
-    routeEpoch: 0,
-    ideal: null,
-    meditation: null,
-    contract: {
-      revision: 1,
-      scope: [],
-      exclusions: [],
-      acceptanceCriteria: [],
-      workPlan: { objective: 'done', units: [] },
-      skillSet: { entries: [], intakeDiscovery: { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] }, zenkiDiscovery: { attempted: false, mode: 'off', requirements: [], queries: [], cacheHits: 0, candidates: 0, selected: [], failures: [] } },
-      finalVerifiers: [],
-      maxAttempts: 8,
-      provenance: { scope: 'inferred', exclusions: 'inferred', acceptanceCriteria: 'inferred', workPlan: 'inferred', skillSet: 'inferred', finalVerifiers: 'inferred', maxAttempts: 'inferred' },
-    },
-    handoff: { sourceRole: 'enno-oduno', taskType: 'build', objective: 'done', target: null, expected: null, constraints: [], verification: [], stopConditions: [] },
-    workUnits: [],
-    finalEvidenceReady: false,
-    finalEvidence: [],
-    blocker: null,
-    advisoryPhaseState: { state: 'not_started' },
-  })
-  const serialized = JSON.stringify(state)
-  assert.equal(serialized.includes('clientBinding'), false)
-  assert.equal(serialized.includes('harness'), false)
 })

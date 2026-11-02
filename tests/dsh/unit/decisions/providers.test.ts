@@ -6,7 +6,6 @@ import { DecisionService } from '../../../../src/dsh/decisions/service.js'
 import { type DecisionBatch, type DecisionProvider, DecisionError } from '../../../../src/dsh/decisions/contracts.js'
 import { classifyTask, selectInstalledSkills } from '../../../../src/dsh/decisions/workflows.js'
 import { resolveCapabilities } from '../../../../src/akinator/capabilities.js'
-import { reviewPlanDecisions } from '../../../../src/dsh/decisions/plan-review.js'
 
 const signal = () => new AbortController().signal
 const config = (provider: 'typesafe' | 'nimble') => TypedDecisionsConfig.parse({ provider, nimble: { endpoint: 'http://127.0.0.1:9000/v1/systemone', model: 'bespoke-model' } })
@@ -63,16 +62,9 @@ for (const kind of ['typesafe', 'nimble'] as const) {
     const controller = new AbortController(), pending = service.evaluate('cancel', batch, controller.signal)
     controller.abort(); await assert.rejects(pending, { code: 'DECISION_CANCELLED' })
   })
-  test(`${kind}: draft checks cover actual candidate and successful typed review avoids check fallback`, async () => {
-    let fallback = 0
-    const service = new DecisionService(config(kind), () => provider(kind, transport(() => 'satisfied')))
-    const context = { phase: 'planning' as const, idealObjective: 'fix', acceptanceCriteria: [], planningConstraints: [], skillAvailability: [], candidate: { acceptanceCriteria: [{ id: 'criterion' }], workPlan: { units: [{ id: 'unit' }] } } }
-    const check = { identity: { provider: 'exact-check', requestedModel: 'bound-model' }, verifyReadOnly: () => true, execute: async (call: any) => { fallback++; assert.equal(call.context.candidate, context.candidate); assert.deepEqual(call.tools, []); return { slotId: call.slotId, outcome: 'completed', summary: 'Complete review', recommendations: [] } } }
-    const result = await reviewPlanDecisions({ service, requestId: 'plan', context, signal: signal(), check })
-    assert.equal(result.contributions.length, 3); assert.equal(fallback, 0)
-    const unavailable = new DecisionService(config(kind), () => provider(kind, async () => new Response('', { status: 503 })))
-    const reviewed = await reviewPlanDecisions({ service: unavailable, requestId: 'fallback-plan', context, signal: signal(), check })
-    assert.equal(fallback, 3); assert.equal(reviewed.backend.provider, 'exact-check')
+  test(`${kind}: decisions accept a bounded payload without exposing its body`, async () => {
+    const service = new DecisionService(config(kind), () => provider(kind, async () => new Response('', { status: 503 })))
+    assert.equal((await service.evaluate(`unavailable-${kind}`, batch, signal())).status, 'fallback')
   })
 }
 test('Nimble ignores entropy confidence and uses probability/margin; TypeSafe uses confidence', async () => {
@@ -105,8 +97,6 @@ test('portable workflows accept different metadata and one-question provider lim
   const catalog = [{ kind: 'skill' as const, name: 'kiokuko-soul' }, { kind: 'skill' as const, name: 'custom-analysis' }]
   const resolution = resolveCapabilities({ task: 'Analyze', profile: { taskType: 'analysis', target: null, expected: null, constraints: null }, recommendedTags: [], capabilities: catalog, memoryUse: 'none' })
   assert.ok((await selectInstalledSkills(service, 'skills', 'Analyze', catalog, resolution, signal())).includes('custom-analysis'))
-  const result = await reviewPlanDecisions({ service, requestId: 'review', signal: signal(), context: { phase: 'planning', idealObjective: 'Analyze', acceptanceCriteria: [], planningConstraints: [], skillAvailability: [], candidate: { acceptanceCriteria: [{ id: 'done' }], workPlan: { units: [{ id: 'analyze' }] } } }, check: { identity: {}, verifyReadOnly: () => { throw new Error('Must not fall back') }, execute: async () => ({}) } })
-  assert.equal(result.backend.revision, 'opaque-build'); assert.equal(result.contributions.length, 3)
 })
 test('limits do not truncate evidence/options, timeouts do not retry, and parent cancellation stays terminal', async () => {
   let calls = 0

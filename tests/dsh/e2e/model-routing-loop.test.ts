@@ -12,7 +12,7 @@ import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { mountCore } from '../../../src/dsh/core/host.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { installDshModelRouting } from '../../../src/dsh/model-routing.js'
-import { MODEL_ROLES, MODEL_TEMPLATES, type ModelBinding } from '../../../src/dsh/model-configuration.js'
+import { type ModelBinding } from '../../../src/dsh/model-configuration.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { fixtureDefinition, interpretedPreparation, toolValue } from '../helpers/coding-script.js'
 import { loadJapaneseOutputSkill } from '../../../src/dsh/japanese-output-skill.js'
@@ -407,7 +407,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.deepEqual(questions, [], 'document editing does not require a coding or execution-mode choice')
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM entries').get()?.n), 0, 'declined post-task review creates no memory')
     assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n')
-    const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox', 'dsh_coding_workflows'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
+    const counts = await adapter.host.runtime!.withDatabase(db => ['dsh_turn_receipts', 'dsh_continuation_outbox', 'dsh_coding_workflows'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0, 0, 0])
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questionHost.dispose(); await h.dispose() }
 })
@@ -466,7 +466,6 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.equal(questionCount, 1)
     assert.equal(codingChoices, 0)
     assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'before\n')
-    assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n), 0)
     await composition.dispose(); await adapter.dispose()
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
     model.prepareNext('debug', 'prepare-recovered', interpretedPreparation(h.mock,'prepare-recovered','same_scope_continuation','change','debug'))
@@ -478,47 +477,12 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.equal(model.requests.length, 7)
     assert.ok(JSON.stringify(model.requests[3].messages).includes('feature.mjsを実装してください。'))
     assert.equal(model.requests.every(r => r.provider === 'ordinary' && r.model === 'mock'), true)
-    const counts = await adapter.host.runtime!.withDatabase(db => ['enno_contracts', 'dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
-    assert.deepEqual(counts, [0, 0, 0])
+    const counts = await adapter.host.runtime!.withDatabase(db => ['dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
+    assert.deepEqual(counts, [0, 0])
     model.prepareNext('debug', 'prepare-next-feature', interpretedPreparation(h.mock,'prepare-next-feature','new','change','debug'))
     await turn(h, agent, '別のfeature.mjsの変更も実装してください。')
     assert.equal(questionCount, 3)
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }
-})
-test('native loop and spawn route every template role, freeze assembly, isolate sessions and restore the ordinary model', {
-  skip: !packageRoot && !sourceRoot, timeout: 30_000,
-}, async () => {
-  const h = await harness()
-  let active: ModelBinding | undefined
-  const script = new h.mock.MockAdapter(Array.from({ length: MODEL_TEMPLATES.length * MODEL_ROLES.length + 2 }, () => h.mock.textResponse('verified')))
-  const providers = ['ordinary', ...MODEL_TEMPLATES.map(t => `route-${t.id}`)]
-  h.ctx.llm.registerAdapter(providers, script)
-  const parent = (await h.ctx.agents.create({sessionId:h.session.SessionId('matrix-parent'),agentOptions:{ provider: 'ordinary', model: 'ordinary' },meta:{ cwd: h.root }})).agent
-  const other = (await h.ctx.agents.create({sessionId:h.session.SessionId('matrix-other'),agentOptions:{ provider: 'ordinary', model: 'other' },meta:{ cwd: h.root }})).agent
-  const route = installDshModelRouting(parent, async () => active)
-  const observed: { provider: string; model: string }[] = []
-  const assembly = parent.ctx.on('system-prompt/assemble', async (_a: unknown, _c: unknown, next: () => Promise<any>) => {
-    const result = await next(); observed.push(result.variables); return result
-  }, { prepend: true })
-  try {
-    for (const template of MODEL_TEMPLATES) {
-      for (const role of MODEL_ROLES.filter(role => role !== 'worker')) {
-        active = { provider: `route-${template.id}`, model: template.models[role][0]! }
-        await turn(h, parent, `${template.id}:${role}`)
-        const request = script.requests.at(-1)!
-        assert.equal(request.provider, active.provider); assert.equal(request.model, active.model)
-        assert.equal(request.reasoningEffort, undefined)
-        assert.equal(observed.at(-1)?.model, active.model)
-      }
-      const child = await h.ctx.subagents.startActivation({ provider: 'spawn', label: 'model route verification', delivery: 'caller', signal: new AbortController().signal, request: { parent,
-        agentOptions: { provider: `route-${template.id}`, model: template.models.worker[0]! }, maxDepth: 1,
-        toolFilter: { allow: [] }, prompt: [{ type: 'text', text: 'Return verification evidence only.' }] } })
-      try { assert.equal((await child.result).stopReason, 'completed'); assert.equal(script.requests.at(-1)?.model, template.models.worker[0]); assert.equal(script.requests.at(-1)?.sessionId, child.childId) } finally { await child.dispose() }
-    }
-    await turn(h, other, 'independent'); assert.equal(script.requests.at(-1)?.model, 'other')
-    active = undefined
-    await turn(h, parent, 'ordinary conversation'); assert.equal(script.requests.at(-1)?.model, 'ordinary')
-  } finally { assembly(); route(); await h.dispose() }
 })
 test('pinned pi-ai wire adapter: Astra Responses, Go parent/child/auxiliary session headers, and no Ollama download', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,

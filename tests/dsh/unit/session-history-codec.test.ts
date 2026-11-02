@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { repairLegacyAbortRecord } from '../../../scripts/session-history-codec.mjs'
 
-const text = 'kiokuko dsh Enno continuation stopped: continuation_limit'
+const text = 'kiokuko dsh continuation stopped: continuation_limit'
 const ending = (cause: unknown) => ({ type: 'turn/end', seq: 730, time: 2,
   data: { turn: 1, reason: { kind: 'aborted', reason: cause } } })
 

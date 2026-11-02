@@ -2,7 +2,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { DshMemoryFinalizer } from '../session-memory-finalizer.js'
 import type { NativeAgent, NativeAgents, NativeSessions } from './native-events.js'
 import { onNativeEvent } from './native-events.js'
-import type { DshEnnoDelegation } from '../enno-delegation.js'
 import type { DeepPlanningController } from '../../deep-thinker/controller.js'
 import type { TurnRecord } from './turn-state.js'
 import { DshEfficiencyObserver, mountDshEfficiencyObserver, type FinalizationInputMode } from '../efficiency.js'
@@ -12,13 +11,12 @@ interface EfficiencyHostDependencies {
   readonly memoryFinalizer: DshMemoryFinalizer
   readonly agents: NativeAgents | undefined
   readonly sessions: NativeSessions | undefined
-  readonly delegation: DshEnnoDelegation
   readonly deepPlanning: DeepPlanningController
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
 }
 
 export function createEfficiencyHost(deps: EfficiencyHostDependencies) {
-  const { ctx, memoryFinalizer, agents, sessions, delegation, deepPlanning, currentSession } = deps
+  const { ctx, memoryFinalizer, agents, sessions, deepPlanning, currentSession } = deps
   let efficiency: DshEfficiencyObserver | undefined
   let efficiencyDisposers: (() => void)[] = []
   const closeEfficiency = () => {
@@ -52,7 +50,7 @@ export function createEfficiencyHost(deps: EfficiencyHostDependencies) {
       efficiencyDisposers.push(mountDshEfficiencyObserver(scope, observer, (sessionId, request) => {
         const agent = observedAgents.get(sessionId)
         if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(sessionId) !== agent.session) return undefined
-        const child = delegation.observationBinding(agent) ?? deepPlanning.executor.observationBinding(agent)
+        const child = deepPlanning.executor.observationBinding(agent)
         if (child !== undefined) return { sessionId, ...child, task: 'child' }
         const owner = currentSession(sessionId)
         if (owner === undefined || owner.nativeSession !== agent.session) return undefined

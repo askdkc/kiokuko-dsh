@@ -21,10 +21,8 @@ test('model context has a fixed trusted-prefix order and user task last', async 
   const messages = await injectDshContext({
     prepared: prepared(),
     task: 'Implement src/index.ts and make the focused tests pass.',
-    routeSkillNames: ['kiokuko-single-purpose-functions'],
-    expertRefs: [{ skillName: 'kiokuko-single-purpose-functions', relativePath: 'references/problem-shaping-and-language.md' }],
   })
-  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'route-skill', 'expert', 'memory', 'memory', 'user-task'])
+  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'memory', 'memory', 'user-task'])
   assert.equal(messages.every((message) => message.role === 'user'), true)
   assert.ok(messages[0]?.content.startsWith(await loadSoulPrompt()))
   assert.match(messages[0]?.content ?? '', /DSH host completed the Akinator intake gate/u)
@@ -32,24 +30,6 @@ test('model context has a fixed trusted-prefix order and user task last', async 
   assert.match(messages[0]?.content ?? '', /intake status `ready`.*nextAction=proceed/u)
   assert.equal(messages.at(-1)?.role, 'user')
   assert.match(messages.at(-1)?.content ?? '', /Implement src\/index\.ts and make the focused tests pass\.[\s\S]*Finalized intake:[\s\S]*src\/index\.ts[\s\S]*tests pass/u)
-})
-
-test('advisory evidence remains untrusted and precedes memory and the final user task', async () => {
-  const messages = await injectDshContext({
-    prepared: prepared(),
-    task: 'Finish the approved review.',
-    advisoryEvidence: {
-      phase: 'final_review',
-      contributions: [{
-        slotId: 'acceptance_auditor',
-        outcome: 'completed',
-        summary: 'The acceptance criterion is supported by fresh evidence.',
-      }],
-    },
-  })
-  assert.deepEqual(messages.map((message) => message.source), ['soul', 'memory-reasoning', 'advisory', 'memory', 'memory', 'user-task'])
-  assert.match(messages.at(-4)?.content ?? '', /acceptance criterion/u)
-  assert.equal(messages.at(-1)?.content, 'Finish the approved review.\n\nFinalized intake:\nsrc/index.ts\ntests pass')
 })
 
 test('ordinary memory stays untrusted and an unavailable validation cannot hide the user request', async () => {
@@ -77,19 +57,6 @@ test('ordinary memory stays untrusted and an unavailable validation cannot hide 
     assert.ok(messages.at(-1)?.content.startsWith('Review the repository change.'))
     assert.match(messages[0]!.content, /nextAction=proceed/u)
   }
-})
-
-test('explicit current directive wins over a stale prepared directive', async () => {
-  const staleDirective = { role: 'zenki', objective: 'stale objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
-  const currentDirective = { role: 'goki', objective: 'current objective', requiredSkills: [], workUnit: null, stopConditions: [], reportSchema: {} }
-  const messages = await injectDshContext({
-    prepared: prepared({ ennoOduno: { directive: staleDirective } }),
-    task: 'Continue the current task.',
-    directive: currentDirective as any,
-  })
-  const directive = messages.find((message) => message.source === 'directive')
-  assert.match(directive?.content ?? '', /current objective/u)
-  assert.doesNotMatch(directive?.content ?? '', /stale objective/u)
 })
 
 test('native task prefixes are omitted without dropping additional or different intake requirements', async () => {

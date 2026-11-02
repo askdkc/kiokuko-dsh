@@ -18,9 +18,8 @@ Reload the plugin to change modes. `full` is also the rollback setting. Neither
 mode changes native permissions, tool schemas, task selection or the original
 user message. The ordinary Skill catalog is not a claim that every listed Skill
 was loaded. SOUL is automatic; Japanese guidance follows the routed model family;
-Lisp guidance follows explicit enable; Enno contracts follow the current role and
-selected experts; ordinary additional Skills remain available through the native
-Skill tool. Complete supplied runtime guidance needs no full-file reread.
+Lisp guidance follows explicit enable; ordinary additional Skills remain
+available through the native Skill tool. Complete supplied runtime guidance needs no full-file reread.
 
 ## One source, two representations
 
@@ -77,7 +76,6 @@ it never installs into the user's live profile.
 | --- | --- |
 | SOUL, native/explicit/prompt-only entrypoints | Compiled body in adapter-observed request |
 | All nine native Skill lookups | Native tool execution, result rendering, next request |
-| Enno role Skills and selected expert | Real admitted role transitions, retry and persisted resume |
 | Deep Japanese guidance | Every worker's request and budget accounting |
 | Lisp enable and lisp_describe | Real protected SBCL, six-tool surface, next request body |
 | DeepSeek wire serializer | Actual provider serializer; fetch boundary captured before network |

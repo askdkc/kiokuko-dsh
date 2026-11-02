@@ -5,7 +5,6 @@ import type { NativeAgent, NativeAgents, NativeCommands, NativeSessions, NativeS
 import { onNativeServiceEvent } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
 import type { createTurnState } from './turn-state.js'
-import type { DshEnnoDelegation } from '../enno-delegation.js'
 import type { DshIntakeGate, DshCapabilityReadContext } from '../intake-gate.js'
 import type { DshCapabilityCatalog } from '../capability-catalog.js'
 import { mountMemoryApplication } from '../memory-application.js'
@@ -25,7 +24,6 @@ interface MemoryApplicationHostDependencies {
   readonly skills: NativeSkills | undefined
   readonly agents: NativeAgents | undefined
   readonly sessions: NativeSessions | undefined
-  readonly delegation: DshEnnoDelegation
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
   readonly turnState: ReturnType<typeof createTurnState>
   readonly gate: DshIntakeGate
@@ -34,7 +32,7 @@ interface MemoryApplicationHostDependencies {
 }
 
 export function mountHostMemoryApplication(deps: MemoryApplicationHostDependencies): (() => void) | undefined {
-  const { ctx, runtime, tools, commands, skills, agents, sessions, delegation,
+  const { ctx, runtime, tools, commands, skills, agents, sessions,
     currentSession, turnState, gate, capabilityCatalog, memoryRetrievalConfig } = deps
   return tools ? mountMemoryApplication({ tools: tools as any, on: (name: string, listener: (...args: any[]) => unknown, options?: { prepend?: boolean }) => onNativeServiceEvent(ctx, name, listener, options), ...(commands ? { commands: commands as any } : {}) }, {
     runtime,
@@ -48,7 +46,7 @@ export function mountHostMemoryApplication(deps: MemoryApplicationHostDependenci
     resolve(execution) {
       const agent = execution.agent, session = agent?.session
       const item = session ? currentSession(session.id) : undefined
-      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || delegation.isChild(agent)) return undefined
+      if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session) return undefined
       return { runId: item.runId, workspace: item.workspace, sessionId: item.sessionId, repositoryRoot: item.repositoryRoot,
         ...(item.prepared.corrections?{corrections:item.prepared.corrections}:{}) }
     },

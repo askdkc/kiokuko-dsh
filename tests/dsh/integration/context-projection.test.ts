@@ -29,22 +29,25 @@ test('57 turns retain one copy of each unchanged Skill and only changed directiv
     nextAction: 'proceed', memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false }, context: null,
   } as unknown as PreparedAgentTask
   const fixed = await injectDshContext({ prepared, task: 'Implement the requested feature.',
-    routeSkillNames: ['kiokuko-single-purpose-functions'], soulInSystemPrompt: true })
+    soulInSystemPrompt: true })
   for (let turn = 1; turn <= 57; turn++) {
-    const messages = projectDshContext([...fixed, fragment('directive', `Current phase ${turn}`)], live)
+    const messages = projectDshContext([...fixed, fragment('route-skill', `Current phase ${turn}`,'phase')], live)
     assert.equal(messages.length, turn === 1 ? fixed.length + 1 : 1)
     live.append(messages)
   }
+  const names = live.events.map(event => (event.data as any).source?.sections?.[0]?.name).filter(Boolean)
+  assert.equal(names.filter((name: string) => name === 'route-skill:phase').length, 57, 'each changed directive is delivered once')
+  assert.equal(names.filter((name: string) => name === 'soul:kiokuko-soul').length, 1, 'the unchanged SOUL fragment is delivered once')
+  assert.equal(names.filter((name: string) => name === 'user-task:user-task').length, 1, 'the unchanged user task is delivered once')
   const text = live.events.map(event => (event.data as any).content[0].text).join('\n')
   assert.equal(text.includes('# Kiokuko SOUL router'), false)
-  assert.equal(text.split('name: kiokuko-single-purpose-functions').length - 1, 1)
   assert.equal(text.split('DSH host completed the Akinator intake gate').length - 1, 1)
   assert.equal(live.events.length, fixed.length + 57)
 })
 
 test('uncommitted attempts do not suppress delivery and pending native messages prevent double injection', () => {
   const live = session()
-  const fragments = [fragment('expert', 'Required expert')]
+  const fragments = [fragment('route-skill', 'Required skill','required')]
   const proposed = projectDshContext(fragments, live)
   assert.equal(projectDshContext(fragments, live).length, 1, 'discarding a proposal must allow retry')
   assert.deepEqual(projectDshContext(fragments, live, proposed), [])
@@ -54,16 +57,19 @@ test('uncommitted attempts do not suppress delivery and pending native messages 
 
 test('latest fragment wins including A to B to A changes, independent Skills, and pending changes', () => {
   const live = session()
-  const first = [fragment('directive', 'A'), fragment('route-skill', 'Skill A', 'one'), fragment('route-skill', 'Skill B', 'two')]
+  const first = [fragment('route-skill', 'Skill A', 'one'), fragment('route-skill', 'Skill B', 'two')]
   live.append(projectDshContext(first, live))
-  live.append(projectDshContext([fragment('directive', 'B')], live))
-  assert.equal(projectDshContext(first, live).length, 1)
+  live.append(projectDshContext([fragment('route-skill', 'Skill C', 'three')], live))
+  // Every already delivered fragment is deduplicated by its exact name; only a
+  // newer text for the same name re-delivers.
+  assert.equal(projectDshContext(first, live).length, 0)
+  assert.equal(projectDshContext([fragment('route-skill', 'Skill A2', 'one')], live).length, 1)
   assert.deepEqual(projectDshContext(first, live, projectDshContext(first, live)), [])
 })
 
 test('compaction and restart reinstate only fragments missing from the retained surface', () => {
   const live = session()
-  const fragments = [fragment('route-skill', 'Skill A', 'one'), fragment('expert', 'Expert A', 'one')]
+  const fragments = [fragment('route-skill', 'Skill A', 'one'), fragment('route-skill', 'Skill D', 'two')]
   live.append(projectDshContext(fragments, live))
   live.events.push({ type: 'user/message', seq: 2, time: 2,
     data: { role: 'user', content: [{ type: 'text', text: 'Checkpoint' }], source: { kind: 'plugin:compaction' } },
@@ -80,7 +86,7 @@ test('compaction and restart reinstate only fragments missing from the retained 
 
 test('human and other-plugin copies cannot suppress host instructions', () => {
   const live = session()
-  const fragments = [fragment('expert', 'Required expert')]
+  const fragments = [fragment('route-skill', 'Required skill','required')]
   const [owned] = projectDshContext(fragments, live) as any[]
   live.append([{ ...owned, source: { ...owned.source, kind: 'plugin:other' } },
     { ...owned, source: { ...owned.source, kind: 'user' } }])

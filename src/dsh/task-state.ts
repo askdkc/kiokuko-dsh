@@ -9,7 +9,6 @@ import { TASK_TYPES, TERMINAL_RUN_STATUSES, type RunStatus, type TaskType } from
 import { canonicalContentHash, type JsonValue } from '../serialization/validate.js'
 import { executeIdempotentInTransaction } from './intake-idempotency.js'
 import { assessTaskCompletion } from './task-completion.js'
-import { completionVerifiers } from './completion-verifiers.js'
 
 export const TASK_STATES = ['ToDo', 'Working', 'Pending', 'Done', 'Ignore'] as const
 export type TaskState = typeof TASK_STATES[number]
@@ -183,11 +182,6 @@ export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: 
         const assessment = assessTaskCompletion(db, identity.taskId)
         if ((assessment.coding || assessment.required > 0) && !assessment.verified)
           conflict('Current task completion criteria are not verified')
-        const enno = db.prepare(`SELECT e.workspace,e.orchestration_session_id AS orchestrationId FROM enno_contracts e
-          JOIN dsh_execution_selections s ON s.run_id=e.run_id WHERE e.run_id=? AND json_extract(s.state_json,'$.mode')='enno'`)
-          .get<{workspace:string;orchestrationId:string}>(identity.taskId)
-        if (enno && completionVerifiers().codingProjection?.(db, { runId: identity.taskId, ...enno })?.completed !== true)
-          conflict('Enno has not verified this task as completed')
       }
       if (current.state === 'Working' && ['wait','ignore'].includes(input.operation) && !proves('stopped'))
         conflict('Stopping a Working task requires a confirmed stop receipt')
@@ -289,8 +283,6 @@ export function transferTaskOwner(db: SqliteDatabase, identity: TaskIdentity, in
     db.prepare(`UPDATE dsh_coding_workflows SET session_id=?,revision=revision+1,
       snapshot_json=json_set(snapshot_json,'$.sessionId',?,'$.revision',revision+1) WHERE run_id=? AND session_id=?`)
       .run(input.sessionId, input.sessionId, identity.taskId, identity.sessionId)
-    db.prepare('UPDATE enno_contracts SET dsh_session_id=? WHERE run_id=? AND dsh_session_id=?')
-      .run(input.sessionId, identity.taskId, identity.sessionId)
     recordDiagnosticTaskResume(db,identity.taskId,input.sessionId,input.operationId)
     return readTaskSnapshot(db, { ...identity, sessionId: input.sessionId }) as unknown as JsonValue
   }) as unknown as TaskSnapshot)

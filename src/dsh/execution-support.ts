@@ -3,7 +3,6 @@ import { realpathSync } from 'node:fs'
 import { retainedEvents } from './context-projection.js'
 import { ContinuityConfig, renderContinuationView, type ContinuityProjection } from '../context/continuity-view.js'
 import { adaptContinuity, type ContinuitySources } from './continuity-adapter.js'
-import type { EnnoOdunoState, EnnoRunSnapshot } from '../enno-oduno/types.js'
 import type { ContinuityObservation } from './efficiency.js'
 import type { DshRuntime } from './runtime.js'
 import { withImmediateTransaction } from '../db/transaction.js'
@@ -31,7 +30,6 @@ export interface ExecutionBinding {
   terminal: boolean
   chat: boolean
   generation: string
-  ennoState?: EnnoOdunoState
 }
 interface SupportState {
   binding: ExecutionBinding
@@ -43,7 +41,6 @@ interface SupportState {
   pending: ExecutionEvidence[]
   pendingIds: Set<string>
   evidence: ExecutionEvidence[]
-  enno?: ContinuitySources['enno']
   projection?: ContinuityProjection
   canonicalWorkspace?: string
   loaded: boolean
@@ -73,22 +70,12 @@ export class DshExecutionSupport {
     this.#config = ContinuityConfig.parse(options.continuity ?? {})
   }
 
-  /** Consume only the source read by the host at this request boundary. */
-  ennoSource(sessionId: string, snapshot: EnnoRunSnapshot, state: EnnoOdunoState): void {
-    if (this.#config.mode === 'off') return
-    const support = this.#states.get(sessionId)
-    if (!support || snapshot.runId !== support.binding.runId || snapshot.dshSessionId !== sessionId
-      || canonicalContentHash(state) !== canonicalContentHash(support.binding.ennoState ?? null)) return
-    support.enno = { snapshot, state }
-  }
-
   async refresh(binding: ExecutionBinding, human: boolean): Promise<void> {
     if (this.#disposed) return
     const previous = this.#states.get(binding.sessionId)
     let state = previous?.binding.runId === binding.runId ? previous : undefined
     if (!state) state = { binding, policyReady: false, degraded: false, monitor: newExplorationState(binding.generation), pending: [], pendingIds: new Set(), evidence: [], loaded: false, serial: 0, confirmations: new Map() }
     state.binding = binding
-    delete state.enno
     delete state.projection
     this.#states.set(binding.sessionId, state)
     if (binding.chat) return
@@ -273,10 +260,9 @@ export class DshExecutionSupport {
     if (this.#config.mode === 'off') return legacy
     try {
       if (!state.canonicalWorkspace) throw new Error('Continuity workspace unavailable')
-      const enno = state.binding.ennoState
       const view = adaptContinuity({ owner: { runId: state.binding.runId, sessionId, workspace: state.canonicalWorkspace ?? state.binding.cwd,
-        mode: enno?.applicable ? 'enno' : 'normal', workUnitId: enno?.directive?.workUnit?.id ?? null, role: enno?.currentRole ?? null },
-        generation: state.binding.generation, workspaceAlias: state.binding.cwd, frame: state.frame, evidence: state.evidence, enno: state.enno })
+        mode: 'normal' },
+        generation: state.binding.generation, workspaceAlias: state.binding.cwd, frame: state.frame, evidence: state.evidence })
       const projection = renderContinuationView(view, this.#config)
       state.projection = projection
       if (this.#config.mode === 'shadow') return legacy
@@ -286,7 +272,7 @@ export class DshExecutionSupport {
       delete state.projection
       return this.#config.mode === 'shadow' ? legacy : [state.frame ? executionFrameText(state.frame) : '', state.verification ?? '',
         state.binding.terminal ? 'Terminal state: report recorded results now. Do not run more tools.' : state.monitor.notice ?? '',
-        'Continuity unavailable. Preserve the original request and current directive; no completeness or verification claim.'].filter(Boolean).join('\n')
+        'Continuity unavailable. Preserve the original request; no completeness or verification claim.'].filter(Boolean).join('\n')
     }
   }
 

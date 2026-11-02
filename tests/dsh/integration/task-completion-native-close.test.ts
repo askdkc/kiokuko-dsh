@@ -144,10 +144,6 @@ for (const resumeAt of ["never", "before-idle", "before-close"] as const) {
           answerReview: {
             finish: async () => effects.push({ kind: "finish-review" }),
           } as any,
-          ennoController: {
-            retire: () => effects.push({ kind: "retire" }),
-          } as any,
-          ennoMemory: { clear: () => {} } as any,
           executionSupport: { clear: () => {} } as any,
           gate: { clearTurn: () => {} } as any,
           turnState: {
@@ -162,11 +158,9 @@ for (const resumeAt of ["never", "before-idle", "before-close"] as const) {
           getSelection: () => undefined,
           currentSession: () => turns.at(-1),
           currentForAgentEvent: () => turns.at(-1),
-          stateForRun: () => prepared.ennoOduno,
           deliverCompletionReport: async () => {},
           reviewBinding: () => ({}) as any,
           evolutionConfig: { mode: "off" } as any,
-          clearToolRun: () => effects.push({ kind: "clear-tools" }),
           sessionEventSource: () => ({}) as any,
           onRunClosed: (_id, _status, _session, authority) =>
             effects.push({ kind: "review", authority }),

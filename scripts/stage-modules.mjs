@@ -9,16 +9,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = resolve(import.meta.dirname, '..')
 const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-const entries = { core: 'dist/dsh/core/index.js', enno: 'dist/dsh/modules/enno.js', lisp: 'dist/dsh/modules/lisp.js' }
+const entries = { core: 'dist/dsh/core/index.js', lisp: 'dist/dsh/modules/lisp.js' }
 const compatibility = JSON.parse(await readFile(join(root, 'scripts/module-compatibility-assets.json'), 'utf8'))
 const sharedAssets = compatibility.runtimeAssets
 const builtin = new Set(builtinModules.flatMap(name => [name, `node:${name}`]))
 const packageName = name => name.startsWith('@') ? name.split('/').slice(0, 2).join('/') : name.split('/')[0]
 async function graph(entry, feature) {
-  const analysis = await build({ absWorkingDir: root, entryPoints: feature === 'core' ? [entry, 'dist/dsh/models/index.js'] : [entry], bundle: true, packages: 'external', platform: 'node', format: 'esm', outdir: 'dist/.module-analysis', write: false, metafile: true,
-    plugins: feature === 'enno' ? [{ name: 'explicit-optional-lisp-mount', setup(build) {
-      build.onResolve({ filter: /^\.\/lisp\/surface\.js$/ }, args => args.kind === 'dynamic-import' && args.importer.endsWith('/dsh/composition.js') ? { path: args.path, external: true } : undefined)
-    } }] : [] })
+  const analysis = await build({ absWorkingDir: root, entryPoints: feature === 'core' ? [entry, 'dist/dsh/models/index.js'] : [entry], bundle: true, packages: 'external', platform: 'node', format: 'esm', outdir: 'dist/.module-analysis', write: false, metafile: true })
   const files = new Set(Object.keys(analysis.metafile.inputs))
   const dependencies = new Set()
   for (const input of Object.values(analysis.metafile.inputs)) for (const imported of input.imports) {
@@ -82,11 +79,10 @@ export async function stageModules(output) {
   const guardrailAssets = [...microJudgeAssets,'scripts/verify-micro-judge.mjs','docs/micro-judge.md',...guardrailLicenses,...(await walk(join(root, 'guardrail'))).map(file => `guardrail/${file}`), 'scripts/guardrail-artifacts.mjs', 'scripts/guardrail-artifacts.d.mts', 'docs/guardrail.md']
   for (const file of sharedAssets) { await stat(join(root, file)); graphs.core.files.add(file) }
   // Identical optional host interfaces may be shared by the two add-ons, never by core.
-  const shared = [...graphs.enno.files].filter(file => graphs.lisp.files.has(file) && !graphs.core.files.has(file))
+  const shared: string[] = []
   const { coreSkills, codingSkills } = await import(pathToFileURL(join(root, 'dist/dsh/modules/resources.js')))
-  const { ennoModule } = await import(pathToFileURL(join(root, entries.enno)))
   const { lispModule } = await import(pathToFileURL(join(root, entries.lisp)))
-  const resources = { core: [...coreSkills.resources, ...codingSkills.resources], enno: [...codingSkills.resources, ...ennoModule.resources], lisp: [...codingSkills.resources, ...lispModule.resources] }
+  const resources = { core: [...coreSkills.resources, ...codingSkills.resources], lisp: [...codingSkills.resources, ...lispModule.resources] }
   const { compileSkillBundle } = await import(pathToFileURL(join(root, 'dist/dsh/skill-compiler.js')))
   const migrations = (await walk(join(root, 'migrations'))).map(file => `migrations/${file}`)
   assert.deepEqual(migrations, compatibility.migrations, 'Update the explicit migration compatibility allowlist before packaging')

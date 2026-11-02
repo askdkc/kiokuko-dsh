@@ -9,7 +9,6 @@ import YAML from 'yaml'
 import * as publicPlugin from '../../../src/index.js'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { Config as CoreConfig, createConfiguredPlugin } from '../../../src/dsh/core/index.js'
-import { ennoModule } from '../../../src/dsh/modules/enno.js'
 import { DshToolPolicy } from '../../../src/dsh/tool-policy.js'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
@@ -18,8 +17,7 @@ isolateSkillHome()
 
 test('default intake: root, DSH, core and configured-module exports agree without activation', () => {
   assert.equal(publicPlugin.Config, dshPlugin.Config)
-  for (const schema of [publicPlugin.Config, dshPlugin.Config, CoreConfig,
-    createConfiguredPlugin([]).Config, createConfiguredPlugin([{ module: ennoModule }]).Config]) {
+  for (const schema of [publicPlugin.Config, dshPlugin.Config, CoreConfig, createConfiguredPlugin([]).Config]) {
     assert.equal(schema.parse({}).intakeMode, 'on-demand')
     assert.equal(schema.parse({ enabled: true }).intakeMode, 'on-demand')
     assert.equal(schema.parse({ intakeMode: undefined }).intakeMode, 'on-demand')
@@ -79,7 +77,7 @@ test('default intake: unsupported custom execution hosts fail explicitly and eag
   const host = {
     tools: { register() { registered++; return () => { registered-- } }, guard() { return () => {} } },
     toolHost: { bind: () => undefined, execute: async () => ({}) },
-    toolPolicy: new DshToolPolicy({ phase: 'normal', runId: 'fixture-run', workspace: 'fixture-workspace', orchestrationId: 'fixture-orchestration', revision: 1, routeEpoch: 0 }),
+    toolPolicy: new DshToolPolicy({ phase: 'normal', runId: 'fixture-run', workspace: 'fixture-workspace', orchestrationId: 'fixture-orchestration', revision: 1 }),
   }
   // Use the real public apply entry, with a minimal effect owner so its rejection
   // is observable without Cordis deliberately containing a failed plugin fiber.

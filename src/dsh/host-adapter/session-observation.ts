@@ -4,17 +4,15 @@ import { hasHumanInput } from '../answer-review/contracts.js'
 import { type ReviewNativeSession } from '../auto-memory-review.js'
 import { executionObservation } from '../evolution-observation.js'
 import { saveEvolutionObservation } from '../plugin-records.js'
-import { isModelAvailabilityFailure } from '../model-routing.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { type DshLogEvent } from '../session-memory-finalizer.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
-import { enqueueUnsubmittedTurn, markOutboxObservedInTransaction } from '../turn-process.js'
+import { markOutboxObservedInTransaction } from '../turn-process.js'
 import { backupInputClaimInTransaction, readInputClaim, markClaimProgressInTransaction, settleInputClaimInTransaction, takeRecoverableInputClaimInTransaction } from '../input-claim.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
-import type { DshEnnoMemoryRefresh } from '../enno-memory-refresh.js'
 import type { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import type { AutoMemoryReviewCoordinator } from '../auto-memory-review.js'
 import type { RoutableAgent } from '../model-routing.js'
@@ -22,7 +20,6 @@ import type { DshSessionLogMirror } from '../session-log-mirror.js'
 import type { DshExecutionSupport } from '../execution-support.js'
 import type { ModelAutoCoordinator } from '../model-auto/coordinator.js'
 import type { EvolutionConfig } from '../../memory/evolution/contracts.js'
-import type { EnnoOdunoState } from '../../enno-oduno/types.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import type { TurnRecord } from './turn-state.js'
 import { onNativeEvent } from './native-events.js'
@@ -30,13 +27,11 @@ import type { NativeAgent } from './native-events.js'
 
 interface ObservationDependencies {
   readonly ctx: Context
-  readonly ennoMemory: DshEnnoMemoryRefresh
   readonly memoryFinalizer: import('../session-memory-finalizer.js').DshMemoryFinalizer
   readonly evolutionConfig: EvolutionConfig
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
   readonly currentForAgentEvent: (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object) => TurnRecord | undefined
   readonly answerReview: AnswerReviewCoordinator
-  readonly markModelUnavailable: (agent: RoutableAgent) => Promise<void>
   readonly recordManualChange: (sessionId: string, pending: Promise<void>) => void
   readonly modelAuto: ModelAutoCoordinator
   readonly root: string
@@ -45,14 +40,13 @@ interface ObservationDependencies {
   readonly sessionMirror: DshSessionLogMirror
   readonly executionSupport: DshExecutionSupport
   readonly kickBoundary: (sessionId: string, agent: DshUserQuestionAgent | undefined) => void
-  readonly stateForRun: (database: SqliteDatabase, item: TurnRecord) => EnnoOdunoState
   readonly objectRecord: (value: unknown) => Record<string, unknown> | undefined
   readonly isHumanMessage: (value: unknown) => boolean
   readonly eventContinuationId: (value: unknown) => string | undefined
 }
 
 export function createSessionObservation(runtime: DshCoreRuntime) {
-  const memoryCalls = new WeakMap<object, Map<string, { name: string; runId: string; agent: object; turn: number; seq: number }>>()
+
   const inMemoryClaims = new Map<string, {
     messages: readonly unknown[]
     providerStarted: boolean
@@ -86,23 +80,13 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
     }
   }
   const install = ({
-    ctx, ennoMemory, evolutionConfig, memoryFinalizer, currentSession, currentForAgentEvent,
-    answerReview, markModelUnavailable, recordManualChange, modelAuto, root,
+    ctx, evolutionConfig, memoryFinalizer, currentSession, currentForAgentEvent,
+    answerReview, recordManualChange, modelAuto, root,
     autoReview, reviewBinding, sessionMirror, executionSupport, kickBoundary,
-    stateForRun, objectRecord, isHumanMessage, eventContinuationId,
+    objectRecord, isHumanMessage, eventContinuationId,
   }: ObservationDependencies) => {
   const observationDisposer = onNativeEvent(ctx, 'tools/result', (execution: any, result: unknown) => {
     try {
-      if (ennoMemory.enabled && execution.parent === undefined) {
-        const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
-        const calls = session ? memoryCalls.get(session) : undefined
-        const call = calls?.get(execution.callId)
-        calls?.delete(execution.callId)
-        if (item && !item.closed && item.nativeAgent === agent && item.nativeSession === session && call
-          && call.runId === item.runId && call.agent === agent && call.turn === item.turn && call.name === execution.name) {
-          ennoMemory.observeResult(item.runId, agent, session, item.repositoryRoot, result)
-        }
-      }
       if (evolutionConfig.mode === 'off' || execution.parent !== undefined) return
       const agent = execution.agent, session = agent?.session, item = session ? currentSession(session.id) : undefined
       if (!item || item.closed || item.nativeAgent !== agent || item.nativeSession !== session || typeof session.eventAt !== 'function' || !Number.isSafeInteger(session.seq)) return
@@ -125,9 +109,6 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
     if (event.agent.session?.id) answerReview.cancel(event.agent.session.id)
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
     if (item !== undefined) item.failed = true
-    if (isModelAvailabilityFailure(event.error)) void markModelUnavailable(event.agent).catch(() => {
-      // Keep the in-memory reselect fence if durable storage is unavailable.
-    })
   })
   const sessionEventDisposer = onNativeEvent(ctx, 'session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     const item = currentSession(session.id)
@@ -152,18 +133,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
     }
     const data = objectRecord(event.data)
     const eventTurn = typeof data?.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : item?.turn
-    if (ennoMemory.enabled && item && item.nativeSession === session && event.type === 'user/message' && isHumanMessage(event.data)) {
-      ennoMemory.invalidate(item.runId)
-    }
     const ownsTurn = item !== undefined && !item.closed && eventTurn === item.turn && typeof event.type === 'string'
-    if (ennoMemory.enabled && ownsTurn && item.nativeSession === session && item.nativeAgent && event.type === 'tool/call'
-      && data?.turn === item.turn && Number.isSafeInteger(event.seq) && typeof data?.callId === 'string' && typeof data.name === 'string'
-      && !/^(?:enno_|oduno_|kiokuko|deep_)/u.test(data.name)) {
-      let calls = memoryCalls.get(session)
-      if (!calls) { calls = new Map(); memoryCalls.set(session, calls) }
-      if (calls.size >= 256) calls.delete(calls.keys().next().value!)
-      calls.set(data.callId, { name: data.name, runId: item.runId, agent: item.nativeAgent, turn: item.turn, seq: event.seq as number })
-    }
     if(event.type==='turn/end'&&typeof event.seq==='number'&&item?.nativeSession===session&&!item.closed) autoReview.notify(reviewBinding(item,session),event.seq)
     const claimKey = `${session.id}\u0000${eventTurn}`
     const fallback = ownsTurn ? inMemoryClaims.get(claimKey) : undefined
@@ -263,26 +233,6 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
         }
       }
       if (!turnEndedWithError || !recoveryAllowed) inMemoryClaims.delete(claimKey)
-      if (reason?.kind === 'completed' && item.prepared.ennoOduno.applicable && !executionSupport.paused(item.sessionId)) {
-        await runtime.withDatabase(database => {
-          const state = stateForRun(database, item)
-          if (state.nextAction === 'complete' || state.nextAction === 'report_blocker'
-            || state.status === 'cancelled' || state.contractRevision === null) return
-          const phase = state.nextAction === 'submit_ideal' ? 'ideal'
-            : state.nextAction === 'review_plan' || state.nextAction === 'submit_plan' || state.nextAction === 'ask_user_confirmation' ? 'planning'
-            : state.nextAction === 'execute_work_unit' ? 'work_unit'
-            : state.nextAction === 'submit_meditation' ? 'meditation' : 'final_review'
-          const operation = phase === 'ideal' ? 'ideal_submit' : phase === 'planning' ? 'plan_submit'
-            : phase === 'work_unit' ? 'work_report' : phase === 'meditation' ? 'meditation_submit' : 'finish'
-          enqueueUnsubmittedTurn(database, {
-            runId: item.runId, dshSessionId: item.sessionId, nativeTurn: item.turn,
-            phase, operation, contractRevision: state.contractRevision,
-            ...(state.directive?.workUnit?.id === undefined ? {} : { workUnitId: state.directive.workUnit.id }),
-            inputDigest: canonicalContentHash({ nextAction: state.nextAction, source: 'unsubmitted_turn' }),
-            idempotencyKey: `dsh-unsubmitted:${item.turn}`, nextAction: state.nextAction,
-          })
-        })
-      }
       kickBoundary(item.sessionId, item.nativeAgent)
     })().catch(() => {
       // Observe-only DSH listeners must never veto the native event.

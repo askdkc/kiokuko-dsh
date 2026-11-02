@@ -6,7 +6,8 @@ import { parseStrictJson } from '../dsh/strict-json.js';
 import { SkillProviderError } from '../skills/providers/schema.js';
 import { SkillSourceError, type SkillSourceFailureCode } from '../skills/source/errors.js';
 import type { SkillCandidate, SkillDiscoveryMode, SkillDiscoverySummary, SkillProviderFailureCode } from '../skills/types.js';
-import { ENNO_MAX_EXTERNAL_SKILLS, ENNO_MAX_TOTAL_SKILL_QUERIES } from '../enno-oduno/types.js';
+export const MAX_EXTERNAL_SKILLS = 2;
+export const MAX_TOTAL_SKILL_QUERIES = 3;
 
 const HASH = /^[0-9a-f]{64}$/u;
 const INVALID_TEXT = /[\p{Cc}\p{Cf}\p{Cs}\uFFFD]/u;
@@ -300,8 +301,8 @@ function validateAttemptRow(row: StoredAttemptRow, identity?: AgentTaskSkillDisc
     || !['intake', 'zenki'].includes(row.phase)
     || typeof row.request_digest !== 'string'
     || !HASH.test(row.request_digest)
-    || !boundedBudget(row.reserved_query_count, ENNO_MAX_TOTAL_SKILL_QUERIES)
-    || !boundedBudget(row.reserved_selection_count, ENNO_MAX_EXTERNAL_SKILLS)
+    || !boundedBudget(row.reserved_query_count, MAX_TOTAL_SKILL_QUERIES)
+    || !boundedBudget(row.reserved_selection_count, MAX_EXTERNAL_SKILLS)
     || !boundedBudget(row.consumed_query_count, row.reserved_query_count as number)
     || !boundedBudget(row.consumed_selection_count, row.reserved_selection_count as number)
     || !canonicalTimestamp(row.started_at)
@@ -405,7 +406,7 @@ function usedDiscoveryBudget(database: SqliteDatabase, runId: string): {
     queryBudget += active ? row.reserved_query_count as number : row.consumed_query_count as number;
     selectionBudget += active ? row.reserved_selection_count as number : row.consumed_selection_count as number;
   }
-  if (queryBudget > ENNO_MAX_TOTAL_SKILL_QUERIES || selectionBudget > ENNO_MAX_EXTERNAL_SKILLS) integrity();
+  if (queryBudget > MAX_TOTAL_SKILL_QUERIES || selectionBudget > MAX_EXTERNAL_SKILLS) integrity();
   return { queryBudget, selectionBudget };
 }
 
@@ -416,16 +417,16 @@ export function claimAgentTaskSkillDiscoveryAttempt(
     queryBudget: number;
     selectionBudget: number;
   } = {
-    queryBudget: ENNO_MAX_TOTAL_SKILL_QUERIES,
-    selectionBudget: ENNO_MAX_EXTERNAL_SKILLS,
+    queryBudget: MAX_TOTAL_SKILL_QUERIES,
+    selectionBudget: MAX_EXTERNAL_SKILLS,
   },
 ): AgentTaskSkillDiscoveryAttemptClaim {
   if (!boundedText(identity.runId, 256)
     || !HASH.test(identity.requestDigest)
     || (identity.phase !== 'intake' && identity.phase !== 'zenki')
     || !DISCOVERY_MODES.includes(identity.mode)
-    || !boundedBudget(requestedBudget.queryBudget, ENNO_MAX_TOTAL_SKILL_QUERIES)
-    || !boundedBudget(requestedBudget.selectionBudget, ENNO_MAX_EXTERNAL_SKILLS)) {
+    || !boundedBudget(requestedBudget.queryBudget, MAX_TOTAL_SKILL_QUERIES)
+    || !boundedBudget(requestedBudget.selectionBudget, MAX_EXTERNAL_SKILLS)) {
     throw new KiokukoError('VALIDATION_ERROR', 'Task Skill discovery attempt identity is invalid');
   }
   return withImmediateTransaction(database, () => {
@@ -437,8 +438,8 @@ export function claimAgentTaskSkillDiscoveryAttempt(
         throw new KiokukoError('CONFLICT', 'Task Skill discovery is already in progress or did not complete');
       }
       const used = usedDiscoveryBudget(database, identity.runId);
-      const queryBudget = Math.min(requestedBudget.queryBudget, ENNO_MAX_TOTAL_SKILL_QUERIES - used.queryBudget);
-      const selectionBudget = Math.min(requestedBudget.selectionBudget, ENNO_MAX_EXTERNAL_SKILLS - used.selectionBudget);
+      const queryBudget = Math.min(requestedBudget.queryBudget, MAX_TOTAL_SKILL_QUERIES - used.queryBudget);
+      const selectionBudget = Math.min(requestedBudget.selectionBudget, MAX_EXTERNAL_SKILLS - used.selectionBudget);
       const grantedQueryBudget = queryBudget === 0 || selectionBudget === 0 ? 0 : queryBudget;
       const grantedSelectionBudget = queryBudget === 0 || selectionBudget === 0 ? 0 : selectionBudget;
       database.prepare(`

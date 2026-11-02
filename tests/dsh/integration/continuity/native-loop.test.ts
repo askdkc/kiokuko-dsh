@@ -182,7 +182,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.deepEqual(questions, expectedQuestions,
       'reload preserves the recording choice and grounded research/writing adds no clarification or approval')
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM dsh_turn_receipts').get<{ n: number }>()!.n), 0,
-      'pause never fabricates Enno receipts or turn seals')
+      'pause never fabricates turn seals')
   } finally {
     composition.stopIngress(); releaseNative?.(); releaseOtherNative?.(); await agentScope?.dispose(); await otherScope?.dispose(); await adapter.dispose(); await composition.dispose()
     observeTools(); await questionFiber.dispose()

@@ -50,7 +50,7 @@ test('native connection metadata recognizes aliases without reading credentials 
   assert.equal(routes.filter(r => r.provider === 'my-orca').length, 1)
 })
 
-test('a live settings descriptor allows the recommended template to reach review without losing the draft', async () => {
+test('a live settings descriptor serves the execution card without losing the draft', async () => {
   const provider = 'openai'
   const llm = {
     listProviders: () => [{ id: provider, name: 'OpenAI' }],
@@ -59,21 +59,19 @@ test('a live settings descriptor allows the recommended template to reach review
     discoverModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ id, name: id })),
   }
   const catalog = nativeModelCatalog(llm, { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { openai: { baseURL: 'https://api.openai.com/v1', api: 'openai-responses' } } } }] })!
-  let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'enno', status: 'selecting' } }
+  let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'pending', status: 'selecting' } }
   const seen: string[] = []
   await assert.rejects(selectExecution({ task: 'Fix model selection', signal: new AbortController().signal, routes: [], llm: catalog, stored,
     save: async (revision, value) => { assert.equal(revision, stored.revision); return stored = { revision: revision + 1, value } },
     questions: { ask: async request => {
       const question = request.questions[0]!
       seen.push(question.id)
-      if (question.id === 'enno-template') assert.ok(question.options?.some(option => option.label === 'OpenAI — 候補・接続未検証'))
-      const selected = question.id === 'enno-model-source' ? 'おすすめテンプレートから選ぶ'
-        : question.id === 'enno-template' ? 'OpenAI — 候補・接続未検証' : '取消・作業を保持'
-      return { answers: [{ id: question.id, selected: [selected] }] }
+      assert.ok(question.options?.some(option => option.label === '通常実行'))
+      return { answers: [{ id: question.id, selected: ['取消・作業を保持'] }] }
     } },
   }), ExecutionSelectionPending)
-  assert.deepEqual(seen, ['enno-model-source', 'enno-template', 'enno-model-review'])
-  assert.equal(stored.value.draft?.roles.ideal?.model, 'gpt-6-astra')
+  assert.deepEqual(seen, ['execution-mode'])
+  assert.equal(stored.value.headWorker, undefined)
 })
 
 test('optional settings metadata failure cannot block the DSH model catalog', async () => {

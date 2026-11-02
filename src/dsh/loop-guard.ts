@@ -1,7 +1,5 @@
 import type { SqliteDatabase } from '../db/adapter.js'
-import type { EnnoOdunoState, EnnoRunSnapshot, RoleDirective } from '../enno-oduno/types.js'
 import { KiokukoError } from '../errors.js'
-import { canonicalContentHash } from '../serialization/validate.js'
 import type { DshBoundaryJob } from './turn-process.js'
 
 export const DSH_AUTOMATIC_CONTINUATION_LIMIT = 3
@@ -56,51 +54,6 @@ function omitUndefined(value: unknown): unknown {
       .filter(([, child]) => child !== undefined)
       .map(([key, child]) => [key, omitUndefined(child)]),
   )
-}
-
-/**
- * Hash only authoritative progress. Native turn IDs, receipts, validation
- * input/failure digests, error prose, and raw task text are deliberately absent.
- */
-export function ennoInstructionDigest(snapshot: EnnoRunSnapshot, directive: RoleDirective | null): string {
-  const currentWorkUnitId = directive?.workUnit?.id ?? null
-  const currentWorkUnit = currentWorkUnitId === null
-    ? null
-    : snapshot.workUnits.find((candidate) => candidate.workUnit.id === currentWorkUnitId) ?? null
-  return canonicalContentHash(omitUndefined({
-    contractRevision: snapshot.revision,
-    mutationRevision: snapshot.mutationRevision,
-    routeEpoch: snapshot.routeEpoch ?? 0,
-    status: snapshot.status,
-    attempts: snapshot.attempts,
-    currentWorkUnit: currentWorkUnit === null ? null : {
-      id: currentWorkUnit.workUnit.id,
-      status: currentWorkUnit.status,
-      attemptCount: currentWorkUnit.attemptCount,
-    },
-    finalEvidenceReady: snapshot.finalEvidenceReady,
-    finalEvidence: snapshot.finalEvidence.map((item) => ({
-      status: item.status,
-      stdoutDigest: item.stdoutDigest,
-      stderrDigest: item.stderrDigest,
-      changedDuringVerification: item.changedDuringVerification ?? false,
-    })),
-    advisoryPhaseState: snapshot.advisoryPhaseState ?? { state: 'not_started' },
-    directive,
-  }))
-}
-
-/** Compatibility digest for the legacy controller, which owns no core DB. */
-export function ennoStateInstructionDigest(state: EnnoOdunoState): string {
-  return canonicalContentHash(omitUndefined({
-    status: state.status ?? null,
-    contractRevision: state.contractRevision ?? null,
-    routeEpoch: state.routeEpoch ?? null,
-    currentRole: state.currentRole ?? null,
-    nextAction: state.nextAction,
-    advisoryPhaseState: state.advisoryPhaseState ?? { state: 'not_started' },
-    directive: state.directive ?? null,
-  }))
 }
 
 export function claimAutomaticContinuationInTransaction(
@@ -230,13 +183,6 @@ export function resetLoopGuardForUserInTransaction(
     UPDATE dsh_loop_guard_states
        SET instruction_digest = NULL, generation = generation + 1,
            automatic_count = 0, status = 'active', blocked_claim_id = NULL, updated_at = ?
-     WHERE run_id = ? AND dsh_session_id = ?
-  `).run(now, runId, dshSessionId)
-  // The older resume limiter remains a secondary automatic bound, but an
-  // explicit user intervention starts a new recovery generation there too.
-  database.prepare(`
-    UPDATE enno_dsh_continuations
-       SET continuation_count = 0, total_count = 0, updated_at = ?
      WHERE run_id = ? AND dsh_session_id = ?
   `).run(now, runId, dshSessionId)
 }

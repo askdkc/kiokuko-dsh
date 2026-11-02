@@ -156,7 +156,7 @@ function repairLegacyAbortRecord(value) {
   const record = objectRecord(value), data = objectRecord(record?.data)
   const reason = objectRecord(data?.reason)
   if (record?.type !== 'turn/end' || reason?.kind !== 'aborted') return value
-  if (reason.reason === 'kiokuko dsh Enno continuation stopped: continuation_limit') {
+  if (reason.reason === 'kiokuko dsh continuation stopped: continuation_limit') {
     return { ...record, data: { ...data, reason: { ...reason, reason: { kind: 'hook', reason: reason.reason } } } }
   }
   const cause = objectRecord(reason.reason)

@@ -90,7 +90,7 @@ function transportShape(value: unknown): unknown {
   }
   // The semantic boundary remains responsible for required fields, closed
   // objects, enum membership, and value bounds. The native transport only
-  // rejects JSON shape mismatches before they can commit a bounded Enno retry.
+  // rejects JSON shape mismatches before they can commit a bounded retry.
   if (source.type === 'object' || projected.properties !== undefined) projected.additionalProperties = true;
   return projected;
 }

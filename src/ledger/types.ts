@@ -17,13 +17,6 @@ export const LEDGER_EVENT_TYPES = [
   'test.completed', 'verification.recorded', 'error.recorded', 'retry.recorded',
   'cancellation.recorded', 'context.used', 'context.feedback', 'memory.proposed',
   'memory.promoted', 'task_profile.revised', 'correction.recorded', 'source.event',
-  'enno.started',
-  'enno.dsh_session_bound', 'enno.dsh_session_rebound',
-  'enno.advice_submitted', 'enno.advice_disposition', 'oduno.ideal_derived', 'zenki.plan_created', 'enno.plan_confirmed',
-  'goki.work_started', 'goki.work_completed', 'goki.work_failed',
-  'enno.review_started', 'enno.review_accepted', 'enno.replan_requested',
-  'enno.verification_started', 'enno.verification_passed', 'enno.verification_failed',
-  'oduno.meditation_completed', 'enno.completed', 'enno.blocked', 'enno.cancelled',
 ] as const;
 export type LedgerEventType = (typeof LEDGER_EVENT_TYPES)[number];
 

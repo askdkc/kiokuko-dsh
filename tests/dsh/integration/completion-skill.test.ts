@@ -40,13 +40,13 @@ test('completion guidance is discoverable and delivers only the selected referen
       const definition = await provider.get(candidate, {})
       assert.ok(definition)
       const unrelated = await buildDshMessageSources({ ...admitted, skillPrompts: prompts })
-      assert.ok(!unrelated.some(source => source.name === name || source.kind === 'expert'))
+      assert.ok(!unrelated.some(source => source.name === name))
       for (const reference of references) {
         const messages = await buildDshMessageSources({ ...admitted, skillPrompts: prompts,
-          routeSkillNames: [name], expertRefs: [{ skillName: name, relativePath: reference.relativePath }] })
+          routeSkillNames: [name] })
         assert.equal(messages.find(source => source.name === name)?.text, definition.content)
-        assert.deepEqual(messages.filter(source => source.kind === 'expert').map(source => source.text), [reference.content])
-        assert.ok(messages.filter(source => source.kind === 'route-skill' || source.kind === 'expert')
+        assert.deepEqual(messages.filter(source => source.kind === 'route-skill').map(source => source.text), [definition.content])
+        assert.ok(messages.filter(source => source.kind === 'route-skill')
           .reduce((bytes, source) => bytes + Buffer.byteLength(source.text), 0) <= 14_336)
       }
       assert.ok(prompts.diagnostics().every(diagnostic => !diagnostic.fallback))

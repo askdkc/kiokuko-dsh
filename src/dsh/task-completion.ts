@@ -21,7 +21,6 @@ import { withImmediateTransaction } from "../db/transaction.js";
 import { KiokukoError } from "../errors.js";
 import { applicationSourceDigest } from "../memory/application.js";
 import { canonicalContentHash } from "../serialization/validate.js";
-import { completionVerifiers } from "./completion-verifiers.js";
 import { readExecutionFrame } from "./execution-frame.js";
 import {
   hasExplicitTestCases,
@@ -104,14 +103,6 @@ export const CompletionMethodSchema = z.discriminatedUnion("kind", [
           });
       }
     }),
-  z
-    .object({
-      kind: z.literal("enno_verifier"),
-      verifierId: text,
-      workUnitId: text.optional(),
-      assertion: z.enum(["exit_zero", "selected_tests_pass"]),
-    })
-    .strict(),
 ]);
 export type CompletionMethod = z.infer<typeof CompletionMethodSchema>;
 export type CriterionAssessment = {
@@ -192,17 +183,11 @@ function runMode(database: SqliteDatabase, runId: string): CompletionMode {
 function criteriaForRun(
   database: SqliteDatabase,
   runId: string,
-): { criteria: CompletionCriterion[]; repositoryRoot: string; enno: boolean } {
+): { criteria: CompletionCriterion[]; repositoryRoot: string } {
   const coding = readCodingWorkflow(database, runId);
   if (coding)
     return {
       repositoryRoot: coding.repositoryRoot,
-      enno:
-        database
-          .prepare(
-            "SELECT 1 FROM dsh_execution_selections WHERE run_id=? AND json_extract(state_json,'$.mode')='enno'",
-          )
-          .get(runId) !== undefined,
       criteria: (coding.definition?.criteria ?? []).map((item) => ({
         id: `coding:${coding.workflowId}:${item.criterionId}`,
         description: `${item.outcome} / ${item.procedure} / ${item.expected}`,
@@ -212,38 +197,14 @@ function criteriaForRun(
     };
   const row = database
     .prepare(
-      `SELECT contract.repository_root AS root, contract.workspace,
-    contract.orchestration_session_id AS orchestrationId FROM ledger_runs AS ledger
-    LEFT JOIN enno_contracts AS contract ON contract.run_id = ledger.run_id WHERE ledger.run_id = ?`,
+      "SELECT workspace FROM ledger_runs WHERE run_id = ?",
     )
-    .get<{
-      root: string;
-      workspace: string | null;
-      orchestrationId: string | null;
-    }>(runId);
+    .get<{ workspace: string | null }>(runId);
   if (!row)
     throw new KiokukoError("NOT_FOUND", "Task completion run does not exist");
-  if (row.workspace && row.orchestrationId && row.root) {
-    const snapshot = completionVerifiers().criteria(database, {
-      runId,
-      workspace: row.workspace,
-      orchestrationId: row.orchestrationId,
-    });
-    return {
-      repositoryRoot: row.root,
-      enno: true,
-      criteria: snapshot.criteria.map((item) => ({
-        id: item.id,
-        description: item.description,
-        revision: snapshot.revision,
-        approval: "approved",
-      })),
-    };
-  }
   const frame = readExecutionFrame(database, runId);
   return {
     repositoryRoot: frame?.workspace ?? "",
-    enno: false,
     criteria: (frame?.conditions ?? [])
       .filter(
         (item) => item.field === "completion" && item.approval !== "proposed",
@@ -272,7 +233,7 @@ export function taskCompletionBindingGuide(
     coding = readCodingWorkflow(database, runId);
   return {
     ...structuredClone(COMPLETION_BINDING_GUIDE),
-    kind: source.enno ? "enno_verifier" : "native_command",
+    kind: "native_command",
     criteria: source.criteria.map((criterion) => {
       const definition = coding?.definition?.criteria.find(
         (item) =>
@@ -305,22 +266,12 @@ function validateMethod(
   runId: string,
   method: CompletionMethod,
   repositoryRoot: string,
-  enno: boolean,
 ): void {
   const coding = readCodingWorkflow(database, runId);
   if (coding && method.assertion === "exit_zero")
     throw new KiokukoError(
       "VALIDATION_ERROR",
       "Coding criteria require selected tests or observable output/artifact assertions, not exit 0 alone",
-    );
-  if (enno !== (method.kind === "enno_verifier"))
-    throw new KiokukoError(
-      "VALIDATION_ERROR",
-      "Completion method does not match execution mode",
-      {
-        field: "method.kind",
-        expected: enno ? "enno_verifier" : "native_command",
-      },
     );
   if (method.kind === "native_command") {
     const cwd = realpathSync(path.resolve(repositoryRoot, method.cwd));
@@ -333,48 +284,6 @@ function validateMethod(
     applicationSourceDigest(repositoryRoot, method.sourcePaths);
     // The pre-bound command selects the operation; complete process output,
     // rather than a command-name allowlist, establishes test coverage.
-  } else {
-    const row = database
-      .prepare("SELECT contract_json FROM enno_contracts WHERE run_id = ?")
-      .get<{ contract_json: string }>(runId);
-    const contract = row
-      ? (JSON.parse(row.contract_json) as {
-          finalVerifiers?: { id: string; executable: string; args: string[] }[];
-          workPlan?: {
-            units: {
-              id: string;
-              focusedVerifiers: {
-                id: string;
-                executable: string;
-                args: string[];
-              }[];
-            }[];
-          };
-        })
-      : undefined;
-    const verifiers = method.workUnitId
-      ? contract?.workPlan?.units.find((unit) => unit.id === method.workUnitId)
-          ?.focusedVerifiers
-      : contract?.finalVerifiers;
-    const verifier = verifiers?.find((item) => item.id === method.verifierId);
-    if (!verifier)
-      throw new KiokukoError(
-        "VALIDATION_ERROR",
-        "Completion verifier is absent from the approved Enno contract",
-        { field: "method.verifierId", expected: "approved_contract_verifier" },
-      );
-    if (
-      !coding &&
-      method.assertion === "selected_tests_pass" &&
-      !selectedNodeTestCommand(
-        [verifier.executable, ...verifier.args].join(" "),
-      )
-    ) {
-      throw new KiokukoError(
-        "VALIDATION_ERROR",
-        "Selected-test proof requires an explicit Node TAP verifier",
-      );
-    }
   }
 }
 
@@ -448,12 +357,10 @@ export function bindTaskCriterion(
     input.runId,
     method,
     source.repositoryRoot,
-    source.enno,
   );
   const approved =
     input.approved ||
-    criterion.description.trim() ===
-      (method.kind === "native_command" ? method.command : method.verifierId);
+    criterion.description.trim() === method.command;
   // One approved command may substantiate several criteria in the same
   // revision, but never a criterion from a later contract revision.
   const coding = readCodingWorkflow(database, input.runId);
@@ -559,7 +466,6 @@ export function beginTaskCompletionExecution(
 ): boolean {
   const source = criteriaForRun(database, input.runId);
   if (
-    source.enno ||
     realpathSync(input.repositoryRoot) !== realpathSync(source.repositoryRoot)
   )
     return false;
@@ -852,62 +758,13 @@ export function assessTaskCompletion(
           reason: "criterion_changed",
         };
       const method = CompletionMethodSchema.parse(JSON.parse(row.method_json));
-      if (method.kind === "enno_verifier") {
-        const contractRow = database
-          .prepare(
-            "SELECT workspace, orchestration_session_id AS orchestrationId FROM enno_contracts WHERE run_id = ?",
-          )
-          .get<{ workspace: string; orchestrationId: string }>(runId)!;
-        const fresh = completionVerifiers().results(
-          database,
-          { runId, ...contractRow },
-          source.repositoryRoot,
-          method.workUnitId,
-        );
-        const result = fresh?.find(
-          (item) => item.verifierId === method.verifierId,
-        );
-        if (!result)
-          return {
-            criterionId: criterion.id,
-            description: criterion.description,
-            state: "stale",
-            reason: "verifier_evidence_missing_or_stale",
-          };
-        const complete =
-          method.assertion === "exit_zero" ||
-          ((!coding || result.explicitCases === true) &&
-            result.tapSummary !== undefined &&
-            result.tapSummary.tests > 0 &&
-            result.tapSummary.pass === result.tapSummary.tests &&
-            result.tapSummary.skipped === 0 &&
-            result.tapSummary.todo === 0);
-        const skipped =
-          method.assertion === "selected_tests_pass" &&
-          result.tapSummary !== undefined &&
-          (result.tapSummary.skipped > 0 ||
-            result.tapSummary.todo > 0 ||
-            result.tapSummary.fail > 0);
+      if (method.kind !== "native_command")
         return {
           criterionId: criterion.id,
           description: criterion.description,
-          state:
-            result.status !== "passed" || skipped
-              ? "unmet"
-              : complete
-                ? "satisfied"
-                : "unknown",
-          reason:
-            result.status !== "passed"
-              ? "verifier_failed"
-              : skipped
-                ? "selected_tests_unmet"
-                : complete
-                  ? "fresh_verifier"
-                  : "selected_test_coverage_unknown",
-          evidenceRef: result.receiptId ?? `${runId}:${method.verifierId}`,
+          state: "stale",
+          reason: "unsupported_completion_method",
         };
-      }
       const executions = database
         .prepare(
           `SELECT * FROM dsh_completion_executions WHERE run_id = ? AND method_digest = ?

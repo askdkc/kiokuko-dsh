@@ -604,3 +604,20 @@ for (const mode of ["once", "persistent", "sealed"] as const) test(`memory extra
     await f.close();
   }
 });
+
+test("native logger property retains pre-approval memory failure diagnostics", async () => {
+  const f = await fixture();
+  try {
+    // Current Cordis exposes ctx.logger intrinsically, not as get('logger').
+    const get = f.host.get.bind(f.host);
+    f.host.get = name => name === "logger" ? undefined : get(name);
+    (f.host as any).logger = { warn: (message: string) => f.host.warnings.push(message) };
+    f.failStorage(new Error("fixture preparation failed"));
+    f.memory.completed("memory-task", "completed", f.session.id);
+    await f.memory.whenIdle();
+    assert.equal(f.host.warnings.length, 1);
+    assert.match(f.host.warnings[0]!, /Optional memory prepare unavailable.*fixture preparation failed/);
+    assert.equal(f.host.asked.length, 0);
+    assert.equal(count(f.database, "replay_memories"), 0);
+  } finally { await f.close(); }
+});

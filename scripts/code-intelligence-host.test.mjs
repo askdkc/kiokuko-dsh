@@ -147,7 +147,7 @@ test('standalone setup, browser and evaluation entries reject unmarked runtime b
   writeFileSync(join(packages,'@deepseek-ai/dsh/package.json'),JSON.stringify({name:'@deepseek-ai/dsh',version:'historical-fixture'}))
   const env={...process.env,KIOKUKO_DSH_PACKAGE_ROOT:packages,KIOKUKO_HARNESS_REPORT:join(directory,'report.json')}
   for(const key of ['KIOKUKO_EXPECTED_DSH_SHA','KIOKUKO_DSH_RUNTIME_MODE','KIOKUKO_DSH_SOURCE_ROOT','DSH_BIN'])delete env[key]
-  const scripts=['prepare-code-provider.mjs','run-code-intelligence.mjs','benchmark-code-intelligence.mjs','install-code-profile.mjs','verify-code-profile.mjs','run-skill-delivery.mjs','verify-module-packages.mjs','run-harness-evaluation.mjs','verify-lisp-approval-web.mjs','verify-shortcuts-web.mjs','verify-coding-workflow-web.mjs','verify-diff-review-web.mjs','verify-models-web.mjs','verify-lisp-web.mjs','verify-head-worker-settings-web.mjs','verify-lisp-plan-web.mjs','verify-correction-product-pair.ts','run-enno-dsh-e2e.mjs']
+  const scripts=['prepare-code-provider.mjs','run-code-intelligence.mjs','benchmark-code-intelligence.mjs','install-code-profile.mjs','verify-code-profile.mjs','run-skill-delivery.mjs','verify-module-packages.mjs','run-harness-evaluation.mjs','verify-lisp-approval-web.mjs','verify-shortcuts-web.mjs','verify-coding-workflow-web.mjs','verify-diff-review-web.mjs','verify-models-web.mjs','verify-lisp-web.mjs','verify-head-worker-settings-web.mjs','verify-lisp-plan-web.mjs','verify-correction-product-pair.ts']
   for(const script of scripts){
    const child=spawnSync(process.execPath,['--import','tsx',join('scripts',script)],{cwd:resolve(import.meta.dirname,'..'),env,encoding:'utf8',timeout:10000})
    assert.equal(child.status,1,script+' must fail closed before setup')

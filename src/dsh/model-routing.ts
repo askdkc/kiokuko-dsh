@@ -1,18 +1,8 @@
-import type { ModelBinding, ModelRole } from './model-configuration.js'
-import type { EnnoOdunoState } from '../enno-oduno/types.js'
+import type { ModelBinding } from './model-configuration.js'
 import type { DshNativeSession } from './session-bridge.js'
 import { applyJapaneseOutputSkill } from './japanese-output-skill.js'
 import type { PromptAssembly } from './japanese-output-skill.js'
 
-export function modelRoleForState(state: EnnoOdunoState): Exclude<ModelRole, 'worker'> | undefined {
-  switch (state.status) {
-    case 'oduno_ideal': return 'ideal'
-    case 'zenki_planning': case 'needs_confirmation': return 'zenki'
-    case 'goki_executing': return 'goki'
-    case 'enno_verifying': case 'oduno_meditation': return 'check'
-    default: return undefined
-  }
-}
 export interface RoutableAgent {
   readonly id: string
   readonly ctx?: { on(name: string, listener: (...args: any[]) => any, options?: { prepend?: boolean }): () => void }

@@ -69,7 +69,7 @@ session explicitly. Skipped, invalid, cancelled or unavailable questions continu
 without capture. An unanswered question is not repeated on each step; use
 `/kioku-agenticreplay start` later (or answer after reloading). With `askOnStart: true`,
 hosts without a question UI also require an explicit start command.
-Managed Enno worker and delegated child sessions are never prompted. A child
+Managed child sessions are never prompted. A child
 follows the exact decision of the session that owns it: with `askOnStart: false`
 it records under that parent's default, and with `askOnStart: true` it records
 only when the parent approved, because a question would interrupt managed work.

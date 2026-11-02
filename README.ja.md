@@ -24,7 +24,7 @@ dumpでは `kiokuko-dsh/harness` が1件だけ有効、`agent-loop` が無効で
 
 ## 機能
 
-- **実行方式** — 通常実行と役小角(enno-oduno)を選べます。[詳細](docs/model-selection.ja.md)
+- **実行方式** — 通常実行と、任意のヘッド/ワーカーモデルペアを選べます。[詳細](docs/model-selection.ja.md)
 - **プロジェクト記憶** — 作業で得た知識を後のタスクで検索できます。[基本概念](docs/concepts.ja.md)
 - **Deep Planning** — 四つの役割で読み取り専用の調査・計画を行います。[使い方](docs/deep-planning.md)
 - **DSHのSubagent** — 標準presetで `subagent` と `subagent_fork` を使えます。通常の子agentではKiokukoの実行方式を再選択しません。[設定](docs/dsh-plugin.md#subagents)
@@ -99,7 +99,7 @@ pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
 
 起動時に、日本語出力を含む全16 Skillと参照ファイルを `~/.agents/skills/` へ同期します。不足分を作成し、管理対象の旧版を更新します。非管理ファイルは上書きしません。他のエージェントではSkillカタログの再読み込みが必要です。
 
-ここで説明しているのは全入り構成です。[core と任意モジュールのビルド](docs/core-modules.md)では、選択した資産だけを配布します。core 単独で、Enno/Lisp の実行系を含めずに会話・調査・文章作成・プロジェクトメモリを扱えます。
+ここで説明しているのは全入り構成です。[core と任意モジュールのビルド](docs/core-modules.md)では、選択した資産だけを配布します。core 単独で、Lisp 実行系を含めずに会話・調査・文章作成・プロジェクトメモリを扱えます。
 
 起動時には、起動ディレクトリの `AGENTS.md` にある既存の Kiokuko 管理ブロックも更新し、その外側の指示は保持します。パッケージ更新後は DSH を再起動してください。別の作業ディレクトリや配備コピーの確認・修復は[セットアップ手順](docs/dsh-plugin.md#what-setup-updates-and-when)を参照してください。`kiokuko use` は DSH のセットアップコマンドではありません。
 
@@ -136,7 +136,7 @@ DSH 更新後に Kiokuko を読み込めない場合は、[起動失敗時の復
 ```
 
 既定の開発モードでは Bubblewrap は不要です。Linux で明示的に保護互換モードを選ぶ場合に必要です。
-「使う」は Lisp、「使わない」は通常ツール、「取消・作業を保持」は準備内容を残して取消です。閉じる・未回答では実装を始めません。通常実行／役小角の選択は別に保持します。Lisp の起動失敗はブロッカーとして残し、復旧または明示的な経路変更後に再開します。
+「使う」は Lisp、「使わない」は通常ツール、「取消・作業を保持」は準備内容を残して取消です。閉じる・未回答では実装を始めません。Lisp の選択はタスクごとに保持します。Lisp の起動失敗はブロッカーとして残し、復旧または明示的な経路変更後に再開します。
 
 Lisp を毎回選び直す必要はありません。`startupDefaults.lisp` を設定すると、作業開始カードがその回答を選んだ状態で表示され、その場で変更もできます。[作業開始時の既定値](#startup-defaults)を参照してください。
 選択後の通常の編集・テストには追加確認を求めません。ソース・実データの削除と既存の永続DB変更は対象を確認します。各項目の最新の証拠と、通常の利用入口からの最終確認が揃った場合だけ完了します。[Goal 駆動コーディング](docs/coding-workflow.md)と[独自実行、レシート、記憶の再利用](docs/owned-execution.md)を参照してください。
@@ -269,7 +269,7 @@ Global記憶の自動生成は停止しています。実行時の適用・検�
 
 ### 過去のツール出力の短縮
 
-ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな正常終了のツール結果をモデルへ2回提示した後、抜粋と `observation_read` で原文を取得できる参照に置き換えます。[Semantic compaction](docs/semantic-compaction.md) は、TODOの完了境界でも前倒し判定を行い、通常・Enno・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。 完全行の抜粋に元本文を一文字も残せない結果は、packせず全文を保持します。既存のv1 packとhandleは引き続き読み込み・復元できます。
+ObservationPack（既定値 `observationPack: { mode: auto }`）は、大きな正常終了のツール結果をモデルへ2回提示した後、抜粋と `observation_read` で原文を取得できる参照に置き換えます。[Semantic compaction](docs/semantic-compaction.md) は、TODOの完了境界でも前倒し判定を行い、通常・Lisp モードで、DSH の自動圧縮前に古いツール出力を選んで短縮します。既定値は `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }` です。利用可能と確認された型付き判定バックエンドと、対応するネイティブサービスが必要です。`/kioku-decisions status` で有効状態と直近の結果を確認できます。 完全行の抜粋に元本文を一文字も残せない結果は、packせず全文を保持します。既存のv1 packとhandleは引き続き読み込み・復元できます。
 
 Layaの圧縮には独立した設定があり、`typedDecisions.laya-coreml.compaction.mode: off` が既定です。明示的な `shadow` は履歴を変えずに評価し、`auto` は `experimental_not_qualified` として停止します。ObservationPackとnative summaryは既存設定を維持します。Akinatorは検証済みのdebug／research／writingだけを自動判定し、任意Skillは完全な説明を持つ最大4候補から最大1個を選びます。[Layaの設定と評価](docs/semantic-compaction.md#local-laya)を参照してください。
 

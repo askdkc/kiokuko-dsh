@@ -63,7 +63,7 @@ async function evaluate(configPath) {
         const evidence = scenario.evidence ? [{ id: 'fixture', callId: 'read', rootCallId: 'read', turn: 1, generation: 'fixture',
           operation: { kind: 'read', paths: [path.join(workspace, 'source.txt')], key: 'read', range: { offset: 1, limit: 2 } },
           acquiredRange: { firstLine: 1, lastLine: 2, totalLines: 40 }, digest: hash('fixture result'), ...scenario.evidence }] : []
-        const view = adaptContinuity({ owner: { runId: 'fixture-run', workspace, sessionId: 'fixture-session', mode: 'normal', workUnitId: null, role: null },
+        const view = adaptContinuity({ owner: { runId: 'fixture-run', workspace, sessionId: 'fixture-session', mode: 'normal' },
           generation: 'fixture', frame, evidence })
         if (scenario.report) {
           const ref = { kind: 'enno-work-result', key: 'fixture-run:dependency', revision: hash(scenario.report) }

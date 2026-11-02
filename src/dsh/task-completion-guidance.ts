@@ -8,12 +8,11 @@ export const COMPLETION_BINDING_GUIDE={
     conditions:{selected_tests_pass:'Observe complete passing selected-test output from the exact bound command; binding or exit 0 alone is not proof.',
       output_matches:'Requires expectedOutput and exact observed output.',artifact_matches:'Requires artifactPath, artifactSha256 and artifactPath in sourcePaths.',
       exit_zero:'Only when the current non-coding criterion permits it; never sufficient for a coding criterion.'}},
-  enno_verifier:{requiredFields:['kind','verifierId','assertion'],condition:'Use a verifier in the current approved Enno contract; add workUnitId only for its focused verifier. No native command substitute.'},
 } as const
 const corrections:Record<string,string>={
   action:'Use status to read current criteria, or bind to propose a check.',
   criterionId:'Copy the exact current criterionId from task_completion status.',
-  'method.kind':'Choose native_command for native work or enno_verifier for the current approved Enno route.',
+  'method.kind':'Use native_command for the current approved route.',
   'method.command':'Supply the exact authorized foreground command matching the intended check procedure; bind does not execute it.',
   'method.cwd':'Supply an existing working directory inside the current repository; use . for its root.',
   'method.sourcePaths':COMPLETION_BINDING_GUIDE.native_command.sourcePaths,
@@ -21,7 +20,6 @@ const corrections:Record<string,string>={
   'method.expectedOutput':'Supply the exact expected output for output_matches.',
   'method.artifactPath':'Supply the current repository-relative artifact path and include it in sourcePaths.',
   'method.artifactSha256':'Supply the expected artifact SHA-256 as 64 lowercase hexadecimal characters.',
-  'method.verifierId':'Use the exact verifierId from the current approved Enno contract, not an arbitrary command.',
 }
 export interface CompletionInputIssue {field:string;reason:string;expected?:string}
 export function completionInputError(issues:readonly CompletionInputIssue[]):KiokukoError {
@@ -31,6 +29,6 @@ export function completionInputError(issues:readonly CompletionInputIssue[]):Kio
     examples:[{condition:'For a current selected_tests criterion in native mode; replace the illustrative ID, command and paths using its actual authorized procedure.',
       arguments:{action:'bind',criterionId:'current-criterion-id',method:{kind:'native_command',command:'node --test tests/example.test.mjs',cwd:'.',sourcePaths:['src/example.mjs','tests/example.test.mjs'],assertion:'selected_tests_pass'}}},
       {condition:'For a current output criterion in native mode; use its real expected output and authorized paths.',arguments:{action:'bind',criterionId:'current-output-criterion-id',method:{kind:'native_command',command:'node src/example.mjs',cwd:'.',sourcePaths:['src/example.mjs'],assertion:'output_matches',expectedOutput:'42'}}}],
-    nextAction:'correct_current_binding_input',note:'Examples are shapes, not permission or evidence. A successful bind remains unverified until the exact approved check is observed on current sources. Native and Enno methods are not interchangeable.'}
+    nextAction:'correct_current_binding_input',note:'Examples are shapes, not permission or evidence. A successful bind remains unverified until the exact approved check is observed on current sources.'}
   return new KiokukoError('VALIDATION_ERROR',`Invalid task_completion input.\nRecovery: ${JSON.stringify(recovery)}`,recovery)
 }

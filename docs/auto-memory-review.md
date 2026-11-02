@@ -1,13 +1,13 @@
 # Automatic memory review
 
-Open top-level chats, discussions and normal/Enno runs review newly completed
+Open top-level chats, discussions and normal runs review newly completed
 human turns without waiting for the session to close. The default interval is
 8 turns. A review may add a project candidate, update a candidate owned by this
 feature, leave it unchanged, or hold it for later evaluation. An empty result
 is a successful review. Saving a memory does not make it verified.
 
 The next human request selects relevant memories using its current question and
-the existing scope, capability and memory-use gates. Active Enno work keeps its
+the existing scope, capability and memory-use gates.
 existing refresh owner and budgets. Saving and retrieval are separate steps;
 not every saved memory belongs in every response.
 
@@ -161,7 +161,7 @@ npm run test:benchmark:memory-review
 
 The native integration tests exercise DSH Session, agent loop and registered
 provider adapter with a deterministic mock model. They verify saving in an
-open chat and retrieval on the next request with `ennoMemory` off/observe/active.
+open chat and retrieval on the next request.
 Separate tests cover two OS processes sharing SQLite, budget rollover, restart,
 late results, exclusion, candidate protection and Finalizer reconciliation.
 

@@ -9,21 +9,6 @@ const identity = z
     (value) => value === value.trim(),
     "Identifiers must not have surrounding whitespace",
   );
-export const MODEL_ROLES = [
-  "ideal",
-  "zenki",
-  "goki",
-  "worker",
-  "check",
-] as const;
-export type ModelRole = (typeof MODEL_ROLES)[number];
-export const ROLE_LABELS: Record<ModelRole, string> = {
-  ideal: "enno-ideal",
-  zenki: "前鬼 (Zenki)",
-  goki: "後鬼 (Goki) ヘッド",
-  worker: "後鬼のサブエージェント",
-  check: "enno-check・振り返り",
-};
 export const ModelRouteSchema = z
   .object({
     provider: identity,
@@ -57,6 +42,7 @@ export type ModelBinding = z.infer<typeof ModelBindingSchema>;
 export const ModelConfigurationSchema = z
   .object({
     routeBindings: z.array(ModelRouteSchema).max(128).optional(),
+    /** Historical Enno-era role names; retained only to read already-persisted rows. */
     roles: z
       .object({
         ideal: ModelBindingSchema,
@@ -83,153 +69,6 @@ export const LegacyModelConfigurationDraftSchema = ModelConfigurationDraftSchema
 export type ModelConfigurationDraft = z.infer<
   typeof ModelConfigurationDraftSchema
 >;
-export interface ModelTemplate {
-  readonly id: string;
-  readonly version: number;
-  readonly name: string;
-  readonly group: string;
-  readonly family: ModelRoute["family"];
-  /** Exact connection contract of an explicitly selected plugin template. */
-  readonly route?: ModelRoute;
-  readonly models: Readonly<Record<ModelRole, readonly string[]>>;
-  readonly maxConcurrentChildren: number;
-}
-function template(
-  id: string,
-  name: string,
-  group: string,
-  family: ModelRoute["family"],
-  head: string,
-  worker: string,
-  goki = head,
-  aliases: readonly string[] = [],
-): ModelTemplate {
-  return Object.freeze({
-    id,
-    version: 1,
-    name,
-    group,
-    family,
-    models: {
-      ideal: [head, ...aliases],
-      zenki: [head, ...aliases],
-      goki: [goki, ...(goki === head ? aliases : [])],
-      worker: [worker],
-      check: [head, ...aliases],
-    },
-    maxConcurrentChildren: family === "ollama" ? 1 : 4,
-  });
-}
-/** Provider-owned exact identifiers only. Display names never select a model. */
-export const MODEL_TEMPLATES: readonly ModelTemplate[] = [
-  template(
-    "openai",
-    "OpenAI",
-    "OpenAI",
-    "openai",
-    "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-6-sol",
-  ),
-  Object.freeze({
-    ...template(
-      "openai-codex",
-      "OpenAI Codex・推奨（dsh-codex）",
-      "OpenAI",
-      "openai",
-      "gpt-6-astra",
-      "gpt-6-luna",
-      "gpt-6-sol",
-    ),
-    // askdkc/dsh-codex e2e61b6 registers this exact route with the Codex Responses adapter.
-    route: {
-      provider: "openai-codex",
-      family: "openai",
-      connection: "codex",
-      protocol: "responses",
-    } as const,
-  }),
-  Object.freeze({
-    ...template(
-      "deepseek-flash",
-      "DeepSeek・V4.1 Flash",
-      "DeepSeek",
-      "deepseek",
-      "deepseek-flash",
-      "deepseek-flash",
-    ),
-    route: {
-      provider: "deepseek-official",
-      family: "deepseek",
-      connection: "api",
-      protocol: "chat-completions",
-    } as const,
-  }),
-  template(
-    "go-deepseek-flash",
-    "OpenCode Go・DeepSeek V4.1 Flash",
-    "OpenCode Go",
-    "opencode-go",
-    "deepseek-v4.1-flash",
-    "deepseek-v4.1-flash",
-  ),
-  template(
-    "go-glm",
-    "OpenCode Go・GLM",
-    "OpenCode Go",
-    "opencode-go",
-    "glm-5.3",
-    "glm-5.3-flash",
-  ),
-  template(
-    "go-qwen",
-    "OpenCode Go・Qwen",
-    "OpenCode Go",
-    "opencode-go",
-    "qwen3.8-max",
-    "qwen3.8-flash",
-  ),
-  template(
-    "zen-glm",
-    "OpenCode Zen",
-    "OpenCode Zen",
-    "opencode-zen",
-    "glm-5.3",
-    "glm-5.3-flash",
-  ),
-  template(
-    "router-deepseek-flash",
-    "OpenRouter・DeepSeek V4.1 Flash",
-    "OpenRouter",
-    "openrouter",
-    "deepseek/deepseek-v4.1-flash",
-    "deepseek/deepseek-v4.1-flash",
-  ),
-  template(
-    "router-glm",
-    "OpenRouter・GLM",
-    "OpenRouter",
-    "openrouter",
-    "z-ai/glm-5.3",
-    "z-ai/glm-5.3-flash",
-  ),
-  template(
-    "router-qwen",
-    "OpenRouter・Qwen",
-    "OpenRouter",
-    "openrouter",
-    "qwen/qwen3.8-max-0902",
-    "qwen/qwen3.8-flash",
-  ),
-  template(
-    "ollama",
-    "Ollama・ローカル標準",
-    "Ollama",
-    "ollama",
-    "qwen3-coder:30b",
-    "qwen3-coder:30b",
-  ),
-];
 export interface ConfiguredModel {
   readonly provider: string;
   readonly id: string;
@@ -357,29 +196,6 @@ export interface DshModelCompatibility {
     readonly goSessionHeaders: boolean;
   }>;
 }
-export async function configurationProblems(
-  configuration: ModelConfiguration,
-  catalog: ModelCatalogSnapshot,
-  routes: readonly ModelRoute[],
-  compatibility?: DshModelCompatibility,
-  validation: 'catalog' | 'connection' = 'connection',
-): Promise<string[]> {
-  return modelBindingProblems(
-    MODEL_ROLES.map((role) => ({
-      label: ROLE_LABELS[role],
-      binding: configuration.roles[role],
-    })),
-    catalog,
-    modelRoutesForCatalog(catalog, [
-      ...routes,
-      ...(configuration.routeBindings ?? []).filter(
-        (route) => !routes.some((r) => r.provider === route.provider),
-      ),
-    ]),
-    compatibility,
-    validation,
-  );
-}
 export async function modelBindingProblems(
   bindings: readonly { label: string; binding: ModelBinding }[],
   catalog: ModelCatalogSnapshot,
@@ -459,19 +275,4 @@ export async function modelBindingProblems(
       );
   }
   return [...new Set(problems)];
-}
-export function templateBindings(
-  template: ModelTemplate,
-  provider: string,
-  catalog: ModelCatalogSnapshot,
-): Partial<Record<ModelRole, ModelBinding>> {
-  return Object.fromEntries(
-    MODEL_ROLES.flatMap((role) => {
-      const id = template.models[role].find((id) =>
-        catalog.models.some((m) => m.provider === provider && m.id === id),
-      ) ?? (catalog.unverifiedProviders?.includes(provider) && catalog.providers.some(p => p.id === provider)
-        ? template.models[role][0] : undefined);
-      return id === undefined ? [] : [[role, { provider, model: id }]];
-    }),
-  );
 }

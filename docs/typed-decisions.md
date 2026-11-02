@@ -286,14 +286,6 @@ missing configuration, uncertainty and service failures use the existing workflo
 fallback. Identity, revision, permission and integrity failures never authorize
 fallback execution.
 
-Zenki calls `enno_plan_review` with the complete candidate. All atomic checks must
-be answered; otherwise the exact persisted `roles.check` model reviews the full
-candidate in a no-tool stream. Both paths share a 30-second review budget. All
-three contribution slots need dispositions. `enno_plan_submit` accepts only the
-identical reviewed candidate with the same catalog and revisions. A changed draft
-requires review again. If neither reviewer completes, the draft remains
-unsubmitted. Existing confirmation and Goki lease checks still apply. Already
-accepted plans continue normally; old pre-draft advice cannot satisfy review.
 
 In Lisp:
 

@@ -3,8 +3,6 @@ import { dshPonytailOwnerKey, type DshPonytailModes } from '../commands.js'
 import type { DshIntakeGateResult, DshPreStepEvent } from '../intake-gate.js'
 import type { DshToolPolicy, DshToolPolicyState } from '../tool-policy.js'
 import type { StoredExecutionSelection } from '../execution-selection.js'
-import type { EnnoOperationResponse } from '../../enno-oduno/service.js'
-import type { EnnoOdunoState } from '../../enno-oduno/types.js'
 import type { DshCapabilityCatalog } from '../capability-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import type { ExecutionBinding } from '../execution-support.js'
@@ -40,37 +38,6 @@ export interface TurnRecord {
   closed: boolean
 }
 
-function phaseForState(state: EnnoOdunoState): DshToolPolicyState['phase'] {
-  if (!state.applicable) return 'completed'
-  if (state.status === 'intake') return 'intake'
-  if (state.status === 'oduno_ideal') return 'ideal'
-  if (state.status === 'zenki_planning') return 'planning'
-  if (state.status === 'needs_confirmation') return 'confirmation'
-  if (state.status === 'goki_executing') return 'goki'
-  if (state.status === 'enno_verifying') return 'verifying'
-  if (state.status === 'oduno_meditation') return 'meditation'
-  if (state.status === 'blocked') return 'blocked'
-  if (state.status === 'cancelled') return 'cancelled'
-  return 'completed'
-}
-
-export function policyState(state: EnnoOdunoState, record: TurnRecord, sessionId: string, lease?: EnnoOperationResponse['executionLease']): DshToolPolicyState {
-  return {
-    phase: phaseForState(state),
-    runId: record.runId,
-    workspace: record.workspace,
-    orchestrationId: record.orchestrationId,
-    ...(record.prepared.context?.deliveryId === null || record.prepared.context?.deliveryId === undefined ? {} : { deliveryId: record.prepared.context.deliveryId }),
-    revision: state.contractRevision ?? 1,
-    routeEpoch: lease?.routeEpoch ?? state.routeEpoch ?? 0,
-    ...(state.advisoryPhaseState.state === 'aggregated' ? { advisoryRoundDigest: state.advisoryPhaseState.inputDigest } : {}),
-    ...(lease === undefined ? {} : { leaseToken: lease.leaseToken, workUnitId: lease.workUnitId, currentWorkUnitId: lease.workUnitId }),
-    dshSessionId: sessionId,
-    nativeTurn: record.turn,
-    ...(state.nextAction === undefined ? {} : { nextAction: state.nextAction }),
-  }
-}
-
 export function createTurnState(
   modes: Pick<DshPonytailModes, 'begin' | 'end'>,
   policy: Pick<DshToolPolicy, 'setState' | 'clearSession'>,
@@ -80,7 +47,6 @@ export function createTurnState(
   const latestBySession = new Map<string, TurnRecord>()
   const states = new Map<string, DshToolPolicyState>()
   const activeModeRequests = new Map<string, string>()
-  const resumedLeases = new Map<string, NonNullable<EnnoOperationResponse['executionLease']>>()
   const currentSession = (sessionId: string): TurnRecord | undefined => latestBySession.get(sessionId)
   const applyPolicy = (runId: string, state: DshToolPolicyState): void => {
     states.set(runId, state)
@@ -101,10 +67,7 @@ export function createTurnState(
     if (previous !== undefined && (previous.nativeAgent !== event.nativeAgent || previous.nativeSession !== event.nativeSession)) {
       throw new Error('kiokuko-dsh logical turn changed native agent or session identity')
     }
-    const incomingRevision = result.prepared.ennoOduno.contractRevision ?? 0
-    const previousRevision = previous?.prepared.ennoOduno.contractRevision ?? 0
-    if (previous !== undefined && (incomingRevision < previousRevision
-      || incomingRevision === previousRevision && generation <= previous.prepareGeneration)) return
+    if (previous !== undefined && generation <= previous.prepareGeneration) return
     const sameAuthority = previous?.authority?.sessionId === authority?.sessionId && previous?.authority?.revision === authority?.revision
       && previous?.authority?.generation === authority?.generation
     const item: TurnRecord = previous ? sameAuthority ? previous : { ...previous } : {
@@ -134,23 +97,13 @@ export function createTurnState(
     if (event.nativeAgent !== undefined) item.nativeAgent = event.nativeAgent
     if (event.nativeSession !== undefined) item.nativeSession = event.nativeSession
     item.turn = event.turn
-    const sameRevision = previous !== undefined && incomingRevision === previousRevision
-      && previous.prepared.ennoOduno.applicable === result.prepared.ennoOduno.applicable
     const previousMemoryOwner = previous?.prepared.memoryOwner
     const nextMemoryOwner = result.prepared.memoryOwner
     const sameMemoryOwner = previousMemoryOwner?.kind === nextMemoryOwner?.kind
       && previousMemoryOwner?.agentId === nextMemoryOwner?.agentId && previousMemoryOwner?.sessionId === nextMemoryOwner?.sessionId
       && previousMemoryOwner?.turn === nextMemoryOwner?.turn && previousMemoryOwner?.requestDigest === nextMemoryOwner?.requestDigest
       && previousMemoryOwner?.runId === nextMemoryOwner?.runId
-    if (sameRevision) {
-      // A newer prepare may carry a newer context delivery while Enno has not
-      // advanced its revision. Preserve the active lease and other policy
-      // state; only replace the authoritative prepared context and delivery.
-      item.prepared = { ...item.prepared, context: result.prepared.context, memoryPolicy: result.prepared.memoryPolicy,
-        ...(nextMemoryOwner === undefined ? {} : { memoryOwner: nextMemoryOwner }) }
-    } else {
-      item.prepared = result.prepared
-    }
+    item.prepared = result.prepared
     item.prepareGeneration = generation
     item.task = event.task
     if (event.requestIntent !== undefined) item.requestIntent = event.requestIntent
@@ -168,33 +121,18 @@ export function createTurnState(
       modes.begin(modeRequest, modeKey)
       activeModeRequests.set(modeKey, modeRequest)
     }
-    const existingState = states.get(item.runId)
-    if (existingState !== undefined && existingState.revision === incomingRevision
-      && existingState.phase === phaseForState(result.prepared.ennoOduno)) {
-      // A continued native turn for the same Enno revision must retain the
-      // active WorkUnit lease and route epoch. Rebuilding policy from the
-      // public prepared projection would silently discard those host-only
-      // credentials and make the first report after recovery fail with
-      // lease_required. The operation path already advances this state when
-      // Enno changes phase; at pre-step only the delivery and authoritative
-      // native turn can legitimately be refreshed without a new contract
-      // revision.
-      const { deliveryId: _previousDeliveryId, ...withoutDeliveryId } = existingState
-      const deliveryId = result.prepared.context?.deliveryId
-      const next = deliveryId === null || deliveryId === undefined
-        ? { ...withoutDeliveryId, nativeTurn: event.turn }
-        : { ...withoutDeliveryId, deliveryId, nativeTurn: event.turn }
-      applyPolicy(item.runId, next)
-    } else {
-      const next = policyState(result.prepared.ennoOduno, item, event.sessionId, resumedLeases.get(run))
-      resumedLeases.delete(run)
-      applyPolicy(item.runId, next)
+    const deliveryId = result.prepared.context?.deliveryId
+    const next: DshToolPolicyState = {
+      phase: 'normal',
+      runId: item.runId,
+      workspace: item.workspace,
+      orchestrationId: item.orchestrationId,
+      ...(deliveryId === null || deliveryId === undefined ? {} : { deliveryId }),
+      revision: 1,
+      dshSessionId: event.sessionId,
+      nativeTurn: event.turn,
     }
-    if (getSelection(item.runId)?.value.mode === 'normal') {
-      const { nextAction: _unused, ...ordinaryState } = states.get(item.runId)!
-      const next: DshToolPolicyState = { ...ordinaryState, phase: 'normal' }
-      applyPolicy(item.runId, next)
-    }
+    applyPolicy(item.runId, next)
   }
   const currentForAgentEvent = (agentId: string, sessionId?: string, turn?: number, nativeSession?: object, nativeAgent?: object): TurnRecord | undefined => {
     // The session is the authoritative route key. Agent ID alone is not
@@ -212,13 +150,9 @@ export function createTurnState(
   const executionBinding = (item: TurnRecord): ExecutionBinding => ({
     runId: item.runId, sessionId: item.sessionId, nativeAgent: item.nativeAgent, nativeSession: item.nativeSession,
     cwd: item.cwd, repositoryRoot: item.repositoryRoot, task: item.task, turn: item.turn,
-    ennoState: item.prepared.ennoOduno,
     chat: item.prepared.intake.profile.taskType === 'chat' || !!getSelection(item.runId)?.value.discussion,
-    terminal: item.closed || ['complete', 'report_blocker'].includes(item.prepared.ennoOduno.nextAction)
-      && item.prepared.ennoOduno.applicable,
-    generation: canonicalContentHash({ runId:item.runId, task:item.task, revision: item.prepared.ennoOduno.contractRevision,
-      route: item.prepared.ennoOduno.routeEpoch ?? null, action: item.prepared.ennoOduno.nextAction,
-      lease: states.get(item.runId)?.leaseToken ?? null }),
+    terminal: item.closed,
+    generation: canonicalContentHash({ runId: item.runId, task: item.task }),
   })
   const sessionIds = (): readonly string[] => [...latestBySession.keys()]
   const releaseRun = (runId: string, authority?: TaskLease): void => {
@@ -238,7 +172,6 @@ export function createTurnState(
     }
     if (![...turns.values()].some(item => item.runId === runId)) {
       states.delete(runId)
-      resumedLeases.delete(runId)
     }
   }
   const clear = (): void => {
@@ -246,13 +179,11 @@ export function createTurnState(
     latestBySession.clear()
     states.clear()
     activeModeRequests.clear()
-    resumedLeases.clear()
   }
   return {
     record, currentSession, currentForAgentEvent, allTurns, sessionIds, executionBinding,
     policyState: (runId: string): DshToolPolicyState | undefined => states.get(runId),
     applyPolicy,
-    stageLease: (runId: string, lease: NonNullable<EnnoOperationResponse['executionLease']>): void => { resumedLeases.set(runId, lease) },
     releaseRun, clear,
   }
 }

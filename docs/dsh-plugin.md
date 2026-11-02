@@ -5,7 +5,7 @@ Kiokuko provides an out-of-tree DeepSeek Harness bundle at `kiokuko-dsh`.
 not fork DeepSeek Harness or modify a repository's files.
 
 These installation instructions use the full compatibility package. A separate
-`kiokuko-dsh/core` entry and local core/Enno/Lisp artifacts are available through
+`kiokuko-dsh/core` entry and local core/Lisp artifacts are available through
 the [configured module build](core-modules.md). Selecting a subpath alone does
 not remove files or dependencies from an installed full package.
 
@@ -63,7 +63,7 @@ events; ordinary conversation text and native todo items are not state evidence.
 
 `toolExposure.mode` defaults to `auto`. On verified OpenAI API routes, normal
 chat/research/analysis/writing/review omit Kiokuko model tools; build/debug/devops
-and active Enno use phase/nextAction filtering with lean descriptions. Native
+use lean descriptions. Native
 and external tools remain available. Explicit `full` preserves the surface.
 `phase` removes only verified Kiokuko tools that are unavailable in the current
 execution phase. Opt-in `lean` applies the same phase policy and removes the
@@ -440,7 +440,7 @@ depend on a consumer-side build permission.
 ## Runtime contract
 
 The Core SQLite database remains the semantic authority for Akinator, memory,
-Enno-Oduno, receipts, leases, and verifier evidence. DeepSeek `SessionEvent`
+receipts and durable evidence. DeepSeek `SessionEvent`
 is the canonical current-session transcript and tool-evidence boundary.
 Kiokuko copies events and verified attachment bytes into a separate,
 rebuildable cache for bounded export and post-completion finalization. Cache
@@ -471,12 +471,12 @@ The dsh integration provides:
   field (including full-width digits) resolve in the same displayed order.
   Shift+Enter and IME composition do not submit. Pending drafts survive a
   Session switch. Every single-select question carrying one to nine options uses
-  the same numbered card — Kiokuko's own intake, the Enno and Deep selection
-  questions, an agent-composed choice such as a release step, and another
+  the same numbered card — Kiokuko's own intake, the Deep selection
+  question, an agent-composed choice such as a release step, and another
   plugin's question alike — so a shortcut is never missing from a question this
   composer shows. Carriers a single number key cannot address — multi-select
   batches, optionless prompts, several questions in one request, and catalogs
-  larger than nine options outside the Enno and Deep flows — retain their native
+  larger than nine options outside the Deep flow — retain their native
   UI. Plan-review cards also use numbered choices: discussion first, refusal
   when offered, then approval. Cmd/Ctrl+1–3 selects a choice and Enter confirms;
   selecting a number alone never submits approval. The plan remains rendered as
@@ -484,14 +484,10 @@ The dsh integration provides:
   cancels the request through the native carrier;
 - an explicit `chat` intake choice (including free-form aliases such as
   `just chatting` and `雑談`) and the task-type question's **Skip this
-  question** action; both skip target/success follow-ups and never create an
-  Enno-Oduno contract, and the chat choice carries across conversational
+  question** action; both skip target/success follow-ups and never create a separate run, and the chat choice carries across conversational
   follow-ups until an explicit actionable request starts a new run;
-- the Kiokuko operations, with only the nine model-facing operations
+- the Kiokuko operations, with the two model-facing operations
   exposed as model tools and host identity injected after argument validation;
-- host-bound capability catalogs are carried into plan submission, while
-  advisory digests remain host-owned and the current model reports only its
-  per-slot advisory dispositions after receiving the bounded advisory evidence;
 - Oduno ideal directives distinguish the mandatory Skill reading list from
   Akinator-discovered Skill contributions, constrain the latter to the exact
   selected names (including an exact empty list), and return bounded corrective
@@ -555,11 +551,9 @@ native flush. Human input supersedes a pending continuation, and plugin delivery
 IDs alone are deduplicated at the next pre-step.
 
 A DSH model-request failure, including a WebSocket failure, also leaves an
-unfinished Enno run active and does not automatically replay model or tool
-work. When the user continues in a later turn, the adapter revalidates the exact
-DSH session, contract revision, and current WorkUnit, then rotates its execution
-lease before reinjecting the directive. Recovery therefore remains available
-after the old 15-minute lease expires without allowing an older turn to report.
+unfinished run active and does not automatically replay model or tool work.
+When the user continues in a later turn, the adapter revalidates the exact
+DSH session before reinjecting any pending continuation.
 
 Ordinary chat remains open while the agent is idle between conversational
 messages. An explicit build, debug, review, research, writing, analysis, or
@@ -573,14 +567,13 @@ after queued events are durable.
 
 Short status checks such as `all fixed?` are classified as analysis rather than
 as a new fix request, and commit-message requests are classified as writing.
-If either arrives while an earlier Enno run is still at the unstarted Oduno
-ideal boundary, the old run is cancelled and the explicit lightweight request
-starts independently instead of being trapped inside that contract.
+If either arrives while an earlier run has not started work, the old run is
+cancelled and the explicit lightweight request starts independently.
 
 After a plugin reload or process restart has cleared in-memory turn state, the
-adapter resumes only the single unambiguous active Enno-Oduno run already bound
+adapter resumes only the single unambiguous active run already bound
 to the same persistent DSH session and canonical repository. The session is
-revalidated through the core continuation gate, persisted pending advisory evidence is restored once, and
+revalidated through the core continuation gate and
 previous ordinary-memory context is not replayed implicitly. Multiple matching
 runs, a continuation limit, a conflicting execution lease, or a changed
 capability catalog still fails closed instead of selecting or advancing a run.
@@ -594,29 +587,12 @@ unavailable states stop without converting the failure into a normal success.
 
 ## Verification
 
-From the Kiokuko checkout:
-
-```bash
-npm run test:e2e:dsh
-```
-
-This builds the package, runs the Cordis composition test with an in-memory
-host adapter, validates model/tool/question/ledger/turn-end boundaries, and
-then runs the pack/install/dump-config/Web-start/Web-stop/remove flow when a
-`dsh` executable is available. When `DSH_BIN` points into a local DeepSeek
-Harness source checkout (or `KIOKUKO_DSH_SOURCE_ROOT` is set), it also resumes a
-persisted pending advisory round and runs two consecutive full Enno agent-loop
-flows through intake, ideal, planning, dedicated review, work reporting, final
-verification, advisory disposition, meditation, native DSH checkpoint,
-terminal close, and post-completion memory finalization. The second flow
-dismisses review, carries revision feedback through the
-next human turn, resubmits, and approves before work starts. It then handles
-consecutive `all fixed?` and commit-message turns without creating another Enno
-contract. The first flow includes a long streamed response and verifies that
-no DSH events are copied into the Kiokuko ledger; the rebuildable mirror retains
-them for cursor-backed finalization/export and records cache usage. Without a dsh executable the CLI portion is reported
-as `unsupported`; CI sets `KIOKUKO_REQUIRE_DSH_CLI=1` so absence is a failure
-rather than an unverified success.
+From the Kiokuko checkout, `npm run build && node scripts/run-tests.mjs tests/dsh/e2e`
+builds the package, runs the Cordis composition test with an in-memory host
+adapter, and validates model/tool/ledger/turn-end boundaries. The
+pack/install/Web-start/Web-stop/remove flow is exercised by the pinned
+end-to-end suite when a `dsh` executable is available; without one the CLI
+portion is reported as `unsupported`.
 
 The terminal profile has a separate acceptance runner. Supply a built DSH CLI,
 packed UI and Kiokuko tarballs, the installed `node-pty/package.json`, and a

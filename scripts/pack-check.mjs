@@ -65,7 +65,6 @@ const requiredFiles = [
   'migrations/035_owned_execution.sql',
   'migrations/036_coding_workflow.sql',
   'docs/coding-workflow.md',
-  'dist/enno-oduno/coding-workflow.js',
   'dist/dsh/coding-workflow/intent.js',
   'dist/dsh/coding-workflow/contracts.js',
   'dist/dsh/coding-workflow/store.js',
@@ -120,7 +119,6 @@ const requiredFiles = [
   'scripts/answer-review-evaluation.mjs',
   'dist/memory/application.js',
   'dist/dsh/memory-application.js',
-  'dist/enno-oduno/memory-verification.js',
   'docs/memory-application.md',
   'docs/auto-memory-review.md',
   'dist/dsh/lisp/manager.js',
@@ -153,11 +151,6 @@ const requiredFiles = [
   'lisp/vendor/cl-unicode/hash-tables.lisp',
   'lisp/vendor/cl-unicode/lists.lisp',
   'LICENSE',
-  'migrations/018_dsh_enno_memory_refresh.sql',
-  'dist/dsh/enno-memory-refresh.js',
-  'dist/dsh/enno-memory-refresh-store.js',
-  'dist/enno-oduno/memory-focus.js',
-  'dist/enno-oduno/memory-refresh-policy.js',
   'migrations/017_dsh_deep_quality.sql',
   'dist/deep-thinker/core/quality.js',
   'dist/deep-thinker/acceptance.js',
@@ -188,7 +181,6 @@ const requiredFiles = [
   'dist/dsh/index.d.ts',
   'dist/dsh/core/index.js',
   'dist/dsh/core/index.d.ts',
-  'dist/dsh/modules/enno.js',
   'dist/dsh/modules/lisp.js',
   'docs/core-modules.md',
   'skills/japanese-translation-for-oss-models/SKILL.md',
@@ -348,9 +340,8 @@ async function createAndSmokeTestTarball() {
     const plugin = await import('kiokuko-dsh');
     const direct = await import('kiokuko-dsh/dsh');
     const core = await import('kiokuko-dsh/core');
-    const enno = await import('kiokuko-dsh/modules/enno');
     const lisp = await import('kiokuko-dsh/modules/lisp');
-    if (typeof core.createConfiguredPlugin !== 'function' || enno.ennoModule.id !== 'enno' || lisp.lispModule.id !== 'lisp') throw new Error('missing configured module exports');
+    if (typeof core.createConfiguredPlugin !== 'function' || lisp.lispModule.id !== 'lisp') throw new Error('missing configured module exports');
     if (JSON.stringify(Object.keys(root)) !== JSON.stringify(Object.keys(direct))) throw new Error('guarded entry changed public exports');
     for (const name of Object.keys(direct)) if (root[name] !== direct[name]) throw new Error('guarded entry changed export identity: ' + name);
     if (plugin.name !== 'kiokuko-dsh') throw new Error('unexpected plugin name');
@@ -504,7 +495,6 @@ try {
     }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './harness', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

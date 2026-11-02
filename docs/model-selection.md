@@ -1,19 +1,18 @@
 # Execution and model selection
 
-For each new build, debug, review or devops task, including README edits, choose
-**normal execution** or **役小角(enno-oduno)** in the native DSH question cards.
-An explicit instruction such as “without enno-oduno” avoids a duplicate mode
-question. Chat and existing non-Enno research/writing tasks keep their ordinary
-flow. Continuations, retries and replanning retain the logical task's choice.
-Cancel or skip preserves the request and draft configuration for resumption.
+For each new build, debug, review or devops task, including README edits, the host
+performs Akinator intake and runs normal execution. Chat and research/writing
+tasks keep their ordinary flow. Continuations, retries and replanning retain the
+logical task's identity. Cancel or skip preserves the request and any draft
+configuration for resumption.
 
 Normal execution uses the current DSH model, memory, applicable Skills, native
-permissions and focused verification. It creates no Enno contract, WorkUnit,
-plan approval or automatic Enno continuation.
+permissions and focused verification. It creates no separate contract, work-unit
+plan, plan approval or automatic continuation.
 
 ## Automatic model selection
 
-In Web profiles, [Kiokuko Models](kiokuko-models.md) manages connections without requiring DSH's Models settings. Its registered models are available to ordinary chat, Enno and Deep alongside native connections.
+In Web profiles, [Kiokuko Models](kiokuko-models.md) manages connections without requiring DSH's Models settings. Its registered models are available to ordinary chat and Deep alongside native connections.
 
 `modelAutoMode` is off by default in both the full plugin and modular core. To try it, authenticate Codex through Kiokuko Models or dsh-codex in the same DSH profile, configure a Jev, Laya or [OpenAI typed-decision backend](typed-decisions.md#openai-credentials), then use `observe` before enabling automatic routing:
 
@@ -28,16 +27,13 @@ modelAutoMode:
 /kioku-model-auto observe
 /kioku-model-auto status
 /kioku-model-auto on
-/kioku-model-auto off
 ```
-
-The command changes only the current native session. `on` also clears its manual model pin; a model selected in DSH's picker pins that session until `on` is run again. Changes apply at the next new task boundary, without changing a request already sent. `/kioku-decisions status` includes the same session projection. To reset session overrides after a configuration change, restart DSH; changing `modelAutoMode.mode` to `off` and restarting disables routing.
 
 The initial preset offers `gpt-6-luna` at low, medium and high effort, plus `gpt-6-sol` at high effort. Up to four exact route bindings can be configured under `modelAutoMode.routes`; each has an `id` from `luna-low`, `luna-medium`, `luna-high`, `sol-high`, and a `binding` with `provider`, `model`, and `reasoningEffort`. These are route labels, so a registered Astra or other GPT model may be assigned explicitly. No new model ID is guessed or substituted. A candidate must have a validated Codex origin and Responses protocol, live model context and modality metadata, supported efforts, call-config validation and token meter. Both native `openai-codex` and Kiokuko-owned Codex routes qualify; an arbitrary provider name or OpenAI API connection does not. Fewer than two valid bindings skips classification.
 
 For a new admitted normal task, Kiokuko sends the current task text, task type, attachment kinds, route IDs and rubric to the selected Jev, Laya or OpenAI backend. It does not send attachment bytes, full history or repository contents for this classification. One Choice result selects a route or abstains. The route is stored against the exact run and reused for continuations; an unknown in-flight decision after restart is retained without another classifier call. `observe` records a proposal but keeps the current model. A failed probe, missing metadata, unsupported effort, timeout, oversized input or abstention also keeps the current model. Cancellation, stale session identity and storage integrity failures stop the request. Dispatch authentication, quota and unavailable-model errors remain ordinary failures; no alternate model is retried automatically.
 
-The status distinguishes the configured mode, readiness, proposal and selected binding from the model observed in a native `request/header`. The initial preset is a rubric, not a claim that it improves quality, elapsed time or subscription usage. Enno, Deep, children, chat, review continuation and protected Lisp execution retain their existing owners. Automatic escalation after a failed implementation pass is not enabled.
+The status distinguishes the configured mode, readiness, proposal and selected binding from the model observed in a native `request/header`. The initial preset is a rubric, not a claim that it improves quality, elapsed time or subscription usage. Deep, children, chat, review continuation and protected Lisp execution retain their existing owners. Automatic escalation after a failed implementation pass is not enabled.
 
 ### Routing evaluation and decision cache
 
@@ -56,110 +52,45 @@ npm run test:evaluation:model-routing -- --live --provider laya --config PATH
 
 `PATH` is a JSON file in the `typedDecisions` configuration shape. Jev requires a versioned `typesafe.model` and `TYPESAFE_API_KEY`; Laya uses an already running worker. Live evaluation makes classifier requests, including a readiness probe, but never starts a generation turn or changes the active session model. Optional `--repetitions 1..10` (default 1), `--seed UINT32` (default 0), and `--output PATH` control repeatable JSON reporting. Offline output checks the evaluation pipeline and reports `quality: null`. Live results compare fixed cases with the current rubric; they do not establish model capability, real-work quality, cost, or provider cache savings. Laya v1 input completeness remains unverified.
 
-The shared decision service keeps at most 256 completed request bindings and 256 completed results in memory when it can reload them from persistent storage. It does not delete stored decisions. This applies to decisions used by normal execution, Enno review, and Lisp `kioku.decisions:*`; automatic model routing and this evaluation remain specific to normal execution.
+The shared decision service keeps at most 256 completed request bindings and 256 completed results in memory when it can reload them from persistent storage. It does not delete stored decisions. This applies to decisions used by normal execution and Lisp `kioku.decisions:*`; automatic model routing and this evaluation remain specific to normal execution.
 
-On Enno and Deep selection cards, use the displayed **Cmd+1–9** shortcuts on macOS
-or **Ctrl+1–9** on Windows/Linux, then press Enter to confirm. With the card
-focused, you can also type an option number and press Enter to submit. For options
-above nine, type consecutive digits (`1`, `2`, Enter selects option 12); Backspace
-corrects the number. Digits typed in the search field remain search text, and Enter
-submits the search. IME composition and repeated key events do not select or submit.
+Option question cards accept **Cmd+1–9** shortcuts on macOS or **Ctrl+1–9** on
+Windows/Linux, then Enter to confirm. With the card focused, typing an option
+number and pressing Enter also submits. For options above nine, type consecutive
+digits (`1`, `2`, Enter selects option 12); Backspace corrects the number. Digits
+typed into a search field remain search text, and Enter submits the search. IME
+composition and repeated key events do not select or submit.
 
-Enno offers eleven versioned templates across **OpenAI, DeepSeek, OpenCode Go,
-OpenCode Zen, OpenRouter and Ollama**, plus a custom configured-model selector. The complete
-[template table and configuration reference](model-selection.ja.md) lists exact
-model IDs. OpenAI assigns Astra to ideal/Zenki/check, Sol to the Goki head and
-Luna to workers. Go and OpenRouter provide GLM and Qwen variants; Zen uses GLM.
-Ollama uses `qwen3-coder:30b` for every role, limits children to one, and never
-downloads models. Reasoning uses model defaults; reflection uses the check model.
+## Head/worker model pairs
 
-All DeepSeek recommendations use **V4.1 Flash for all five roles**. Exact IDs differ:
-`deepseek-flash` on [DeepSeek's API](https://www.deepseek.com/en/news/deepseek-v4-1-flash/),
-`deepseek-v4.1-flash` on [OpenCode Go](https://opencode.ai/docs/go/), and
-`deepseek/deepseek-v4.1-flash` on [OpenRouter](https://openrouter.ai/deepseek/deepseek-v4.1-flash).
-The direct DeepSeek template uses DSH's `deepseek-official` connection. These templates
-never substitute V4 Pro or an older Flash ID when V4.1 Flash is unavailable.
-The [OpenCode model registry](https://models.opencode.ai/api.json) was also checked
-on 2026-09-11. Its `opencode-go` entry includes V4.1 Flash; its Zen entry (`opencode`)
-does not. Registry entries can lag provider changes. Zen and Ollama
-use the configured-model selector for models without a verified template ID.
+The native selection card offers the current DSH model (`通常実行`) or a fixed
+**GPT-6.1-Sol head + DeepSeek V4.1 Flash subagent** pair for the task. The pair is
+adopted only after live catalog validation of both exact model IDs; there is no
+automatic replacement. A pair is stored per logical run or per session and never
+rewrites an active task's resolved configuration. Agent-scoped assembly/request
+hooks freeze one selection per request and restore ordinary routing at
+completion.
 
-OpenCode connections added in Kiokuko Models use the plugin's own transport. Custom connections to the official Zen/Go endpoints also retain conversation routing across Chat Completions, Responses and Messages. Native DSH provider profiles remain owned by DSH; select the Kiokuko Models connection to use this transport.
+OpenAI assignments follow the [OpenAI model guide](https://developers.openai.com/api/docs/models):
+**gpt-6.1-sol** as the head and **gpt-6.1-luna**/DeepSeek **V4.1 Flash** as the
+worker, matching dsh-codex registration IDs when using a Codex connection. Exact
+provider/model IDs are passed to the native adapter; display names never
+authorize substitutions.
 
-For [dsh-codex](https://github.com/askdkc/dsh-codex), choose **OpenAI Codex・推奨（dsh-codex）**
-from the template menu, then confirm the configuration. It assigns Astra to
-ideal/planning/check, Sol to the Goki head and Luna to workers, following the
-[OpenAI model guide](https://developers.openai.com/api/docs/models). This is a
-quality/workload recommendation, not a measured per-task latency or quota optimum.
-The template also accepts a Kiokuko Models Codex connection with verified origin
-and Responses metadata, storing its stable `kiokuko-…` registration ID. The native
-route retains the `openai-codex` / `codex` / `responses` contract from
-[dsh-codex's implementation](https://github.com/askdkc/dsh-codex/blob/e2e61b6d8f3b511cf2dac99688e97b8728cb122c/src/index.ts)
-without asking for the connection again. Native DSH model validation takes
-precedence over legacy `modelRoutes` declarations; the plugin configuration file
-remains untouched. Recommended models must exist in the current DSH catalog;
-missing models leave roles unset and prevent starting. The catalog is rechecked
-immediately before adoption.
+DSH owns provider authentication, transport and model validation. Authentication,
+quota and unavailable-model failures retain completed work and require reselection
+rather than automatic fallback.
 
-Bind generic templates to actual configured DSH providers; route IDs are not assumed.
-Distinguish OpenAI API from Codex authentication and Go from Zen. The selector
-supports provider/model search, pagination, copying roles, editing, back and
-cancel. Exact IDs or declared aliases resolve models; similar display names
-never authorize substitutions. Edited templates are custom but retain their
-original template ID/version. Configuration confirmation shows every role's
-provider and model. Provider-catalog failure, missing routes/models and required
-compatibility verification have distinct presentations.
-Unset roles start with enno-ideal's provider and go straight to model selection;
-editing an assigned role keeps its own provider. Use “接続を変更” (change connection)
-on the model card to choose another provider. If the preferred provider is unset
-or no longer registered, the selector opens the provider list.
-Use “検索をクリア” to clear an empty search and “一覧を再取得” to retry a failed list.
-Free-text digits remain search terms. Selecting a model returns directly to role
-review. Provider family, authentication and protocol are taken from DSH rather
-than requested again. Back and cancel retain confirmed model assignments.
-
-To choose by model name, select **DSHに設定済みのモデルから選ぶ**, edit a role,
-select its connection, then search or select a model name and confirm the configuration.
-This works with configured **OpenCode Go, OpenCode Zen, OpenRouter and Ollama**
-connections. Every entry displays its name and exact ID; the same model on OpenRouter
-Each connection remains a distinct binding. Lists come from the current DSH profile.
-Register a missing connection in DSH and select **一覧を再取得** to refresh it.
-The public registry is a recommendation reference; it does not register models in
-DSH. Its `ollama-cloud` catalog is separate from a local Ollama installation.
-
-DSH owns provider authentication, transport and model validation. Kiokuko passes
-exact provider/model IDs to the native adapter and uses DSH's configurable-provider
-directory for template matching and local concurrency. Unknown provider metadata
-is not a reason to ask for connection details again. Authentication, quota and
-unavailable-model failures retain completed work and require reselection rather
-than automatic fallback.
-
-Optional legacy `modelRoutes` entries remain readable for older hosts and provider
-plugins without directory metadata. Current native metadata takes precedence;
-these entries never override DSH's wire settings. On hosts without native model
-validation, existing Astra/Go declarations retain their compatibility checks.
-Local validation and recording-adapter tests do not prove paid account access
-or provider acceptance of a request.
+## Persisted selection and recovery
 
 Resolved configuration and the ordinary model are persisted per logical run.
-Template updates do not rewrite active tasks. Agent-scoped assembly/request hooks
-freeze one selection per request and restore ordinary routing at completion;
-the Web `selectModel()` command and deployment defaults are not changed.
-
-`enno_delegate` accepts an `instruction` for the current approved WorkUnit. The
-host validates the lease, chooses the approved worker model and uses native
-in-process `spawn`. Children are bound before their first request and cannot
-restart intake, delegate or report parent acceptance. Initially workers use
-scoped file tools; Goki runs commands and focused verifiers and then reports with
-`enno_work_report`. Child completion is evidence, not WorkUnit acceptance.
-Interrupted delegations remain uncertain rather than being automatically replayed.
-Child concurrency is counted from durable state across restarts. Each child request
-and file operation rechecks the current lease. A hard process exit can leave a
-delegation marked as running; inspect its native child evidence before additional
-delegation. Restarting does not erase that reservation.
+The configured execution owner binds run ownership to one `mode` and rejects
+conflicting ownership rather than allowing a second task lane. A persisted
+selection that no longer matches current policy degrades to an explicit reselect
+prompt instead of being silently reinterpreted.
 
 Native tests cover request model IDs, ordinary README completion, cancel/reload,
 input recovery, independent sessions, routing restoration and actual adapter
 transport. Recording adapters do not verify paid account access, subscription
-limits or successful live provider responses. Existing advisors, leases, final
-verification, memory finalization and AgenticReplay behavior remain in place.
+limits or successful live provider responses. Memory finalization and
+AgenticReplay behavior remain in place.

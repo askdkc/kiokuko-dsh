@@ -16,7 +16,7 @@ import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSe
 import { ExecutionSelectionPending } from '../model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../lisp/coding-choice.js'
 import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from '../lisp/request-surface.js'
-import { installDshModelRouting, modelRoleForState, isModelAvailabilityFailure, type RoutableAgent } from '../model-routing.js'
+import { installDshModelRouting, type RoutableAgent } from '../model-routing.js'
 import { assertDshModelAdmitted, type DshIntakeGateResult, type DshPreStepEvent } from '../intake-gate.js'
 import { hasKnownDshToolPolicyState, type DshToolPolicyState } from '../tool-policy.js'
 import { projectToolsForLean, projectToolsForMinimal, resolveToolExposureMode, projectToolsForPhase, type ToolExposureConfig, type ToolExposureMetrics } from '../tool-exposure.js'
@@ -29,10 +29,8 @@ import type { DshCoreRuntime } from '../core-runtime.js'
 import type { ModelAutoCoordinator } from '../model-auto/coordinator.js'
 import type { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
-import type { DshEnnoDelegation } from '../enno-delegation.js'
 import type { DeepPlanningController } from '../../deep-thinker/controller.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
-import type { EnnoOdunoState } from '../../enno-oduno/types.js'
 import type { TurnRecord } from './turn-state.js'
 import { onNativeEvent } from './native-events.js'
 import { operationName } from './tool-host.js'
@@ -51,7 +49,6 @@ interface RoutingDependencies {
   readonly modelAuto: ModelAutoCoordinator
   readonly answerReview: AnswerReviewCoordinator
   readonly semanticCompaction: SemanticCompactionCoordinator
-  readonly delegation: DshEnnoDelegation
   readonly deepPlanning: DeepPlanningController
   readonly isGenericNativeChild: (agent: RoutableAgent) => boolean
   readonly getSkillPrompts: () => DshSkillPrompts
@@ -67,59 +64,35 @@ interface RoutingDependencies {
   readonly prepareTurn: (event: DshPreStepEvent) => Promise<DshIntakeGateResult>
   readonly mapPreStep: (payload: DshNativePreStepPayload) => Promise<DshPreStepEvent>
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
-  readonly readStateForRun: (item: TurnRecord) => Promise<EnnoOdunoState>
   readonly refreshMemoryOwner: (item: TurnRecord, signal: AbortSignal) => Promise<void>
 }
 
 export function createRouting({
   ctx, native, tools, agents, sessions, runtime, modelAuto, answerReview,
-  semanticCompaction, delegation, deepPlanning, isGenericNativeChild, getSkillPrompts,
+  semanticCompaction, deepPlanning, isGenericNativeChild, getSkillPrompts,
   getToolExposureConfig, reportToolExposureFallback, reportToolExposureProjection, modelCatalog,
   getSelection, setSelection, hasSelection,
   getPolicyState, captureInitialInput, prepareTurn, mapPreStep, currentSession,
-  readStateForRun, refreshMemoryOwner, demand, nativeWorkers,
+  refreshMemoryOwner, demand, nativeWorkers,
 }: RoutingDependencies) {
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
-  const selectionFailures = new Map<string, Promise<void>>()
   const selectionBlocked = new WeakSet<object>()
   const manualModelChanges = new Map<string, Promise<void>>()
   const assemblyClaims = new WeakMap<object, { turn: number; messages: unknown[] }>()
-  const markModelUnavailable = (agent: RoutableAgent): Promise<void> => {
-    const owner = delegation.parent(agent) ?? agent
-    const item = owner.session ? currentSession(owner.session.id) : undefined
-    if (!item || getSelection(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return Promise.resolve()
-    const existing = selectionFailures.get(item.runId)
-    if (existing) return existing
-    const current = getSelection(item.runId)!
-    const value = { ...current.value, status: 'reselect' as const, problem: '選択したモデルで認証・利用上限・モデル利用可否のエラーが発生しました。完了済みの作業を保持しています。次の要求に使う構成を選び直してください。' }
-    setSelection(item.runId, { ...current, value })
-    const pending = runtime.withDatabase(db => {
-      const stored = readExecutionSelection(db, item.runId)
-      if (!stored) throw new KiokukoError('INTEGRITY_ERROR', 'Model selection disappeared')
-      setSelection(item.runId, writeExecutionSelection(db, item.runId, stored.revision, { ...stored.value, status: 'reselect', problem: value.problem }))
-    }).finally(() => selectionFailures.delete(item.runId))
-    selectionFailures.set(item.runId, pending)
-    return pending
-  }
+  const markModelUnavailable = (agent: RoutableAgent): Promise<void> => Promise.resolve()
   const routingDisposers = new Map<object, () => void>()
   const installRouting = (agent: RoutableAgent) => {
     if (routingDisposers.has(agent) || !agent.ctx) return
     const releaseToolSurfaceRecording = semanticCompaction.deferToolSurfaceRecording(agent as unknown as CompactionAgent)
     semanticCompaction.attach(agent as unknown as CompactionAgent, async () => {
-      const childModel = await delegation.restoreOrPersist(agent)
-      if (childModel) {
-        const authority = await delegation.authorityFingerprint(agent)
-        return { child: delegation.observationBinding(agent), childSessionId: agent.session?.id, model: childModel, authority }
-      }
       if (isNativeSubagent(agent)) return undefined
       const item = agent.session ? currentSession(agent.session.id) : undefined
       return item ? { runId: item.runId, sessionId: item.sessionId, selection: getSelection(item.runId) ?? null,
         taskEvidence: { currentRequest: item.task,
           ...(item.prepared.intake.profile.target ? { target: item.prepared.intake.profile.target } : {}),
           ...(item.prepared.intake.profile.expected ? { successCriteria: item.prepared.intake.profile.expected } : {}),
-          ...(item.prepared.intake.profile.constraints ? { constraints: item.prepared.intake.profile.constraints } : {}) },
-        state: await readStateForRun(item) } : { sessionId: agent.session?.id }
+          ...(item.prepared.intake.profile.constraints ? { constraints: item.prepared.intake.profile.constraints } : {}) } } : { sessionId: agent.session?.id }
     })
     const memoryFence = new MemoryRequestFence()
     const disposeRetry = onNativeEvent(agent.ctx, 'agent/request-error', async (event: any, next: () => Promise<any>) => {
@@ -129,7 +102,6 @@ export function createRouting({
     const disposeMemory = onNativeEvent(agent.ctx, 'agent/request', async (event: any, next: () => Promise<any>) => {
       memoryFence.begin(event)
       const request = await next()
-      if (delegation.isChild(agent)) return request
       if (demand?.pending(agent)) { await demand.beforeRequest(agent); return request }
       const item = agent.session ? currentSession(agent.session.id) : undefined
       const prepared = item?.turn === memoryFence.turn ? item.prepared : undefined
@@ -169,11 +141,11 @@ export function createRouting({
           const selection = selectionRecord?.value
           const state = item ? getPolicyState(item.runId) : undefined
           const prepared = item?.prepared
-          const selectionOptional = exposureMode === 'auto' && !!prepared && !prepared.ennoOduno.applicable
+          const selectionOptional = exposureMode === 'auto' && !!prepared
             && ['chat', 'research', 'analysis', 'writing'].includes(prepared.intake.profile.taskType ?? '')
             && (prepared.intake.status === 'ready' || prepared.intake.status === 'exhausted')
           const selectionReady = selection ? selection.status === 'ready' && !selection.discussion
-            && (selection.mode === 'normal' || selection.mode === 'enno') : selectionOptional
+            && selection.mode === 'normal' : selectionOptional
           const unboundReason = !item ? 'turn_record_missing'
             : !session ? 'native_session_missing'
             : !selection && !selectionOptional ? 'selection_missing'
@@ -181,7 +153,7 @@ export function createRouting({
             : !prepared ? 'prepared_state_missing'
             : selection && selection.status !== 'ready' ? 'selection_not_ready'
             : selection?.discussion ? 'discussion_pending'
-            : selection && selection.mode !== 'normal' && selection.mode !== 'enno' ? 'unsupported_selection_mode'
+            : selection && selection.mode !== 'normal' ? 'unsupported_selection_mode'
             : item.closed ? 'session_closed'
             : item.failed ? 'session_failed'
             : prepared.run.status !== 'active' ? 'run_not_active'
@@ -190,7 +162,6 @@ export function createRouting({
             : item.nativeSession !== session ? 'session_identity'
             : agents?.get(agent.id) !== agent ? 'agent_registry'
             : sessions?.get(session.id) !== session ? 'session_registry'
-            : delegation.isChild(agent) ? 'delegated_agent'
             : deepPlanning.executor.isChild(agent) ? 'deep_planning_agent'
             : state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn ? 'policy_binding'
             : !hasKnownDshToolPolicyState(state) ? 'unknown_policy_state'
@@ -199,7 +170,7 @@ export function createRouting({
             || item.closed || item.failed || prepared.run.status !== 'active'
             || currentSession(item.sessionId) !== item || item.nativeAgent !== agent || item.nativeSession !== session
             || agents?.get(agent.id) !== agent || sessions?.get(session.id) !== session
-            || delegation.isChild(agent) || deepPlanning.executor.isChild(agent)
+            || deepPlanning.executor.isChild(agent)
             || state.runId !== item.runId || state.workspace !== item.workspace || state.orchestrationId !== item.orchestrationId
             || state.dshSessionId !== item.sessionId || state.nativeTurn !== item.turn || !hasKnownDshToolPolicyState(state)) fallback = `unbound:${unboundReason}`
           else {
@@ -208,14 +179,13 @@ export function createRouting({
               && item.nativeAgent === agent && item.nativeSession === session && item.prepared === prepared
               && item.prepareGeneration === generation && getSelection(item.runId) === selectionRecord
               && getPolicyState(item.runId) === state && agents?.get(agent.id) === agent && sessions?.get(session.id) === session
-              && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent)
+              && !deepPlanning.executor.isChild(agent)
             let effectiveMode: import('../tool-exposure.js').ResolvedToolExposureMode = exposureMode === 'auto' ? 'full' : exposureMode
             let decisionReason = 'explicit'
             if (exposureMode === 'lean' || exposureMode === 'auto') {
-              const exposureRole = modelRoleForState(item.prepared.ennoOduno)
               const selectedBinding = autoRoute?.runId === item.runId && autoRoute.sessionId === item.sessionId
                 ? autoRoute.binding
-                : selection?.mode === 'enno' && exposureRole ? selection.configuration?.roles[exposureRole] : undefined
+                : undefined
               const variables = (assembly as { variables?: Record<string, unknown> }).variables
               const provider = variables?.provider
               const model = variables?.model
@@ -223,7 +193,7 @@ export function createRouting({
               if (!assemblyBinding || (selectedBinding && (assemblyBinding.provider !== selectedBinding.provider || assemblyBinding.model !== selectedBinding.model))) fallback = 'model_binding_unavailable'
               else {
                 const decision = resolveToolExposureMode({ mode: exposureMode, taskType: prepared.intake.profile.taskType,
-                  selectionMode: selection?.mode === 'enno' ? 'enno' : 'normal', state })
+                  selectionMode: 'normal', state })
                 effectiveMode = decision.mode
                 decisionReason = decision.reason
                 if (effectiveMode === 'full') fallback = decision.reason
@@ -246,7 +216,7 @@ export function createRouting({
                 if (projection.reason === 'projected') assembly = Object.assign({}, assembly, {
                   tools: projection.tools,
                   ...(effectiveMode === 'minimal' ? { sections: assembly.sections.map(section => section.name === 'kiokuko:soul'
-                    ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` }
+                    ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check or memory_checkpoint. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` }
                     : section) } : {}),
                 })
                 if (effectiveMode === 'minimal' && projection.reason === 'projected') minimalSurface = true
@@ -266,7 +236,7 @@ export function createRouting({
       // An armed/native Deep request owns its ingress before ordinary intake.
       const deep = await deepPlanning.beforeAssembly(agent, signal)
       if (deep.owned) { assemblyClaims.delete(agent); return deep.model }
-      if (demand && !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
+      if (demand && !deepPlanning.executor.isChild(agent) && !isGenericNativeChild(agent)) {
         // Maintenance runs before DSH resolves its step's immutable tool set.
         // Only prepare Lisp availability here. Source-bound interpretation
         // must wait for the real turn/start and its claimed input.
@@ -286,14 +256,11 @@ export function createRouting({
         }
         if (demand.pending(agent)) return await nativeWorkers.head(agent, signal) ?? { kind: 'native' }
       }
-      const childModel = await delegation.restoreOrPersist(agent)
-      if (childModel) { await delegation.assertCurrent(agent); return childModel }
       if (isGenericNativeChild(agent)) { assemblyClaims.delete(agent); return await nativeWorkers.worker(agent, signal) ?? { kind: 'native' } }
       selectionBlocked.delete(agent)
       const claim = assemblyClaims.get(agent)
       assemblyClaims.delete(agent)
       const current = agent.session ? currentSession(agent.session.id) : undefined
-      if (current) await selectionFailures.get(current.runId)
       const turn = claim?.turn ?? current?.turn
       if (turn === undefined) {
         reportToolExposureFallback('pre_step_missing_turn')
@@ -324,14 +291,12 @@ export function createRouting({
       if (!item || item.closed) return await nativeWorkers.head(agent, signal)
       const selection = getSelection(item.runId)?.value
       if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
-      const role = modelRoleForState(item.prepared.ennoOduno)
       const reviewModel = answerReview.model(agent as ReviewAgent)
       if (reviewModel) return reviewModel
       const headModel = !selectionBlocked.has(agent) ? await nativeWorkers.head(agent, signal) : undefined
       if (headModel) return headModel
-      if (selection?.mode === 'enno' && selection.status === 'ready' && role) return selection.configuration?.roles[role]
       if ((native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined)?.enabled(agent as DshUserQuestionAgent)) return { kind: 'native' }
-      if (admitted && !role && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
+      if (admitted && !selectionBlocked.has(agent) && (!selection || selection.mode === 'normal' && selection.status === 'ready')
         && item.nativeAgent === agent && item.nativeSession === agent.session && item.turn === turn && !item.closed
         && !isNativeSubagent(agent)) {
         assertDshModelAdmitted(admitted)
@@ -352,7 +317,7 @@ export function createRouting({
       },
       save: async ordinaryModel => {
         const runId = agent.session ? currentSession(agent.session.id)?.runId : undefined
-        if (!runId || delegation.isChild(agent)) return
+        if (!runId) return
         await modelAuto.baseline(runId, ordinaryModel)
         await runtime.withDatabase(db => {
           const stored = readExecutionSelection(db, runId)
@@ -378,7 +343,7 @@ export function createRouting({
         const lisp = native.get(LISP_ASSEMBLY_SERVICE, false) as LispAssemblyService | undefined
         if (lisp) assembly = await lisp.project(agent, assembly)
         if (!nativeToolSurface) assembly = projectToolSurface(assembly)
-        else if (minimalSurface) assembly = { ...assembly, sections: assembly.sections.map(section => section.name === 'kiokuko:soul' ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check, memory_checkpoint or Enno tool calls. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` } : section) }
+        else if (minimalSurface) assembly = { ...assembly, sections: assembly.sections.map(section => section.name === 'kiokuko:soul' ? { ...section, text: `${section.text}\nFor this admitted task, Kiokuko model tools are intentionally omitted. Do not request curator_check or memory_checkpoint. The host owns task completion; use the available native tools as needed. Memory is optional and may be organized only after the task ends, then saved only after the user approves the exact shown revision.` } : section) }
         // Automatic reconsideration uses existing originals only: no repeated tool effects.
         if (answerReview.reconsidering(agent as unknown as ReviewAgent)) assembly = Object.assign({}, assembly, { tools: [] })
         semanticCompaction.recordTools(agent as unknown as CompactionAgent, (assembly as { tools?: unknown }).tools)
@@ -396,7 +361,7 @@ export function createRouting({
     const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async () => {
       await demand?.fence(agent, request)
       const item = agent.session ? currentSession(agent.session.id) : undefined
-      if (!demand?.pending(agent) && item && item.prepared.memoryOwner?.kind === 'execution' && !item.closed && item.turn === memoryFence.turn && !delegation.isChild(agent) && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
+      if (!demand?.pending(agent) && item && item.prepared.memoryOwner?.kind === 'execution' && !item.closed && item.turn === memoryFence.turn && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
         let allowed: ReadonlyMap<string,string> = new Map()
         if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.prepared.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
         assertMemoryOwner(item.prepared.memoryOwner, { agentId: agent.id, sessionId: item.sessionId, turn: memoryFence.turn, requestDigest: canonicalContentHash(item.task), runId: item.runId }, 'execution')
@@ -428,17 +393,8 @@ export function createRouting({
     routingDisposers.set(agent, () => { nativeToolSurface?.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {
-    delegation.created(event.agent)
     installRouting(event.agent)
   })
-  const modelErrorDisposer = onNativeEvent(ctx, 'agent/request-error', async (event: { agent: RoutableAgent; failure: unknown }, next: () => Promise<unknown>) => {
-    if (!isModelAvailabilityFailure(event.failure)) return next()
-    const owner = delegation.parent(event.agent) ?? event.agent
-    const item = owner.session ? currentSession(owner.session.id) : undefined
-    if (!item || getSelection(item.runId)?.value.mode !== 'enno' || !modelRoleForState(item.prepared.ennoOduno)) return next()
-    await markModelUnavailable(event.agent)
-    return undefined // No native automatic retry or provider substitution.
-  }, { prepend: true })
   for (const agent of agents?.list?.() ?? []) installRouting(agent)
   return {
     install: installRouting,
@@ -452,7 +408,6 @@ export function createRouting({
     recordManualChange: (sessionId: string, pending: Promise<void>): void => { manualModelChanges.set(sessionId, pending) },
     dispose: (): void => {
       routingCreatedDisposer()
-      modelErrorDisposer()
       for (const dispose of routingDisposers.values()) dispose()
       routingDisposers.clear()
     },

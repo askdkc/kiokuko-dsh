@@ -21,7 +21,7 @@ const publicEntry = await import(pathToFileURL(join(packageRoot, legacy ? 'dist/
 assert.equal(publicEntry.name, 'kiokuko-dsh')
 assert.equal(typeof publicEntry.apply, 'function')
 const core = legacy ? undefined : await import(pathToFileURL(join(packageRoot, 'dist/dsh/core/index.js')))
-if (combination === 'core') assert.ok(![...loaded].some(url => /\/(enno-oduno|lisp|deep-thinker)\//.test(url)), 'core entry imports no optional implementation')
+if (combination === 'core') assert.ok(![...loaded].some(url => /\/(lisp|deep-thinker)\//.test(url)), 'core entry imports no optional implementation')
 const imported = [...loaded].filter(url => url.startsWith(pathToFileURL(packageRoot).href))
 const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skills, commands, tokenMeter, compaction] = await Promise.all(
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic'].map(async name => name === 'agent-loop' && combination === 'full'
@@ -112,8 +112,7 @@ try {
   const names = inventory.skills.map(skill => skill.name)
   assert.ok(names.includes('kiokuko-soul'))
   for (const name of ['coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion']) assert.ok(names.includes(name), `Packed coding Skill missing: ${name}`)
-  assert.equal(names.includes('kiokuko-enno-oduno'), legacy || combination.includes('enno'))
-  assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
+    assert.equal(names.includes('kiokuko-lisp'), legacy || combination.includes('lisp'))
   const parent = (await ctx.agents.create({ sessionId: session.SessionId('module-fixture'), agentOptions: { provider: 'fixture', model: 'fixture' }, meta: { cwd: directory } })).agent
   if (combination === 'full') assert.equal(parent.constructor.name, 'KiokukoHarnessAgent', 'The current full package must execute its replacement factory')
   const hasTypeSafe = true
@@ -134,7 +133,7 @@ try {
     const { openConnection } = await import(pathToFileURL(join(packageRoot, 'dist/db/connection.js')))
     const db = openConnection(configuration.databasePath)
     try {
-      for (const table of ['ledger_runs', 'akinator_sessions', 'enno_contracts']) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, table)
+      for (const table of ['ledger_runs', 'akinator_sessions']) assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n, 0, table)
     } finally { db.close() }
     console.log(JSON.stringify({ combination, status: 'passed', intakeProbe, nativeRequests: 1, liveModelQuality: 'unmeasured' }))
   } else {

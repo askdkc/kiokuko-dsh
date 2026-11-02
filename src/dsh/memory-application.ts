@@ -138,12 +138,6 @@ const CONTROL_TOOLS = new Set([
   "task_completion",
   "memory_checkpoint",
   "curator_check",
-  "enno_finish",
-  "enno_work_report",
-  "enno_plan_review",
-  "enno_plan_submit",
-  "enno_ideal_submit",
-  "enno_meditation_submit",
 ]);
 
 /** Only an exact foreground native Bash invocation at the bound repository root is proof-eligible. */

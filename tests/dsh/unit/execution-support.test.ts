@@ -143,7 +143,7 @@ test('operation refusal preserves reports, unsupported tools, other sessions, an
   const f = await fixture()
   try {
     assert.match(f.guard({ name: 'write', arguments: { file_path: '../outside' }, agent: f.agent, callId: 'write' })!, /outside/)
-    for (const name of ['enno_work_report', 'enno_finish', 'enno_meditation_submit', 'enno_answer', 'shell', 'memory_checkpoint']) {
+    for (const name of ['shell', 'memory_checkpoint']) {
       assert.equal(f.guard({ name, arguments: { file_path: '../outside' }, agent: f.agent, callId: name }), undefined)
     }
     assert.equal(f.guard({ name: 'write', arguments: { file_path: '../outside' }, agent: { session: { id: 'other' } }, callId: 'other' }), undefined)

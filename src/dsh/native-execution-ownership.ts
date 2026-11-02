@@ -19,7 +19,6 @@ export function nativeExecutionOwnership(db: SqliteDatabase, sessionId: string, 
     const workflow = readCodingWorkflow(db, run.run_id)
     if (workflow && (workflow.state !== 'completed' || workflow.pendingScopeChange || workflow.protocol
       && (workflow.protocol.phase !== 'report' || workflow.protocol.pending || workflow.protocol.green?.outcome !== 'passed'))) return 'owned'
-    if (db.prepare("SELECT 1 FROM enno_contracts WHERE run_id=? AND status<>'completed' LIMIT 1").get(run.run_id)) return 'owned'
     for (const operation of db.prepare('SELECT state,receipt_json FROM dsh_owned_operations WHERE run_id=?').all<{ state: string; receipt_json: string }>(run.run_id)) {
       const receipt = JSON.parse(operation.receipt_json)
       if (operation.state !== 'completed' || !receipt || typeof receipt !== 'object' || receipt.state !== 'completed' || receipt.runId !== run.run_id

@@ -35,16 +35,16 @@ for (const mode of ['native', 'ptc'] as const) test(`raw register validates tran
     for (const definition of definitions) ctx.tools.register(definition)
     let call = 0
     async function invoke(args: unknown) {
-      return executeNativeTool(ctx, packages!, { callId: `call-${++call}`, name: mode === 'native' ? 'enno_work_report' : 'run_code',
-        arguments: mode === 'native' ? args : { description: 'Check raw transport boundary', code: `return await tools.enno_work_report(${JSON.stringify(args)})` }, signal: new AbortController().signal })
+      return executeNativeTool(ctx, packages!, { callId: `call-${++call}`, name: mode === 'native' ? 'curator_check' : 'run_code',
+        arguments: mode === 'native' ? args : { description: 'Check raw transport boundary', code: `return await tools.curator_check(${JSON.stringify(args)})` }, signal: new AbortController().signal })
     }
-    for (const args of [{ result: '{}' }, { result: { changedPaths: [1] } }, { result: { mutated: 'false' } }, { result: '{}', workspace: 'forged' }]) {
+    for (const args of [{ limit: 'many' }, { includeUnready: 1 }, { cwd: 'workspace', workspace: 1 }, { cwd: 'workspace', workspace: 'outer', workspaceId: 'forged' }]) {
       const result = await invoke(args)
       assert.equal(result.isError, true, JSON.stringify(result))
-      assert.match(JSON.stringify(result), 'workspace' in args ? /host-owned identity/ : /published transport schema/)
+      assert.match(JSON.stringify(result), 'workspaceId' in args ? /host-owned identity/ : /published transport schema/)
       assert.equal(binds, 0); assert.equal(effects, 0)
     }
-    const result = await invoke({})
+    const result = await invoke({ workspace: 'workspace' })
     assert.equal(result.isError, false, JSON.stringify(result))
     assert.equal(binds, 1); assert.equal(effects, 1)
   } finally {

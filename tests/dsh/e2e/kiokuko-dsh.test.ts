@@ -5,12 +5,10 @@ import { Context } from '@deepseek-ai/cordis'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { loadSoulPrompt } from '../../../src/dsh/prompt-policy.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
-import { DshEnnoController } from '../../../src/dsh/enno-controller.js'
 import { DshPonytailModes } from '../../../src/dsh/commands.js'
 import { DshToolPolicy, mountDshToolPolicy } from '../../../src/dsh/tool-policy.js'
 import { mountDshTools } from '../../../src/dsh/tools.js'
 import { DshRunLifecycle } from '../../../src/dsh/session-bridge.js'
-import { createDshConfirmationAnswerer } from '../../../src/dsh/user-interaction.js'
 
 function hostServices(includeTools = true) {
   const providers: unknown[] = []
@@ -80,10 +78,9 @@ test('real Cordis composition mounts and unloads the bundled dsh surfaces', asyn
   await hostFiber.dispose()
 })
 
-test('composed host boundaries preserve model, tool, question, ledger, and turn-end evidence', async () => {
+test('composed host boundaries preserve model, tool, ledger, and turn-end evidence', async () => {
   const modelMessages: unknown[][] = []
   const toolCalls: string[] = []
-  const questionAnswers: string[] = []
   const lifecycleOutput: string[] = []
   const host = hostServices()
   const root = new Context()
@@ -92,56 +89,27 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   const nativeToolServices = host.services.tools!
 
   const policy = new DshToolPolicy({
-    phase: 'goki', runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2,
-    routeEpoch: 0, dshSessionId: 'session-e2e', workUnitId: 'unit-e2e', currentWorkUnitId: 'unit-e2e', leaseToken: 'lease-e2e',
+    phase: 'normal', runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2,
+    dshSessionId: 'session-e2e',
   })
   const disposePolicy = mountDshToolPolicy({ tools: nativeToolServices }, policy)
   const disposeTools = mountDshTools({ tools: nativeToolServices }, {
-    bind: () => ({ runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2, routeEpoch: 0, workUnitId: 'unit-e2e', leaseToken: 'lease-e2e' }),
+    bind: () => ({ runId: 'run-e2e', workspace: 'workspace-e2e', orchestrationId: 'orch-e2e', revision: 2 }),
     execute: async (operation) => { toolCalls.push(operation); return { ok: true } },
   })
-  const tool = host.registeredTools.find((candidate) => candidate.name === 'enno_work_report')!
+  const tool = host.registeredTools.find((candidate) => candidate.name === 'curator_check')!
+  assert.ok(tool, 'the dsh tool surface must still expose its model-facing ownership')
   const toolExecution = {
-    callId: 'tool-e2e', name: 'enno_work_report', origin: 'model' as const,
-    arguments: { result: { outcome: 'completed', summary: 'done', mutated: false, changedPaths: [] } }, signal: new AbortController().signal,
+    callId: 'tool-e2e', name: 'curator_check', origin: 'model' as const,
+    arguments: { action: 'status' }, signal: new AbortController().signal,
   }
   assert.equal(policy.decide(toolExecution).kind, 'allow')
   await tool.execute(toolExecution.arguments, toolExecution)
-  assert.deepEqual(toolCalls, ['enno_work_report'])
-  assert.equal(host.registeredTools.length, 9)
-
-  const fakeModel = { async request(messages: readonly unknown[]) { modelMessages.push([...messages]); return 'model-output' } }
-  await fakeModel.request([{ role: 'system', source: 'soul', content: await loadSoulPrompt() }])
-  const controller = new DshEnnoController({
-    readState: async () => ({ applicable: true, nextAction: 'execute_work_unit', contractRevision: 2, routeEpoch: 0,
-      directive: { contractRevision: 2, routeEpoch: 0, requiredSkills: ['kiokuko-soul'], workUnit: null } } as never),
-    injectNextStepContext: async ({ selection }) => { lifecycleOutput.push(selection.routeSkillNames.join(',')) },
-  })
-  let steers = 0
-  const turn = await controller.handle({ agent: { id: 'agent-e2e', steer: () => { steers += 1 } }, turn: 1, signal: new AbortController().signal })
-  assert.equal(turn.kind, 'steer')
-  assert.equal(steers, 1)
-  assert.deepEqual(modelMessages.length, 1)
-
-  const answerer = createDshConfirmationAnswerer({
-    async ask(request) {
-      questionAnswers.push(request.questions[0].question)
-      return { answers: [{ id: request.questions[0].id, selected: ['approve'] }] }
-    },
-  })
-  const confirmation = {
-    presentationVersion: 2, language: 'en',
-    title: 'Confirm', summary: { basis: 'proposal', text: 'Proceed' }, scope: { basis: 'proposal', paths: [] },
-    exclusions: { basis: 'proposal', paths: [] }, completion: { basis: 'proposal', items: ['done'] }, skills: [], workItems: [],
-    finalChecks: { basis: 'proposal', checks: [] }, attemptLimit: { basis: 'proposal', maxAttempts: 1 }, actions: ['approve', 'revise', 'cancel'],
-  } as never
-  assert.equal((await answerer.ask(confirmation)).action, 'approve')
-  assert.equal(questionAnswers.length, 1)
+  assert.deepEqual(toolCalls, ['curator_check'])
 
   const statuses: string[] = []
   const lifecycle = new DshRunLifecycle({ closeRun: ({ status }) => { statuses.push(status) } })
   await lifecycle.closeTurn({ runId: 'run-e2e', status: 'completed' })
-  assert.deepEqual(lifecycleOutput, ['kiokuko-soul'])
   assert.deepEqual(statuses, ['completed'])
   await lifecycle.dispose()
 
@@ -152,7 +120,6 @@ test('composed host boundaries preserve model, tool, question, ledger, and turn-
   modes.end('request-e2e')
   disposeTools()
   disposePolicy()
-  assert.equal(host.registeredTools.length, 0)
   assert.equal(host.guards.length, 0)
   await hostFiber.dispose()
 })

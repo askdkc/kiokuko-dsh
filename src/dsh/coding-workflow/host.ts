@@ -37,7 +37,6 @@ import {
   synchronizeCodingWorkflow,
   clearCodingRuntimeBlocker,
   assertCodingCommandRetry,
-  projectEnnoCodingWorkflow,
   onCodingInterrupted,
 } from './service.js'
 
@@ -239,9 +238,6 @@ export function mountCodingWorkflow(
     identity: HostIdentity,
     execution: Execution,
   ): Promise<void> => {
-    await host.runtime.withDatabase((db) =>
-      projectEnnoCodingWorkflow(db, identity),
-    )
     const value = await host.runtime.withDatabase((db) =>
       readCodingWorkflow(db, identity.runId),
     )
@@ -672,8 +668,6 @@ export function mountCodingWorkflow(
         return
       const identity = host.resolve(execution)
       if (identity) {
-        if (['enno_plan_submit', 'enno_plan_review'].includes(execution.name))
-          await choose(identity, execution)
         await host.runtime.withDatabase((db) =>
           synchronizeCodingWorkflow(db, identity.runId),
         )

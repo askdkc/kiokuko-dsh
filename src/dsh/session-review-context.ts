@@ -8,7 +8,6 @@ import { isRetrievableEntry } from '../memory/hybrid-retrieval.js'
 import { redactDshSourceText } from '../context/memory-projection.js'
 import { DiffReviewError, type ReviewContext } from '../diff-review/schema.js'
 import { readAkinatorSession } from '../akinator/store.js'
-import { readEnnoSnapshot } from '../enno-oduno/store.js'
 
 export interface ReviewSessionSource {
   get(sessionId: string): { id: string; header?: { cwd?: string } } | undefined
@@ -39,26 +38,16 @@ export async function resolveReviewSession(
   return { sessionId, cwd, repositoryRoot: project.repositoryRoot, repositoryId: project.repositoryId, workspace: project.workspace }
 }
 
-interface RunRow extends Record<string, unknown> { runId: string; status: string; startedAt: string; task: string | null; intakeId: string | null; ennoRoot: string | null }
+interface RunRow extends Record<string, unknown> { runId: string; status: string; startedAt: string; task: string | null; intakeId: string | null }
 
 function contextForRun(db: SqliteDatabase, binding: ReviewSessionBinding, run: RunRow): ReviewContext {
-  if (!run.intakeId || run.ennoRoot && run.ennoRoot !== binding.repositoryRoot) return { source: 'unavailable', memory: 'mismatch', memories: [], reason: 'run_binding_mismatch' }
+  if (!run.intakeId) return { source: 'unavailable', memory: 'mismatch', memories: [], reason: 'run_binding_mismatch' }
   const task = run.task ? redactDshSourceText(run.task)?.slice(0, 4000) : undefined
   const profile = readAkinatorSession(db, { workspace: binding.workspace, sessionId: run.intakeId }).profile
   const constraints = profile.constraints ? redactDshSourceText(profile.constraints)?.slice(0, 4000) : undefined
   const expected = profile.expected ? redactDshSourceText(profile.expected)?.slice(0, 4000) : undefined
   const fields = { ...(task ? { task } : {}), ...(constraints ? { constraints } : {}), ...(expected ? { expected } : {}) }
-  let execution: NonNullable<ReviewContext['execution']> = []
-  if (run.ennoRoot) {
-    try {
-      const snapshot = readEnnoSnapshot(db, { runId: run.runId, workspace: binding.workspace, orchestrationId: run.intakeId })
-      execution = snapshot.finalEvidence.map(item => ({ id: item.verifier.id,
-        command: redactDshSourceText([item.verifier.executable, ...item.verifier.args].join(' ')) ?? '[command withheld]',
-        cwd: redactDshSourceText(item.verifier.cwd) ?? '[path withheld]',
-        status: item.status === 'passed' && !item.skipped ? 'passed' : item.status === 'timeout' ? 'timeout' : 'failed',
-        snapshotMatch: 'unproven', source: 'verifier-receipt' }))
-    } catch { /* a broken receipt does not become successful execution evidence */ }
-  }
+  const execution: NonNullable<ReviewContext['execution']> = []
   let deliveries: ReturnType<typeof listContextDeliveries>['items']
   try { deliveries = listContextDeliveries(db, { workspace: binding.workspace, runId: run.runId, limit: 1 }).items }
   catch { return { source: run.status === 'active' ? 'current-run' : 'completed-run', runId: run.runId, ...fields, status: run.status, memory: 'unavailable', memories: [], execution, reason: 'delivery_unavailable' } }
@@ -86,10 +75,9 @@ function contextForRun(db: SqliteDatabase, binding: ReviewSessionBinding, run: R
 export async function readSessionReviewContext(runtime: Pick<DshCoreRuntime, 'withDatabase'>, binding: ReviewSessionBinding, requestedRunId?: string): Promise<ReviewContext> {
   return runtime.withDatabase(db => {
     const rows = db.prepare(`SELECT lr.run_id AS runId, lr.status, lr.started_at AS startedAt,
-      s.task_text AS task, ri.session_id AS intakeId, ec.repository_root AS ennoRoot
+      s.task_text AS task, ri.session_id AS intakeId
       FROM ledger_runs lr LEFT JOIN run_intakes ri ON ri.run_id=lr.run_id
       LEFT JOIN akinator_sessions s ON s.id=ri.session_id
-      LEFT JOIN enno_contracts ec ON ec.run_id=lr.run_id
       WHERE lr.dsh_session_id=? AND lr.workspace=?
       ORDER BY lr.started_at DESC, lr.run_id ASC LIMIT 20`).all<RunRow>(binding.sessionId, binding.workspace)
     const active = rows.filter(row => row.status === 'active' || row.status === 'intake')

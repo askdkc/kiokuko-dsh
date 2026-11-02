@@ -243,7 +243,7 @@ test('pre-step passes through unresolved intake without an answerer and rejects 
   }
 })
 
-test('skipping task type enters ordinary chat without creating an Enno/Oduno contract', async () => {
+test('skipping task type enters ordinary chat without creating a separate run', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({
     repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -269,8 +269,6 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
     assert.equal(result.prepared.intake.profile.expected, 'Let us chat about SvelteKit.')
     assert.equal(result.prepared.intake.status, 'ready')
     assert.deepEqual(result.prepared.intake.missingFields, [])
-    assert.equal(result.prepared.ennoOduno.applicable, false)
-    assert.equal(result.prepared.ennoOduno.nextAction, 'complete')
     assert.equal(result.prepared.skillDiscovery.attempted, false)
     assert.deepEqual(result.prepared.skillDiscovery.requirements, [])
     assert.deepEqual(asked, ['taskType'])
@@ -282,8 +280,7 @@ test('skipping task type enters ordinary chat without creating an Enno/Oduno con
     assert.equal(nextCalls, 1)
     const database = openConnection(fixture.databasePath)
     try {
-      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()?.count, 0)
-      assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_task_skill_discovery_attempts').get<{ count: number }>()?.count, 0)
+            assert.equal(database.prepare('SELECT COUNT(*) AS count FROM agent_task_skill_discovery_attempts').get<{ count: number }>()?.count, 0)
     } finally {
       database.close()
     }

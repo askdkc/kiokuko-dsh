@@ -171,30 +171,28 @@ async function main(): Promise<void> {
       dshSessionId,
       skillDiscoveryMode: 'off',
     }))
-    assert.equal(prepared.ennoOduno.dshSessionId, dshSessionId)
+    assert.equal(typeof prepared.run.runId, 'string')
+    assert.ok(prepared.run.runId.length > 0)
 
     const first = await runtime.resume({ dshSessionId, runId: prepared.run.runId })
     assert.equal(first.continue, true)
     assert.equal(first.runId, prepared.run.runId)
-    assert.ok(first.resumeToken)
+    assert.equal(first.status, 'active')
 
     const second = await runtime.resume({
       dshSessionId,
       runId: prepared.run.runId,
-      resumeToken: first.resumeToken!,
     })
     assert.equal(second.continue, true)
     assert.equal(second.runId, prepared.run.runId)
 
     await runtime.withDatabase((database) => {
       const row = database.prepare(`
-        SELECT lr.dsh_session_id AS runDshSessionId, ec.dsh_session_id AS dshSessionId
+        SELECT lr.dsh_session_id AS runDshSessionId
           FROM ledger_runs AS lr
-          JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
          WHERE lr.run_id = ?
-      `).get<{ runDshSessionId: string; dshSessionId: string }>(prepared.run.runId)
+      `).get<{ runDshSessionId: string }>(prepared.run.runId)
       assert.equal(row?.runDshSessionId, dshSessionId)
-      assert.equal(row?.dshSessionId, dshSessionId)
     })
     assert.equal(runtime.closeAgent({ dshSessionId, turn: 1 }), true)
     process.stdout.write('Sample database baseline initialization and DSH runtime resume verification passed.\n')

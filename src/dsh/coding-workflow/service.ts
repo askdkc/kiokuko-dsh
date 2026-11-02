@@ -3,9 +3,8 @@ import type { SqliteDatabase } from '../../db/adapter.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { KiokukoError } from '../../errors.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
-import { assessTaskCompletion, bindTaskCriterion, completionSourceDigest, type CompletionAssessment, type CompletionMethod } from '../task-completion.js'
+import { assessTaskCompletion, completionSourceDigest, type CompletionAssessment, type CompletionMethod } from '../task-completion.js'
 import { redactDshSourceText } from '../../context/memory-projection.js'
-import { completionVerifiers } from '../completion-verifiers.js'
 import { mayRepeatCommand } from '../execution-command.js'
 import { CODING_MINIMUM_DEFINITION_EXAMPLE, CodingBlockerSchema, CodingDefinitionSchema, type CodingDefinition, type CodingIdentity, type CodingWorkflow } from './contracts.js'
 import { assertCodingIdentity, mutateCodingWorkflow, readCodingWorkflow } from './store.js'
@@ -28,7 +27,6 @@ export function codingItems(value: CodingWorkflow, assessment: CompletionAssessm
   }))
 }
 export function codingStatus(db: SqliteDatabase, identity: CodingIdentity, options: { readOnly?: boolean } = {}) {
-  if (!options.readOnly) projectEnnoCodingWorkflow(db, identity)
   let value = readCodingWorkflow(db, identity.runId)
   if (!value) return { applicable: false as const, revision: 0, expectedRevision: 1,
     minimumValidInput: { tool: 'coding_workflow_apply', arguments: { action: 'propose', expectedRevision: 1,
@@ -91,8 +89,6 @@ export function codingVerificationText(db: SqliteDatabase, identity: CodingIdent
 /** Definitions propose observable work; only host evidence can satisfy it. */
 export function proposeCodingWorkflow(db: SqliteDatabase, identity: CodingIdentity, callId: string,
   expectedRevision: number, raw: unknown, revise = false, scopeChanged = false, projected = false): CodingWorkflow {
-  if (!projected && db.prepare("SELECT 1 FROM dsh_execution_selections WHERE run_id=? AND json_extract(state_json,'$.mode')='enno'").get(identity.runId))
-    throw new KiokukoError('CONFLICT', 'Enno coding Goal comes from its existing ideal and plan; submit those through Enno controls')
   const definition = CodingDefinitionSchema.parse(raw)
   return mutateCodingWorkflow(db, identity, callId, expectedRevision, { action: revise ? 'revise' : 'propose', definition, scopeChanged }, value => {
     if (terminal(value)) throw new KiokukoError('CONFLICT', 'Coding workflow is terminal')
@@ -148,9 +144,6 @@ export function markCodingScopeChange(db: SqliteDatabase, identity: CodingIdenti
   if (!value) return undefined
   assertCodingIdentity(value, identity)
   if (terminal(value)) throw new KiokukoError('CONFLICT', 'Coding workflow is terminal')
-  if (db.prepare("SELECT 1 FROM dsh_execution_selections WHERE run_id=? AND json_extract(state_json,'$.mode')='enno'").get(identity.runId)) {
-    return value // Enno remains authoritative for its own contract revision and evidence invalidation.
-  }
   if (!/^[a-f0-9]{64}$/u.test(requestDigest) || evidenceRefs.length > 32
     || evidenceRefs.some(ref => typeof ref !== 'string' || !ref || ref.length > 256 || /[\p{Cc}\p{Cf}]/u.test(ref))) {
     throw new KiokukoError('VALIDATION_ERROR', 'Request intent evidence is invalid')
@@ -168,24 +161,6 @@ export function markCodingScopeChange(db: SqliteDatabase, identity: CodingIdenti
   })
 }
 
-/** Optional Enno module supplies a projection through the core reader seam. */
-export function projectEnnoCodingWorkflow(db: SqliteDatabase, identity: CodingIdentity): void {
-  let value = readCodingWorkflow(db, identity.runId)
-  if (!value || terminal(value) || !db.prepare("SELECT 1 FROM dsh_execution_selections WHERE run_id=? AND json_extract(state_json,'$.mode')='enno'").get(identity.runId)) return
-  const enno = db.prepare('SELECT workspace,orchestration_session_id AS orchestrationId FROM enno_contracts WHERE run_id=?')
-    .get<{ workspace:string; orchestrationId:string }>(identity.runId)
-  if (!enno) return
-  const projection = completionVerifiers().codingProjection?.(db, { runId:identity.runId,...enno })
-  if (!projection) return
-  const digest = canonicalContentHash(projection.definition)
-  if (value.ennoProjectionDigest !== digest) {
-    value = proposeCodingWorkflow(db, identity, `enno-definition:${digest}`, value.revision, projection.definition, !!value.definition, false, true)
-    value = mutateCodingWorkflow(db, identity, `enno-source:${digest}`, value.revision, { digest }, current=>{ current.ennoProjectionDigest = digest })
-  }
-  for (const binding of projection.bindings) bindTaskCriterion(db, { runId:identity.runId,
-    callId:`enno-check:${digest}:${value.scopeVersion}:${binding.criterionId}:${projection.approved}`, criterionId:codingCriterionId(value,binding.criterionId),
-    method:{ kind:'enno_verifier', verifierId:binding.verifierId, ...(binding.workUnitId?{workUnitId:binding.workUnitId}:{}), assertion:'selected_tests_pass' }, approved:projection.approved })
-}
 function scopeDigest(value: CodingDefinition): string {
   return canonicalContentHash({ ideal: value.goal.ideal, target: value.goal.target, criteria: value.criteria.map(({revision: _revision, ...criterion}) => criterion).sort((a,b)=>a.criterionId.localeCompare(b.criterionId)), constraints: [...value.goal.constraints].sort(), outOfScope: [...value.goal.outOfScope].sort(),
     items: value.items.map(item => ({ itemId: item.itemId, change: item.change, dependsOn: [...item.dependsOn].sort(), criterionIds: [...item.criterionIds].sort(),
@@ -255,11 +230,7 @@ export function synchronizeCodingWorkflow(db: SqliteDatabase, runId: string): Co
   const value = readCodingWorkflow(db, runId)
   if (!value || terminal(value) || !value.definition || value.choice.state === 'pending') return value
   const assessment = assessTaskCompletion(db, runId), items = codingItems(value, assessment)
-  const enno = db.prepare(`SELECT e.workspace,e.orchestration_session_id AS orchestrationId FROM enno_contracts e
-    JOIN dsh_execution_selections s ON s.run_id=e.run_id WHERE e.run_id=? AND json_extract(s.state_json,'$.mode')='enno'`)
-    .get<{ workspace:string; orchestrationId:string }>(runId)
-  const authorityComplete = !enno || completionVerifiers().codingProjection?.(db, { runId,...enno })?.completed === true
-  const state = assessment.verified && authorityComplete ? 'completed' : items.every(item => item.state === 'satisfied') ? 'verifying_goal' : value.blocker ? 'blocked' : value.state
+  const state = assessment.verified ? 'completed' : items.every(item => item.state === 'satisfied') ? 'verifying_goal' : value.blocker ? 'blocked' : value.state
   if (state === value.state) return value
   return mutateCodingWorkflow(db, value, `evidence:${canonicalContentHash({ revision: value.revision, assessment })}`, value.revision, { assessment }, current => { current.state = state })
 }
@@ -278,28 +249,12 @@ export function reopenTerminalCodingWorkflow(db: SqliteDatabase, identity: Codin
   return withImmediateTransaction(db, () => {
     const value = readCodingWorkflow(db, identity.runId)
     if (value) assertCodingIdentity(value, identity)
-    const enno = db.prepare(`SELECT e.workspace,e.orchestration_session_id AS orchestrationId FROM enno_contracts e
-      JOIN dsh_execution_selections s ON s.run_id=e.run_id WHERE e.run_id=? AND json_extract(s.state_json,'$.mode')='enno'`)
-      .get<{ workspace: string; orchestrationId: string }>(identity.runId)
-    let sourceReopened = false
-    if (enno) {
-      const reopen = completionVerifiers().reopenTask
-      if (!reopen) throw new KiokukoError('CONFLICT', 'The loaded Enno module cannot resume this task')
-      sourceReopened = reopen(db, { runId: identity.runId, ...enno }, { operationId,
-        repositoryRoot: identity.repositoryRoot, force: options.terminalOutcome === true || Boolean(value && terminal(value)) })
-    }
-    if (!value) return undefined // Enno may resume, but no second Goal is invented.
-    if (!terminal(value) && !options.terminalOutcome && !sourceReopened) return value
-    const projected = enno ? completionVerifiers().codingProjection?.(db, { runId: identity.runId, ...enno }) : undefined
+    if (!value) return undefined // No second Goal is invented on bare resume.
+    if (!terminal(value) && !options.terminalOutcome) return value
     return mutateCodingWorkflow(db, identity, `task-resume:${operationId}`, value.revision,
       { action: 'explicit-task-resume' }, current => {
         current.scopeVersion++
-        if (enno) {
-          if (projected) {
-            current.definition = projected.definition
-            current.ennoProjectionDigest = canonicalContentHash(projected.definition)
-          }
-        } else if (current.definition) {
+        if (current.definition) {
           current.definition.goal.revision++
           for (const criterion of current.definition.criteria) criterion.revision++
         }

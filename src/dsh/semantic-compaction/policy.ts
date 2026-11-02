@@ -83,7 +83,7 @@ export function selectCandidates(events: readonly SurfaceEvent[], meter: NativeT
     if (typeof tool !== 'string' || typeof pair[0]!.block.arguments !== 'string') continue
     if (Object.keys(pair[0]!.block).some(key => !['type', 'id', 'name', 'arguments'].includes(key))) continue
     // These outputs carry orchestration authority or protected host state.
-    if (/^(?:enno_|kioku|memory_|task_|curator_)|(?:approval|lease|verification)/u.test(tool)) continue
+    if (/^(?:kioku|memory_|task_|curator_)|(?:approval|lease|verification)/u.test(tool)) continue
     // Any prior surface replacement is conservatively ineligible, including native pruning.
     if (event.sourceEventSeqs?.length && (event.sourceEventSeqs.length !== 1 || eventAt?.(event.sourceEventSeqs[0]!)?.type !== 'tool/call' || eventAt(event.sourceEventSeqs[0]!)?.data.callId !== result.callId) || text.text.includes(COMPACTION_MARKER) || text.text.includes(LOSSLESS_COMPACTION_MARKER)) continue
     const points = Array.from(text.text)

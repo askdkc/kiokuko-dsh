@@ -2,7 +2,7 @@
 
 ## Model and reasoning handoff
 
-When a user changes the DSH model or reasoning effort, Kiokuko can shorten eligible older tool results with the selected Jev or Laya decision provider and ask DSH's configured summarizer to create one native checkpoint. The checkpoint replaces older model-visible conversation; the original events remain in the append-only session history. The last two completed model steps, pending input, and latest user message remain verbatim. Automatic Enno/Deep routing and delegated children do not trigger a handoff.
+When a user changes the DSH model or reasoning effort, Kiokuko can shorten eligible older tool results with the selected Jev or Laya decision provider and ask DSH's configured summarizer to create one native checkpoint. The checkpoint replaces older model-visible conversation; the original events remain in the append-only session history. The last two completed model steps, pending input, and latest user message remain verbatim. Automatic Deep routing and delegated children do not trigger a handoff.
 
 ```yaml
 modelHandoff:
@@ -35,7 +35,7 @@ If no complete source line fits that excerpt, the result stays full: no new pack
 
 Failures, unknown success, background execution, Lisp and execution-control results are excluded. Bash additionally requires a captured structured foreground exit status of zero, without interruption or sandbox failure, and an exact match to the logged presentation. `isError: false` alone is insufficient. After reload, Bash results without that live proof remain untouched.
 
-The auxiliary native tool is separate from Enno business operations:
+The auxiliary native tool is separate from business operations:
 
 ```ts
 observation_read({ handle, offset: 2000, limit: 2000 })

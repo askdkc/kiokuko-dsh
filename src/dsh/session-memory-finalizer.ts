@@ -1399,7 +1399,7 @@ export function episodeEvidenceForEvent(event: DshLogEvent, boundToolName?: stri
   const kind = event.type === 'user/message' ? 'user' : event.type === 'tool/call' ? 'action' : event.type === 'tool/result' ? 'result' : undefined
   if (!kind || kind === 'result' && boundToolName === undefined) return undefined
   // Memory/control tools must not recycle previous knowledge into new supporting evidence.
-  if (/kiok|memory|recall|enno|memos|curator|task_prepare|task_context_read|^observation_read$/i.test(String(boundToolName ?? data.name ?? ''))) return undefined
+  if (/kiok|memory|recall|memos|curator|task_prepare|task_context_read|^observation_read$/i.test(String(boundToolName ?? data.name ?? ''))) return undefined
   const text = redactDshSourceText(eventText(event))
   if (!text || text.length > 4000) return undefined
   const execution = record(data.result) ?? record(data.meta) ?? record(record(data.message)?.output) ?? data

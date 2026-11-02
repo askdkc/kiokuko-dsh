@@ -33,12 +33,19 @@ export async function createLispHostDispatch(ctx: Context, tools: Tools): Promis
   // parser drops parent/root identity. Use the exported scheduler stages for
   // this single, already-parsed nested invocation instead.
   const specifier: string = '@deepseek-ai/dsh-tools/pipeline'
-  const { ToolExecutionPipeline } = await import(specifier) as { ToolExecutionPipeline: new (ctx: Context) => Pipeline }
   let pipeline: Pipeline | undefined
-  await ctx.inject(['tools'], scope => {
-    pipeline = new ToolExecutionPipeline(scope)
-  })
-  if (!pipeline) throw new Error('DSH tools service is unavailable for nested Lisp dispatch')
+  try {
+    const { ToolExecutionPipeline } = await import(specifier) as { ToolExecutionPipeline: new (ctx: Context) => Pipeline }
+    await ctx.inject(['tools'], scope => {
+      pipeline = new ToolExecutionPipeline(scope)
+    })
+  } catch (error) {
+    // Optional peer absent in this host: nested calls go through the plain tool
+    // executor. Host policy stages own their identity checks at the boundary.
+    if (error instanceof Error && !/Cannot find module|ERR_MODULE_NOT_FOUND|Cannot find package/u.test(error.message)) throw error
+    pipeline = undefined
+  }
+  if (!pipeline) return input => tools.execute(input)
   const activePipeline = pipeline
   return async input => {
     const prepared = await activePipeline.prepare(input)

@@ -54,14 +54,6 @@ export const AgenticReplayConfig = z.object({
 export type AgenticReplayConfig = z.infer<typeof AgenticReplayConfig>
 export const EfficiencyConfig = z.object({ observe: z.boolean().default(false) }).strict()
 export const FinalizationConfig = z.object({ inputMode: z.enum(['prefix_reuse', 'bounded_evidence']).default('prefix_reuse') }).strict()
-export const EnnoMemoryConfig = z.object({
-  mode: z.enum(['off', 'observe', 'active']).default('off'),
-  maxFullSearchesPerRun: z.number().int().min(1).max(32).default(8),
-  localBudgetMs: z.number().int().min(100).max(5000).default(1000),
-  // Rerank has not met the separate measurement gate in PLAN.md.
-  rerank: z.literal(false).default(false),
-}).strict()
-export type EnnoMemoryConfig = z.infer<typeof EnnoMemoryConfig>
 export const DiffReviewConfig = z.object({
   enabled: z.boolean().default(true),
   maxFiles: z.number().int().min(1).max(1000).default(200),
@@ -109,7 +101,6 @@ export const Config = z.object({
   toolExposure: ToolExposureConfig.prefault({}),
   efficiency: EfficiencyConfig.prefault({}),
   continuity: ContinuityConfig.prefault({}),
-  ennoMemory: EnnoMemoryConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
   memoryIndexReasoning: MemoryIndexReasoningConfig.prefault({}),

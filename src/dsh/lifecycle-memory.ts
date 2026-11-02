@@ -70,6 +70,7 @@ type Agent = {
   };
 };
 type Host = {
+  logger?: { warn?: (message: string) => void };
   get(name: string, strict?: boolean): any;
   on(
     name: string,
@@ -687,11 +688,10 @@ export class DshLifecycleMemory {
     const approved = approvalKey ? this.approved.get(approvalKey) : undefined;
     if (approved) approved.diagnostic = diagnostic;
     try {
-      this.host
-        .get("logger", false)
-        ?.warn?.(
-          `Optional memory ${phase} unavailable [${diagnostic.code}]: ${diagnostic.message}; the completed task is unchanged.`,
-        );
+      const logger = this.host.logger ?? this.host.get("logger", false);
+      logger?.warn?.(
+        `Optional memory ${phase} unavailable [${diagnostic.code}]: ${diagnostic.message}; the completed task is unchanged.`,
+      );
     } catch {
       /* Diagnostics are non-vetoing. */
     }

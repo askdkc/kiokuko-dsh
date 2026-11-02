@@ -23,7 +23,7 @@ ZIP の試作をそのまま別の実行環境にするのではなく、既存�
 
 設定の `lisp.enabled: true` と SBCL が必要です。既存の選択画面で Lisp を選べば、
 共有関数をそのまま利用できます。選択肢の順序、番号キー・修飾キー・Enterによる操作、
-通常実行／役小角の選択とは別に、Lisp の選択をタスクと scopeVersion に保存します。新しい実装タスクでは再確認し、未回答・閉じる操作では起動しません。
+実行方式の選択とは別に、Lisp の選択をタスクと scopeVersion に保存します。新しい実装タスクでは再確認し、未回答・閉じる操作では起動しません。
 `lisp_define`・`lisp_call`・`lisp_observe` は、Working taskや `enable-task` への切替を要求しません。
 同じsession・agentの保護済み常駐workerは再利用し、PID・世代・既存定義を維持します。
 開発用workerや別ownerのheapは借りず、リポジトリをマウントしない保護付きscratchで計算します。

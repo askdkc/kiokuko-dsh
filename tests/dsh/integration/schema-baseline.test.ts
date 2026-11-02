@@ -8,7 +8,6 @@ import { openConnection } from '../../../src/db/connection.js'
 import { loadMigrationSnapshot, migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { CURRENT_MIGRATION_VERSIONS, CURRENT_SCHEMA_VERSION } from '../../fixtures/current-migrations.js'
-import { prepareTurnIntent } from '../../../src/dsh/turn-process.js'
 import { recordEntry } from '../../../src/memory/entries.js'
 import { explainMemory } from '../../../src/memory/explain.js'
 
@@ -82,49 +81,6 @@ test('the schema keeps 001 immutable and appends forward-only DSH runtime migrat
   assert.equal(snapshot.migrations[4]!.name, '005_dsh_completion_recovery.sql')
 })
 
-test('version-4 receipt history upgrades with stable replay identities and pending completion output', async () => {
-  const root = await mkdtemp(path.join(tmpdir(), 'kiokuko-completion-migration-'))
-  const version4Directory = path.join(root, 'v4')
-  await mkdir(version4Directory)
-  for (const name of ['001_baseline.sql', '002_dsh_memory_finalization.sql', '003_dsh_turn_process.sql', '004_dsh_loop_guard.sql']) {
-    await copyFile(path.join(migrationsDirectory, name), path.join(version4Directory, name))
-  }
-  const database = openConnection(path.join(root, 'data.sqlite3'))
-  try {
-    migrateDatabase(database, version4Directory)
-    const prepared = await prepareAgentTask(database, {
-      requestId: 'v4-upgrade', cwd: root, task: 'Test receipt upgrade',
-      profileHints: { taskType: 'build', target: 'src', expected: 'safe migration', constraints: null },
-      capabilities: [], dshSessionId: 'upgrade-session', skillDiscoveryMode: 'off',
-    })
-    database.prepare("UPDATE ledger_runs SET status = 'active' WHERE run_id = ?").run(prepared.run.runId)
-    for (const turn of [1, 2, 3]) {
-      const id = String(turn).repeat(64)
-      const phase = turn === 3 ? 'meditation' : 'work_unit'
-      const operation = turn === 3 ? 'meditation_submit' : 'work_report'
-      database.prepare(`INSERT INTO dsh_turn_intents (receipt_id, run_id, dsh_session_id, native_turn,
-        phase, contract_revision, work_unit_key, input_digest, operation, idempotency_key,
-        continuation_id, boundary_job_id, created_at) VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, ?, ?, ?, ?, ?)`)
-        .run(id, prepared.run.runId, turn, phase, id, operation, `key-${turn}`, id, id, new Date().toISOString())
-      database.prepare(`INSERT INTO dsh_turn_receipts (receipt_id, run_id, dsh_session_id, native_turn,
-        phase, contract_revision, work_unit_key, input_digest, outcome_kind, next_action, created_at)
-        VALUES (?, ?, 'upgrade-session', ?, ?, 1, 'unit', ?, 'applied', ?, ?)`)
-        .run(id, prepared.run.runId, turn, phase, id, turn === 3 ? 'complete' : 'execute_work_unit', new Date().toISOString())
-    }
-    assert.deepEqual(migrateDatabase(database, migrationsDirectory).applied, CURRENT_MIGRATION_VERSIONS.filter(version => version > 4))
-    assert.deepEqual(database.prepare('SELECT execution_attempt AS attempt FROM dsh_turn_receipts ORDER BY native_turn')
-      .all<{ attempt: number }>().map(row => row.attempt), [0, 1, 0])
-    const replay = prepareTurnIntent(database, {
-      runId: prepared.run.runId, dshSessionId: 'upgrade-session', nativeTurn: 2,
-      phase: 'work_unit', contractRevision: 1, workUnitId: 'unit', executionAttempt: 1,
-      inputDigest: '2'.repeat(64), operation: 'work_report', idempotencyKey: 'key-2',
-    })
-    assert.equal(replay.receiptId, '2'.repeat(64))
-    assert.equal(database.prepare('SELECT status FROM dsh_completion_reports').get<{ status: string }>()?.status, 'pending')
-    assert.throws(() => database.prepare('UPDATE dsh_turn_intents SET execution_attempt = -1').run(), /CHECK/u)
-    assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
-  } finally { database.close(); await rm(root, { recursive: true, force: true }) }
-})
 
 test('baseline initialization creates the complete DSH schema with clean integrity', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kiokuko-baseline-'))
@@ -203,8 +159,6 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_diagnostic_events',
         'dsh_diagnostic_gaps',
         'dsh_diagnostic_reviews',
-        'dsh_enno_delegations',
-        'dsh_enno_memory_refresh',
         'dsh_evolution_observations', 'dsh_execution_evidence',
         'dsh_execution_frames',
         'dsh_execution_owners',
@@ -252,16 +206,6 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'embedding_runtime',
         'embedding_settings',
         'embedding_setup_runs',
-        'enno_advisory_contributions',
-        'enno_advisory_rounds',
-        'enno_contracts',
-        'enno_dsh_continuations',
-        'enno_execution_leases',
-        'enno_operation_receipts',
-        'enno_plan_drafts',
-        'enno_resume_tokens',
-        'enno_verifier_runs',
-        'enno_work_units',
         'entries',
         'entries_fts',
         'entries_trigram',

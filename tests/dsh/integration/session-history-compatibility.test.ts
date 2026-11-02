@@ -9,7 +9,6 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
-import { DshEnnoController } from '../../../src/dsh/enno-controller.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import * as dshPlugin from '../../../src/dsh/index.js'
 import { mountSessionHistoryCompatibility } from '../../../src/dsh/session-history-compatibility.js'
@@ -117,7 +116,7 @@ function legacyRows() {
   ]
 }
 
-const legacyStopReason = 'kiokuko dsh Enno continuation stopped: continuation_limit'
+const legacyStopReason = 'kiokuko dsh continuation stopped: continuation_limit'
 function abortRows(cause: unknown): Array<{ type: string; seq: number; time: number; data: { turn: number; reason?: { kind: string; reason: unknown; extra?: boolean } } }> {
   return [
     { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } },
@@ -167,7 +166,7 @@ for (const [name, cause] of [['unknown-text', 'other cancellation'], ['null', nu
   })
 }
 
-test('native Enno cancellation persists a hook cause and reopens without repair', options, async () => {
+test('native cancellation persists a hook cause and reopens without repair', options, async () => {
   const f = await fixture()
   try {
     const names = ['dsh-llm', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop']
@@ -185,7 +184,7 @@ test('native Enno cancellation persists a hook cause and reopens without repair'
     const mock = nativeMock(llm)
     const adapter = new mock.MockAdapter([mock.textResponse('Finished fixture response.')])
     f.ctx.llm.registerAdapter(['mock'], adapter)
-    const composition = await mountDshComposition(f.ctx, { ennoController: new DshEnnoController({ readState: async () => { throw new Error('Fixture state unavailable') } }) })
+    const composition = await mountDshComposition(f.ctx, {})
     f.disposers.push(composition.dispose)
     await composition.historyCheck
     const agent = (await f.ctx.agents.create({sessionId:f.session.SessionId('native-hook-abort'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: f.root }})).agent

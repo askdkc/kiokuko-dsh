@@ -8,7 +8,7 @@ import { DshEfficiencyObserver } from '../../../../src/dsh/efficiency.js'
 
 function input(): ContinuityInput {
   const source = { kind: 'execution-evidence' as const, key: 'run:evidence', revision: 'digest' }
-  return { owner: { runId: 'run', workspace: '/project', sessionId: 'session', mode: 'normal', workUnitId: null, role: null },
+  return { owner: { runId: 'run', workspace: '/project', sessionId: 'session', mode: 'normal' } as ContinuityInput['owner'],
     stamp: 'stamp', sources: [source], coverage: 'complete', omittedItems: 0,
     items: [{ key: 'evidence', kind: 'observation', text: '資料🙂 {{not_a_command}}', basis: 'host-observation', validity: 'historical', sources: [source] }] }
 }
@@ -42,13 +42,13 @@ test('whole Japanese and emoji items respect every byte budget and item cap with
     for (const line of output.text.split('\n').filter(line => line.startsWith('observation'))) assert.doesNotThrow(() => JSON.parse(line.slice(line.indexOf(': ') + 2)))
   }
 })
-test('reject duplicate keys, missing or stale refs, control text, secrets and mislabeled model reports', () => {
+test('reject duplicate keys, missing or stale refs and control text', () => {
   const source = input(), item = source.items[0]!
   const items = [item, item, { ...item, key: 'stale', sources: [{ ...source.sources[0]!, revision: 'old' }] },
-    { ...item, key: 'control', text: 'hello\u0000there' }, { ...item, key: 'unsafe', basis: 'model-report' as const }]
+    { ...item, key: 'control', text: 'hello\u0000there' }]
   const view = buildContinuationView({ ...source, items })
   assert.equal(view.items.length, 1)
-  assert.equal(view.omittedItems, 4)
+  assert.equal(view.omittedItems, 3)
   assert.equal(view.coverage, 'partial')
   assert.equal(buildContinuationView({ ...source, sources: [] }).items.length, 0)
   assert.equal(buildContinuationView({ ...source, coverage: 'unavailable' }).items.length, 0)
@@ -66,15 +66,15 @@ test('continuity metrics are bounded and allowlisted, never retaining text or ca
   observer.recordContinuity({ ...value, bytes: 600 })
   assert.equal(observer.snapshot().continuity[0]!.bytes, 600)
 })
-test('same text with distinct sources or trust labels is not collapsed; next checks are capped at three', () => {
+test('same text with distinct sources is not collapsed; next checks are capped at three', () => {
   const source = input(), item = source.items[0]!
-  const reportSource = { kind: 'enno-work-result' as const, key: 'run:report', revision: 'report-revision' }
-  const view = buildContinuationView({ ...source, sources: [...source.sources, reportSource], items: [item, { ...item, key: 'report', kind: 'reported-result', basis: 'model-report', validity: 'unknown', sources: [reportSource] },
+  const evidenceSource = { kind: 'execution-frame' as const, key: 'run', revision: 'frame-revision' }
+  const view = buildContinuationView({ ...source, sources: [...source.sources, evidenceSource], items: [item, { ...item, key: 'duplicate', sources: [evidenceSource] },
     ...Array.from({ length: 6 }, (_, i) => ({ ...item, key: `check-${i}`, kind: 'next-check' as const }))] })
   const output = renderContinuationView(view, ContinuityConfig.parse({ mode: 'active' }))
   assert.equal(output.items, 5)
   assert.equal(output.omittedItems, 3)
-  assert.match(output.text, /model-report; unknown/)
+  assert.match(output.text, /host-observation; historical/)
 })
 test('normal adapter preserves source truth, prioritizes incomplete acquisitions, and discloses bounded coverage', () => {
   const source = input()

@@ -128,11 +128,11 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     commands: { register() { return () => undefined } },
     userQuestions: { async ask(request: { questions: readonly [{ id: string; options?: { label: string }[] }]; agent?: object }) {
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
-      if (request.questions[0].id === 'enno-execution-mode' && (request.agent as {id:string}).id === 'lisp-coding-agent') {
+      if (request.questions[0].id === 'execution-mode' && (request.agent as {id:string}).id === 'lisp-coding-agent') {
         selectionQuestions.push(request.questions[0].id)
         return { answers: [{ id: request.questions[0].id, selected: ['通常実行'] }] }
       }
-      if (request.questions[0].id === 'enno-execution-mode' && executionCustom !== undefined) {
+      if (request.questions[0].id === 'execution-mode' && executionCustom !== undefined) {
         selectionQuestions.push(request.questions[0].id)
         return { answers: [{ id: request.questions[0].id, selected: [], custom: executionCustom }] }
       }
@@ -187,8 +187,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(new Set(registeredNames).size, registeredNames.length, 'each public operation must be registered exactly once')
     assert.deepEqual([...registeredNames].sort(), [
       'coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check',
-      'curator_check', 'enno_delegate', 'enno_finish', 'enno_ideal_submit',
-      'enno_meditation_submit', 'enno_plan_review', 'enno_plan_submit', 'enno_work_report',
+      'curator_check',
       'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_remove', 'kioku_result', 'kioku_write',
       'memory_checkpoint', 'memory_context', 'memory_explain', 'memory_improve', 'memory_observe', 'memory_review_status',
       'task_completion', 'task_memory_review',
@@ -283,7 +282,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterNativeEnter.close()
     }
     assert.deepEqual(questionAgents, [])
-    assert.deepEqual(selectionQuestions, ['enno-execution-mode', 'enno-model-source', 'enno-template', 'enno-model-review'])
+    assert.deepEqual(selectionQuestions, ['execution-mode'])
     assert.ok(decision.messages.length > 0)
     // The host proposes messages; only the native loop's durable append proves delivery.
     commitContext(primarySession, decision.messages)
@@ -296,17 +295,17 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.ok(event.nativeSession)
     const nativeSession = event.nativeSession
     const currentToolBinding = toolHost.bind({
-      callId: 'bound-call', name: 'enno_plan_submit', arguments: {},
+      callId: 'bound-call', name: 'curator_check', arguments: {},
       agent: { dshSessionId: 'native-session', nativeSession }, signal: event.signal,
     })
     soulModelInvocable = false
-    await assert.rejects(toolHost.execute('enno_plan_submit', {}, {
+    await assert.rejects(toolHost.execute('curator_check', {}, {
       ...currentToolBinding,
       idempotencyKey: 'catalog-change-call',
     }, event.signal), /mandatory bundled Skill|catalog changed/iu)
     soulModelInvocable = true
     assert.throws(() => toolHost.bind({
-      callId: 'stale-session-call', name: 'enno_plan_submit', arguments: {},
+      callId: 'stale-session-call', name: 'curator_check', arguments: {},
       agent: { dshSessionId: 'native-session', nativeSession: { id: 'native-session' } }, signal: event.signal,
     }), /native session identity is stale/u)
     const staleStops: string[] = []
@@ -335,25 +334,19 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.deepEqual(nextStep.kind, 'enter')
     assert.deepEqual(nextStep.messages, [])
     assert.equal(adapter.host.ponytailModes!.isActive('dsh:native-agent:native-session:1'), true)
-    const idealTool = registered.find((definition) => definition.name === 'enno_ideal_submit')!
+    const curatorTool = registered.find((definition) => definition.name === 'curator_check')!
     const guardReason = (execution: any): string | undefined => (
       guards.map((guard) => guard(execution)).find((reason) => reason !== undefined)
     )
-    let concludedInvalidIdeal = 0
-    const invalidIdealExecution = {
-      callId: 'invalid-ideal-turn-1',
-      name: 'enno_ideal_submit',
+    const curatorBoundExecution = {
+      callId: 'curator-turn-1',
+      name: 'curator_check',
       arguments: {},
       agent: event.nativeAgent,
       signal: event.signal,
-      concludeTurn: () => { concludedInvalidIdeal += 1 },
     }
-    assert.equal(guardReason(invalidIdealExecution), undefined)
-    const invalidIdeal = await idealTool.execute({}, invalidIdealExecution)
-    assert.equal(invalidIdeal.kind, 'retry')
-    assert.match(invalidIdeal.reason.message, /ideal:missing_required_field/u)
-    assert.equal(concludedInvalidIdeal, 1)
-    assert.match(guardReason({ ...invalidIdealExecution, callId: 'sealed-ideal-turn-1' })!, /turn_sealed/u)
+    assert.equal(guardReason(curatorBoundExecution), undefined)
+    await curatorTool.execute({ query: '', limit: 1 }, curatorBoundExecution)
     const firstActionRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
     const actionQuestionCount = questionIds.length
     const secondActionEvent = await adapter.host.mapPreStep!({
@@ -367,8 +360,8 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(secondActionDecision.messages.some(message => JSON.stringify(message).includes('DSH host completed the Akinator intake gate')), false,
       'a new turn must not resend unchanged context')
     assert.equal(guardReason({
-      ...invalidIdealExecution,
-      callId: 'retry-ideal-turn-2',
+      ...curatorBoundExecution,
+      callId: 'retry-curator-turn-2',
       agent: secondActionEvent.nativeAgent,
     }), undefined)
     assert.equal(adapter.host.resolveSessionRunId!(event.nativeSession as { id: string }), firstActionRun)
@@ -390,7 +383,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal(
       await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent),
       undefined,
-      'a model-turn error must not terminalize an unfinished Enno run before a user can recover it',
+      'a model-turn error must not terminalize an unfinished run before a user can recover it',
     )
     const emptyRecoveryEvent = await adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,
@@ -428,7 +421,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const fallbackRun = adapter.host.resolveSessionRunId!(fallbackSession)!
     const blocked = openConnection(f.databasePath)
     try {
-      blocked.prepare("UPDATE enno_contracts SET status = 'blocked', phase = NULL, blocker = 'test blocker' WHERE run_id = ?").run(fallbackRun)
       blocked.prepare("UPDATE ledger_runs SET status = 'failed' WHERE run_id = ?").run(fallbackRun)
     } finally {
       blocked.close()
@@ -476,7 +468,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       assert.equal(value.mode, 'pending')
       assert.equal(value.status, 'selecting')
       assert.equal(value.discussion.text, executionCustom)
-      assert.equal(discussionDb.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(discussionRun)!.count, 0)
     } finally { discussionDb.close() }
     assert.ok(guards.some(guard => guard({ agent: discussionAgent, name: 'shell' })?.includes('実行方式は未確定')))
     commitContext(discussionSession, discussionDecision.messages)
@@ -521,7 +512,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       bindTaskRepository(coldDiscussionDb, { taskId: coldDiscussionRun, sessionId: coldDiscussionSession.id, repositoryRoot: realpathSync(f.root) })
       const saved = readExecutionSelection(coldDiscussionDb, coldDiscussionRun)!
       writeExecutionSelection(coldDiscussionDb, coldDiscussionRun, saved.revision, { ...saved.value,
-        discussion: { questionId: 'enno-execution-mode', text: 'ただのチャット', turn: 1 },
+        discussion: { questionId: 'execution-mode', text: 'ただのチャット', turn: 1 },
       })
     } finally { coldDiscussionDb.close() }
     const selectionsBeforeColdDiscussion = selectionQuestions.length
@@ -543,7 +534,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.ok(JSON.stringify(coldDiscussionDecision.messages).includes('ただのチャット'))
 
     const beforeChat = openConnection(f.databasePath)
-    const ennoContractsBeforeChat = beforeChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count
     beforeChat.close()
     skipTaskType = true
     const chatEffects: string[] = []
@@ -639,7 +629,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
 
     const afterChat = openConnection(f.databasePath)
     try {
-      assert.equal(afterChat.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get<{ count: number }>()!.count, ennoContractsBeforeChat)
       assert.equal(afterChat.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(thirdChatRun)?.status, 'active')
       assert.equal(afterChat.prepare("SELECT COUNT(*) AS count FROM ledger_events WHERE run_id = ? AND source_type = 'dsh-session'").get<{ count: number }>(thirdChatRun)!.count, 0)
     } finally {
@@ -695,7 +684,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const afterWritingPivot = openConnection(f.databasePath)
     try {
       assert.equal(afterWritingPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(firstActionRun)?.status, 'cancelled')
-      assert.equal(afterWritingPivot.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id = ?').get<{ count: number }>(writingRun)?.count, 0)
     } finally {
       afterWritingPivot.close()
     }
@@ -782,13 +770,12 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       assert.equal(lispQuestions, 0, 'Lisp choice waits for the visible Goal proposal')
       assert.ok(registered.some(tool => tool.name === 'coding_workflow'))
       assert.equal((await adapter.host.intakeGate!.preStep(mapped, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-      assert.ok(selectionQuestions.slice(selectionsBeforeLisp).includes('enno-execution-mode'), 'Execution mode is separate from the later task-bound Lisp choice')
+      assert.ok(selectionQuestions.slice(selectionsBeforeLisp).includes('execution-mode'), 'Execution mode is separate from the later task-bound Lisp choice')
       const db = openConnection(f.databasePath)
       try {
         const runId = adapter.host.resolveSessionRunId!(lispSession)!
         assert.equal(readExecutionSelection(db, runId)?.value.mode, 'normal')
         assert.equal(readExecutionSelection(db, runId)?.value.status, 'ready')
-        assert.equal(db.prepare('SELECT COUNT(*) AS count FROM enno_contracts WHERE run_id=?').get<{ count: number }>(runId)?.count, 0)
       } finally { db.close() }
       const repeated = await adapter.host.mapPreStep!({ ...input, step: 2 })
       assert.deepEqual(repeated.capabilities, mapped.capabilities)

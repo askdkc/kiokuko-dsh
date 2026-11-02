@@ -82,7 +82,6 @@ for (const armed of [false, true]) test(`Deep native: ${armed ? 'armed human inp
     assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT COUNT(*) AS n FROM entries').get()?.n), 0)
     assert.equal(parent.session.snapshotEvents().filter((e: any) => e.type === 'llm/request').length, 0)
     assert.ok((await adapter.host.deepPlanning!.reports.snapshot(parent.session.id)).some(e => e.kind === 'report' && e.text.includes('read-only analysis stage')))
-    assert.equal(await adapter.host.deepPlanning!.store.database(db => db.prepare('SELECT count(*) AS count FROM enno_contracts').get<{count:number}>()!.count), 0)
   } finally {
     composition.stopIngress();  await adapter.dispose(); await composition.dispose(); await handle.dispose();await ctx.fiber.dispose()
     await rm(root, { recursive: true, force: true }); await rm(data, { recursive: true, force: true })

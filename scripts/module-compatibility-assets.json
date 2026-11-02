@@ -49,7 +49,8 @@
     "migrations/047_managed_operation_journal.sql",
     "migrations/048_repository_learning.sql",
     "migrations/049_lisp_session_hosts.sql",
-    "migrations/050_auxiliary_recovery.sql"
+    "migrations/050_auxiliary_recovery.sql",
+    "migrations/051_drop_enno.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

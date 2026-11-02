@@ -45,7 +45,7 @@ consumer disables release age delay only for this acceptance test; it does not
 change the user's configuration or build approvals.
 
 `pack:check` checks both lockfiles and package/declaration closure.
-`test:modules` checks isolated core, core/enno, core/lisp, core/enno/lisp and full
+`test:modules` checks isolated core, core/lisp and full
 compatibility packages. Run build-producing checks sequentially because they
 replace `dist`.
 

@@ -13,8 +13,8 @@ export const ciPlatforms = Object.freeze({
 });
 export const ciToolchain = Object.freeze({ node: 'v24.16.0', npm: '11.13.0', rust: 'rustc 1.85.0 (4d91de4e4 2025-02-17)' });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const ordinaryRoots = /^(?:src\/(?:akinator|context|deep-thinker|diff-review|embedding|enno-oduno|ledger|memory|model-tools)\/|src\/dsh\/(?:answer-review|coding-workflow|decisions|model-auto|models|observation-pack|orchestration|semantic-compaction|typesafe)\/)/;
-const ordinaryFiles = /^src\/dsh\/(?:agenticreplay-|answer-|context-|continuity-|correction-|enno-|execution-|intake-|memory-|request-|session-|task-|tool-|turn-)[^/]+\.ts$/;
+const ordinaryRoots = /^(?:src\/(?:akinator|context|deep-thinker|diff-review|embedding|ledger|memory|model-tools)\/|src\/dsh\/(?:answer-review|coding-workflow|decisions|model-auto|models|observation-pack|orchestration|semantic-compaction|typesafe)\/)/;
+const ordinaryFiles = /^src\/dsh\/(?:agenticreplay-|answer-|context-|continuity-|correction-|execution-|intake-|memory-|request-|session-|task-|tool-|turn-)[^/]+\.ts$/;
 const shared = /^(?:src\/(?:config|db|repository|security|serialization|skills)\/|src\/(?:index|errors)\.ts$|src\/dsh\/(?:core\/|modules\/|generated\/|(?:composition|index|core-runtime|runtime|database|tools|commands|config|task-authority-context|lisp-tool-identity)\.ts$))/;
 const fullInputs = /^(?:\.github\/|scripts\/|tests\/|skills\/|migrations\/|dsh\/|docs\/guardrail-licenses\/)|(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|Cargo\.(?:toml|lock)|tsconfig[^/]*\.json|\.npmrc)$/;
 const ui = /^src\/(?:client|models-client)\.ts$|^src\/dsh\/(?:model-selection-ui|session-log-surface|diff-review-surface)\.ts$/;

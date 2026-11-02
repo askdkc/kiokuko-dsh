@@ -1,6 +1,6 @@
 # Focused Kiokuko skills
 
-Seven specialists add investigation, architecture, review, benchmarking, verification recipes, skill authoring and technical writing. SOUL selects them only for relevant tasks. Existing code/UI/Enno/memory contracts remain authoritative. See [the adaptation ledger](pstack-adaptation.json) for all 49 upstream skills and 23 playbooks, pinned to the recorded commit. Upstream code is not installed or executed.
+Seven specialists add investigation, architecture, review, benchmarking, verification recipes, skill authoring and technical writing. SOUL selects them only for relevant tasks. Existing code/UI/memory contracts remain authoritative. See [the adaptation ledger](pstack-adaptation.json) for the upstream skills and playbooks, pinned to the recorded commit. Upstream code is not installed or executed.
 
 The common guidance targets GPT-6 Astra and GPT-6.1 Sol without selecting either model or forcing a reasoning budget. Outcomes, constraints and evidence take precedence over ritual steps. Model quality remains **unmeasured** until both actual models are evaluated; local content and delivery tests do not establish model improvement.
 

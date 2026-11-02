@@ -82,7 +82,6 @@ arbitrary stdout or a successful no-op process is insufficient.
 | skill-delivery | main, lisp | `node scripts/run-skill-delivery.mjs` | explicit completion receipt |
 | consumer-npm | main, runtime | `node scripts/verify-agenticreplay-consumer.mjs` | explicit completion receipt |
 | consumer-pnpm | main, runtime | `node scripts/verify-agenticreplay-consumer.mjs --pnpm` | explicit completion receipt |
-| dsh-lifecycle | main, runtime | `node scripts/run-enno-dsh-e2e.mjs` | explicit completion receipt |
 | sqlite-vec | main, semantic | `npm run test:sqlite-vec` | explicit completion receipt |
 | code-provider | code-provider | `node scripts/run-ci-native.mjs code-provider` | Explicit selected native fixture; nonempty official lifecycle without skipped required cases. |
 | p0 | p0 | `node scripts/run-ci-native.mjs p0` | Explicit selected native fixture; nonempty official lifecycle without skipped required cases. |

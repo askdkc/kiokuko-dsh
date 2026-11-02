@@ -21,7 +21,7 @@ async function standardSnapshot(): Promise<unknown[]> {
 test('dsh capability catalog is complete, immutable, and order-bound', async () => {
   const catalog = createDshCapabilityCatalog(await standardSnapshot())
   assert.equal(catalog.complete, true)
-  assert.equal(catalog.skills.length, 18)
+  assert.equal(catalog.skills.length, 17)
   assert.deepEqual(catalog.skills.slice(-2).map(skill => skill.name), ['kiokuko-lisp', 'natural-japanese-output'])
   assert.match(catalog.digest, /^[0-9a-f]{64}$/u)
   assert.doesNotThrow(() => assertCompleteDshCapabilityCatalog(catalog))
@@ -67,7 +67,7 @@ test('grounded profile and dsh turn request identity are deterministic', () => {
 test('run bindings use version 3 exclusively and reject every other binding version', () => {
   const current = [
     { kind: 'skill' as const, name: 'kiokuko-soul' },
-    { kind: 'tool' as const, name: 'enno_plan_submit' },
+    { kind: 'tool' as const, name: 'curator_check' },
   ]
   const bound = bindCapabilityCatalog({}, current)
   assert.equal((bound.kiokukoCapabilityCatalogBinding as { version: number }).version, 3)
@@ -76,7 +76,7 @@ test('run bindings use version 3 exclusively and reject every other binding vers
   const staleVersion = { kiokukoCapabilityCatalogBinding: { version: 1, digest: canonicalContentHash({ version: 1 }) } }
   assert.throws(() => assertCapabilityCatalogBinding(staleVersion, current), /missing or invalid/u)
   assert.throws(
-    () => assertCapabilityCatalogBinding(bound, [...current, { kind: 'tool', name: 'enno_finish' }]),
+    () => assertCapabilityCatalogBinding(bound, [...current, { kind: 'tool', name: 'memory_checkpoint' }]),
     /catalog differs/u,
   )
 })

@@ -9,8 +9,7 @@ import { repeatedMemoryScenarios } from './repeated-memory-scenarios.mjs'
 const root = resolve(import.meta.dirname, '..')
 const fixture = 'dsh-runtime'
 const scenarioRoutes = new Map([
-  ['e2e-repeated-deep', 'deep'], ['e2e-repeated-normal', 'normal'], ['e2e-repeated-enno', 'enno'],
-  ['e2e-repeated-enno-prefix', 'enno/prefix_reuse'], ['e2e-repeated-enno-bounded', 'enno/bounded_evidence'],
+  ['e2e-repeated-deep', 'deep'], ['e2e-repeated-normal', 'normal'],
 ])
 const contract = JSON.parse(readFileSync(join(root,'scripts/verification.json'),'utf8'))
 const optIn = contract.nativeScopeExclusions

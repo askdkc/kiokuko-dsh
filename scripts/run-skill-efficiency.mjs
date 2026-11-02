@@ -12,7 +12,6 @@ const cases=[
   ['ordinary',['kiokuko-soul']],
   ['japanese',['kiokuko-soul','natural-japanese-output']],
   ['lisp',['kiokuko-soul','natural-japanese-output','kiokuko-lisp']],
-  ['enno',['kiokuko-soul','kiokuko-enno-oduno','kiokuko-single-purpose-functions']],
   ['ui',['kiokuko-soul','kiokuko-single-purpose-functions','kiokuko-ui-design-soul']],
 ]
 const results=[]

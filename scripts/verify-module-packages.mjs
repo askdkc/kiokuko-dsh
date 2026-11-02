@@ -82,7 +82,7 @@ const hostServices = Object.fromEntries(['cordis', 'llm', 'session', 'session-pr
 try {
   const staged = join(work, 'staged'), report = await stageModules(staged)
   const packed = {}
-  for (const name of ['core', 'enno', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
+  for (const name of ['core', 'lisp']) packed[name] = await pack(join(staged, name), join(work, `pack-${name}`))
   const coreFiles = new Set(packed.core.files.map(file => file.path))
   for (const path of ['migrations/032_memory_evidence.sql', 'migrations/033_memory_forgetting.sql', 'dist/memory/evidence.js', 'dist/memory/explain.js', 'dist/memory/forget.js', 'dist/memory/forgotten.js', 'docs/memory-evidence.md']) assert.ok(coreFiles.has(path), `Missing memory lifecycle core asset: ${path}`)
   assert.ok(coreFiles.has('migrations/031_dsh_lisp_hot_tools.sql'), 'Missing hot-tool catalog migration')
@@ -96,14 +96,14 @@ try {
   for (const path of ['migrations/025_answer_review.sql', 'dist/dsh/answer-review/coordinator.js', 'docs/answer-review.md', 'scripts/evaluate-answer-review.mjs', 'scripts/laya-worker.py', 'scripts/smoke-laya-coreml.mjs', 'docs/laya-coreml.md', 'docs/laya-coreml-LICENSE.txt', 'dist/dsh/decisions/laya-coreml.js', 'dist/dsh/decisions/laya-v1.js', 'dist/dsh/decisions/laya-transport.js']) {
     assert.ok(coreFiles.has(path), `Missing Laya core asset: ${path}`)
   }
-  for (const name of ['enno', 'lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
+  for (const name of ['lisp']) for (const file of report.artifacts[name].sourceFiles) assert.ok(!coreFiles.has(file), `${name} duplicates core implementation: ${file}`)
   assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('lisp/')).map(file => file.path), ['lisp/process-identity.mjs', 'lisp/repository-owner.mjs', 'lisp/supervisor.mjs'], 'core includes the shared supervisor ownership closure, never the Lisp runtime')
   await command(process.execPath,[join(packed.core.directory,'lisp/supervisor.mjs'),JSON.stringify({command:process.execPath,args:['-e','process.exit(0)'],cwd:packed.core.directory,env:{PATH:process.env.PATH}})],packed.core.directory)
-  assert.ok(!packed.core.files.some(file => /^skills\/kiokuko-(lisp|enno-oduno)\//.test(file.path)))
+  assert.ok(!packed.core.files.some(file => /^skills\/kiokuko-lisp\//.test(file.path)))
   assert.ok(!Object.keys(report.artifacts.core.dependencies).some(name => name === 'agenticreplay' || name.startsWith('@agenticreplay/')))
   assert.deepEqual(packed.core.files.filter(file => file.path.startsWith('migrations/')).map(file => file.path).sort(), report.sharedCompatibilityAssets.map(asset => asset.path).sort())
   const results = []
-  for (const configuration of [[], ['enno'], ['lisp'], ['enno', 'lisp']]) {
+  for (const configuration of [[], ['lisp']]) {
     const combination = ['core', ...configuration].join('-'), consumer = join(work, combination)
     const manifest = await composeModules(Object.fromEntries(['core', ...configuration].map(name => [name, packed[name].directory])), consumer)
     assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('Laya-CoreML Unix socket')))

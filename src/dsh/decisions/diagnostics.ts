@@ -20,7 +20,7 @@ export type DiagnosticBinding = z.infer<typeof DiagnosticBinding>
 export const DiagnosticAttempt = z.object({ origin: z.enum(['intake','provider']), requestRef: digest,
   sessionId: nativeId.optional(), turn: revision.optional(), inputDigest: digest, contextDigest: digest.optional(),
   binding: DiagnosticBinding.optional(), policyRef: digest, referenceDigests: z.array(digest).max(32).default([]),
-  purpose: z.enum(['akinator','request-intent','skills','enno-check','lisp','memory-reuse','compaction','model-handoff','answer-review','model-routing','intent-semantic-match','correction-classification', 'curator-classification']) }).strict()
+  purpose: z.enum(['akinator','request-intent','skills','lisp','memory-reuse','compaction','model-handoff','answer-review','model-routing','intent-semantic-match','correction-classification', 'curator-classification']) }).strict()
 export type DiagnosticAttempt = z.input<typeof DiagnosticAttempt>
 export const DIAGNOSTIC_REASONS = ['observed','resolved','unresolved','native_unowned','clarification_required','target_unknown','scope_unknown',
   'transition_required','question_unavailable','context_changed','answer_queued','resume_observed','receipt_observed','continuation_observed',
@@ -205,14 +205,6 @@ export function recordDiagnosticTurn(db:SqliteDatabase,receiptId:string):void {
     }
   })
 }
-/** Runs after the existing Enno receipt trigger, inside its authoritative transaction. */
-export function recordDiagnosticEnnoCommit(db:SqliteDatabase,runId:string,operation:string,key:string):void {
-  bestEffortDiagnostic(db,runId,()=>{
-    const intent=db.prepare('SELECT receipt_id FROM dsh_turn_intents WHERE run_id=? AND operation=? AND idempotency_key=?').get(runId,operation,key)
-    if(intent)recordDiagnosticTurn(db,String(intent.receipt_id))
-  })
-}
-
 /** Trusted, independent adjudication API; never exposed as a model tool or inferred from resume. */
 export function reviewDiagnosticStop(db: SqliteDatabase, decisionId: string, verdict: 'false_stop'|'justified_stop', reviewRef: string): void {
   withImmediateTransaction(db,()=>{

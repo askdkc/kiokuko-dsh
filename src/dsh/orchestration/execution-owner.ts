@@ -1,7 +1,9 @@
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { KiokukoError } from '../../errors.js'
 
-export type ExecutionOwner = { dsh_session_id: string; workspace: string; mode: 'normal' | 'enno' | 'deep-thinker'; start_id: string; run_id: string | null }
+/** Persisted owner rows keep one mode per session; legacy 'enno' rows are refused at admission. */
+export type ExecutionOwnerMode = 'normal' | 'deep-thinker'
+export type ExecutionOwner = { dsh_session_id: string; workspace: string; mode: ExecutionOwnerMode; start_id: string; run_id: string | null }
 export function readExecutionOwner(db: SqliteDatabase, sessionId: string): ExecutionOwner | undefined {
   return db.prepare('SELECT * FROM dsh_execution_owners WHERE dsh_session_id=?').get<ExecutionOwner>(sessionId)
 }

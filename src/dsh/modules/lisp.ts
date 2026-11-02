@@ -6,7 +6,7 @@ import { bundledResources } from './resources.js'
 
 /** Lisp uses the shared development executor; explicit protected mode retains its root fence. */
 export const lispModule: DshModule<CoreModuleHost> = {
-  id: 'lisp', coreVersion: 1, requires: ['tools', 'sessions', 'agents', 'commands'], conflicts: ['enno'],
+  id: 'lisp', coreVersion: 1, requires: ['tools', 'sessions', 'agents', 'commands'],
   resources: bundledResources(['kiokuko-lisp']),
   configure: value => LispConfig.parse(value ?? {}),
   async mount({ host, defer }, configuration) {

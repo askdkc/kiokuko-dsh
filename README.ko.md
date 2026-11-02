@@ -23,7 +23,7 @@ AgenticReplay로 모델과 도구의 동작을 기록하고, 기록을 확인하
 DSH 표준 agent preset은 `subagent`와 `subagent_fork`를 제공합니다. 일반 하위 agent에서는 Kiokuko 실행 방식을 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents).
 
 
-새 변경 작업에서는 일반 실행 또는 役小角(enno-oduno)를 선택할 수 있습니다. 역할별 모델은 추천 템플릿이나 DSH에 설정된 모델에서 선택합니다. [모델 선택과 연결 제한](docs/model-selection.md).
+새 변경 작업에서는 일반 실행과 선택적 헤드/워커 모델 쌍을 사용합니다. [모델 선택과 연결 제한](docs/model-selection.md).
 
 선택 기능인 [자동 모델 선택](docs/model-selection.md#automatic-model-selection)은 기본적으로 꺼져 있습니다(`modelAutoMode.mode: off`). `/kioku-model-auto on | observe | off | status`는 현재 세션만 바꿉니다. `observe`는 제안만 기록하고 실제 모델은 유지합니다. 일반 작업에서 준비된 Jev, Laya 또는 OpenAI, dsh-codex, DSH 모델 메타데이터와 token meter가 필요합니다. 판정에 실패하면 현재 모델을 유지하고 수동 선택을 우선합니다.
 
@@ -36,7 +36,7 @@ ObservationPack은 기본값 `observationPack: { mode: auto }`를 유지합니�
 ## 기능
 
 - **Kiokuko Models** — 기본 Models 설정과 별도로 Web 설정 또는 `/kiokuko model`에서 연결하고 인증합니다. Infron Standard/Flex도 지원합니다. [설정 및 공유 자격 증명](docs/kiokuko-models.md)
-- **실행 모드** — 일반 실행 또는 역할 기반 계획과 검증을 제공하는 役小角(enno-oduno)를 선택합니다. [자세히](docs/model-selection.md)
+- **실행 모드** — 일반 실행. 모델 선택: [자세히](docs/model-selection.md)
 - **프로젝트 메모리** — 이후 작업에 유용한 프로젝트 지식을 검색합니다. [개념](docs/concepts.md)
 - **심층 계획** — 네 역할이 범위를 제한한 읽기 전용 조사를 수행합니다. [사용 방법](docs/deep-planning.md)
 - **DSH 하위 에이전트** — 표준 preset은 `subagent`와 `subagent_fork`를 제공하며, 기본 하위 에이전트는 Kiokuko 실행 모드를 다시 묻지 않습니다. [설정](docs/dsh-plugin.md#subagents)
@@ -113,7 +113,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 시작 시 일본어 출력 Skill을 포함한 모든 번들 Skill과 참조 파일을 `~/.agents/skills/`에 동기화합니다. 누락된 파일을 만들고 관리 대상 복사본을 업데이트하며, 비관리 파일은 덮어쓰지 않습니다. 다른 에이전트에서는 Skill 카탈로그를 다시 로드해야 합니다.
 
-위 설명은 전체 패키지의 기본 동작입니다. [코어와 선택 모듈 빌드](docs/core-modules.md)는 선택한 리소스만 포함합니다. 코어는 Enno/Lisp 런타임 없이 대화·조사·글쓰기·프로젝트 메모리를 처리합니다.
+위 설명은 전체 패키지의 기본 동작입니다. [코어와 선택 모듈 빌드](docs/core-modules.md)는 선택한 리소스만 포함합니다. 코어는 Lisp 런타임 없이 대화·조사·글쓰기·프로젝트 메모리를 처리합니다.
 
 시작 시 시작 디렉터리의 `AGENTS.md`에 있는 기존 Kiokuko 관리 블록도 갱신하며, 블록 밖의 지침은 보존합니다. 패키지 업데이트 후 DSH를 다시 시작하세요. 다른 작업 디렉터리나 오래된 복사본의 확인 및 복구는 [설정 절차](docs/dsh-plugin.md#what-setup-updates-and-when)를 참고하세요. `kiokuko use`는 DSH 설정 명령이 아닙니다.
 
@@ -249,7 +249,7 @@ LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya
 
 ### 의미 기반 압축
 
-ObservationPack(`observationPack: { mode: auto }`)은 성공한 대형 기본 도구 결과를 모델 호출 두 번 동안 유지한 후, 발췌문과 `observation_read` 핸들로 대체합니다. [의미 기반 압축](docs/semantic-compaction.md)은 TODO 완료 경계에서 평가하고 일반, Enno, Lisp 모드에서 기본 자동 압축에 앞서 오래된 도구 결과를 선택적으로 줄입니다. 기본값은 `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`이며, 준비된 타입 기반 판정 백엔드와 지원되는 기본 서비스가 필요합니다. `/kioku-decisions status`로 활성화 상태와 최근 결과를 확인하세요. 완전한 행의 발췌에 원문이 전혀 남지 않는 결과는 pack하지 않고 전체를 유지합니다. 기존 v1 pack과 핸들은 계속 읽고 복원할 수 있습니다.
+ObservationPack(`observationPack: { mode: auto }`)은 성공한 대형 기본 도구 결과를 모델 호출 두 번 동안 유지한 후, 발췌문과 `observation_read` 핸들로 대체합니다. [의미 기반 압축](docs/semantic-compaction.md)은 TODO 완료 경계에서 평가하고 일반, Lisp 모드에서 기본 자동 압축에 앞서 오래된 도구 결과를 선택적으로 줄입니다. 기본값은 `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`이며, 준비된 타입 기반 판정 백엔드와 지원되는 기본 서비스가 필요합니다. `/kioku-decisions status`로 활성화 상태와 최근 결과를 확인하세요. 완전한 행의 발췌에 원문이 전혀 남지 않는 결과는 pack하지 않고 전체를 유지합니다. 기존 v1 pack과 핸들은 계속 읽고 복원할 수 있습니다.
 
 Laya 압축의 별도 기본값은 `typedDecisions.laya-coreml.compaction.mode: off`입니다. 명시적인 `shadow`는 기록을 변경하지 않고 평가하며, `auto`는 여전히 `experimental_not_qualified` 상태입니다. 이 설정은 ObservationPack과 기본 요약의 기존 동작을 유지합니다. Akinator는 검증된 debug/research/writing 범위만 사용하며, 선택적 Skill 선택은 설명이 완전한 후보를 최대 네 개 사용하고 모델이 추가로 고르는 Skill은 최대 한 개입니다. [Laya 설정 및 평가](docs/semantic-compaction.md#local-laya)를 참고하세요.
 

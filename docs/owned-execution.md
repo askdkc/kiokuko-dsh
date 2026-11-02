@@ -4,7 +4,7 @@ Kiokuko registers native `kioku_read`, `kioku_write`, `kioku_edit`,
 `kioku_remove`, `kioku_exec`, and `kioku_result` tools. They use Node filesystem
 and process services directly; stock DSH filesystem/shell sandbox settings do
 not control this executor. Native presentation and PTC transport both remain
-supported. Plan, goal, cancellation, admitted identity, and Enno delegation
+supported. Plan, goal, cancellation, admitted identity, and execution owner
 scope still apply.
 
 Ordinary project reads, edits, builds, tests, PATH commands and investigation

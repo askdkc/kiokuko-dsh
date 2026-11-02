@@ -23,7 +23,7 @@ AgenticReplay 可记录模型和工具活动，查看记录并导出 HTML。
 标准 DSH agent preset 提供 `subagent` 和 `subagent_fork`。普通子 agent 不会再次询问 Kiokuko 的执行模式。[配置说明](docs/dsh-plugin.md#subagents)。
 
 
-新的修改任务可以选择普通执行或役小角(enno-oduno)。役小角支持推荐模板，也可从DSH已配置的模型中为各角色选择模型。[模型选择与连接限制](docs/model-selection.md)。
+新的修改任务使用普通执行，并可选配头/工作者模型对。[模型选择与连接限制](docs/model-selection.md)。
 
 可选的[自动模型选择](docs/model-selection.md#automatic-model-selection)默认关闭（`modelAutoMode.mode: off`）。`/kioku-model-auto on | observe | off | status` 仅更改当前会话；`observe` 只记录建议，不更换模型。普通任务需要已就绪的 Jev、Laya 或 OpenAI、dsh-codex，以及 DSH 的模型元数据和 token meter。判定失败时保留当前模型，手动选择优先。
 
@@ -36,7 +36,7 @@ ObservationPack 默认保持 `observationPack: { mode: auto }`。若完整行摘
 ## 功能
 
 - **Kiokuko Models** — 通过 Web 设置或 `/kiokuko model` 连接并认证，独立于原生 Models 设置。支持 Infron Standard/Flex。[设置与共享凭据](docs/kiokuko-models.md)
-- **执行模式** — 选择普通执行或役小角(enno-oduno)，后者提供基于角色的规划和验证。[详情](docs/model-selection.md)
+- **执行模式** — 普通执行；模型选择详见[详情](docs/model-selection.md)
 - **项目记忆** — 检索有用的项目知识，供后续工作使用。[概念](docs/concepts.md)
 - **深度规划** — 由四个角色开展有边界的只读调查。[使用方法](docs/deep-planning.md)
 - **DSH 子代理** — 标准 preset 提供 `subagent` 和 `subagent_fork`；原生子代理不会重复询问 Kiokuko 的执行模式。[配置](docs/dsh-plugin.md#subagents)
@@ -112,7 +112,7 @@ pnpm dsh plugin --profile web update kiokuko-dsh --latest
 
 启动时会将包括日语输出在内的全部内置 Skill 及其引用文件同步到 `~/.agents/skills/`，创建缺失文件并更新受管理的副本，不覆盖非受管理文件。其他代理需要重新加载 Skill 目录。
 
-以上是完整包的默认行为。[核心与可选模块构建](docs/core-modules.md)仅打包所选资源；核心可独立处理对话、调研、写作和项目记忆，不包含 Enno/Lisp 运行时。
+以上是完整包的默认行为。[核心与可选模块构建](docs/core-modules.md)仅打包所选资源；核心可独立处理对话、调研、写作和项目记忆，不包含 Lisp 运行时。
 
 启动时也会更新启动目录中 `AGENTS.md` 的现有 Kiokuko 管理块，保留块外的指令。更新包后请重启 DSH。其他工作目录或旧副本的检查与修复请参阅[设置步骤](docs/dsh-plugin.md#what-setup-updates-and-when)。`kiokuko use` 不是 DSH 的设置命令。
 
@@ -248,7 +248,7 @@ LAYA_MODEL="$HOME/.local/share/laya-coreml/multilingual" start-laya
 
 ### 语义压缩
 
-ObservationPack（`observationPack: { mode: auto }`）会将大型、成功的原生工具结果保留供模型调用两次，然后替换为摘录和 `observation_read` 句柄。[语义压缩](docs/semantic-compaction.md)会在 TODO 完成边界进行评估，并在普通、Enno 和 Lisp 模式中，先于原生自动压缩选择性地缩短旧工具结果。默认值为 `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`，需要已就绪的类型化判定后端及受支持的原生服务。使用 `/kioku-decisions status` 查看启用状态和最近结果。若完整行摘录无法保留任何原文，则保留全文而不进行 pack。现有 v1 pack 和句柄仍可读取和恢复。
+ObservationPack（`observationPack: { mode: auto }`）会将大型、成功的原生工具结果保留供模型调用两次，然后替换为摘录和 `observation_read` 句柄。[语义压缩](docs/semantic-compaction.md)会在 TODO 完成边界进行评估，并在普通和 Lisp 模式中，先于原生自动压缩选择性地缩短旧工具结果。默认值为 `semanticCompaction: { mode: auto, preemptive: true, budgetMs: 5000 }`，需要已就绪的类型化判定后端及受支持的原生服务。使用 `/kioku-decisions status` 查看启用状态和最近结果。若完整行摘录无法保留任何原文，则保留全文而不进行 pack。现有 v1 pack 和句柄仍可读取和恢复。
 
 Laya 压缩另有独立配置，默认值为 `typedDecisions.laya-coreml.compaction.mode: off`。显式选择 `shadow` 会评估但不改变历史；`auto` 仍处于 `experimental_not_qualified` 状态。此开关保留 ObservationPack 和原生摘要的现有行为。Akinator 仅使用经过验证的 debug/research/writing 范围；可选 Skill 选择最多使用四个信息完整的候选，并由模型最多追加选择一个。请参阅[Laya 设置与评估](docs/semantic-compaction.md#local-laya)。
 

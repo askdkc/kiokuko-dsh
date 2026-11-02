@@ -19,7 +19,7 @@ async function files(directory, prefix = '') {
 
 /** Assemble trusted local artifacts. The output must be new; conflicting ownership fails closed. */
 export async function composeModules(sources, destination) {
-  if (!sources.core || Object.keys(sources).some(name => !['core', 'enno', 'lisp'].includes(name))) throw new Error('Expected core and optional enno/lisp artifact directories')
+  if (!sources.core || Object.keys(sources).some(name => !['core', 'lisp'].includes(name))) throw new Error('Expected core and optional lisp artifact directories')
   await mkdir(destination, { recursive: true })
   if ((await readdir(destination)).length) throw new Error('Composition output must be empty')
   const manifest = JSON.parse(await readFile(join(sources.core, 'package.json'), 'utf8'))
@@ -76,7 +76,7 @@ export async function composeModules(sources, destination) {
   await writeFile(join(destination, 'dist/dsh/configured.d.ts'), `import { createConfiguredPlugin } from './core/index.js'\ndeclare const plugin: ReturnType<typeof createConfiguredPlugin>\nexport declare const name: typeof plugin.name\nexport declare const inject: typeof plugin.inject\nexport declare const Config: typeof plugin.Config\nexport declare const apply: typeof plugin.apply\n`)
   manifest.private = true
   manifest.exports = { './models':{types:'./dist/dsh/models/index.d.ts',default:'./dist/dsh/models/index.js'}, './client':{types:'./dist/models-client.d.ts',default:'./dist/models-client.cjs'}, '.': { types: './dist/dsh/configured.d.ts', default: './dist/dsh/configured.js' }, './core': { types: './dist/dsh/core/index.d.ts', default: './dist/dsh/core/index.js' }, ...Object.fromEntries(optional.map(name => [`./modules/${name}`, { types: `./dist/dsh/modules/${name}.d.ts`, default: `./dist/dsh/modules/${name}.js` }])) }
-  const inject = ['skills', 'systemPrompt', 'tools', 'sessions', 'agents', 'commands', 'userQuestions', ...(sources.enno ? ['llm', 'subagents', 'sessionQuery', 'sessionPersistence', 'attachments', 'connection'] : [])]
+  const inject = ['skills', 'systemPrompt', 'tools', 'sessions', 'agents', 'commands', 'userQuestions']
   await mkdir(join(destination, 'dsh'))
   await writeFile(join(destination, 'dsh/cordis.patch.yml'), JSON.stringify([{ insert: [{ id: 'kiokuko-models', name: 'kiokuko-dsh/models', inject: ['llm', 'commands'] }, { id: 'kiokuko-dsh', name: 'kiokuko-dsh', inject, config: { enabled: true } }] }], null, 2) + '\n')
   manifest.dsh = { client:manifest.dsh.client, bundle: { patch: './dsh/cordis.patch.yml' }, permissions: { summary: 'Configured local Kiokuko core and explicitly selected modules.', readPaths: ['Registered workspace and configured Kiokuko database'], writePaths: ['Configured Kiokuko database, pre-migration backups and selected managed Skills under ~/.agents/skills', ...(sources.lisp ? ['Protected Lisp scratch, journals, backups and explicitly approved project changes'] : [])], commands: sources.lisp ? ['Explicit protected SBCL and brokered subprocesses'] : [] } }
@@ -94,7 +94,7 @@ export async function composeModules(sources, destination) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [staging, output, ...selected] = process.argv.slice(2)
-  if (!staging || !output || selected.some(name => !['enno', 'lisp'].includes(name)) || new Set(selected).size !== selected.length) throw new Error('Usage: node scripts/compose-modules.mjs STAGING EMPTY_OUTPUT [enno] [lisp]')
+  if (!staging || !output || selected.some(name => name !== 'lisp') || new Set(selected).size !== selected.length) throw new Error('Usage: node scripts/compose-modules.mjs STAGING EMPTY_OUTPUT [lisp]')
   await composeModules(Object.fromEntries(['core', ...selected].map(name => [name, resolve(staging, name)])), resolve(output))
   console.log(`Configured local package: ${resolve(output)}`)
 }

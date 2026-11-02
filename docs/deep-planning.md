@@ -119,7 +119,7 @@ that run has no report yet, it shows only its state; earlier reports remain in
 **Deepの回答**. No report event is appended
 to the native log: DSH 0.1.2-rc.1 and 0.1.5-rc.1 drop the external event `ignorable` append
 option and would reject that log on reopening. The next ordinary input returns to
-the existing normal/Enno selection rules and receives a bounded, untrusted
+the existing admission rules and receives a bounded, untrusted
 summary of this Session's last Deep report.
 
 Quality reports begin with the selected candidate, the critic's overall reason,
@@ -151,10 +151,10 @@ exact parent's existing AgenticReplay choice; they do not prompt or enable captu
 
 The pure core in `src/deep-thinker/core` imports neither DSH nor the database.
 The controller, store, executor, reader and report port own their respective
-effects. Enno retains its own authorization callbacks and acceptance rules;
+effects. Deep retains its own authorization callbacks and acceptance rules;
 only native child creation/binding/result/disposal mechanics are shared.
 
-Migration 013 adds Session ownership shared by normal/Enno/Deep, Deep intents,
+Migration 013 adds Session ownership shared by normal/Deep, Deep intents,
 configuration drafts, graph nodes/edges, attempts, artifacts, evidence receipts,
 budget reservations, report outboxes and finalization claims. Source and
 configuration revisions, process leases and owner epochs fence results.

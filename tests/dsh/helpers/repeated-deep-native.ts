@@ -31,7 +31,6 @@ export async function completeDeepRound(f: Awaited<ReturnType<typeof deepNativeF
   assert.equal(requests.filter(request => request.sessionId === f.parent.session.id && request.purpose !== 'compaction').length, 0)
   const job = await f.deep.store.database(db => {
     assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n, 0, 'Deep must not fabricate native episodes')
-    assert.equal(db.prepare('SELECT count(*) AS n FROM enno_contracts').get<{n:number}>()!.n, 0)
     assert.equal(db.prepare("SELECT count(*) AS n FROM dsh_deep_finalizations WHERE status IN ('pending','processing')").get<{n:number}>()!.n, 0)
     assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_deep_finalizations WHERE run_id=?').get<{n:number}>(state.runId)!.n,0,'Deep completion cannot queue automatic extraction')
     return db.prepare("SELECT 1 FROM sqlite_master WHERE name='replay_memories'").get()

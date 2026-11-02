@@ -1,6 +1,6 @@
 # Memory delivery budgets and relations
 
-The default memory body budget is **16,000 Unicode code points**, not tokens or UTF-16 code units. Existing explicit character budgets take precedence, including continued requests and Enno refresh. Selection and ranking are unchanged. The title, summary and body projection consumes the body budget; JSON identity wrappers and relation metadata are separate. Each model-visible item carries `workspace` and `entryId`.
+The default memory body budget is **16,000 Unicode code points**, not tokens or UTF-16 code units. Existing explicit character budgets take precedence, including continued requests. Selection and ranking are unchanged. The title, summary and body projection consumes the body budget; JSON identity wrappers and relation metadata are separate. Each model-visible item carries `workspace` and `entryId`.
 
 `relationDelivery` describes stored `entry_links` among the final provided items. Its default budget is **8,000 Unicode code points of compact `JSON.stringify({relationDelivery})`**, including the outer property key and braces, and **128 edges**. Explicit `relationCharacterBudget` / `relationEdgeCap` options take precedence over `KIOKUKO_RELATION_CHARACTER_BUDGET` / `KIOKUKO_RELATION_EDGE_CAP`, then the defaults. Character limits must be integers from 1 to 100,000; edge caps from 1 to 1,024. A limit too small even for an omission frame is an explicit validation error.
 

@@ -21,16 +21,16 @@ import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
 import type { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
 import { readContextDelivery } from '../../../src/context/delivery.js'
 import { readEntry } from '../../../src/memory/entries.js'
-import { reportEnnoWork } from '../../../src/enno-oduno/service.js'
+import { memoryFailureDiagnostic } from '../../../src/dsh/memory-failure.js'
 
 export const PROCEDURE = 'validate schema before migrating'
 export const APPLICABILITY = 'SQLITE_BUSY in fixture-store fixture-v1 only'
 export const BOUNDARY = 'Do not apply to production or fixture-v2'
 export const UNRESOLVED = 'Concurrent writers remain untested'
 export const VERIFICATION = 'The fixture schema and row checksum were verified'
-export type RepeatedRoute = 'normal' | 'enno'
-export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; correctedIds?: readonly string[]; staleAuthority?: 'revision' | 'lease' }
-export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; planReviewCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
+export type RepeatedRoute = 'normal'
+export interface RoundFault { saveFailure?: boolean; duplicateCompletion?: boolean; correctedIds?: readonly string[] }
+export interface RoundReport { round: number; runId: string; session: string; start: number; end: number; mainCalls: number; auxiliaryCalls: number; toolExecutions: number; suppliedIds: string[]; finalizations: number; episodes: number; lessons: number; stages: string[] }
 export const fixtureData = ['account rows: Ada, Ken; schema accounts(email)', 'inventory rows: bolt, nut, washer; schema parts(sku, quantity)', 'audit rows: created, revised, reviewed, approved; schema events(actor, action, time)']
 const applicationPaths = fixtureData.map((_, index) => `fixtures/${index}.txt`)
 const applicationCommand = `${process.execPath} --test --test-reporter=tap fixtures/verify.mjs`
@@ -71,12 +71,14 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   ctx.on('agent/error', (event: any) => { nativeErrors.push(String(event.error?.stack ?? event.error ?? 'native agent failed')) })
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   provider.resolveModel = async (provider: string, model: string) => ({ provider, id: model, name: model, context: { contextWindow: 100000 } })
-  let auxiliaryCalls = 0, planReviewCalls = 0, toolExecutions = 0, activeRound = 0, activeReadonly = false
+  let auxiliaryCalls = 0, toolExecutions = 0, activeRound = 0, activeReadonly = false
   let roundStage = 'not-started', lastNative = 'none'
   ctx.on('session/event', (_session: any, event: any) => {
     if (['tool/call', 'tool/result', 'turn/end'].includes(event.type)) lastNative = `${event.type}:${event.seq}:${event.data.name ?? ''}`.slice(0, 256)
   }, { global: true })
-  const memoryQuestions: {round:number;phase:'organize'|'review';proposal?:any}[] = []
+  const memoryQuestions: {round:number;phase:'organize'|'review';id:string;selected:string;proposal?:any}[] = []
+  let approvalWait: { before: number; expected: number; priorRunIds: string[] } | undefined
+  let roundLogSeq = 0
   let auxiliaryHook: ((request: any) => Promise<void>) | undefined
   let activeFault: RoundFault = {}, activeSession = ''
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
@@ -106,23 +108,6 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       const observation = `${VERIFICATION}: ${content}; checksum ${checksum}; ${APPLICABILITY}`
       await writeFile(join(root, 'fixtures', `${args.fixture}.verified`), observation)
       toolExecutions++
-      if (activeFault.staleAuthority) {
-        const agent = liveAgents.get(activeSession)!
-        const binding = await adapter.host.toolHost!.bind({ callId: `late-report-${activeRound}`, name: 'enno_work_report', arguments: {}, signal: new AbortController().signal, agent: { dshSessionId: activeSession, nativeSession: agent.session } })
-        assert.ok(binding.revision > 1 && binding.leaseToken && binding.workUnitId)
-        await database(async db => {
-          const before = db.prepare('SELECT * FROM enno_contracts WHERE run_id=?').get(binding.runId)
-          const calls = db.prepare('SELECT count(*) AS n FROM enno_verifier_runs').get<{n:number}>()!.n
-          await assert.rejects(reportEnnoWork(db, { runId: binding.runId, workspace: binding.workspace, orchestrationId: binding.orchestrationId,
-            expectedRevision: activeFault.staleAuthority === 'revision' ? binding.revision - 1 : binding.revision,
-            routeEpoch: binding.routeEpoch, leaseToken: activeFault.staleAuthority === 'lease' ? `expired-${binding.leaseToken}` : binding.leaseToken,
-            workUnitId: binding.workUnitId, idempotencyKey: `stale-${activeRound}`, result: { outcome: 'completed', summary: VERIFICATION, mutated: false, changedPaths: [] } }),
-          (error: any) => error.code === 'CONFLICT')
-          assert.deepEqual(db.prepare('SELECT * FROM enno_contracts WHERE run_id=?').get(binding.runId), before)
-          assert.equal(db.prepare('SELECT count(*) AS n FROM enno_verifier_runs').get<{n:number}>()!.n, calls)
-        })
-        recordRepeatedStage({ round: activeRound, stage: `enno-stale-${activeFault.staleAuthority}`, expected: 'rejected-without-mutation', actual: 'rejected-without-mutation', extraVerifierCalls: 0 })
-      }
       return { exitCode: 0, observation }
     } }))
   fibers.push(await ctx.plugin({ name: 'repeated-memory-questions', apply(context: any) {
@@ -132,8 +117,9 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         if (/整理してよい|保存する記憶はこの内容でよい/u.test(question.question)) {
           const phase = question.question.includes('整理してよい') ? 'organize' : 'review'
           const proposal = phase === 'review' ? JSON.parse(question.detail.slice(question.detail.indexOf('\n{') + 1,question.detail.lastIndexOf('\nApprove,'))) : undefined
-          memoryQuestions.push({round:activeRound,phase,proposal})
-          return { id:question.id,selected:[activeReadonly ? '今回は保存しない' : phase === 'organize' ? '整理して確認する' : 'この内容を保存する'] }
+          const selected = activeReadonly ? '今回は保存しない' : phase === 'organize' ? '整理して確認する' : 'この内容を保存する'
+          memoryQuestions.push({round:activeRound,phase,id:question.id,selected,proposal})
+          return { id:question.id,selected:[selected] }
         }
         if (/^(boundary-|loop-|effect-)/u.test(question.id)) throw new Error(`Unexpected workflow hold: ${question.id}: ${question.detail}`)
         const selected = question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'kioku-agenticreplay-recording' ? '記録しない' : question.id === 'kiokuko-plan-confirmation' ? 'approve'
@@ -142,12 +128,11 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       }) }
     } })
   } }))
-  const knownRequests = new Set(Array.from({length:30},(_,index)=>{const number=index+1;return [false,true].map(readonly=>`${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`)}).flat())
+  const knownRequests = new Set(Array.from({length:30},(_,index)=>{const number=index+1;return [false,true].map(readonly=>`通常実行で、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`)}).flat())
   const decisions = intentFixtureDecisions(task => knownRequests.has(task) ? {action:'verify',taskType:'review'} : undefined)
   const adapter = createDshHostAdapter(ctx, { decisions, repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
     ...options,
     modelRoutes: mockModelRoutes, agenticReplay: { enabled: true, askOnStart: false }, efficiency: { observe: true }, finalization: { inputMode },
-    advisory: { verifyReadOnly: () => true, execute: async call => ({ slotId: call.slotId, outcome: 'completed', summary: 'Reviewed the immutable fixture contract.', recommendations: [], risks: [], evidence: [] }) },
     llm: { async *stream(request) {
       if (/^(Extract up to|Return JSON array|Check each supplied)/.test(request.system ?? '')) {
         // Keep the default index worker active without counting its distinct
@@ -158,13 +143,6 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         return
       }
       auxiliaryCalls++
-      const review = fixturePlanReview(request)
-      if (review) {
-        planReviewCalls++
-        yield { type: 'text-delta', text: JSON.stringify(review) }
-        yield { type: 'finish', reason: { kind: 'stop' } }
-        return
-      }
       await auxiliaryHook?.(request)
       const last = (request.messages.at(-1) as any).content[0].text as string
       const reconciliation=last.startsWith('{"reconciliation"')?JSON.parse(last).reconciliation:undefined
@@ -228,30 +206,25 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   }
 
   const executeRound = async (number: number, sessionId: string, readonly = false, expectLesson = number === 4, fault: RoundFault = {}): Promise<RoundReport> => {
-    activeRound = number; activeReadonly = readonly; roundStage = 'create-agent'
-    activeFault = fault; activeSession = sessionId
+    activeRound = number; activeReadonly = readonly; roundStage = 'create-agent'; approvalWait = undefined
+    activeFault = fault; activeSession = sessionId; roundLogSeq = ctx.logger.buffer.at(-1)?.sn ?? -1
     let agent = liveAgents.get(sessionId)
     if (!agent) { agent = (await ctx.agents.create({sessionId:session.SessionId(sessionId),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: root }})).agent; liveAgents.set(sessionId, agent) }
     roundStage = 'inspect-prior-state'
-    const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeReview = planReviewCalls, beforeTools = toolExecutions
+    const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeTools = toolExecutions
     const prior = await database(db => db.prepare('SELECT run_id FROM ledger_runs').all<{run_id:string}>())
     const beforeApproved = await database(countApproved)
+    approvalWait = { before: beforeApproved, expected: beforeApproved + 1, priorRunIds: prior.map(run => run.run_id) }
     if (fault.saveFailure) await database(db => db.exec(`CREATE TEMP TRIGGER repeated_fail_before_commit BEFORE INSERT ON replay_memories
       BEGIN SELECT RAISE(ABORT, 'injected approved memory commit failure'); END;`))
     const response = `Completed fixture lifecycle ${number}.`
-    const task = `${route === 'normal' ? '通常実行で' : '役小角を使って'}、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
+    const task = `通常実行で、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`
     // Each round is a new request, including the read-only observation probe.
     // Bind the scripted main-model interpretation to this turn's host evidence;
     // legacy taskType alone leaves ownership unresolved without a decision provider.
     script.push(interpretedPreparation(mock, `prepare-${number}`, 'new', 'verify', readonly ? 'debug' : 'review'))
-    if (route === 'enno') script.push(...ennoScript(mock, number, readonly).map(step => {
-      const name = step.find((chunk: any) => chunk.type === 'block-end' && chunk.block.type === 'tool-call')?.block.name
-      return ['enno_ideal_submit', 'enno_work_report', 'enno_finish', 'enno_meditation_submit'].includes(name) ? withMemoryReview(step, readonly, false) : step
-    }))
-    else {
-      if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'exec', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
-    }
-    script.push(route === 'normal' ? withMemoryReview(mock.textResponse(response), readonly, true) : mock.textResponse(response))
+    if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'exec', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
+    script.push(withMemoryReview(mock.textResponse(response), readonly, true))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     roundStage = 'native-final-response'
     await waitFor(() => {
@@ -293,8 +266,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       assert.equal(saved.length, readonly || fault.saveFailure ? 0 : 1, 'only approved native replay may be saved')
       if (saved.length) {
         const proposal = JSON.parse(saved[0]!.proposal_json)
-        if (route === 'normal') assert.ok(proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'approved memory must contain the actual successful fixture verifier: '+JSON.stringify({attempts:proposal.attempts,applicationCommand}))
-        else assert.ok(proposal.attempts.length > 0 && !proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'Enno review must not invent a Bash verifier receipt')
+        assert.ok(proposal.attempts.some((attempt:any) => attempt.command === applicationCommand && attempt.outcome === 'succeeded'), 'approved memory must contain the actual successful fixture verifier: '+JSON.stringify({attempts:proposal.attempts,applicationCommand}))
         assert.ok(memoryQuestions.some(question => question.round === number && question.phase === 'review' && JSON.stringify(question.proposal) === saved[0]!.proposal_json), 'the saved proposal must equal the displayed revision')
       }
       assert.equal(db.prepare('SELECT count(*) AS n FROM memory_episodes').get<{n:number}>()!.n, 0, 'execution cannot generate a lesson without post-task approval')
@@ -302,7 +274,6 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       return { run, job: { source_start_seq: sourceStartSeq, source_end_seq: sourceEndSeq }, episodes: approved, lessons: approved, finalizations: approved.length }
     })
     const requests = provider.requests.slice(beforeMain)
-    assert.equal(planReviewCalls - beforeReview, route === 'enno' ? 3 : 0, 'each Enno plan must complete all three check-model review slots')
     for (const id of fault.correctedIds ?? []) {
       const current=await database(db=>readEntry(db,{workspace:'repeated-memory',entryId:id}))
       const snapshots=requests.flatMap(request=>request.messages).filter((message:any)=>message.source?.sections?.some((section:any)=>section.name===`memory:memory:${id}`))
@@ -339,7 +310,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     assert.equal(script.length, 0, 'no unconsumed or repeated main model requests')
     assert.equal(toolExecutions - beforeTools, readonly ? 0 : 1)
     const report = { round: number, runId: state.run.run_id, session: sessionId, start: state.job.source_start_seq, end: state.job.source_end_seq,
-      mainCalls: requests.length, auxiliaryCalls: auxiliaryCalls - beforeAux, planReviewCalls: planReviewCalls - beforeReview, toolExecutions: toolExecutions - beforeTools,
+      mainCalls: requests.length, auxiliaryCalls: auxiliaryCalls - beforeAux, toolExecutions: toolExecutions - beforeTools,
       suppliedIds: [...suppliedIds], finalizations: state.finalizations, episodes: state.episodes.length, lessons: state.lessons.length,
       stages: ['admission', 'native-execution', 'final-response', 'log-flush', 'human-review', 'approved-replay', 'durable-state', 'model-request'] }
     recordRepeatedStage(report)
@@ -348,44 +319,43 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const round = async (...args: Parameters<typeof executeRound>) => {
     try { return await deadline(executeRound(...args), `complete lifecycle ${args[0]}`) }
     catch (cause) {
-      // Failure-only context: keep the original deadline, assertions and cause.
-      throw new Error(`${cause instanceof Error ? cause.message : String(cause)}; stage=${roundStage}; lastNative=${lastNative}; modelRequests=${provider.requests.length}`, { cause })
+      // Snapshot only on failure: distinguish extraction, approved save, and a
+      // wrong count predicate. Never dump request text, proposals or capture paths.
+      let memory: unknown
+      try {
+        memory = await deadline((async () => {
+          const stored = await database(db => ({
+            approved: countApproved(db),
+            runs: db.prepare(`SELECT run_id,status,dsh_session_id,task_state,task_revision,task_generation,
+              task_owner_session_id,ended_at,task_pending_stop_json IS NOT NULL AS pending_stop FROM ledger_runs
+              WHERE dsh_session_id=? ORDER BY rowid DESC LIMIT 4`).all(activeSession).map((row: any) => ({
+                ...row, currentRequest: !approvalWait?.priorRunIds.includes(row.run_id) })),
+            saves: countApproved(db) ? db.prepare(`SELECT task_id,session_id,approval_key,revision
+              FROM replay_memories ORDER BY rowid DESC LIMIT 4`).all() : [],
+          }))
+          const status = await ctx.tools.get('memory_review_status').execute({})
+          const capture = adapter.host.agenticReplay?.recorder.status(activeSession)
+          return { predicate: approvalWait && { before: approvalWait.before, expected: approvalWait.expected }, ...stored,
+            statuses: status.statuses.slice(-4).map((value: any) => ({ taskId: value.taskId, approvalKey: value.approvalKey,
+              status: value.status, ...(value.diagnostic ? { diagnostic: { ...memoryFailureDiagnostic(value.diagnostic), phase: value.diagnostic.phase } } : {}) })),
+            questions: memoryQuestions.filter(value => value.round === activeRound).slice(-4).map(value => ({
+              id: value.id, phase: value.phase, selected: value.selected, taskId: value.proposal?.source.taskId,
+              revision: value.proposal?.revision })),
+            failures: ctx.logger.buffer.filter((value: any) => value.sn > roundLogSeq && typeof value.args[0] === 'string'
+              && value.args[0].startsWith('Optional memory ')).slice(-4)
+              .map((value: any) => memoryFailureDiagnostic(value.args[0]).message.slice(0, 600)),
+            capture: capture && { capability: capture.capability, state: capture.trace?.state,
+              missing: capture.trace?.missing_event_count, unresolved: capture.trace?.unresolved_call_count,
+              error: capture.trace?.last_error_code, persistenceFailed: capture.persistenceFailed },
+            turns: liveAgents.get(activeSession)?.session.snapshotEvents().filter((value: any) => value.type === 'turn/end')
+              .slice(-3).map((value: any) => ({ seq: value.seq, turn: value.data.turn, reason: value.data.reason?.kind })),
+          }
+        })(), 'memory failure snapshot', 1000)
+      } catch (error) { memory = { unavailable: memoryFailureDiagnostic(error) } }
+      recordRepeatedStage({ round: activeRound, stage: roundStage, memory })
+      throw new Error(`${cause instanceof Error ? cause.message : String(cause)}; stage=${roundStage}; lastNative=${lastNative}; modelRequests=${provider.requests.length}; memory=${JSON.stringify(memory)}`, { cause })
     }
   }
   return { round, database, adapter, provider, setAuxiliaryHook: (hook: typeof auxiliaryHook) => { auxiliaryHook = hook },
     close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); disposeApplicationVerifier(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
-}
-
-export function ennoScript(mock: ReturnType<typeof nativeMock>, round: number, readonly = false): any[] {
-  const dispositions = (slots: string[]) => slots.map(slotId => ({ slotId, disposition: 'adopted', rationale: 'Applied the fixture evidence.' }))
-  const ideal = dispositions(['constraint_guardian','skill_trust_analyst','success_signal_critic'])
-  const planning = dispositions(['workunit_architect','protocol_risk_reviewer','verification_designer'])
-  const final = dispositions(['acceptance_auditor','regression_adversary','evidence_freshness_reviewer'])
-  const verifier = { id: 'fixture-check', kind: 'test', executable: process.execPath, args: ['--test','--test-reporter=tap','fixtures/verify.mjs'], cwd: '.', timeoutMs: 5000 }
-  const plan = {
-    executionHints: [], scope: ['fixtures'], exclusions: [], acceptanceCriteria: [{ id: 'verified', description: VERIFICATION }],
-    workPlan: { objective: PROCEDURE, units: [{ id: 'verify-fixture', objective: PROCEDURE, scope: ['fixtures'], dependencies: [], routes: ['code'], skillNames: ['kiokuko-single-purpose-functions'], expertRefs: [{ id: 'code.verification.v1', reason: 'Verify source evidence.' }], acceptanceCriteria: [VERIFICATION], focusedVerifiers: [verifier] }] },
-    skillRequirements: [], finalVerifiers: [verifier], maxAttempts: 3,
-    provenance: { scope: 'explicit_user', exclusions: 'explicit_user', acceptanceCriteria: 'explicit_user', workPlan: 'inferred', skillSet: 'repository_evidence', finalVerifiers: 'repository_evidence', maxAttempts: 'inferred' } }
-  return [mock.textResponse('The ideal is ready.'), mock.toolCallResponse(`ideal-${round}`, 'enno_ideal_submit', {
-    ideal: { objective: 'Validate the requested disposable fixture.', principles: ['Preserve the source data.'], skillContributions: [], successSignals: [VERIFICATION] }, advisoryDisposition: ideal }),
-  mock.textResponse('The plan is ready.'), mock.toolCallResponse(`review-${round}`, 'enno_plan_review', plan),
-  mock.toolCallResponse(`plan-${round}`, 'enno_plan_submit', { ...plan, advisoryDisposition: planning }),
-  ...(readonly ? [] : [mock.toolCallResponse(`verify-${round}`, 'exec', { fixture: (round - 1) % 3, procedure: PROCEDURE })]),
-  mock.toolCallResponse(`work-${round}`, 'enno_work_report', { result: { outcome: 'completed', summary: VERIFICATION, mutated: false, changedPaths: [] } }),
-  mock.toolCallResponse(`finish-${round}`, 'enno_finish', { advisoryDisposition: final, review: { decision: 'accept', summary: VERIFICATION } }),
-  mock.toolCallResponse(`meditate-${round}`, 'enno_meditation_submit', { meditation: { summary: 'All fixture evidence remains applicable only to fixture-v1.', inspectedPaths: ['fixtures'], deletionCandidates: [] } })]
-}
-
-/** Answer only the real no-tool plan-review protocol; memory extraction uses its own fixture. */
-export function fixturePlanReview(request: Parameters<import('../../../src/dsh/session-memory-finalizer.js').DshLlm['stream']>[0]) {
-  if (!request.system?.startsWith('Review the entire candidate plan')) return undefined
-  assert.equal(request.provider, 'mock')
-  assert.equal(request.model, 'gpt-6-astra')
-  assert.deepEqual(request.tools, [])
-  const payload = JSON.parse((request.messages[0] as { content: { text: string }[] }).content[0]!.text)
-  assert.ok(['workunit_architect', 'protocol_risk_reviewer', 'verification_designer'].includes(payload.slotId))
-  assert.equal(payload.context.phase, 'planning')
-  assert.ok(payload.context.candidate.workPlan.units.length > 0)
-  return { slotId: payload.slotId, outcome: 'completed', summary: 'Reviewed the complete fixture plan.', recommendations: [], risks: [], evidence: [] }
 }

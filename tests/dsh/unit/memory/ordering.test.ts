@@ -23,7 +23,7 @@ test('withheld memory never reaches the model without memory-reasoning', async (
 
 for(const intakeStatus of ['ready','exhausted'] as const)for(const memoryReasoningRequired of [false,true])for(const contextWithheld of [false,true])test(`memory source ordering: ${intakeStatus}, reasoning=${memoryReasoningRequired}, withheld=${contextWithheld}`,async()=>{
   const value=prepared({memoryReasoningRequired,contextWithheld})
-  const sources=await buildDshMessageSources({task:'The exact current request',intakeStatus,nextAction:'proceed',memoryPolicy:value.memoryPolicy,context:value.context,routeSkillNames:[],expertRefs:[]})
+  const sources=await buildDshMessageSources({task:'The exact current request',intakeStatus,nextAction:'proceed',memoryPolicy:value.memoryPolicy,context:value.context})
   assert.equal(sources[0]!.kind,'soul');assert.equal(sources[0]!.trust,'system')
   assert.equal(sources.at(-1)!.kind,'user-task');assert.equal(sources.at(-1)!.trust,'user');assert.equal(sources.at(-1)!.text,'The exact current request')
   const reasoning=sources.findIndex(source=>source.kind==='memory-reasoning'),memories=sources.filter(source=>source.kind==='memory')

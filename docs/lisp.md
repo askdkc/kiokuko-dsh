@@ -125,7 +125,7 @@ rejection and model abstention defer classification. Native adapters let the
 ordinary model infer advisory intent or ask a concrete clarification; they do not
 repeat the generic category dialog merely because the classifier abstained. Classification does not authorize implementation. For an explicit coding request the agent defines the Goal, implementation items and their observable criteria, then the host asks whether to use Lisp for that task. Both yes and no persist for the task and scope across restart. Conversation, review and plan-only requests do not trigger this prompt. Closing, free text without a clear choice or a disconnected question leaves implementation pending. Cancellation preserves the prepared work. A selected Lisp startup failure remains a recoverable blocker.
 
-Normal/Enno execution mode and Lisp choice are separate. The task question remains available when the Lisp module is disabled; no needs no Lisp runtime, while yes requires the enabled module and working SBCL. To explicitly change the current task's Lisp route or inspect its state, use these commands in the desired DSH session:
+Execution-mode selection and Lisp choice are separate. The task question remains available when the Lisp module is disabled; no needs no Lisp runtime, while yes requires the enabled module and working SBCL. To explicitly change the current task's Lisp route or inspect its state, use these commands in the desired DSH session:
 
 ```text
 /kioku-lisp enable

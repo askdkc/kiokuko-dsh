@@ -45,9 +45,8 @@ test('explicit legacy execution host deliberately opts out and mounts native too
   const modes = new DshPonytailModes()
   modes.begin('request-native')
   const policy = new DshToolPolicy({
-    phase: 'goki', runId: 'run-native', workspace: 'workspace-native', orchestrationId: 'orch-native',
-    revision: 1, routeEpoch: 0, dshSessionId: 'native-agent', workUnitId: 'unit-native', leaseToken: 'lease-native',
-    currentWorkUnitId: 'unit-native', nextAction: 'execute_work_unit',
+    phase: 'normal', runId: 'run-native', workspace: 'workspace-native', orchestrationId: 'orch-native',
+    revision: 1, dshSessionId: 'native-agent',
   })
   const calls: string[] = []
   const composition = {
@@ -57,7 +56,7 @@ test('explicit legacy execution host deliberately opts out and mounts native too
     },
     toolPolicy: policy,
     toolHost: {
-      bind: () => ({ runId: 'run-native', workspace: 'workspace-native', orchestrationId: 'orch-native', revision: 1, routeEpoch: 0, workUnitId: 'unit-native', leaseToken: 'lease-native' }),
+      bind: () => ({ runId: 'run-native', workspace: 'workspace-native', orchestrationId: 'orch-native', revision: 1 }),
       execute: async (operation: string) => { calls.push(operation); return { ok: true } },
     },
     commands: {
@@ -74,7 +73,7 @@ test('explicit legacy execution host deliberately opts out and mounts native too
   await host
   await plugin
 
-  assert.equal(tools.length, 9)
+  assert.deepEqual(tools.map((tool: any) => tool.name).sort(), ['curator_check', 'memory_checkpoint'])
   assert.equal(commands.length, 3)
   assert.ok(commands.some(command => command.name === 'kioku-agenticreplay'))
   const keyCommand = commands.find(command => command.name === 'kioku-typesafe-key')
@@ -83,16 +82,16 @@ test('explicit legacy execution host deliberately opts out and mounts native too
   assert.deepEqual(await commands.find(command => command.name === 'ponytail').handler({ rawInput: 'ultra', signal: new AbortController().signal }), {
     kind: 'success', text: 'Ponytail mode set to ultra for the active request.',
   })
-  const workReport = tools.find((tool) => tool.name === 'enno_work_report')
-  assert.ok(workReport)
+  const curator = tools.find((tool: any) => tool.name === 'curator_check')
+  assert.ok(curator)
   const denied = await (root.waterfall as unknown as (name: string, execution: unknown, next: () => Promise<unknown>) => Promise<unknown>)('tools/pre-execute', {
-    callId: 'wrong-phase-call', name: 'enno_plan_submit', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
+    callId: 'unknown-call', name: 'task_answer', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   }, async () => ({ kind: 'allow' }))
-  assert.deepEqual(denied, { kind: 'deny', reason: 'Kiokuko dsh tool denied (wrong_directive)' })
-  await workReport.execute({ result: { outcome: 'completed', summary: 'done', mutated: false, changedPaths: [] } }, {
-    callId: 'native-call', name: 'enno_work_report', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
+  assert.deepEqual(denied, { kind: 'deny', reason: 'Kiokuko dsh tool denied (unknown_tool)' })
+  await curator.execute({ query: 'status' }, {
+    callId: 'native-call', name: 'curator_check', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   })
-  assert.deepEqual(calls, ['enno_work_report'])
+  assert.deepEqual(calls, ['curator_check'])
   const missingSearch = { isError: true, error: {
     message: 'grep search failed (exit 2): missing.ts: IO error for operation on missing.ts: No such file or directory (os error 2)',
     info: { name: 'SearchError', code: 'SEARCH_FAILED' },

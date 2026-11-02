@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { HeadWorkerConfigurationSchema, headWorkerCandidates, validateHeadWorker, headWorkerEnnoConfiguration } from '../../../src/dsh/head-worker-configuration.js'
+import { HeadWorkerConfigurationSchema, headWorkerCandidates, validateHeadWorker } from '../../../src/dsh/head-worker-configuration.js'
 import type { ModelCatalogSnapshot, DshModelCatalog } from '../../../src/dsh/model-configuration.js'
 const catalog: ModelCatalogSnapshot = {
   providers: [
@@ -39,13 +39,6 @@ test('pair schema and validation reject fallback models, unknown routes and unav
   assert.equal(missing.heads.length, 0); assert.equal(missing.workers.length, 0); assert.ok(missing.problems.length >= 2)
   assert.ok((await validateHeadWorker(pair, { ...llm, resolveCallConfig: async b => ({ ...b, model: 'fallback' }) }, [])).length)
   assert.ok((await validateHeadWorker({ ...pair, worker: { provider: 'sol', model: 'deepseek-flash' } }, llm, [])).length)
-})
-test('Enno maps all parent roles to head and only delegated worker to Flash', () => {
-  const config = headWorkerEnnoConfiguration(pair)
-  for (const role of ['ideal', 'zenki', 'goki', 'check'] as const) assert.deepEqual(config.roles[role], pair.head)
-  assert.deepEqual(config.roles.worker, pair.worker)
-  assert.equal(config.custom, false)
-  assert.equal(config.maxConcurrentChildren, 4)
 })
 test('provider-specific IDs cannot migrate across a different route family', async () => {
   const wrong = { ...catalog, models: [...catalog.models, { provider: 'sol', id: 'deepseek-flash', name: 'Flash' }] }

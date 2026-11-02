@@ -378,7 +378,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
       jsx("h2", { children: "Kiokuko Models" }),
       jsx("p", {
         children:
-          "Connect directly for chat, Enno and Deep. Credentials are shared with dsh-cli. Signing out also signs dsh-cli out.",
+          "Connect directly for chat and Deep. Credentials are shared with dsh-cli. Signing out also signs dsh-cli out.",
       }),
       ...(error
         ? [jsx("p", { role: "alert", children: error }, "error")]
@@ -394,7 +394,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
         "aria-label": "Head/worker pair",
         children: [
           jsx("legend", { children: "Head/worker pair (optional)" }),
-          jsx("p", { children: "GPT-6.1-Sol head + DeepSeek V4.1 Flash subagents for normal chat, Lisp and Enno. Both exact models must be available; there is no automatic replacement. An approved Enno task keeps its selected models until the next task." }),
+          jsx("p", { children: "GPT-6.1-Sol head + DeepSeek V4.1 Flash subagents for normal chat and Lisp. Both exact models must be available; there is no automatic replacement." }),
           jsx("p", { children: "Current chat: " + (sessionId ? pairSummary(pair?.current) : "Open a chat to select its pair") }),
           jsx("p", { children: "Default for new chats: " + pairSummary(pair?.default) }),
           jsx("p", { children: "Candidates are catalog entries. Connection availability is checked when you apply the pair." }),

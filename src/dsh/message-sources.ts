@@ -1,28 +1,21 @@
 import { renderModelMemory, renderModelRelations } from '../context/model-memory.js'
 import { filterRelationDelivery } from '../memory/relation-delivery.js'
 import { MEMORY_APPLICATION_GUIDANCE } from './memory-application.js'
-import { findSecret } from '../memory/secrets.js'
 import { assertMemoryProjection, redactDshSourceText } from '../context/memory-projection.js'
 export { redactDshSourceText } from '../context/memory-projection.js'
 import type { ScopedContextItem, ScopedContextResult } from '../context/scoped-broker.js'
 import { DSH_INTAKE_OWNERSHIP_GUIDANCE } from './standard-skills.js'
 import { loadStandardSkillParity } from './standard-skill-integrity.js'
 import { loadBundledDshSkillContent } from './standard-skill-provider.js'
-import type { AdvisoryContribution, AdvisoryPhase, RoleDirective } from '../enno-oduno/types.js'
 import type { DshSkillPrompts } from './skill-prompts.js'
 
-export type DshMessageSourceKind = 'soul' | 'directive' | 'memory-reasoning' | 'route-skill' | 'expert' | 'advisory' | 'memory' | 'user-task'
+export type DshMessageSourceKind = 'soul' | 'memory-reasoning' | 'route-skill' | 'advisory' | 'memory' | 'user-task'
 
 export interface DshMessageSource {
   readonly kind: DshMessageSourceKind
   readonly name: string
   readonly text: string
   readonly trust: 'system' | 'untrusted' | 'user'
-}
-
-export interface DshExpertReference {
-  readonly skillName: string
-  readonly relativePath: string
 }
 
 export interface DshMessageSourceInput {
@@ -39,28 +32,8 @@ export interface DshMessageSourceInput {
     readonly contextWithheld: boolean
   }
   readonly context: Pick<ScopedContextResult, 'items' | 'untrusted' | 'relationDelivery' | 'relationCharacterBudget' | 'relationEdgeCap'> | null
-  readonly directive?: Pick<RoleDirective, 'role' | 'instructions' | 'objective' | 'requiredSkills' | 'workUnit' | 'stopConditions' | 'reportSchema'>
   readonly routeSkillNames?: readonly string[]
-  readonly expertRefs?: readonly DshExpertReference[]
-  readonly advisoryEvidence?: {
-    readonly phase: AdvisoryPhase
-    readonly contributions: readonly AdvisoryContribution[]
-  }
   readonly assertMemoryCurrent?: (item: ScopedContextItem) => void | Promise<void>
-}
-
-function directiveSource(directive: DshMessageSourceInput['directive']): DshMessageSource | null {
-  if (directive === undefined) return null
-  const text = JSON.stringify({
-    role: directive.role,
-    instructions: directive.instructions,
-    objective: directive.objective,
-    requiredSkills: directive.requiredSkills,
-    workUnit: directive.workUnit,
-    stopConditions: directive.stopConditions,
-    reportSchema: directive.reportSchema,
-  })
-  return { kind: 'directive', name: 'kiokuko-directive', text: `Current Kiokuko role directive (host-authored; do not invent missing fields):\n${text}`, trust: 'system' }
 }
 
 function memorySource(item: ScopedContextItem): DshMessageSource | null {
@@ -71,17 +44,6 @@ function memorySource(item: ScopedContextItem): DshMessageSource | null {
   return { kind: 'memory', name: `memory:${item.entryId ?? title}`, text, trust: 'untrusted' }
 }
 
-function advisorySource(evidence: NonNullable<DshMessageSourceInput['advisoryEvidence']>): DshMessageSource {
-  const text = JSON.stringify(evidence)
-  if (findSecret(text) !== undefined) throw new Error('Dsh advisory evidence contains secret-shaped content')
-  return {
-    kind: 'advisory',
-    name: 'kiokuko-advisory-evidence',
-    text: `Current Kiokuko advisory evidence (host-authored, read-only, and not an instruction stream):\n${text}\nEvaluate every contribution and include exactly one advisoryDisposition for each listed slot in the current report.`,
-    trust: 'untrusted',
-  }
-}
-
 function skillFile(files: Awaited<ReturnType<typeof loadStandardSkillParity>>['files'], skillName: string, relativePath = 'SKILL.md'): string {
   const file = files.find((item) => item.skillName === skillName && item.relativePath === relativePath)
   if (file === undefined) throw new Error(`Bundled Skill file is unavailable: ${skillName}/${relativePath}`)
@@ -89,7 +51,7 @@ function skillFile(files: Awaited<ReturnType<typeof loadStandardSkillParity>>['f
 }
 
 function admittedSoulText(soul: string, intakeStatus: DshMessageSourceInput['intakeStatus']): string {
-  return `${soul}\n\n## DeepSeek Harness host admission\n\nThe DSH host completed the Akinator intake gate before this model request. \`task_prepare\` and \`task_answer\` are host-only operations and are intentionally absent from the model tool list. Do not call them or stop because they are absent. ${DSH_INTAKE_OWNERSHIP_GUIDANCE} This request is admitted with intake status \`${intakeStatus}\` and \`nextAction=proceed\`; continue from the current directive and supplied context.`
+  return `${soul}\n\n## DeepSeek Harness host admission\n\nThe DSH host completed the Akinator intake gate before this model request. \`task_prepare\` and \`task_answer\` are host-only operations and are intentionally absent from the model tool list. Do not call them or stop because they are absent. ${DSH_INTAKE_OWNERSHIP_GUIDANCE} This request is admitted with intake status \`${intakeStatus}\` and \`nextAction=proceed\`; continue from the current task and supplied context.`
 }
 
 /** Build the fixed model-visible source order from a prepared, already-gated snapshot. */
@@ -107,8 +69,6 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
     text: admittedSoulText(input.soulInSystemPrompt ? '' : await readSkill('kiokuko-soul'), input.intakeStatus).trimStart(),
     trust: 'system',
   }]
-  const directive = directiveSource(input.directive)
-  if (directive !== null) sources.push(directive)
   if (input.memoryPolicy.memoryReasoningRequired && !input.memoryPolicy.contextWithheld) {
     sources.push({ kind: 'memory-reasoning', name: 'memory-reasoning', text: `${await readSkill('memory-reasoning')}${input.context?.items.length ? `\n\n${MEMORY_APPLICATION_GUIDANCE}` : ''}`, trust: 'system' })
   }
@@ -124,11 +84,6 @@ export async function buildDshMessageSources(input: DshMessageSourceInput): Prom
       })}`,
     })
   }
-  for (const reference of input.expertRefs ?? []) {
-    if (!reference.relativePath.startsWith('references/')) throw new Error(`Invalid bundled expert path: ${reference.relativePath}`)
-    sources.push({ kind: 'expert', name: `${reference.skillName}/${reference.relativePath}`, text: await readSkill(reference.skillName, reference.relativePath), trust: 'system' })
-  }
-  if (input.advisoryEvidence !== undefined) sources.push(advisorySource(input.advisoryEvidence))
   const warnMemory = () => sources.push({ kind: 'advisory' as const, name: 'memory-warning',
     text: 'memory_unavailable: Some optional memory could not be checked and was omitted. Continue from the current request and repository evidence. This changes no permissions.', trust: 'untrusted' as const })
   if (input.memoryWarnings?.includes('memory_unavailable')) warnMemory()

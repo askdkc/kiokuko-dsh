@@ -3,7 +3,7 @@
 Kiokuko automatically includes the complete bundled
 [Natural Japanese Output Skill](../skills/japanese-translation-for-oss-models/SKILL.md)
 in native Agent prompts for DeepSeek, Kimi, GLM, Qwen, HY/Hunyuan, MiMo and
-MiniMax model families. This covers ordinary work, Enno roles and Deep workers.
+MiniMax model families. This covers ordinary work and Deep workers.
 No additional configuration or Skill tool permission is needed.
 
 The exact selected **model ID** determines the match, after host routing.

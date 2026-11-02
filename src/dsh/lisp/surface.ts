@@ -556,7 +556,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     registeredAgents.add(agent)
     const prompt = agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
     if (prompt) {
-      local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
+      if (!policyPrompt) local.push(prompt.section({ name: 'kiokuko:lisp', order: -90000, text: guide }))
       if (!policyPrompt) local.push(prompt.section({ name: 'kiokuko:lisp-approval', order: -89999, text: approvalText }))
     }
   }

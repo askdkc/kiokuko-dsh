@@ -7,7 +7,7 @@ export const CodingId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/u)
 const revision = z.number().int().min(1)
 export const CodingCriterionSchema = z.object({
   criterionId: CodingId, revision, outcome: text, procedure: text, expected: text,
-  evidence: z.enum(['selected_tests', 'output', 'artifact', 'browser', 'enno']),
+  evidence: z.enum(['selected_tests', 'output', 'artifact', 'browser']),
 }).strict()
 export const CodingItemSchema = z.object({
   itemId: CodingId, change: text, dependsOn: z.array(CodingId).max(64),
@@ -88,7 +88,6 @@ export interface CodingWorkflow extends CodingIdentity {
   revision: number; scopeVersion: number; state: CodingState; definition?: CodingDefinition;
   choice: CodingChoice; retiredIds: string[]; activeItemId?: string; blocker?: CodingBlocker;
   attempts: Record<string, { fingerprint: string; count: number; retryAt: number; sourceDigest?: string }>;
-  ennoProjectionDigest?: string;
   protocol?: ProtocolState;
   pendingScopeChange?: { requestDigest: string; evidenceRefs: string[] }
 }

@@ -663,11 +663,8 @@ function useShortcutGroup(ref: { current: HTMLElement | null }, handler: (event:
     }
   }, [ref])
 }
-function isEnnoSearchQuestion(question: IntakeItem): boolean {
-  return question.header === '実行方式とモデル' && /^enno-(?:provider|model)-(?:ideal|zenki|goki|worker|check)$/u.test(question.id)
-}
 function questionInputKind(question: IntakeItem): 'choice' | 'search' | 'value' {
-  if (isEnnoSearchQuestion(question) || (question.header === 'Deep planning' && question.id === 'deep-role-model')) return 'search'
+  if (question.header === 'Deep planning' && question.id === 'deep-role-model') return 'search'
   if (question.header === 'Deep planning' && question.id === 'deep-budget-value') return 'value'
   return 'choice'
 }

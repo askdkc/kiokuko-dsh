@@ -14,7 +14,7 @@ import { interpretedPreparation, toolValue } from '../../helpers/coding-script.j
 import { approveFixtureMemory } from '../../helpers/approved-fixture-memory.js'
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT
 
-for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)for(const mode of ['off','observe','active'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat stays unsaved until explicit approval, then retrieves and forgets':`${intakeMode} native: ordinary answers do not open a review execution`} with ennoMemory=${mode}`, {skip:!packages,timeout:30000},async()=>{
+for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)test(`${intakeMode==='legacy-owner'?'legacy-owner native T01/T06/T11/T39: open chat stays unsaved until explicit approval, then retrieves and forgets':`${intakeMode} native: ordinary answers do not open a review execution`}`, {skip:!packages,timeout:30000},async()=>{
   const modules=await Promise.all(['cordis','llm','session','session-projection','system-prompt','tools','agent','agent-loop','skill','commands'].map(name=>import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages!,'@deepseek-ai',name==='cordis'?name:`dsh-${name}`,'lib/index.js')).href))))
   const [cordis,llm,session,projection,systemPrompt,tools,agents,loop,skills,commands]=modules
   const root=await mkdtemp(join(tmpdir(),'native-memory-review-'));await mkdir(join(root,'.git'))
@@ -59,7 +59,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-
     ctx.on('session/flush',(s:any)=>{persisted.splice(0,persisted.length,...s.snapshotEvents());return Promise.resolve()})
     // Disabling decisions defers interpretation to the model in eager mode too.
     // A legacy owner is seeded separately to cover historical chat-ledger review.
-    adapter=createDshHostAdapter(ctx,{...(intakeMode!=='on-demand'?{intakeMode:'eager',typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),agenticReplay:{enabled:false},ennoMemory:{mode}})
+    adapter=createDshHostAdapter(ctx,{...(intakeMode!=='on-demand'?{intakeMode:'eager',typedDecisions:{mode:'off'}}:{}),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),agenticReplay:{enabled:false}})
     composition=await mountDshComposition(ctx,adapter.host)
     if(intakeMode==='legacy-owner'){
       const seeded=new Set<string>()

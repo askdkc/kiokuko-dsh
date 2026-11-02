@@ -110,8 +110,8 @@ for (const scenario of ['same-session','restart'] as const) {
   })
 }
 
-for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reuse', 'bounded_evidence'] as const) for (const scenario of ['same-session', 'new-session', 'restart'] as const) {
-  const name = `${route}/${mode}/${scenario}`
+for (const mode of ['prefix_reuse', 'bounded_evidence'] as const) for (const scenario of ['same-session', 'new-session', 'restart'] as const) {
+  const name = `normal/${mode}/${scenario}`
   if (!selectedScenarios.includes(name)) continue
   test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
     const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-memory-')))
@@ -119,11 +119,11 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
     const rounds: RoundReport[] = []
     try {
       await prepareRepeatedWorkspace(root)
-      if (scenario !== 'restart') host = await repeatedNativeHost(root, mode, route)
+      if (scenario !== 'restart') host = await repeatedNativeHost(root, mode, 'normal')
       for (let round = 1; round <= 4; round++) {
         if (scenario === 'restart') {
           const env = { ...process.env }; delete env.NODE_TEST_CONTEXT
-          await promisify(execFile)(process.execPath, ['--import', 'tsx', 'tests/dsh/helpers/repeated-memory-process.ts', root, mode, route, String(round)], { env, timeout: 60_000, maxBuffer: 1024 * 1024 })
+          await promisify(execFile)(process.execPath, ['--import', 'tsx', 'tests/dsh/helpers/repeated-memory-process.ts', root, mode, 'normal', String(round)], { env, timeout: 60_000, maxBuffer: 1024 * 1024 })
           const report = JSON.parse(await readFile(join(root, '.git', `round-${round}.json`), 'utf8'))
           rounds.push(report); recordRepeatedStage(report)
         } else rounds.push(await host!.round(round, scenario === 'same-session' ? 'repeated-session' : `repeated-${round}`, round === 4))
@@ -133,8 +133,6 @@ for (const route of ['normal', 'enno'] as const) for (const mode of ['prefix_reu
       assert.equal(rounds[2]!.episodes, 3)
       assert.equal(rounds[2]!.lessons, 3, 'each of three separately approved runs is retained')
       assert.equal(rounds[3]!.finalizations, 3, 'the read-only probe declines another save')
-      assert.equal(rounds[3]!.planReviewCalls, route === 'enno' ? 3 : 0)
-      assert.equal(rounds[3]!.auxiliaryCalls, rounds[3]!.planReviewCalls, 'read-only retrieval adds no memory extraction call')
       if (host) {
         for (const [index, setting] of ['observe', 'off'].entries()) {
           await host.database(db => configureEvolution(db, setting as 'observe' | 'off'))
@@ -184,20 +182,6 @@ for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scen
       for (let n = 1; n < rounds.length; n++) assert.ok(rounds[n - 1]!.end < rounds[n]!.start)
       if (scenario === 'correction') await host.round(offset + 4, 'fault-session', true, false, { correctedIds })
       if (scenario === 'duplicate-completion' || scenario === 'save-failure') await host.round(4, 'fault-session', true, true)
-    } finally { await host?.close(); await rm(root, { recursive: true, force: true }) }
-  })
-}
-
-for (const mode of ['prefix_reuse','bounded_evidence'] as const) for (const scenario of ['stale-revision','stale-lease'] as const) {
-  const name = `enno/${mode}/${scenario}`
-  if (!selectedScenarios.includes(name)) continue
-  test(`repeated memory lifecycle: ${name}`, { skip: packages ? false : 'requires pinned native DSH', timeout: 300_000 }, async () => {
-    const root = realpathSync(await mkdtemp(join(tmpdir(), 'repeated-enno-fence-')))
-    let host: Awaited<ReturnType<typeof repeatedNativeHost>> | undefined
-    try {
-      await prepareRepeatedWorkspace(root); host = await repeatedNativeHost(root, mode, 'enno')
-      for (let round = 1; round <= 4; round++) await host.round(round, 'enno-fence-session', round === 4, round === 4,
-        round === 2 ? { staleAuthority: scenario === 'stale-revision' ? 'revision' : 'lease' } : {})
     } finally { await host?.close(); await rm(root, { recursive: true, force: true }) }
   })
 }

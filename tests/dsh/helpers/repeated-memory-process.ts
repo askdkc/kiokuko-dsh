@@ -4,7 +4,7 @@ import { repeatedNativeHost, deadline, type RepeatedRoute } from './repeated-mem
 import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
 
 const [root, mode, route, value] = process.argv.slice(2)
-if (!root || !['prefix_reuse','bounded_evidence'].includes(mode!) || !['normal','enno'].includes(route!)) throw new Error('Invalid lifecycle process arguments')
+if (!root || !['prefix_reuse','bounded_evidence'].includes(mode!) || route! !== 'normal') throw new Error('Invalid lifecycle process arguments')
 const round = Number(value)
 const host = await repeatedNativeHost(root, mode as FinalizationInputMode, route as RepeatedRoute)
 try {

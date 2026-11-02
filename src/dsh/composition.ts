@@ -23,7 +23,6 @@ import { randomUUID } from 'node:crypto'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { DshSkillPrompts } from './skill-prompts.js'
-import { DshEnnoController, type DshTurnStoppingAgent, type DshTurnStoppingContext } from './enno-controller.js'
 import { DshIntakeGate, type DshPreStepDecision, type DshPreStepEvent, type DshPreStepContext } from './intake-gate.js'
 import { mountDshIdleLifecycle, mountDshSessionLifecycle, type DshCloseIntent, type DshIdleLifecycleContext, type DshNativeSession, type DshRunLifecycle, type DshSessionLifecycleContext } from './session-bridge.js'
 import { mountDshToolPolicy, type DshToolPolicy } from './tool-policy.js'
@@ -77,7 +76,6 @@ export interface DshCompositionHost {
   readonly semanticCompaction?: SemanticCompactionCoordinator
   readonly skillPrompts?: DshSkillPrompts
   readonly configureSkillPrompts?: (prompts: DshSkillPrompts) => void
-  readonly configureEnnoMemory?: (config: import('./config.js').EnnoMemoryConfig) => void
   readonly configureToolExposure?: (config: import('./tool-exposure.js').ToolExposureConfig) => void
   readonly modelToolDefinitionsChanged?: (definitions: readonly DshToolDefinition[]) => void
   readonly deepPlanning?: import('../deep-thinker/controller.js').DeepPlanningController
@@ -112,7 +110,6 @@ export interface DshCompositionHost {
   readonly sessionMirrorOwner?: 'composition' | 'host'
   readonly sessionExport?: DshSessionLogExportService
   readonly checkpointSessionMirror?: (session: DshNativeSession) => PromiseLike<DshMirrorCheckpoint>
-  readonly ennoController?: DshEnnoController
   readonly boundaryWorker?: Pick<DshBoundaryWorker, 'kick' | 'dispose' | 'whenIdle'>
   readonly boundaryWorkerOwner?: 'composition' | 'host'
   readonly lifecycle?: DshRunLifecycle
@@ -190,25 +187,6 @@ function mountNativeIntakeGate(
     return decision
   }
   return harness ? harness.onStep(listener as any) : ctx.on('agent/pre-step', listener, { prepend: true })
-}
-
-function mountNativeEnnoController(ctx: DshTurnStoppingContext, controller: DshEnnoController): () => void {
-  return (ctx as unknown as { on(name: 'agent/turn-stopping', listener: (payload: DshNativeTurnStoppingPayload) => Promise<void>, options?: { readonly prepend?: boolean }): () => void }).on('agent/turn-stopping', async (payload: DshNativeTurnStoppingPayload) => {
-    const agent: DshTurnStoppingAgent = {
-      id: payload.agent.id,
-      nativeAgent: payload.agent,
-      ...(payload.agent.session?.id === undefined && payload.agent.sessionId === undefined ? {} : { sessionId: payload.agent.session?.id ?? payload.agent.sessionId }),
-      ...(payload.agent.session === undefined ? {} : { nativeSession: payload.agent.session as object }),
-      steer: (message) => payload.agent.steer({
-        id: randomUUID(),
-        role: 'user',
-        content: [{ type: 'text', text: message.content }],
-        source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' },
-      }),
-      ...(payload.agent.cancel === undefined ? {} : { cancel: (reason: string) => payload.agent.cancel!({ kind: 'hook', reason }) }),
-    }
-    await controller.handle({ agent, turn: payload.turn, signal: payload.signal })
-  }, { prepend: true })
 }
 
 function mountNativeBoundaryKick(
@@ -402,13 +380,8 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
       if (host.mapPreStep === undefined) throw new Error('kiokuko-dsh intake gate requires a native task projection')
       ingressDisposers.push(mountNativeIntakeGate(ctx as unknown as Parameters<typeof mountNativeIntakeGate>[0], host.intakeGate, host.mapPreStep, host.boundaryWorker, host.deepPlanning, host.onDemandIntake, host.bypassNativeIntake, host.harnessLifecycle))
     }
-    if (host.boundaryWorker !== undefined && host.ennoController !== undefined) {
-      throw new Error('kiokuko-dsh must not mount both the durable boundary worker and the legacy turn-stopping controller')
-    }
     if (host.boundaryWorker !== undefined) {
       ingressDisposers.push(...mountNativeBoundaryKick(ctx as unknown as Parameters<typeof mountNativeBoundaryKick>[0], host.boundaryWorker, host.bypassNativeIntake, host.harnessLifecycle))
-    } else if (host.ennoController !== undefined) {
-      ingressDisposers.push(mountNativeEnnoController(ctx as unknown as DshTurnStoppingContext, host.ennoController))
     }
     if (host.lifecycle !== undefined) {
       if (host.resolveIdleClose === undefined) throw new Error('kiokuko-dsh idle lifecycle requires a close resolver')

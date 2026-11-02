@@ -413,7 +413,7 @@ test('a delayed old lifecycle close cannot terminalize an explicitly resumed gen
   const f = await fixture()
   const no = () => {}
   const lifecycle = createLifecycle({ runtime: f.runtime, sessions: {}, sessionMirror: {}, memoryFinalizer: {},
-    autoReview: { worker: { abort: no } }, answerReview: {}, ennoController: {}, ennoMemory: {}, executionSupport: {}, gate: {},
+    autoReview: { worker: { abort: no } }, answerReview: {}, executionSupport: {}, gate: {},
     turnState: { allTurns: () => [], releaseRun: no }, getSelection: () => undefined, currentSession: () => undefined,
     currentForAgentEvent: () => undefined, stateForRun: () => ({}), deliverCompletionReport: async () => {}, reviewBinding: no,
     evolutionConfig: { mode: 'off' }, clearToolRun: no, sessionEventSource: no } as any)

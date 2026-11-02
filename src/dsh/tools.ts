@@ -6,24 +6,12 @@ import { modelFacingInputSchema, modelFacingTransportSchema, modelToolContract, 
 import { KiokukoError } from '../errors.js'
 
 export const DSH_MODEL_FACING_OPERATIONS = [
-  'enno_plan_review',
-  'enno_plan_submit',
-  'enno_ideal_submit',
-  'enno_work_report',
-  'enno_delegate',
-  'enno_finish',
-  'enno_meditation_submit',
   'curator_check',
   'memory_checkpoint',
 ] as const satisfies readonly ModelToolOperationName[]
 
 /** Operations whose description repeats the same input schema already published in `parameters`. */
 export const DSH_LEAN_DESCRIPTION_OPERATIONS = [
-  'enno_plan_submit',
-  'enno_ideal_submit',
-  'enno_work_report',
-  'enno_finish',
-  'enno_meditation_submit',
   'curator_check',
 ] as const satisfies readonly ModelToolOperationName[]
 
@@ -77,10 +65,6 @@ export interface DshToolHostBinding {
   readonly orchestrationId: string
   readonly deliveryId?: string
   readonly revision: number
-  readonly routeEpoch: number
-  readonly advisoryRoundDigest?: string
-  readonly leaseToken?: string
-  readonly workUnitId?: string
   readonly idempotencyKey: string
 }
 
@@ -202,25 +186,14 @@ export function bindDshToolInvocation(
   validBindingText(state.workspace, 'workspace')
   validBindingText(state.orchestrationId, 'orchestration identity')
   if (state.deliveryId !== undefined) validBindingText(state.deliveryId, 'delivery identity')
-  if (state.advisoryRoundDigest !== undefined && !/^[0-9a-f]{64}$/u.test(state.advisoryRoundDigest)) {
-    throw new KiokukoError('VALIDATION_ERROR', 'dsh advisory round digest is invalid')
-  }
-  if (!Number.isSafeInteger(state.revision) || state.revision < 1
-    || !Number.isSafeInteger(state.routeEpoch) || state.routeEpoch < 0) {
+  if (!Number.isSafeInteger(state.revision) || state.revision < 1) {
     throw new KiokukoError('VALIDATION_ERROR', 'dsh host binding is invalid')
-  }
-  if (state.workUnitId !== undefined) validBindingText(state.workUnitId, 'WorkUnit identity')
-  if (state.leaseToken !== undefined) validBindingText(state.leaseToken, 'lease token')
-  if (operation === 'enno_work_report' && (state.workUnitId === undefined || state.leaseToken === undefined)) {
-    throw new KiokukoError('CONFLICT', 'dsh WorkUnit report requires the current host lease')
   }
   return Object.freeze({ ...state, idempotencyKey: dshToolIdempotencyKey(execution) })
 }
 
 function descriptionFor(operation: ModelToolOperationName): string {
   if (operation === 'memory_checkpoint') return 'This legacy compatibility tool does not save memories or complete tasks. Memory organization is optional after task completion; only native user approval of the exact preview permits saving. Use memory_context for optional lookup.'
-  if (operation === 'enno_plan_review') return 'Review the complete candidate plan before submission. The host selects the configured typed provider or exact check model. No execution is approved. Read findings, supply dispositions, then enno_plan_submit the identical reviewed candidate; changed drafts require review again. Ordinary review failure is recoverable.'
-  if (operation === 'enno_delegate') return 'Delegate a bounded part of the CURRENT approved WorkUnit to a native DSH spawn child. Supply instruction only. The host chooses the approved worker model and scope. No grandchildren. Review the returned evidence, run focused verification, then submit enno_work_report yourself. Child completion does not accept the WorkUnit.'
   return `Use native JSON types; never encode an object or array as a JSON string. The host supplies identity, routing, lease and idempotency. Returns TurnOutcome: applied.value is the business response; applied.handoff is next-turn state. Predictable rejections return retry or clarify, not transport errors. Business payload: ${JSON.stringify(modelFacingInputSchema(operation))}`
 }
 
@@ -234,42 +207,17 @@ export function leanDshToolDescription(operation: string, description: string): 
   return expected.slice(0, markerIndex)
 }
 
-function ennoNextAction(value: unknown): string | undefined {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const outcome = value as { kind?: unknown }
-  const businessValue = outcome.kind === 'applied' && 'value' in outcome
-    ? (outcome as { value?: unknown }).value
-    : value
-  if (typeof businessValue !== 'object' || businessValue === null || Array.isArray(businessValue)) return undefined
-  const ennoOduno = (businessValue as { ennoOduno?: unknown }).ennoOduno
-  if (typeof ennoOduno !== 'object' || ennoOduno === null || Array.isArray(ennoOduno)) return undefined
-  const nextAction = (ennoOduno as { nextAction?: unknown }).nextAction
-  return typeof nextAction === 'string' && nextAction.length > 0 ? nextAction : undefined
-}
-
 function concludesDshTurn(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const outcome = value as { kind?: unknown }
-  if (outcome.kind === 'retry' || outcome.kind === 'clarify' || outcome.kind === 'waiting_user') return true
-  const nextAction = ennoNextAction(value)
-  // Every successful phase mutation owns one model turn.  The durable seal is
-  // committed with the Enno receipt before this marker is observed. Terminal
-  // states are the exception: the model must consume the successful result and
-  // emit the user-facing completion/blocker report before the native turn ends.
-  return nextAction !== undefined && nextAction !== 'complete' && nextAction !== 'report_blocker'
+  return outcome.kind === 'retry' || outcome.kind === 'clarify' || outcome.kind === 'waiting_user'
 }
-
-const TERMINAL_REPORT_INSTRUCTION = "Kiokuko reached a terminal state. Do not call another tool. Return a visible final assistant response in the user's language now. Lead with the outcome; summarize what changed, the verification performed and its results, and any remaining issues or uncertainty. Do not expose internal Enno/DSH identities or protocol fields."
 
 function renderDshToolResult(value: unknown): readonly { readonly type: 'text'; readonly text: string }[] {
   const blocks = [{
     type: 'text' as const,
     text: typeof value === 'string' ? value : JSON.stringify(value),
   }]
-  const nextAction = ennoNextAction(value)
-  if (nextAction === 'complete' || nextAction === 'report_blocker') {
-    blocks.push({ type: 'text', text: TERMINAL_REPORT_INSTRUCTION })
-  }
   return Object.freeze(blocks)
 }
 
@@ -324,11 +272,9 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
         const binding = bindDshToolInvocation(execution, host.bind(execution))
         execution.signal.throwIfAborted()
         const value = await host.execute(operation, snapshot, binding, execution.signal)
-        // The result's nextAction, rather than the operation name, owns the turn
-        // boundary. DSH appends successful tool/results before observing
-        // concludeTurn. Terminal results deliberately stay open for one final,
-        // visible assistant response.
-        if (operation !== 'enno_plan_review' && concludesDshTurn(value)) rawExecution.concludeTurn?.()
+        // A retry/clarify/waiting_user result owns the turn boundary. DSH appends
+        // successful tool/results before observing concludeTurn.
+        if (concludesDshTurn(value)) rawExecution.concludeTurn?.()
         return value
       },
     })

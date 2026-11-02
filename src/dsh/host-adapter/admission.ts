@@ -5,7 +5,7 @@ import {
   observeDiagnostic,
 } from '../decisions/diagnostics.js'
 import type { TaskType } from '../../akinator/types.js'
-import { createTurnState, policyState } from '../host-adapter/turn-state.js'
+import { createTurnState } from '../host-adapter/turn-state.js'
 import {
   bindMemoryApplication,
   memoryRetrievalStatus,
@@ -41,7 +41,6 @@ import {
   type ReviewNativeSession,
 } from '../auto-memory-review.js'
 import { refreshContinuedTaskContext } from '../task-intake.js'
-import { DshEnnoMemoryRefresh } from '../enno-memory-refresh.js'
 import { saveSessionNotice } from '../plugin-records.js'
 import { AkinatorMemoryConfig } from '../config.js'
 import {
@@ -65,8 +64,6 @@ import type {
   DshModelCatalog,
   DshModelCompatibility,
 } from '../model-configuration.js'
-import { ennoStateForPreparedTask } from '../../enno-oduno/service.js'
-import { DshEnnoDelegation } from '../enno-delegation.js'
 import type { DeepPlanningController } from '../../deep-thinker/controller.js'
 import { realpathSync } from 'node:fs'
 import { type DshNativePreStepPayload } from '../composition.js'
@@ -101,23 +98,7 @@ import {
 import { type DshCapabilityCatalog } from '../capability-catalog.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { KiokukoError } from '../../errors.js'
-import {
-  answerEnno,
-  stateForSnapshot,
-  inapplicableEnnoState,
-} from '../../enno-oduno/service.js'
-import {
-  claimExecutionLeaseInTransaction,
-  readEnnoSnapshot,
-  terminalizeLedgerRunInTransaction,
-} from '../../enno-oduno/store.js'
-import { decideDshContinuation } from '../continuation.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
-import {
-  ENNO_APPLICABLE_TASK_TYPES,
-  type EnnoExecutionLease,
-  type EnnoOdunoState,
-} from '../../enno-oduno/types.js'
 import {
   supersedeBoundaryJobsAtOrBeforeRevisionInTransaction,
   supersedeOutboxAtOrBeforeRevisionInTransaction,
@@ -188,9 +169,7 @@ interface AdmissionDependencies {
   readonly runtime: DshCoreRuntime
   readonly decisions: DecisionService
   readonly answerReview: AnswerReviewCoordinator
-  readonly delegation: DshEnnoDelegation
   readonly executionSupport: DshExecutionSupport
-  readonly ennoMemory: DshEnnoMemoryRefresh
   readonly memoryFinalizer: DshMemoryFinalizer
   readonly autoReview: AutoMemoryReviewCoordinator
   readonly sessionMirror: DshSessionLogMirror
@@ -206,10 +185,6 @@ interface AdmissionDependencies {
     runId: string,
     value: StoredExecutionSelection,
   ) => void
-  readonly refreshEnnoMemory: (
-    item: TurnRecord,
-    signal: AbortSignal,
-  ) => Promise<void>
   readonly executionBinding: (item: TurnRecord) => ExecutionBinding
   readonly captureInitialInput: (
     sessionId: string,
@@ -233,7 +208,6 @@ interface AdmissionDependencies {
   readonly cancelBoundarySession: (sessionId: string) => void
   readonly isSelectionBlocked: (agent: object) => boolean
   readonly closeTurn: (input: DshRunClose) => Promise<void>
-  readonly readStateForRun: (item: TurnRecord) => Promise<EnnoOdunoState>
   readonly capabilityCatalog: (
     skills: NativeSkills | undefined,
     tools: NativeTools | undefined,
@@ -290,9 +264,7 @@ export function createAdmission({
   runtime,
   decisions,
   answerReview,
-  delegation,
   executionSupport,
-  ennoMemory,
   memoryFinalizer,
   autoReview,
   sessionMirror,
@@ -302,7 +274,6 @@ export function createAdmission({
   turnState,
   getSelection,
   setSelection,
-  refreshEnnoMemory,
   executionBinding,
   captureInitialInput,
   contextMessages,
@@ -311,7 +282,6 @@ export function createAdmission({
   cancelBoundarySession,
   isSelectionBlocked,
   closeTurn,
-  readStateForRun,
   capabilityCatalog,
   sessionEventSource,
   objectRecord,
@@ -325,27 +295,6 @@ export function createAdmission({
   let resumeExistingRun:
     | ((event: DshPreStepEvent) => Promise<DshIntakeGateResult | undefined>)
     | undefined
-  function supersedesUnstartedEnno(
-    event: DshPreStepEvent,
-    state: EnnoOdunoState,
-  ): boolean {
-    if (state.status !== 'oduno_ideal') return false
-    const incomingType = resolveGroundedIntakeProfile({
-      task: event.task,
-      cwd: event.cwd,
-      deferTaskTypeInference: event.deferTaskTypeInference === true,
-      ...(event.profileHints === undefined
-        ? {}
-        : { profileHints: event.profileHints }),
-    }).profileHints.taskType
-    return (
-      incomingType !== null &&
-      !ENNO_APPLICABLE_TASK_TYPES.includes(
-        incomingType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number],
-      )
-    )
-  }
-
   function eventTurn(event: { readonly data?: unknown }): number | undefined {
     const data =
       typeof event.data === 'object' &&
@@ -444,11 +393,9 @@ export function createAdmission({
           !item.closed &&
           !item.failed &&
           item.prepared.run.status === 'active' &&
-          !item.prepared.ennoOduno.applicable &&
           !selection?.discussion &&
           (!selection ||
             (selection.mode === 'normal' && selection.status === 'ready')) &&
-          !delegation.isChild(reviewAgent) &&
           !deepPlanning.executor.isChild(reviewAgent) &&
           !isNativeSubagent(reviewAgent) &&
           !executionSupport.paused(event.sessionId)
@@ -518,59 +465,6 @@ export function createAdmission({
     })
   }
 
-  const refreshContinuedWorkLease = async (
-    item: TurnRecord,
-    expected: EnnoOdunoState,
-  ): Promise<
-    { state: EnnoOdunoState; lease: EnnoExecutionLease } | undefined
-  > => {
-    const expectedWorkUnitId =
-      expected.nextAction === 'execute_work_unit'
-        ? expected.directive?.workUnit?.id
-        : undefined
-    if (expectedWorkUnitId === undefined) return undefined
-    return runtime.withDatabase((database) =>
-      withImmediateTransaction(database, () => {
-        const snapshot = readEnnoSnapshot(database, {
-          runId: item.runId,
-          workspace: item.workspace,
-          orchestrationId: item.orchestrationId,
-        })
-        const state = stateForSnapshot(snapshot)
-        const workUnitId =
-          state.nextAction === 'execute_work_unit'
-            ? state.directive?.workUnit?.id
-            : undefined
-        if (
-          state.contractRevision !== expected.contractRevision ||
-          workUnitId !== expectedWorkUnitId
-        ) {
-          throw new KiokukoError(
-            'CONFLICT',
-            'Enno WorkUnit changed before DSH turn recovery',
-          )
-        }
-        if (snapshot.dshSessionId !== item.sessionId) {
-          throw new KiokukoError(
-            'CONFLICT',
-            'Enno DSH route changed before WorkUnit recovery',
-          )
-        }
-        return {
-          state,
-          lease: claimExecutionLeaseInTransaction(
-            database,
-            snapshot,
-            workUnitId,
-            {
-              dshSessionId: item.sessionId,
-            },
-          ),
-        }
-      }),
-    )
-  }
-
   class CapturingGate extends DshIntakeGate {
     readonly supersededChoices = new Map<string, StoredExecutionSelection>()
     async choose(
@@ -586,7 +480,7 @@ export function createAdmission({
       if (
         stored?.value.mode === 'pending' &&
         inherited?.value.status === 'ready' &&
-        ['normal', 'enno'].includes(inherited.value.mode) &&
+        inherited.value.mode === 'normal' &&
         (!explicitExecutionMode(event.task) ||
           explicitExecutionMode(event.task) === inherited.value.mode)
       ) {
@@ -612,20 +506,6 @@ export function createAdmission({
           result.prepared.capabilities,
           event.signal,
         )
-      }
-      // Legacy accepted plans keep their original execution contract. A draft
-      // awaiting the new review gate must first acquire an explicit check binding.
-      if (!stored && result.prepared.ennoOduno.status === 'zenki_planning') {
-        stored = await runtime.withDatabase((db) => {
-          initializeExecutionSelection(db, runId)
-          const current = readExecutionSelection(db, runId)!
-          return current.value.mode === 'pending'
-            ? writeExecutionSelection(db, runId, current.revision, {
-                mode: 'enno',
-                status: 'selecting',
-              })
-            : current
-        })
       }
       if (!stored) return result
       const discussion = stored.value.discussion
@@ -658,20 +538,20 @@ export function createAdmission({
         }
       }
       if (
-        !ENNO_APPLICABLE_TASK_TYPES.includes(
-          result.prepared.intake.profile
-            .taskType as (typeof ENNO_APPLICABLE_TASK_TYPES)[number],
+        stored.value.mode === 'pending' &&
+        !explicitExecutionMode(event.task) &&
+        !(['build', 'debug', 'review', 'devops'] as readonly string[]).includes(
+          result.prepared.intake.profile.taskType ?? '',
         )
       ) {
         const revision = stored.revision
-        if (stored.value.mode === 'pending')
-          await runtime.withDatabase((db) =>
-            db
-              .prepare(
-                'DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?',
-              )
-              .run(runId, revision),
-          )
+        await runtime.withDatabase((db) =>
+          db
+            .prepare(
+              'DELETE FROM dsh_execution_selections WHERE run_id = ? AND revision = ?',
+            )
+            .run(runId, revision),
+        )
         return result
       }
       setSelection(runId, stored)
@@ -699,12 +579,7 @@ export function createAdmission({
         },
       })
       setSelection(runId, selected)
-      const ennoOduno = selected.value.discussion
-        ? result.prepared.ennoOduno
-        : await runtime.withDatabase((db) =>
-            ennoStateForPreparedTask(db, result.prepared, event.sessionId),
-          )
-      return { ...result, prepared: { ...result.prepared, ennoOduno } }
+      return result
     }
     override async prepare(
       event: DshPreStepEvent,
@@ -786,7 +661,6 @@ export function createAdmission({
           !prior.closed &&
           !prior.failed &&
           prior.turn < event.turn &&
-          !prior.prepared.ennoOduno.applicable &&
           !(await runtime.withDatabase((db) =>
             readCodingWorkflow(db, current.taskId),
           ))
@@ -1109,59 +983,8 @@ export function createAdmission({
             prepared: previous.prepared,
             catalog: event.capabilities,
           }
-        let previousState = await readStateForRun(previous)
-        // DSH's dedicated plan-review card returns the composer to the user
-        // when they choose "Chat about it". The next human message is the
-        // requested plan revision; settle it host-side before Zenki resumes.
-        // This keeps enno_answer host-only and avoids reopening Akinator.
-        if (
-          previousState.nextAction === 'ask_user_confirmation' &&
-          previousState.contractRevision !== null
-        ) {
-          const expectedRevision = previousState.contractRevision
-          const requestedChanges = event.task.trim()
-          if (requestedChanges.length === 0)
-            throw new KiokukoError(
-              'VALIDATION_ERROR',
-              'Plan revision feedback is empty',
-            )
-          const revised = await runtime.withDatabase((database) =>
-            answerEnno(database, {
-              runId: previous.runId,
-              workspace: previous.workspace,
-              orchestrationId: previous.orchestrationId,
-              expectedRevision,
-              idempotencyKey: `dsh-confirmation-feedback:${canonicalContentHash(
-                {
-                  runId: previous.runId,
-                  revision: expectedRevision,
-                  sessionId: event.sessionId,
-                  turn: event.turn,
-                  requestedChanges,
-                },
-              )}`,
-              action: 'revise',
-              requestedChanges,
-            }),
-          )
-          previous.prepared = {
-            ...previous.prepared,
-            ennoOduno: revised.ennoOduno,
-          }
-          const next = policyState(
-            revised.ennoOduno,
-            previous,
-            previous.sessionId,
-            revised.executionLease,
-          )
-          turnState.applyPolicy(previous.runId, next)
-          previousState = revised.ennoOduno
-        }
         const previousWasChat =
-          previous.prepared.intake.profile.taskType === 'chat'
-        const superseded =
-          previous.prepared.ennoOduno.applicable &&
-          supersedesUnstartedEnno(event, previousState)
+          previous.prepared.intake.profile.taskType === "chat"
         const selection = getSelection(previous.runId)?.value
         const coding = await runtime.withDatabase((db) =>
           readCodingWorkflow(db, previous.runId),
@@ -1170,23 +993,30 @@ export function createAdmission({
         // Only a new human request can replace it without an explicit continuation.
         const resumeCoding =
           coding &&
-          !['completed', 'cancelled', 'superseded'].includes(coding.state) &&
+          !["completed", "cancelled", "superseded"].includes(coding.state) &&
           (!hasHumanInput(event.nativeMessages ?? []) ||
             continuesCodingScope(event))
+        // Durable ledger state owns run liveness; an in-memory active record
+        // cannot resurrect a failed, cancelled or missing run.
+        const durableStatus = await runtime.withDatabase(
+          (db) => new LedgerStore(db).readRun(previous.runId)?.status,
+        )
+        const durableOpen =
+          durableStatus === "intake" || durableStatus === "active"
         const continuePrevious =
           resumeCoding ||
           (selection &&
-            (selection.status !== 'ready' ||
-              (selection.mode === 'normal' && previous.failed)))
+            (selection.status !== "ready" ||
+              (selection.mode === "normal" && previous.failed)))
             ? true
             : previousWasChat
-              ? event.profileHints?.taskType === 'chat'
-              : !superseded &&
-                previousState.status !== 'completed' &&
-                previousState.status !== 'blocked' &&
-                previousState.status !== 'cancelled' &&
-                (previousState.nextAction !== 'complete' ||
-                  executionSupport.paused(previous.sessionId))
+              ? event.profileHints?.taskType === "chat"
+              : durableOpen &&
+                !previous.failed &&
+                previous.prepared.run.status === "active" &&
+                (event.profileHints?.taskType ??
+                  previous.prepared.intake.profile.taskType) ===
+                  previous.prepared.intake.profile.taskType
         if (continuePrevious) {
           this.assertCatalog(previous.catalog, event.capabilities)
           const intent = event.requestIntent
@@ -1212,23 +1042,6 @@ export function createAdmission({
                 evidenceRefs,
               ),
             )
-          }
-          const refreshedWork = await refreshContinuedWorkLease(
-            previous,
-            previousState,
-          )
-          if (refreshedWork !== undefined) {
-            previous.prepared = {
-              ...previous.prepared,
-              ennoOduno: refreshedWork.state,
-            }
-            const next = policyState(
-              refreshedWork.state,
-              previous,
-              previous.sessionId,
-              refreshedWork.lease,
-            )
-            turnState.applyPolicy(previous.runId, next)
           }
           const continuedMemory: Pick<
             PreparedAgentTask,
@@ -1293,14 +1106,19 @@ export function createAdmission({
             prepared: previous.prepared,
             catalog: event.capabilities,
           }
-        await retireSupersededRun(
-          previous,
-          superseded || previousState.status === 'cancelled'
-            ? 'cancelled'
-            : previousState.status === 'blocked'
-              ? 'failed'
-              : 'completed',
+        // The durable ledger status owns the retire outcome: a directly
+        // failed/cancelled run must close with its recorded status (idempotent
+        // close), never as 'completed' (which would fake verified completion
+        // or collide with the immutable close-status ledger guard).
+        const priorLedgerStatus = await runtime.withDatabase(
+          (db) => new LedgerStore(db).readRun(previous.runId)?.status,
         )
+        const priorStatus =
+          priorLedgerStatus === 'failed' || priorLedgerStatus === 'cancelled'
+            ? priorLedgerStatus
+            : 'completed'
+        await retireSupersededRun(previous, priorStatus)
+        this.supersedeTurn(event.sessionId, event.turn)
       }
       const resumed = await resumeExistingRun?.(event)
       if (resumed !== undefined) {
@@ -1333,7 +1151,6 @@ export function createAdmission({
       answerReview.humanInput(event.sessionId, event.turn)
       cancelBoundarySession(event.sessionId)
       const previous = currentSession(event.sessionId)
-      if (previous) ennoMemory.invalidate(previous.runId)
       const state =
         previous === undefined
           ? undefined
@@ -1415,7 +1232,7 @@ export function createAdmission({
       event: DshPreStepEvent,
       next: () => Promise<DshPreStepDecision>,
     ): Promise<DshPreStepDecision> {
-      if (event.nativeAgent && delegation.isChild(event.nativeAgent))
+      if (event.nativeAgent && deepPlanning.executor.isChild(event.nativeAgent))
         return next()
       // The native chain owns admission and the original message ordering.
       // Run it before any Kiokuko storage or classification work so an
@@ -1548,8 +1365,6 @@ export function createAdmission({
             if (paused) return { kind: 'reject' }
           }
         }
-        if (item !== undefined && !getSelection(item.runId)?.value.discussion)
-          await refreshEnnoMemory(item, event.signal)
         const messages = await contextMessages(event, nativeDecision.messages)
         return {
           ...nativeDecision,
@@ -1659,9 +1474,7 @@ export function createAdmission({
           'CONFLICT',
           'Deep Thinker recovery requires its own execution lane',
         )
-      // Pending selection still goes through choose(); only an explicit persisted
-      // Enno selection can recover Enno ownership instead of ordinary execution.
-      const executionMode = selection?.mode === 'enno' ? 'enno' : 'normal'
+      const executionMode: 'normal' = 'normal'
       const owner = readExecutionOwner(database, event.sessionId)
       if (
         owner &&
@@ -1670,73 +1483,6 @@ export function createAdmission({
           owner.mode !== executionMode)
       )
         throw new KiokukoError('CONFLICT', 'Task execution owner changed')
-      const orchestration = database
-        .prepare(
-          'SELECT orchestration_session_id AS id FROM enno_contracts WHERE run_id=?',
-        )
-        .get<{ id: string }>(runId)
-      const snapshot = !orchestration
-        ? undefined
-        : readEnnoSnapshot(database, {
-            runId,
-            workspace: project.workspace,
-            orchestrationId: orchestration.id,
-          })
-      if (executionMode === 'enno' && !snapshot)
-        throw new KiokukoError(
-          'CONFLICT',
-          'Persisted Enno selection has no matching execution contract',
-        )
-      if (
-        snapshot &&
-        !event.signal.aborted &&
-        supersedesUnstartedEnno(event, stateForSnapshot(snapshot))
-      ) {
-        terminalizeLedgerRunInTransaction(database, runId, 'cancelled')
-        return undefined
-      }
-      const automaticMessage = event.nativeMessages?.find((message) => {
-        const continuationId = pluginContinuationId(message)
-        if (continuationId === undefined) return false
-        const outbox = database
-          .prepare(
-            `
-        SELECT message_form AS messageForm
-          FROM dsh_continuation_outbox
-         WHERE continuation_id = ?
-      `,
-          )
-          .get<{ messageForm: 'continuation' | 'loop-recovery' }>(
-            continuationId,
-          )
-        return outbox === undefined
-          ? !isLoopRecoveryMessage(message)
-          : outbox.messageForm !== 'loop-recovery'
-      })
-      const automaticClaimId =
-        automaticMessage === undefined
-          ? undefined
-          : pluginContinuationId(automaticMessage)
-      const decision = snapshot
-        ? decideDshContinuation(
-            database,
-            {
-              dshSessionId: event.sessionId,
-              cwd: event.cwd,
-              ...(automaticClaimId === undefined
-                ? {}
-                : { claimId: automaticClaimId }),
-            },
-            runId,
-          )
-        : undefined
-      if (decision && (!decision.continue || decision.runId !== runId)) {
-        throw new KiokukoError(
-          'CONFLICT',
-          decision.warning ??
-            'The active run cannot be resumed by this DSH session',
-        )
-      }
       const capabilityEntries = [
         ...event.capabilities.skills,
         ...event.capabilities.tools,
@@ -1872,13 +1618,8 @@ export function createAdmission({
             ? 'required_capability_unavailable'
             : 'answer_from_evidence_or_ask_user',
         securityNotice:
-          'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly. Active ennoMemory may make a new bounded selection under current authority.',
-        ennoOduno: snapshot
-          ? stateForSnapshot(snapshot)
-          : inapplicableEnnoState(),
+          'This resumed DSH run uses only current repository evidence and the current host capability catalog; previously delivered ordinary memory is not replayed implicitly.',
       }
-      if (decision?.executionLease)
-        turnState.stageLease(runId, decision.executionLease)
       return { admitted, prepared, catalog: event.capabilities }
     })
   const requestIntentContextFor = async (
@@ -1922,25 +1663,21 @@ export function createAdmission({
           if (!project) return undefined
           const candidates = database
             .prepare(
-              `SELECT lr.run_id AS runId,
-          ec.orchestration_session_id AS orchestrationId
+              `SELECT lr.run_id AS runId
         FROM ledger_runs AS lr
         LEFT JOIN dsh_coding_workflows AS cw ON cw.run_id = lr.run_id
-        LEFT JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
         WHERE lr.workspace = ? AND COALESCE(lr.task_owner_session_id, lr.dsh_session_id) = ? AND lr.status = 'active'
           AND lr.task_state NOT IN ('Done', 'Ignore')
           AND ((json_extract(cw.snapshot_json, '$.repositoryRoot') = ?
               AND json_extract(cw.snapshot_json, '$.sessionId') = ?
-              AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded'))
-            OR (ec.repository_root = ? AND ec.status NOT IN ('completed', 'cancelled', 'blocked')))
+              AND json_extract(cw.snapshot_json, '$.state') NOT IN ('completed', 'cancelled', 'superseded')))
         ORDER BY lr.created_at, lr.run_id LIMIT 2`,
             )
-            .all<{ runId: string; orchestrationId: string | null }>(
+            .all<{ runId: string }>(
               project.workspace,
               sessionId,
               project.repositoryRoot,
               sessionId,
-              project.repositoryRoot,
             )
           if (candidates.length > 1)
             throw new KiokukoError(
@@ -1957,16 +1694,6 @@ export function createAdmission({
         const workflow = readCodingWorkflow(database, runId)
         const definition = workflow?.definition
         const frame = readExecutionFrame(database, runId)
-        const enno =
-          !workflow &&
-          persistedRun?.runId === runId &&
-          persistedRun.orchestrationId !== null
-            ? readEnnoSnapshot(database, {
-                runId,
-                workspace: persistedRun.workspace,
-                orchestrationId: persistedRun.orchestrationId,
-              })
-            : undefined
         const active: RequestIntentContext['activeGoal'] = definition
           ? {
               runId,
@@ -1987,47 +1714,7 @@ export function createAdmission({
                 outOfScope: [],
                 constraints: [],
               }
-            : enno
-              ? {
-                  runId,
-                  workflowRevision: enno.revision,
-                  goalRevision: enno.revision,
-                  scopeRevision: enno.revision,
-                  ideal: enno.ideal?.objective ?? enno.handoff.objective,
-                  ...(enno.handoff.target === null
-                    ? {}
-                    : { target: enno.handoff.target }),
-                  outOfScope: [...enno.contract.exclusions],
-                  constraints: [...enno.handoff.constraints],
-                }
-              : sameOwner && previous.prepared.ennoOduno.applicable
-                ? {
-                    runId,
-                    ...(previous.prepared.ennoOduno.contractRevision === null
-                      ? {}
-                      : {
-                          workflowRevision:
-                            previous.prepared.ennoOduno.contractRevision,
-                          goalRevision:
-                            previous.prepared.ennoOduno.contractRevision,
-                          scopeRevision:
-                            previous.prepared.ennoOduno.contractRevision,
-                        }),
-                    ...(previous.prepared.ennoOduno.directive?.objective
-                      ? {
-                          ideal:
-                            previous.prepared.ennoOduno.directive.objective,
-                        }
-                      : {}),
-                    ...(previous.prepared.intake.profile.target
-                      ? { target: previous.prepared.intake.profile.target }
-                      : {}),
-                    outOfScope: [],
-                    constraints: previous.prepared.intake.profile.constraints
-                      ? [previous.prepared.intake.profile.constraints]
-                      : [],
-                  }
-                : undefined
+            : undefined
         const candidates = (frame?.conditions ?? [])
           .filter((condition) => condition.approval === 'proposed')
           .slice(0, 7)
@@ -2089,7 +1776,7 @@ export function createAdmission({
     if (
       !currentSession(sessionId) &&
       boundSession &&
-      !delegation.isChild(payload.agent)
+      !deepPlanning.executor.isChild(payload.agent as never)
     )
       await answerReview.recover(payload.agent as ReviewAgent, async (row) => {
         await sessions?.flush?.(boundSession)
@@ -2130,7 +1817,7 @@ export function createAdmission({
     // the authoritative task projection.
     // After a turn was deliberately paused, DSH may consume the next-turn
     // inbox item before pre-step and expose an empty step-local message batch.
-    // The durable Enno run is still authoritative, so fall back to its last
+    // The durable resumed run is still authoritative, so fall back to its last
     // human task. The native conversation retains the new user message for the
     // model, while any supplied step-local user text still replaces this
     // fallback and is recorded as the continuation instruction.
@@ -2175,7 +1862,7 @@ export function createAdmission({
     if (
       !reviewing &&
       hasHumanInput(payload.messages) &&
-      !delegation.isChild(payload.agent) &&
+      !deepPlanning.executor.isChild(payload.agent as never) &&
       intentTask.trim()
     ) {
       requestIntentContext = await requestIntentContextFor(

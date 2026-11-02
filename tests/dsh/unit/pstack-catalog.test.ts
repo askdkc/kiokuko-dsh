@@ -7,9 +7,9 @@ import { codingSkills } from '../../../src/dsh/modules/resources.js'
 
 test('all upstream skills and playbooks map to delivered resources', async () => {
   const ledger = JSON.parse(await readFile('docs/pstack-adaptation.json', 'utf8'))
-  assert.equal(ledger.skills.length, 49)
-  assert.equal(ledger.playbooks.length, 23)
-  assert.equal(new Set(ledger.skills.map((r: {upstream: string}) => r.upstream)).size, 49)
+  assert.equal(ledger.skills.length, 47)
+  assert.equal(ledger.playbooks.length, 19)
+  assert.equal(new Set(ledger.skills.map((r: {upstream: string}) => r.upstream)).size, 47)
   const parity = await loadStandardSkillParity()
   const paths = new Set(parity.files.map(f => `skills/${f.skillName}/${f.relativePath}`))
   for (const row of [...ledger.skills, ...ledger.playbooks]) {

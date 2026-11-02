@@ -14,7 +14,7 @@ Before the first implementation effect in an admitted workflow the agent defines
 
 Closing, an empty answer, a disconnected client or missing question service leaves the choice pending; reads and conversation remain available. Use the same choice or an explicit enable/disable command to recover. Conversation, reads and status remain available. `coding_workflow next` reopens the same pending question. A new task or material scope change gets a new question unless the user explicitly selected manual session ON. The lisp.enabled configuration and approval settings alone never answer it. Manual `/kioku-lisp enable`, `enable-task` or `disable` changes an already defined current task explicitly, invalidating its old evidence; it cannot bypass an undefined Goal.
 
-After the choice, the agent follows dependency-ready items without another approval at every step. Existing Plan, native goal/ownership and destructive-effect approval rules still apply. Normal/Enno selection remains separate from Lisp selection. Enno projects its authoritative ideal, WorkUnits and focused/final verifiers into the common view; it cannot submit a competing Goal.
+After the choice, the agent follows dependency-ready items without another approval at every step. Existing Plan, native goal/ownership and destructive-effect approval rules still apply. Lisp selection remains separate from execution-mode selection.
 
 ## Lisp coding prototype
 

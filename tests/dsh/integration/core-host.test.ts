@@ -181,10 +181,9 @@ test('core native path handles conversation, research, writing and project memor
   const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
   try {
     assert.equal(f.sections.length, 2)
-    assert.doesNotMatch(f.sections[0].text, /\| `kiokuko-enno-oduno`|\| `kiokuko-single-purpose-functions`/)
+    assert.doesNotMatch(f.sections[0].text, /\| `kiokuko-single-purpose-functions`/)
     const skills = (await f.providers[0].list({})).candidates.map((item: any) => item.name)
     for (const name of ['kiokuko-soul', 'memory-reasoning', 'natural-japanese-output', 'coding-ideal-routine-skill', 'kiokuko-single-purpose-functions', 'one-shot-software-completion']) assert.ok(skills.includes(name), name)
-    assert.equal(skills.includes('kiokuko-enno-oduno'), false)
     assert.equal(skills.includes('kiokuko-lisp'), false)
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{ workspace: string }>()!.workspace
@@ -214,7 +213,6 @@ test('core native path handles conversation, research, writing and project memor
       await f.listeners.get('agent/idle')!({ agent: f.agent })
     }
     const after = openConnection(join(f.root, 'memory.sqlite3'))
-    assert.equal(after.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get()?.count, 0)
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_sessions').get()?.count, 0)
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 0)
     assert.equal(after.prepare('SELECT COUNT(*) AS count FROM akinator_sessions').get()?.count, 0)
@@ -247,7 +245,6 @@ test('mounted core answers a first factual question through Laya without executi
     try {
       assert.equal(db.prepare('SELECT COUNT(*) AS count FROM akinator_sessions').get()?.count, 0)
       assert.equal(db.prepare('SELECT COUNT(*) AS count FROM ledger_runs').get()?.count, 0)
-      assert.equal(db.prepare('SELECT COUNT(*) AS count FROM enno_contracts').get()?.count, 0)
       assert.equal(db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_sessions').get()?.count, 0)
     } finally { db.close() }
   } finally { await handle.dispose(); await f.cleanup() }
@@ -473,7 +470,6 @@ test('configured resource deployment preserves omitted/user files and compiled d
     const delivered = await provider.get(inventory.candidates[0], {})
     assert.match(delivered!.content, /Organize the requested text/)
     assert.doesNotMatch(delivered!.content, /Optional long explanation/)
-    assert.equal(await prompts.get('kiokuko-enno-oduno'), undefined)
     const target = join(f.root, '.agents/skills/writing/SKILL.md')
     await writeFile(target, 'User replacement')
     await assert.rejects(synchronizeConfiguredSkills([resource], f.root), /managed|ownership|marker|overwrite/i)
@@ -724,7 +720,6 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/); assert.ok(!JSON.stringify(output.messages).includes('excluded-skill'))
     assert.equal(calls, 3, 'request intent, task type and Skill selection each use the configured decision provider')
     const db = openConnection(join(f.root, 'memory.sqlite3'))
-    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()?.n, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, 0)
     db.close()

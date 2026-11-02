@@ -1,4 +1,4 @@
-import type { DshSpawnBackend } from '../dsh/enno-delegation.js'
+import type { DshSpawnBackend } from '../dsh/orchestration/managed-agent-executor.js'
 import type { RoutableAgent } from '../dsh/model-routing.js'
 import { ManagedAgentExecutor, spawnRestrictionMode } from '../dsh/orchestration/managed-agent-executor.js'
 import { readExecutionOwner } from '../dsh/orchestration/execution-owner.js'

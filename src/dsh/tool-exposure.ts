@@ -14,13 +14,12 @@ export interface ToolExposureDecision {
 /** Decide presentation only; admission, ownership and runtime bindings are host concerns. */
 export function resolveToolExposureMode(input: {
   mode: ToolExposureConfig['mode']; taskType: TaskType | null
-  selectionMode: 'normal' | 'enno'; state: DshToolPolicyState;
+  selectionMode: 'normal'; state: DshToolPolicyState;
   /** @deprecated Native projection does not depend on provider metadata. */
   route?: ModelRoute | undefined
 }): ToolExposureDecision {
   if (input.mode !== 'auto') return { mode: input.mode, reason: 'explicit' }
   if (!hasKnownDshToolPolicyState(input.state)) return { mode: 'full', reason: 'unknown_state' }
-  if (input.selectionMode === 'enno') return { mode: 'lean', reason: 'enno' }
   if (input.taskType === null || !TASK_TYPES.includes(input.taskType)) return { mode: 'full', reason: 'unknown_task' }
   if (['chat', 'research', 'analysis', 'writing', 'review'].includes(input.taskType)) return { mode: 'minimal', reason: 'task_minimal' }
   if (input.state.phase !== 'normal') return { mode: 'full', reason: 'normal_state_mismatch' }

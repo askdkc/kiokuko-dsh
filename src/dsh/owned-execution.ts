@@ -66,7 +66,7 @@ export const isOwnedExecutionCall = (execution: object) => ownedCalls.has(execut
  * reading, cancellation and pure evaluation do not acquire execution authority. */
 export function taskEffectTool(name: string, args: unknown): boolean {
   if (name === 'str_replace_editor') return (args as {command?:unknown}|null)?.command !== 'view'
-  return ['kioku_write','kioku_edit','kioku_remove','kioku_exec','write','edit','bash','spawn','fork','subagent','enno_delegate','task_operation'].includes(name)
+  return ['kioku_write','kioku_edit','kioku_remove','kioku_exec','write','edit','bash','spawn','fork','subagent','task_operation'].includes(name)
 }
 const fileInput = z.object({path:z.string().min(1),content:z.string().optional(),expectedHash:z.string().nullable().optional(),oldText:z.string().optional(),newText:z.string().optional()}).strict()
 const commandInput = z.object({command:z.string().min(1),cwd:z.string().optional(),shell:z.enum(['bash','zsh']).default('bash'),background:z.boolean().default(false),timeoutMs:z.number().int().min(1).max(3600000).default(300000),destructiveTargets:z.array(z.string()).optional()}).strict()

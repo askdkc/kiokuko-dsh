@@ -65,8 +65,3 @@ export async function validateHeadWorker(configuration: HeadWorkerConfiguration,
   if (!workerForRoute(parsed.data.worker, routes)) problems.push('DeepSeek V4.1 Flash の接続とモデルIDが一致しません。接続を選び直してください。')
   return [...new Set(problems)]
 }
-export function headWorkerEnnoConfiguration(configuration: HeadWorkerConfiguration): ModelConfiguration {
-  const pair = HeadWorkerConfigurationSchema.parse(configuration)
-  return { roles: { ideal: { ...pair.head }, zenki: { ...pair.head }, goki: { ...pair.head }, worker: { ...pair.worker }, check: { ...pair.head } },
-    template: { id: HEAD_WORKER_PRESET, version: 1 }, custom: false, maxConcurrentChildren: 4 }
-}

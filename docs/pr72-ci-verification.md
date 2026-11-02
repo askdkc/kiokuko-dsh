@@ -7,8 +7,8 @@ input and `prepare_requested_work`, then retain native permissions, memory
 review, and execution guards.
 
 Native fixtures now prepare each new work request, including human resume
-after unload/reload. The persisted Enno fixture creates the same session
-ownership receipt as production; it does not replace the default with eager
+after unload/reload. The persisted fixtures use the same session
+ownership receipt as production; they do not replace the default with eager
 intake. Eager compatibility tests remain explicitly identified.
 
 The fixed harness retains all original eleven scenario names and assertions.

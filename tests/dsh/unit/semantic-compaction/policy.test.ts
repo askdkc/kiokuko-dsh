@@ -34,7 +34,7 @@ test('current native tool messages remain eligible without rewriting the tool id
   f.coordinator.stop()
 })
 
-for (const change of ['first-call', 'recent-result', 'ambiguous', 'multiple-text', 'image', 'unknown-block-field', 'replacement', 'short', 'enno', 'lisp-unknown']) test(`preserves protected content: ${change}`, () => {
+for (const change of ['first-call', 'recent-result', 'ambiguous', 'multiple-text', 'image', 'unknown-block-field', 'replacement', 'short', 'lisp-unknown']) test(`preserves protected content: ${change}`, () => {
   const f = fixture(), result = f.events[7]!.data.message.content[0], call = f.events[6]!.data.message.content[0]
   if (change === 'first-call') f.events.shift()
   if (change === 'recent-result') f.events.pop()
@@ -44,7 +44,6 @@ for (const change of ['first-call', 'recent-result', 'ambiguous', 'multiple-text
   if (change === 'unknown-block-field') result.content[0].unknown = true
   if (change === 'replacement') f.events[7]!.sourceEventSeqs = [0]
   if (change === 'short') result.content[0].text = '🙂'.repeat(1024)
-  if (change === 'enno') call.name = 'enno_work_report'
   if (change === 'lisp-unknown') call.name = 'lisp_eval'
   assert.equal(selectCandidates(f.events, f.meter, new Map()).length, 0)
   f.coordinator.stop()

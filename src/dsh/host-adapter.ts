@@ -41,7 +41,6 @@ import { MemoryIndexReasoningConfig } from "../memory/index-reasoning/contracts.
 import { ObservationPackConfig } from "./observation-pack/policy.js";
 import {
   createTurnState,
-  policyState,
   type TurnRecord,
 } from "./host-adapter/turn-state.js";
 import { createRouting } from "./host-adapter/routing.js";
@@ -59,7 +58,6 @@ import { readCodingWorkflow } from "./coding-workflow/store.js";
 import { stableLispCapabilities } from "./lisp-service-key.js";
 import { createEfficiencyHost } from "./host-adapter/efficiency-host.js";
 import { createMemoryReviewHost } from "./host-adapter/memory-review-host.js";
-import { createEnnoMemoryHost } from "./host-adapter/enno-memory-host.js";
 import { createSessionAccess } from "./host-adapter/session-access.js";
 import { createEvolutionHost } from "./host-adapter/evolution-host.js";
 import {
@@ -107,8 +105,6 @@ import {
 import { MemoryReviewConfig } from "../memory/review/contracts.js";
 import { MemoryRetrievalConfig } from "../memory/retrieval-contracts.js";
 
-import { DshEnnoMemoryRefresh } from "./enno-memory-refresh.js";
-import { EnnoMemoryConfig } from "./config.js";
 import { CompletionConfig } from "./task-completion.js";
 
 import { saveSessionNotice } from "./plugin-records.js";
@@ -145,7 +141,6 @@ import type {
 } from "./model-configuration.js";
 import { nativeModelCatalog } from "./native-model-catalog.js";
 
-import { DshEnnoDelegation, type DshSpawnBackend } from "./enno-delegation.js";
 import { createDshAgenticReplayHost } from "./agenticreplay-host.js";
 import { fileURLToPath } from "node:url";
 import { realpathSync } from "node:fs";
@@ -175,10 +170,8 @@ import {
   type DshSessionQuery,
 } from "./session-memory-finalizer.js";
 
-import { type DshAdvisoryCall } from "./advisory-runner.js";
 import { DshPonytailModes } from "./commands.js";
 import {
-  createDshConfirmationAnswerer,
   type DshUserQuestions,
 } from "./user-interaction.js";
 import {
@@ -192,15 +185,7 @@ import {
 } from "../serialization/validate.js";
 import { KiokukoError } from "../errors.js";
 
-import { stateForSnapshot } from "../enno-oduno/service.js";
-import { readEnnoSnapshot } from "../enno-oduno/store.js";
-
 import { DeepPlanningController } from "../deep-thinker/controller.js";
-
-import {
-  type EnnoNextAction,
-  type EnnoOdunoState,
-} from "../enno-oduno/types.js";
 
 import {
   DshSessionLogMirror,
@@ -221,13 +206,6 @@ function sessionEventSource(value: object | undefined): DshSessionEventSource {
     );
   }
   return source as DshSessionEventSource;
-}
-
-export interface DshAdvisoryHost {
-  readonly verifyReadOnly: (
-    call: DshAdvisoryCall,
-  ) => boolean | PromiseLike<boolean>;
-  readonly execute: (call: DshAdvisoryCall) => Promise<unknown>;
 }
 
 export interface DshHostAdapterOptions {
@@ -256,7 +234,6 @@ export interface DshHostAdapterOptions {
   readonly deepPlanning?: unknown;
   readonly akinatorMemory?: import("zod").z.input<typeof AkinatorMemoryConfig>;
   readonly efficiency?: import("zod").z.input<typeof EfficiencyConfig>;
-  readonly ennoMemory?: import("zod").z.input<typeof EnnoMemoryConfig>;
   readonly continuity?: import("zod").z.input<typeof ContinuityConfig>;
   readonly memoryIndexReasoning?: import("zod").z.input<
     typeof MemoryIndexReasoningConfig
@@ -281,8 +258,6 @@ export interface DshHostAdapterOptions {
   /** Test/custom host override; the normal DSH bundle injects llm. */
   readonly llm?: DshLlm;
   readonly sessionCachePath?: string;
-  /** Optional host-owned isolated, read-only advisory execution surface. */
-  readonly advisory?: DshAdvisoryHost;
 }
 
 export interface DshHostAdapter {
@@ -421,22 +396,6 @@ export function eventContinuationId(data: unknown): string | undefined {
   return pluginContinuationId(record?.message);
 }
 
-export function continuationMessage(
-  continuationId: string,
-  nextAction: EnnoNextAction,
-): unknown {
-  const work =
-    nextAction === "execute_work_unit"
-      ? "The current WorkUnit is not accepted unless the latest Enno result says so. Correct or report only that WorkUnit."
-      : `Continue only the current Kiokuko phase for nextAction=${nextAction}. Do not skip ahead.`;
-  return Object.freeze({
-    id: continuationId,
-    role: "user",
-    content: [{ type: "text", text: work }],
-    source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: "instructions" },
-  });
-}
-
 async function capabilityCatalog(
   skills: NativeSkills | undefined,
   tools: NativeTools | undefined,
@@ -572,9 +531,6 @@ export function createDshHostAdapter(
   const llm = options.llm ?? (native.get("llm", false) as DshLlm | undefined);
   const reviewConfig = DiffReviewConfig.parse(options.diffReview ?? {});
   const completionMode = CompletionConfig.parse(options.completion ?? {}).mode;
-  const advisory =
-    options.advisory ??
-    (native.get("dshAdvisory", false) as DshAdvisoryHost | undefined);
   const modelCatalog = nativeModelCatalog(
     native.get("llm", false) as DshModelCatalog | undefined,
     native.get("settings", false) as
@@ -673,15 +629,11 @@ export function createDshHostAdapter(
     options.modelHandoff,
   );
   const lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root);
-  const delegation = new DshEnnoDelegation(
-    runtime,
-    native.get("subagents", false) as DshSpawnBackend | undefined,
-  );
   const deepPlanning = new DeepPlanningController({
     runtime,
     decisions,
     ctx: ctx as any,
-    backend: native.get("subagents", false) as DshSpawnBackend | undefined,
+    backend: native.get("subagents", false) as import("./orchestration/managed-agent-executor.js").DshSpawnBackend | undefined,
     sessions,
     agents,
     catalog: modelCatalog,
@@ -708,44 +660,7 @@ export function createDshHostAdapter(
         delegationDepth?: number;
       };
     };
-  }): boolean =>
-    isNativeSubagent(agent) &&
-    !delegation.isChild(agent) &&
-    !deepPlanning.executor.isChild(agent);
-  const childGuardDisposer = tools?.guard((value) => {
-    const execution = value as {
-      agent?: object;
-      name?: string;
-      arguments?: unknown;
-    };
-    return execution.agent
-      ? delegation.toolDenial(
-          execution.agent,
-          execution.name ?? "",
-          execution.arguments,
-        )
-      : undefined;
-  });
-  const childExecutionDisposer = onNativeEvent(
-    ctx,
-    "tools/execute",
-    async (
-      execution: { agent?: object; name: string; arguments: unknown },
-      next: () => Promise<unknown>,
-    ) => {
-      if (execution.agent && delegation.isChild(execution.agent)) {
-        await delegation.assertCurrent(execution.agent);
-        const denial = delegation.toolDenial(
-          execution.agent,
-          execution.name,
-          execution.arguments,
-        );
-        if (denial) throw new KiokukoError("CONFLICT", denial);
-      }
-      return next();
-    },
-    { prepend: true },
-  );
+  }): boolean => isNativeSubagent(agent) && !deepPlanning.executor.isChild(agent);
   const sessionCachePath =
     options.sessionCachePath ??
     (options.databasePath === undefined
@@ -769,12 +684,11 @@ export function createDshHostAdapter(
     sessionMirror,
   });
   const policy = new DshToolPolicy({
-    phase: "intake",
+    phase: "normal",
     runId: "pending",
     workspace: "pending",
     orchestrationId: "pending",
     revision: 1,
-    routeEpoch: 0,
   });
   const modes = new DshPonytailModes();
   const turnState = createTurnState(modes, policy, (runId) =>
@@ -793,26 +707,6 @@ export function createDshHostAdapter(
     ...(tools === undefined
       ? {}
       : { tools: { guard: tools.guard.bind(tools) } }),
-  });
-  const ennoMemory = new DshEnnoMemoryRefresh(
-    runtime,
-    EnnoMemoryConfig.parse(options.ennoMemory ?? {}),
-    (value) => efficiencyHost.efficiency?.recordEnnoMemory(value),
-  );
-  const { refreshEnnoMemory } = createEnnoMemoryHost({
-    ennoMemory,
-    runtime,
-    executionSupport,
-    delegation,
-    getSelection: (runId) => selections.get(runId),
-    turnState,
-    currentSession,
-    capabilityCatalog,
-    skills,
-    tools,
-    assertTurnStoppingCatalog: (expected, actual) =>
-      gate.assertTurnStoppingCatalog(expected, actual),
-    isHumanMessage,
   });
   const executionBinding = turnState.executionBinding;
   const memoryFinalizer = new DshMemoryFinalizer({
@@ -876,10 +770,6 @@ export function createDshHostAdapter(
     startSeq: 0,
   });
   deepPlanning.attachFinalizer(() => memoryFinalizer.kick());
-  const confirmationAnswerer =
-    userQuestions === undefined
-      ? undefined
-      : createDshConfirmationAnswerer(userQuestions);
   const observation = createSessionObservation(runtime);
   const captureInitialInput = observation.captureInitialInput;
   let retireSupersededRun:
@@ -904,9 +794,7 @@ export function createDshHostAdapter(
     runtime,
     decisions,
     answerReview,
-    delegation,
     executionSupport,
-    ennoMemory,
     memoryFinalizer,
     autoReview,
     sessionMirror,
@@ -918,7 +806,6 @@ export function createDshHostAdapter(
     setSelection: (runId, value) => {
       selections.set(runId, value);
     },
-    refreshEnnoMemory,
     executionBinding,
     captureInitialInput,
     contextMessages: (event, pending) => contextMessages(event, pending),
@@ -933,8 +820,6 @@ export function createDshHostAdapter(
       boundaryWorker.cancelSession(sessionId),
     isSelectionBlocked: (agent) => routing.isSelectionBlocked(agent),
     closeTurn: (input) => runLifecycle.closeTurn(input),
-    readStateForRun: (item) =>
-      runtime.withDatabase((db) => stateForRun(db, item)),
     capabilityCatalog,
     sessionEventSource,
     objectRecord,
@@ -1101,58 +986,6 @@ export function createDshHostAdapter(
             advance: async (input) => {
               policy.beginTurn(input.agent.session!.id, input.turn);
             },
-            resumeConfirmation: async (input) =>
-              runtime.withDatabase(async (db) => {
-                const sessionId = input.agent.session!.id;
-                if (detachedDemandSessions.has(sessionId)) return false;
-                const current = currentSession(sessionId);
-                if (current !== undefined) {
-                  if (
-                    current.nativeAgent !== input.agent ||
-                    current.nativeSession !== input.agent.session ||
-                    current.turn > input.turn
-                  ) {
-                    if (process.env.KIOKUKO_INTENT_DEBUG === "1")
-                      console.error("confirmation resume current mismatch", {
-                        turn: input.turn,
-                        currentTurn: current.turn,
-                        agent: current.nativeAgent === input.agent,
-                        session: current.nativeSession === input.agent.session,
-                      });
-                    return false;
-                  }
-                }
-                const project = await resolveProjectWorkspaceReadOnly(
-                  db,
-                  answerCwd(input.agent),
-                  { allowDirectory: true },
-                );
-                if (!project) return false;
-                const candidates = db
-                  .prepare(
-                    `SELECT lr.run_id AS runId
-        FROM ledger_runs AS lr
-        JOIN enno_contracts AS ec ON ec.run_id = lr.run_id
-        WHERE lr.workspace = ? AND lr.dsh_session_id = ? AND lr.status = 'active'
-          AND ec.repository_root = ? AND ec.status = 'needs_confirmation'
-        ORDER BY lr.created_at, lr.run_id LIMIT 2`,
-                  )
-                  .all<{ runId: string }>(
-                    project.workspace,
-                    sessionId,
-                    project.repositoryRoot,
-                  );
-                if (process.env.KIOKUKO_INTENT_DEBUG === "1")
-                  console.error(
-                    "confirmation resume candidates",
-                    candidates.length,
-                  );
-                return (
-                  candidates.length === 1 &&
-                  (current === undefined ||
-                    current.runId === candidates[0]!.runId)
-                );
-              }),
             replay: async (input) =>
               runtime.withDatabase((db) => {
                 const sessionId = input.agent.session!.id;
@@ -1225,7 +1058,6 @@ export function createDshHostAdapter(
                   current &&
                   current.turn < input.turn &&
                   input.messages.some(isHumanMessage) &&
-                  !current.prepared.ennoOduno.applicable &&
                   !resumeCoding
                 )
                   return false;
@@ -1248,16 +1080,13 @@ export function createDshHostAdapter(
                   db
                     .prepare(
                       `SELECT 1 FROM ledger_runs lr
-        LEFT JOIN enno_contracts ec ON ec.run_id=lr.run_id
         LEFT JOIN dsh_coding_workflows cw ON cw.run_id=lr.run_id
         WHERE lr.workspace=? AND lr.dsh_session_id=? AND lr.status='active'
-          AND ((ec.repository_root=? AND ec.status NOT IN ('completed','cancelled','blocked'))
-            OR (?=1 AND json_extract(cw.snapshot_json,'$.state') NOT IN ('completed','cancelled','superseded'))) LIMIT 1`,
+          AND (?=1 AND json_extract(cw.snapshot_json,'$.state') NOT IN ('completed','cancelled','superseded')) LIMIT 1`,
                     )
                     .get(
                       project.workspace,
                       input.agent.session!.id,
-                      project.repositoryRoot,
                       requestIntent?.relation === "new" ? 0 : 1,
                     ),
                 );
@@ -1468,12 +1297,8 @@ export function createDshHostAdapter(
             pair: stored.value.headWorker,
           };
         }
-        // An existing approved Enno or Deep configuration owns its own roles.
-        if (
-          stored?.value.mode === "enno" ||
-          stored?.value.mode === "deep-thinker"
-        )
-          return undefined;
+        // An existing approved Deep configuration owns its own roles.
+        if (stored?.value.mode === "deep-thinker") return undefined;
       }
       if (!pairLlm) return undefined;
       const saved = await getHeadWorkerSessionSelection(
@@ -1692,7 +1517,6 @@ export function createDshHostAdapter(
     modelAuto,
     answerReview,
     semanticCompaction,
-    delegation,
     deepPlanning,
     isGenericNativeChild,
     demand,
@@ -1712,8 +1536,6 @@ export function createDshHostAdapter(
     prepareTurn: (event) => gate.prepare(event),
     mapPreStep,
     currentSession,
-    readStateForRun: (item) =>
-      runtime.withDatabase((db) => stateForRun(db, item)),
     refreshMemoryOwner: admission.refreshMemoryOwner,
   });
   const contextMessages = createContextMessages({
@@ -1728,8 +1550,6 @@ export function createDshHostAdapter(
     systemSkillsFor: routing.systemSkillsFor,
     getSelection: (runId) => selections.get(runId),
     currentForAgentEvent,
-    advisoryEvidenceFor: (item, state) =>
-      toolHostModule.advisoryEvidenceFor(item, state),
     executionBinding,
     sessionEventSource,
   });
@@ -1740,23 +1560,13 @@ export function createDshHostAdapter(
     currentForAgentEvent,
     skills,
     tools,
-    sessions,
-    agents,
     gate,
     decisions,
-    delegation,
-    llm,
-    modelCatalog,
     executionSupport,
     executionBinding,
-    policy,
-    advisory,
     capabilityCatalog,
-    objectRecord,
   });
-  const { toolHost, advisoryRunner, assertTurnBoundary, submitAdvisory } =
-    toolHostModule;
-  const advisoryEvidenceFor = toolHostModule.advisoryEvidenceFor;
+  const { toolHost, assertTurnBoundary } = toolHostModule;
   const boundaries = createBoundaries({
     isGenericNativeChild,
     ctx,
@@ -1768,33 +1578,19 @@ export function createDshHostAdapter(
     tools,
     userQuestions,
     gate,
-    delegation,
     executionSupport,
     answerReview,
     sessionMirror,
     currentSession,
-    currentForAgentEvent,
-    stateForRun,
-    systemSkillsFor: routing.systemSkillsFor,
-    getSkillPrompts: () => skillPrompts,
-    refreshEnnoMemory,
-    confirmationAnswerer,
-    assertTurnBoundary,
-    advisoryRunner,
-    submitAdvisory,
-    advisoryEvidenceFor,
-    applyPolicy: turnState.applyPolicy,
     capabilityCatalog,
     closeTurn: (input) => runLifecycle.closeTurn(input),
     sessionEventSource,
     boundedUtf8Text,
     boundedMessageText,
     recoveryMessage,
-    continuationMessage,
   });
   const {
     boundaryWorker,
-    ennoController,
     deliverCompletionReport,
     boundarySessionStartDisposer,
   } = boundaries;
@@ -1807,7 +1603,6 @@ export function createDshHostAdapter(
     skills,
     agents,
     sessions,
-    delegation,
     currentSession,
     turnState,
     gate,
@@ -1843,14 +1638,12 @@ export function createDshHostAdapter(
               sessions?.get(session.id) !== session
             )
               return undefined;
-            const child = delegation.observationBinding(agent);
-            const item = currentSession(child?.parentSessionId ?? session.id);
+            const item = currentSession(session.id);
             if (
               !item ||
               item.closed ||
-              (child && child.runId !== item.runId) ||
-              (!child &&
-                (item.nativeAgent !== agent || item.nativeSession !== session))
+              item.nativeAgent !== agent ||
+              item.nativeSession !== session
             )
               return undefined;
             return {
@@ -1888,7 +1681,6 @@ export function createDshHostAdapter(
               item.closed ||
               item.nativeAgent !== agent ||
               item.nativeSession !== session ||
-              delegation.isChild(agent) ||
               isGenericNativeChild(agent)
             )
               return undefined;
@@ -1916,18 +1708,12 @@ export function createDshHostAdapter(
       isGenericNativeChild(agent)
     )
       return undefined;
-    const child = delegation.observationBinding(agent);
-    const item = currentSession(child?.parentSessionId ?? session.id);
+    const item = currentSession(session.id);
     if (
       !item ||
       item.closed ||
-      (child && child.runId !== item.runId) ||
-      (!child && (item.nativeAgent !== agent || item.nativeSession !== session))
-    )
-      return undefined;
-    if (
-      child &&
-      delegation.toolDenial(agent, execution.name, execution.arguments)
+      item.nativeAgent !== agent ||
+      item.nativeSession !== session
     )
       return undefined;
     return {
@@ -1996,8 +1782,6 @@ export function createDshHostAdapter(
               return cwd === root
                 ? nativeTaskAuthority.read(execution)
                 : undefined;
-            if (delegation.isChild(agent))
-              return cwd === root ? resolveParentOwned(execution) : undefined;
             const current = resolveParentOwned(execution);
             if (execution.name === "kioku_read" && current) {
               const item = currentSession(session.id);
@@ -2078,13 +1862,11 @@ export function createDshHostAdapter(
   );
   const observationMount = observation.install({
     ctx,
-    ennoMemory,
     evolutionConfig,
     memoryFinalizer,
     currentSession,
     currentForAgentEvent,
     answerReview,
-    markModelUnavailable: (agent) => routing.markModelUnavailable(agent),
     recordManualChange: (sessionId, pending) =>
       routing.recordManualChange(sessionId, pending),
     modelAuto,
@@ -2102,7 +1884,6 @@ export function createDshHostAdapter(
       if (!nativeAgent || !isGenericNativeChild(nativeAgent))
         boundaryWorker.kick(sessionId, agent);
     },
-    stateForRun,
     objectRecord,
     isHumanMessage,
     eventContinuationId,
@@ -2116,19 +1897,15 @@ export function createDshHostAdapter(
     memoryFinalizer,
     autoReview,
     answerReview,
-    ennoController,
-    ennoMemory,
     executionSupport,
     gate,
     turnState,
     getSelection: (runId) => selections.get(runId),
     currentSession,
     currentForAgentEvent,
-    stateForRun,
     deliverCompletionReport,
     reviewBinding,
     evolutionConfig,
-    clearToolRun: toolHostModule.clearRun,
     sessionEventSource,
     onRunClosed: (runId, status, sessionId, authority) =>
       lifecycleMemory.completed(runId, status, sessionId, authority),
@@ -2151,8 +1928,7 @@ export function createDshHostAdapter(
         agent: (id) => agents?.get(id),
         logicalRun: resolveSessionRunId,
         ...(userQuestions ? { questions: userQuestions } : {}),
-        interactive: (agent) =>
-          !delegation.isChild(agent) && !deepPlanning.executor.isChild(agent),
+        interactive: (agent) => !deepPlanning.executor.isChild(agent),
         recordingRun: (agent) => deepPlanning.executor.recordingRun(agent),
         recordingParent: (agent) =>
           deepPlanning.executor.recordingParent(agent),
@@ -2164,7 +1940,6 @@ export function createDshHostAdapter(
     memoryFinalizer,
     agents,
     sessions,
-    delegation,
     deepPlanning,
     currentSession,
   });
@@ -2213,7 +1988,6 @@ export function createDshHostAdapter(
     configureSkillPrompts(prompts) {
       skillPrompts = prompts;
     },
-    configureEnnoMemory: (config) => ennoMemory.configure(config),
     configureToolExposure: (config) => {
       toolExposureConfig = ToolExposureConfig.parse(config);
     },
@@ -2279,7 +2053,6 @@ export function createDshHostAdapter(
     resolveIdleClose,
     resolveSessionClose,
   };
-
   return {
     host,
     dispose: () =>
@@ -2301,9 +2074,7 @@ export function createDshHostAdapter(
         await demand?.dispose();
         demandEnd?.();
         demandDisposed?.();
-        childGuardDisposer?.();
         discussionGuardDisposer?.();
-        childExecutionDisposer();
         routing.dispose();
         nativeTaskAuthority.dispose();
         nativeWorkers.dispose();
@@ -2320,7 +2091,6 @@ export function createDshHostAdapter(
         const pausedSessions = new Set(
           turnState.sessionIds().filter((id) => executionSupport.paused(id)),
         );
-        ennoMemory.close();
         executionSupport.dispose();
         try {
           observationMount.disposeError();
@@ -2344,11 +2114,6 @@ export function createDshHostAdapter(
         }
         try {
           modes.dispose();
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          ennoController.dispose();
         } catch (error) {
           failures.push(error);
         }
@@ -2412,7 +2177,6 @@ export function createDshHostAdapter(
           failures.push(error);
         }
         turnState.clear();
-        toolHostModule.clear();
         boundaries.clear();
         admission.clear();
         observation.clear();
@@ -2424,17 +2188,6 @@ export function createDshHostAdapter(
           );
       })()),
   };
-}
-
-function stateForRun(database: any, item: TurnRecord): EnnoOdunoState {
-  if (!item.prepared.ennoOduno.applicable) return item.prepared.ennoOduno;
-  return stateForSnapshot(
-    readEnnoSnapshot(database, {
-      runId: item.runId,
-      workspace: item.workspace,
-      orchestrationId: item.orchestrationId,
-    }),
-  );
 }
 
 export { KIOKUKO_DSH_HOST_SERVICE };

@@ -10,18 +10,18 @@ export const ContinuityConfig = z.object({
 export type ContinuityConfig = z.infer<typeof ContinuityConfig>
 const identifier = z.string().min(1).max(4096).refine(s => Buffer.byteLength(s) <= 8192 && !/[\p{Cc}\p{Cf}]/u.test(s))
 const sourceSchema = z.object({
-  kind: z.enum(['execution-frame', 'execution-evidence', 'enno-contract', 'enno-work-result', 'enno-verifier']),
+  kind: z.enum(['execution-frame', 'execution-evidence']),
   key: identifier,
   revision: identifier,
 }).strict()
 const ownerSchema = z.object({ runId: identifier, workspace: identifier, sessionId: identifier,
-  mode: z.enum(['normal', 'enno']), workUnitId: identifier.nullable(), role: identifier.nullable() }).strict()
+  mode: z.enum(['normal']) }).strict()
 const itemSchema = z.object({
   key: identifier,
-  kind: z.enum(['observation', 'reported-result', 'open-requirement', 'next-check']),
+  kind: z.enum(['observation', 'open-requirement', 'next-check']),
   text: z.string().min(1).max(16384).refine(s => Buffer.byteLength(s) <= 32768
     && !/[\p{Cc}\p{Cf}]/u.test(s.replace(/[\n\r\t]/gu, '')) && findSecret(s) === undefined),
-  basis: z.enum(['host-observation', 'model-report', 'user-explicit']),
+  basis: z.enum(['host-observation', 'user-explicit']),
   validity: z.enum(['current', 'historical', 'unknown']),
   sources: z.array(sourceSchema).min(1).max(8),
 }).strict()
@@ -57,11 +57,7 @@ export function buildContinuationView(value: ContinuityInput): ContinuationView 
   for (const raw of input.items) {
     const parsed = itemSchema.safeParse(raw)
     if (!parsed.success || keys.has(parsed.data.key)
-      || parsed.data.sources.some(source => !refs.has(canonicalContentHash(source)))
-      || parsed.data.sources.some(source => source.kind === 'enno-work-result'
-        && (parsed.data.basis !== 'model-report' || parsed.data.kind !== 'reported-result'))
-      || (parsed.data.basis === 'model-report' && parsed.data.sources.some(source => source.kind !== 'enno-work-result'))
-      || (parsed.data.basis === 'model-report' && parsed.data.kind !== 'reported-result')) {
+      || parsed.data.sources.some(source => !refs.has(canonicalContentHash(source)))) {
       omittedItems++; continue
     }
     keys.add(parsed.data.key); items.push(parsed.data)

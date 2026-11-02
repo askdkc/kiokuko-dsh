@@ -2,15 +2,8 @@ import { currentScopedEntry } from '../context/scoped-memory-gate.js'
 import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../repository/project-fingerprint.js'
 import type { PreparedAgentTask } from './task-intake.js'
 import type { DshRuntime } from './runtime.js'
-import type { DshExpertReference, DshMessageSource, DshMessageSourceInput } from './message-sources.js'
+import type { DshMessageSource, DshMessageSourceInput } from './message-sources.js'
 import { buildDshMessageSources } from './message-sources.js'
-import type { RoleDirective } from '../enno-oduno/types.js'
-import {
-  STANDARD_FUNCTION_EXPERT_FILES,
-  STANDARD_FUNCTION_EXPERT_IDS,
-  STANDARD_UI_EXPERT_FILES,
-  STANDARD_UI_EXPERT_IDS,
-} from './standard-skills.js'
 
 export interface DshModelMessage {
   readonly role: 'user'
@@ -19,31 +12,7 @@ export interface DshModelMessage {
   readonly name: string
 }
 
-export interface DshDirectiveSourceSelection {
-  readonly routeSkillNames: readonly string[]
-  readonly expertRefs: readonly DshExpertReference[]
-}
-
-const expertFilesById = new Map<string, string>([
-  ...STANDARD_FUNCTION_EXPERT_IDS.map((id, index) => [id, STANDARD_FUNCTION_EXPERT_FILES[index]!] as const),
-  ...STANDARD_UI_EXPERT_IDS.map((id, index) => [id, STANDARD_UI_EXPERT_FILES[index]!] as const),
-])
-
-/** Project only the current role directive's required skills and selected experts. */
-export function selectDshDirectiveSources(directive: Pick<RoleDirective, 'requiredSkills' | 'workUnit'>): DshDirectiveSourceSelection {
-  const expertRefs = (directive.workUnit?.expertRefs ?? []).map((reference) => {
-    const relativePath = expertFilesById.get(reference.id)
-    if (relativePath === undefined) throw new Error(`No bundled dsh expert mapping exists for ${reference.id}`)
-    const skillName = reference.id.startsWith('ui.') ? 'kiokuko-ui-design-soul' : 'kiokuko-single-purpose-functions'
-    return { skillName, relativePath }
-  })
-  return Object.freeze({
-    routeSkillNames: Object.freeze([...new Set(directive.requiredSkills)]),
-    expertRefs: Object.freeze(expertRefs),
-  })
-}
-
-function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSkillNames: readonly string[], expertRefs: readonly DshExpertReference[], directive: DshMessageSourceInput['directive'], userTaskInConversation: boolean): DshMessageSourceInput {
+function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSkillNames: readonly string[], userTaskInConversation: boolean): DshMessageSourceInput {
   if (prepared.intake.status !== 'ready' && prepared.intake.status !== 'exhausted') throw new Error('Cannot inject context before intake is finalized')
   if (prepared.nextAction !== 'proceed') throw new Error('Cannot inject context when the host gate did not permit proceeding')
   const profile = prepared.intake.profile
@@ -69,9 +38,7 @@ function sourceInput(prepared: PreparedAgentTask, fallbackTask: string, routeSki
     nextAction: 'proceed',
     memoryPolicy: prepared.memoryPolicy,
     context: prepared.context,
-    ...(directive === undefined ? {} : { directive }),
     routeSkillNames,
-    expertRefs,
   }
 }
 
@@ -82,9 +49,6 @@ export async function injectDshContext(input: {
   readonly prepared: PreparedAgentTask
   readonly task: string
   readonly routeSkillNames?: readonly string[]
-  readonly expertRefs?: readonly DshExpertReference[]
-  readonly advisoryEvidence?: DshMessageSourceInput['advisoryEvidence']
-  readonly directive?: DshMessageSourceInput['directive']
   readonly runtime?: Pick<DshRuntime, 'withDatabase'>
   readonly soulInSystemPrompt?: boolean
   /** Native DSH already carries the human message; emit only additional intake facts. */
@@ -104,9 +68,8 @@ export async function injectDshContext(input: {
   const sources = await buildDshMessageSources({
     ...(input.skillPrompts ? { skillPrompts: input.skillPrompts } : {}),
     ...(input.systemSkillNames ? { systemSkillNames: input.systemSkillNames } : {}),
-    ...sourceInput(input.prepared, input.task, [...new Set([...(input.routeSkillNames ?? []), ...(input.prepared.selectedSkills ?? [])])], input.expertRefs ?? [], input.directive, input.userTaskInConversation === true),
+    ...sourceInput(input.prepared, input.task, [...new Set([...(input.routeSkillNames ?? []), ...(input.prepared.selectedSkills ?? [])])], input.userTaskInConversation === true),
     ...(input.soulInSystemPrompt === undefined ? {} : { soulInSystemPrompt: input.soulInSystemPrompt }),
-    ...(input.advisoryEvidence === undefined ? {} : { advisoryEvidence: input.advisoryEvidence }),
     ...(assertMemoryCurrent === undefined ? {} : { assertMemoryCurrent }),
   })
   return Object.freeze(sources.map((source) => Object.freeze({

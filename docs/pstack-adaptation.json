@@ -109,20 +109,6 @@
       "verification": "tests/dsh/unit/pstack-catalog.test.ts"
     },
     {
-      "upstream": "pstack/skills/arena/SKILL.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "idea": "Compare candidates and partition ownership",
-      "changed": "Host-admitted execution only; no model fallback or automatic fanout",
-      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
-    },
-    {
-      "upstream": "pstack/skills/swarm/SKILL.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "idea": "Compare candidates and partition ownership",
-      "changed": "Host-admitted execution only; no model fallback or automatic fanout",
-      "verification": "tests/dsh/unit/pstack-catalog.test.ts"
-    },
-    {
       "upstream": "pstack/skills/poteto-mode/SKILL.md",
       "destination": "skills/kiokuko-soul/SKILL.md",
       "idea": "Route work and use available models",
@@ -359,16 +345,6 @@
       "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
     },
     {
-      "upstream": "pstack/skills/poteto-mode/playbooks/autopilot-full.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "disposition": "Independent coverage only when host admitted; no automatic merging."
-    },
-    {
-      "upstream": "pstack/skills/poteto-mode/playbooks/autopilot-stack.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "disposition": "Respect unit dependencies and verify each accepted increment; no inferred Git authority."
-    },
-    {
       "upstream": "pstack/skills/poteto-mode/playbooks/babysit.md",
       "destination": "skills/one-shot-software-completion/SKILL.md",
       "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
@@ -407,16 +383,6 @@
       "upstream": "pstack/skills/poteto-mode/playbooks/opening-a-pr.md",
       "destination": "skills/one-shot-software-completion/SKILL.md",
       "disposition": "Adapt method only; host owns execution, resume and permissions. PR, shipping and cleanup require explicit authorization."
-    },
-    {
-      "upstream": "pstack/skills/poteto-mode/playbooks/orchestrate.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "disposition": "Only host-admitted WorkUnits; disjoint ownership and evidence-backed synthesis."
-    },
-    {
-      "upstream": "pstack/skills/poteto-mode/playbooks/pause-safely.md",
-      "destination": "skills/kiokuko-enno-oduno/SKILL.md",
-      "disposition": "Preserve completed effects and return through the host pause/recovery contract."
     },
     {
       "upstream": "pstack/skills/poteto-mode/playbooks/perf-issue.md",

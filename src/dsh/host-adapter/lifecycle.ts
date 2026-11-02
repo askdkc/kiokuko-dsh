@@ -23,16 +23,12 @@ import type {
   AutoMemoryReviewCoordinator,
   ReviewNativeSession,
 } from "../auto-memory-review.js";
-import type { DshEnnoController } from "../enno-controller.js";
-import type { DshEnnoMemoryRefresh } from "../enno-memory-refresh.js";
 import type { DshExecutionSupport } from "../execution-support.js";
 import type { DshIntakeGate } from "../intake-gate.js";
 import type { StoredExecutionSelection } from "../execution-selection.js";
-import type { EnnoOdunoState } from "../../enno-oduno/types.js";
 import type { MemoryEvolutionConfig } from "../../memory/evolution/contracts.js";
 import { withImmediateTransaction } from "../../db/transaction.js";
 import { LedgerStore } from "../../ledger/store.js";
-import { terminalizeLedgerRunInTransaction } from "../../enno-oduno/store.js";
 import { KiokukoError } from "../../errors.js";
 import {
   saveTaskCompletionReceipt,
@@ -58,8 +54,6 @@ interface LifecycleDependencies {
   readonly memoryFinalizer: DshMemoryFinalizer;
   readonly autoReview: AutoMemoryReviewCoordinator;
   readonly answerReview: AnswerReviewCoordinator;
-  readonly ennoController: DshEnnoController;
-  readonly ennoMemory: DshEnnoMemoryRefresh;
   readonly executionSupport: DshExecutionSupport;
   readonly gate: DshIntakeGate;
   readonly turnState: ReturnType<typeof createTurnState>;
@@ -74,7 +68,6 @@ interface LifecycleDependencies {
     nativeSession?: object,
     nativeAgent?: object,
   ) => TurnRecord | undefined;
-  readonly stateForRun: (database: any, item: TurnRecord) => EnnoOdunoState;
   readonly deliverCompletionReport: (
     session: object | undefined,
   ) => Promise<void>;
@@ -88,7 +81,6 @@ interface LifecycleDependencies {
     startSeq: number;
   };
   readonly evolutionConfig: import("zod").z.infer<typeof MemoryEvolutionConfig>;
-  readonly clearToolRun: (runId: string) => void;
   readonly sessionEventSource: (
     session: object | undefined,
   ) => DshSessionEventSource;
@@ -135,17 +127,13 @@ export function createLifecycle(deps: LifecycleDependencies) {
     sessionMirror,
     autoReview,
     answerReview,
-    ennoController,
-    ennoMemory,
     executionSupport,
     gate,
     turnState,
     currentSession,
     currentForAgentEvent,
-    stateForRun,
     deliverCompletionReport,
     reviewBinding,
-    clearToolRun,
     sessionEventSource,
   } = deps;
   const getSelection = deps.getSelection;
@@ -220,9 +208,6 @@ export function createLifecycle(deps: LifecycleDependencies) {
         (item.failed && selection.mode === "normal"))
     )
       return undefined;
-    const state = await runtime.withDatabase((database) =>
-      stateForRun(database, item),
-    );
     const coding = await runtime.withDatabase((db) =>
       readCodingWorkflow(db, item.runId),
     );
@@ -233,35 +218,29 @@ export function createLifecycle(deps: LifecycleDependencies) {
         status: "cancelled",
         terminalTurn: item.turn,
       };
-    if (state.status === "cancelled")
-      return {
-        ...closeAuthority(item),
-        runId: item.runId,
-        status: "cancelled",
-      };
-    if (state.status === "blocked" || state.nextAction === "report_blocker")
+    // A chat run spans the quiet time between user messages; it does not
+    // end just because the driver became idle.
+    if (item.prepared.intake.profile.taskType === "chat") return undefined;
+    // A durable ledger failure is a terminal host outcome: the run cannot
+    // silently reopen and its recorded failure keeps the lease auditable.
+    const runStatus = await runtime.withDatabase((db) =>
+      new LedgerStore(db).readRun(item.runId)?.status,
+    );
+    if (runStatus === "failed")
       return {
         ...closeAuthority(item),
         runId: item.runId,
         status: "failed",
         terminalTurn: item.turn,
       };
-    // A chat run spans the quiet time between user messages. Enno's
-    // inapplicable `complete` means that no orchestration is required for this
-    // turn; it does not mean that the persistent conversation has ended.
-    if (item.prepared.intake.profile.taskType === "chat") return undefined;
-    if (state.status === "completed" || state.nextAction === "complete") {
-      if (!(await completionReady(item))) return undefined;
-      // A provider failure while wording the final response cannot undo
-      // already verified completion. The durable host report covers it.
+    if (item.failed)
       return {
         ...closeAuthority(item),
         runId: item.runId,
-        status: "completed",
+        status: "cancelled",
         terminalTurn: item.turn,
       };
-    }
-    // Idle means the driver has no active work, not that Enno reached a
+    // Idle means the driver has no active work, not that the task reached a
     // terminal state. Keep only genuinely resumable active states open.
     return undefined;
   };
@@ -301,56 +280,58 @@ export function createLifecycle(deps: LifecycleDependencies) {
         );
       return undefined;
     }
-    const state = await runtime.withDatabase((database) =>
-      stateForRun(database, item),
+    const coding = await runtime.withDatabase((db) =>
+      readCodingWorkflow(db, item.runId),
     );
-    if (state.status === "completed") {
-      if (!(await completionReady(item))) return undefined;
+    if (coding?.state === "cancelled" || coding?.state === "superseded") {
       await deliverCompletionReport(nativeSession);
-      return {
-        ...closeAuthority(item),
-        runId: item.runId,
-        status: "completed",
-        terminalTurn: item.turn,
-      };
-    }
-    if (item.failed)
-      return {
-        ...closeAuthority(item),
-        runId: item.runId,
-        status: "failed",
-        terminalTurn: item.turn,
-      };
-    if (state.status === "cancelled")
       return {
         ...closeAuthority(item),
         runId: item.runId,
         status: "cancelled",
       };
-    if (state.status === "blocked" || state.nextAction === "report_blocker")
+    }
+    if (item.prepared.intake.profile.taskType === "chat") return undefined;
+    // A durable terminal ledger status owns reconciliation. Otherwise an idle
+    // non-chat close records its unfinished work as cancelled: the run is
+    // superseded (not completed) and keeps its authority auditable. Completion
+    // is declared only by explicit verified task completion.
+    const ledgerStatus = await runtime.withDatabase(
+      (db) => new LedgerStore(db).readRun(item.runId)?.status,
+    );
+    if (ledgerStatus === "failed") {
+      await deliverCompletionReport(nativeSession);
       return {
         ...closeAuthority(item),
         runId: item.runId,
         status: "failed",
         terminalTurn: item.turn,
       };
-    if (
-      item.prepared.intake.profile.taskType === "chat" ||
-      state.nextAction === "complete"
-    ) {
-      if (
-        item.prepared.intake.profile.taskType !== "chat" &&
-        !(await completionReady(item))
-      )
-        return undefined;
+    }
+    if (ledgerStatus === "cancelled") {
+      await deliverCompletionReport(nativeSession);
       return {
         ...closeAuthority(item),
         runId: item.runId,
-        status: "completed",
+        status: "cancelled",
+      };
+    }
+    if (!(await completionReady(item))) {
+      await deliverCompletionReport(nativeSession);
+      return {
+        ...closeAuthority(item),
+        runId: item.runId,
+        status: "cancelled",
         terminalTurn: item.turn,
       };
     }
-    return { ...closeAuthority(item), runId: item.runId, status: "cancelled" };
+    await deliverCompletionReport(nativeSession);
+    return {
+      ...closeAuthority(item),
+      runId: item.runId,
+      status: "completed",
+      terminalTurn: item.turn,
+    };
   };
   const closeRun = async (input: DshRunClose): Promise<void> => {
     let committedAuthority: TaskLease | undefined;
@@ -384,8 +365,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
             "Run close target does not exist",
           );
         if (before.status === "intake" || before.status === "active") {
-          terminalizeLedgerRunInTransaction(
-            database,
+          new LedgerStore(database).updateRunStatusInTransaction(
             input.runId,
             input.status,
           );
@@ -442,29 +422,15 @@ export function createLifecycle(deps: LifecycleDependencies) {
           /* optional memory observation */
         }
       for (const item of items) {
-        ennoController.retire({
-          ...(item.nativeAgent === undefined
-            ? {}
-            : { nativeAgent: item.nativeAgent }),
-          ...(item.nativeSession === undefined
-            ? {}
-            : { nativeSession: item.nativeSession }),
-        });
         if (item.nativeAgent)
           reviewFinishes.push(
             answerReview.finish(item.nativeAgent as ReviewAgent),
           );
         item.closed = true;
-        try {
-          ennoMemory.clear(item.runId);
-        } catch {
-          /* Optional memory cleanup cannot retain a task owner. */
-        }
         executionSupport.clear(item.sessionId);
         gate.clearTurn(item.sessionId, item.turn);
       }
       turnState.releaseRun(input.runId, input.authority);
-      clearToolRun(input.runId);
     });
     await Promise.all(reviewFinishes);
   };
@@ -513,10 +479,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
           prior.taskId === task.taskId &&
           prior.sessionId === task.sessionId &&
           prior.repositoryRoot === task.repositoryRoot &&
-          ((prior.revision === task.revision &&
-            prior.generation === task.generation) ||
-            (prior.revision + 1 === task.revision &&
-              prior.generation + 1 === task.generation))
+          prior.revision === task.revision &&
+          prior.generation === task.generation
         );
       };
       if (!matches(item)) return undefined;
@@ -627,15 +591,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
       try {
         const selected = getSelection(item.runId)?.value;
         if (selected) {
-          const state = await runtime.withDatabase((db) =>
-            stateForRun(db, item),
-          );
           if (
             selected.status !== "ready" ||
-            (selected.mode === "enno" &&
-              !["completed", "blocked", "cancelled"].includes(
-                state.status ?? "",
-              )) ||
             (selected.mode === "normal" &&
               (item.failed ||
                 (item.nativeAgent as NativeAgent | undefined)?.status ===
@@ -646,18 +603,10 @@ export function createLifecycle(deps: LifecycleDependencies) {
         let status: "completed" | "failed" | "cancelled";
         if (item.prepared.intake.profile.taskType === "chat")
           status = item.failed ? "failed" : "cancelled";
+        else if (item.failed) status = "failed";
         else {
-          const state = await runtime.withDatabase((database) =>
-            stateForRun(database, item),
-          );
-          status =
-            state.status === "completed" || state.nextAction === "complete"
-              ? "completed"
-              : item.failed ||
-                  state.status === "blocked" ||
-                  state.nextAction === "report_blocker"
-                ? "failed"
-                : "cancelled";
+          if (!(await completionReady(item))) continue;
+          status = "completed";
         }
         if (status === "completed") {
           if (!(await completionReady(item))) continue;

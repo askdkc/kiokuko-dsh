@@ -1,5 +1,4 @@
 import { KiokukoError } from '../errors.js'
-import type { EnnoNextAction } from '../enno-oduno/types.js'
 import {
   DSH_MODEL_FACING_OPERATIONS,
   bindDshToolInvocation,
@@ -9,17 +8,15 @@ import {
   isDshModelFacingOperation,
 } from './tools.js'
 
-export type DshToolPhase = 'normal' | 'intake' | 'ideal' | 'planning' | 'confirmation' | 'goki' | 'verifying' | 'meditation' | 'completed' | 'blocked' | 'cancelled'
+export type DshToolPhase = 'normal'
 
 export interface DshToolPolicyState extends Omit<DshToolHostBinding, 'idempotencyKey'> {
   readonly phase: DshToolPhase
   readonly nativeTurn?: number
-  readonly currentWorkUnitId?: string
   readonly dshSessionId?: string
-  readonly nextAction?: EnnoNextAction
 }
 
-export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'WRONG_PHASE' | 'WRONG_DIRECTIVE' | 'STALE_STATE' | 'LEASE_REQUIRED' | 'CANCELLED' | 'IDENTITY_INJECTION' | 'TURN_SEALED'
+export type DshToolPolicyDenyCode = 'UNLOADED' | 'UNKNOWN_TOOL' | 'WRONG_PHASE' | 'STALE_STATE' | 'CANCELLED' | 'IDENTITY_INJECTION' | 'TURN_SEALED'
 
 export type DshToolPolicyDecision =
   | { readonly kind: 'allow'; readonly binding: DshToolHostBinding }
@@ -34,25 +31,6 @@ export interface DshToolPolicyContext {
 
 const phaseAllowlist: Readonly<Record<DshToolPhase, readonly string[]>> = Object.freeze({
   normal: ['curator_check', 'memory_checkpoint'],
-  intake: [],
-  ideal: ['enno_ideal_submit'],
-  planning: ['enno_plan_review', 'enno_plan_submit'],
-  confirmation: [],
-  goki: ['enno_work_report', 'enno_delegate', 'curator_check', 'memory_checkpoint'],
-  verifying: ['enno_finish', 'curator_check', 'memory_checkpoint'],
-  meditation: ['enno_meditation_submit'],
-  completed: [],
-  blocked: [],
-  cancelled: [],
-})
-
-const directiveOperation: Readonly<Partial<Record<EnnoNextAction, string>>> = Object.freeze({
-  submit_ideal: 'enno_ideal_submit',
-  review_plan: 'enno_plan_review',
-  submit_plan: 'enno_plan_submit',
-  execute_work_unit: 'enno_work_report',
-  submit_final_review: 'enno_finish',
-  submit_meditation: 'enno_meditation_submit',
 })
 
 function denied(code: DshToolPolicyDenyCode, reason: string): DshToolPolicyDecision {
@@ -64,26 +42,16 @@ function publicReason(code: DshToolPolicyDenyCode): string {
 }
 
 /** Shared policy decision used by execution guards and model-facing projection. */
-export function operationStateDenyCode(state: DshToolPolicyState, operation: typeof DSH_MODEL_FACING_OPERATIONS[number], origin: 'model' | 'host' | undefined): DshToolPolicyDenyCode | undefined {
-  if (state.nextAction !== undefined && origin !== 'host') {
-    const expected = directiveOperation[state.nextAction]
-    if (expected === undefined) return 'STALE_STATE'
-    if (expected !== operation && !(expected === 'enno_plan_submit' && operation === 'enno_plan_review') && !(expected === 'enno_work_report' && operation === 'enno_delegate')) return 'WRONG_DIRECTIVE'
-  }
+export function operationStateDenyCode(state: DshToolPolicyState, operation: typeof DSH_MODEL_FACING_OPERATIONS[number], _origin: 'model' | 'host' | undefined): DshToolPolicyDenyCode | undefined {
   const allowedOperations = phaseAllowlist[state.phase]
   if (allowedOperations === undefined) return 'STALE_STATE'
   if (!allowedOperations.includes(operation)) return 'WRONG_PHASE'
-  if ((operation === 'enno_work_report' || operation === 'enno_delegate')
-    && (state.currentWorkUnitId === undefined || state.workUnitId !== state.currentWorkUnitId || state.leaseToken === undefined)) return 'LEASE_REQUIRED'
   return undefined
 }
 
-/** Unknown serialized phase/action values must never be interpreted as an empty allowlist. */
+/** Unknown serialized phase values must never be interpreted as an empty allowlist. */
 export function hasKnownDshToolPolicyState(state: DshToolPolicyState): boolean {
-  if (!Object.prototype.hasOwnProperty.call(phaseAllowlist, state.phase)) return false
-  const action = state.nextAction
-  return action === undefined || Object.prototype.hasOwnProperty.call(directiveOperation, action)
-    || action === 'answer_intake' || action === 'ask_user_confirmation' || action === 'run_final_verification' || action === 'report_blocker' || action === 'complete'
+  return Object.prototype.hasOwnProperty.call(phaseAllowlist, state.phase)
 }
 
 

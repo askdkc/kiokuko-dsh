@@ -31,7 +31,7 @@ once, preserving any preceding path prefix.
 returns nothing usable, register the exact model ID and limits manually under
 **Advanced settings → Register model manually**, then **Save connection**. Search the
 resulting list. **Use in current chat** only changes that idle chat; **Default for new
-chats** saves the native default for future chats. Enno, Deep and model-auto use the
+chats** saves the native default for future chats. Deep and model-auto use the
 same registered adapters and model capabilities. An unavailable model is rejected
 rather than silently substituted.
 
@@ -52,13 +52,8 @@ a different normal head model also leaves pair mode for the selected scope. Sele
 the exact same provider and head model preserves the worker choice. Profile defaults are
 snapshotted per chat, so changing the default does not rewrite existing chats.
 
-The execution-choice card also offers the pair for just the current normal task,
-and Enno's model-configuration menu offers the same pair. Lisp is an execution-tool
-choice and uses the normal parent/worker routing. In Enno, `ideal`, `zenki`, `goki`
-and `check` use the head; the delegated `worker` uses Flash. A profile/chat pair
-seeds the initial Enno role review. An already approved Enno task keeps its explicit
-role configuration until the next task; selecting another Enno custom configuration
-continues to work.
+The execution-choice card also offers the pair for just the current normal task.
+Lisp is an execution-tool choice and uses the normal parent/worker routing.
 
 Selection and dispatch require the exact live catalog bindings. The head ID is
 `gpt-6.1-sol`. The worker ID is `deepseek-flash` on a DeepSeek route,
@@ -101,7 +96,7 @@ appear in list responses, normal profile settings or command history. The settin
 necessarily grants access to the shared credentials through login, replacement and logout.
 Session tool permissions do not govern these explicit human settings operations.
 
-OrcaRouter is no longer offered or recommended. Legacy saved Enno/Deep configurations
+OrcaRouter is no longer offered or recommended. Legacy saved Deep configurations
 remain readable and require explicit model reselection before reuse. Replay history and
 migrations are unaffected.
 

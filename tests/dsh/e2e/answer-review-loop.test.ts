@@ -168,7 +168,6 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       assert.equal(model.requests.length,expectedRequests,JSON.stringify({rows,status:reviewStatus(),events:agent.session.snapshotEvents().map((e:any)=>({type:e.type,seq:e.seq,turn:e.data?.turn,reason:e.data?.reason}))}))
       if(!newRequest) assert.equal(questions,questionCount,'correction does not reopen intake or execution choice')
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
-      assert.equal(db.prepare('SELECT COUNT(*) AS n FROM enno_contracts').get()!.n,0)
       assert.equal(taskTypeQuestions,0,'explicit preparation supplies the advisory task type')
       assert.equal(taskTypeCalls,newRequest?1:0,'only superseding owned work consults task classification; corrective requests do not reopen it');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))

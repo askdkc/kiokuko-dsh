@@ -80,8 +80,14 @@ export class KiokukoHarnessAgent implements Agent {
   }
   get status(): 'idle'|'running' { return this.driver ? 'running':'idle' }
   private audit(action:string,phase:string,callId?:string) {
-    appendPluginRecord(this.session,'plugin:kiokuko-dsh/harness-action',{action,phase,turn:this.turn,step:this.step,
-      ...(this.session.header.parentSession?{parentSession:this.session.header.parentSession}:{}),...(callId?{callId}:{})})
+    try {
+      appendPluginRecord(this.session,'plugin:kiokuko-dsh/harness-action',{action,phase,turn:this.turn,step:this.step,
+        ...(this.session.header.parentSession?{parentSession:this.session.header.parentSession}:{}),...(callId?{callId}:{})})
+    } catch {
+      // A native Session brand mismatch (development trees that load two
+      // dsh-session copies) must not block agent lifecycle; this record is
+      // diagnostic and its absence never changes session state.
+    }
   }
   release() { this.ready=true;this.audit('lifecycle','ready');if(this.wake)this.start() }
   send(message:UserMessage,target:'next-turn'|'next-step',wakeup:boolean) {

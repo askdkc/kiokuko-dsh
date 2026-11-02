@@ -134,8 +134,6 @@ for (const closeStatus of ["completed", "failed"] as const)
                 effects.push("finish-review");
               },
             } as any,
-            ennoController: { retire: () => effects.push("retire") } as any,
-            ennoMemory: { clear: () => effects.push("clear-memory") } as any,
             executionSupport: {
               clear: () => effects.push("clear-execution"),
             } as any,
@@ -153,14 +151,9 @@ for (const closeStatus of ["completed", "failed"] as const)
             getSelection: () => undefined,
             currentSession: () => turns.at(-1),
             currentForAgentEvent: () => turns.at(-1),
-            stateForRun: () => prepared.ennoOduno,
             deliverCompletionReport: async () => undefined,
             reviewBinding: () => ({}) as any,
             evolutionConfig: { mode: "off" } as any,
-            clearToolRun: () => {
-              effects.push("clear-tools");
-              currentWork.abort();
-            },
             sessionEventSource: () => ({}) as any,
             onRunClosed: (_runId, _status, _sessionId, task) => {
               reviewAuthorities.push(task);

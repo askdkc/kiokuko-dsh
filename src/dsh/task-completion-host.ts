@@ -26,8 +26,8 @@ const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('bind'), criterionId: z.string().min(1).max(256), method: CompletionMethodSchema }).strict(),
 ])
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
-  method: z.object({ kind: z.enum(['native_command', 'enno_verifier']), command: z.string().optional(),
-    cwd: z.string().optional(), sourcePaths: z.array(z.string()).describe('Required for native_command: at least one current repository-relative implementation/test path; include an asserted artifact.').optional(), verifierId: z.string().optional(), workUnitId: z.string().optional(),
+  method: z.object({ kind: z.literal('native_command'), command: z.string(),
+    cwd: z.string(), sourcePaths: z.array(z.string()).min(1).max(32).describe('Required: at least one current repository-relative implementation/test path; include an asserted artifact.'),
     protocol: ProtocolRecipeSchema.optional(),
     assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).describe('Match the criterion evidence. output_matches requires expectedOutput; artifact_matches requires artifactPath, artifactSha256, and artifact in sourcePaths. Coding never accepts exit_zero alone.').optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
 }).strict()
@@ -37,7 +37,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
   const pending = new WeakMap<object, { runId: string; callId: string; agent: object; sessionId: string; lease: TaskLease }>()
   const disposers: (() => void)[] = []
   disposers.push(ctx.tools.register({ name: 'task_completion', modelFacing: true,
-    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. For native_command supply command, cwd, nonempty sourcePaths and assertion. For enno_verifier use the current approved verifierId and its assertion; the methods are not interchangeable. Read status for criterion-specific requirements.',
+    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. Supply command, cwd, nonempty sourcePaths and assertion. Read status for criterion-specific requirements.',
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {

@@ -38,13 +38,12 @@ export { DshRuntime } from "./runtime.js";
 export type * from "./agent-state.js";
 export type * from "./runtime.js";
 export * from "./capability-catalog.js";
-export type { DshResumeDecision } from "./continuation.js";
+export type { DshResumeDecision } from "./runtime.js";
 export * from "./intake-profile-resolver.js";
 export * from "./intake-gate.js";
 export * from "./user-interaction.js";
 export * from "./message-sources.js";
 export * from "./context-injection.js";
-export * from "./directive-projection.js";
 export * from "./tools.js";
 export * from "./tool-policy.js";
 export * from "./tool-exposure.js";
@@ -167,12 +166,6 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
             resolvedConfig.modelHandoff,
           )
         : undefined;
-      if (host.configureEnnoMemory)
-        host.configureEnnoMemory(resolvedConfig.ennoMemory);
-      else if (resolvedConfig.ennoMemory.mode !== "off")
-        throw new Error(
-          "The explicit Kiokuko host does not support ennoMemory",
-        );
       host.intakeGate?.configureMemory(resolvedConfig.akinatorMemory);
       host.memoryEvolution?.configure(resolvedConfig.memoryEvolution);
       host.memoryIndexReasoning?.configure?.(
@@ -339,7 +332,6 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       toolExposure: resolvedConfig.toolExposure,
       modelRoutes: resolvedConfig.modelRoutes,
       diffReview: resolvedConfig.diffReview,
-      ennoMemory: resolvedConfig.ennoMemory,
       memoryRetrieval: resolvedConfig.memoryRetrieval,
       akinatorMemory: resolvedConfig.akinatorMemory,
       efficiency: resolvedConfig.efficiency,

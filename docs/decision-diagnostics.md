@@ -10,7 +10,6 @@
 - 公開 adapter と Core の OnDemandIntake による現在の依頼参照、解釈、経路、確認質問、受理した UI 回答、native followup の再捕捉。モデルが提出する `requestIntent` schema に診断 ID の指定欄はありません。
 - host が実際に run を束縛した admission。元の解釈が参照する task と新しい実行 run が異なる場合も、元の参照は書き換えません。
 - 明示的な task resume／native session の所有権引き継ぎ。対象 session、task revision／generation、source epoch をその時点の DB から取得します。
-- Enno operation receipt の既存 trigger が作った turn receipt／continuation outbox、未提出ターンと予測可能な失敗の既存取引。
 
 有効な型付き判定で必須項目が解決した実行候補は、原文と候補を独立した provider 呼び出しで照合し、同梱 Rust の有限領域制約で検査します。`semantic_match`／`detector` には実際の入力・出力 digest、実行ファイル hash、版、完全性、所要時間と結果を記録します。通常の request-intent 分類だけをこれらの成功として扱いません。説明・情報収集・未解決の必須項目では未実行、明示的な判定 OFF は `assessment_disabled`／`not_run`、有効な検査の障害は unavailable として区別します。制約・対象・revision と利用不能の扱いは [micro judge の契約](micro-judge.md) を参照してください。
 
@@ -34,7 +33,7 @@ reason は有限の code だけを許可します。session、task、receipt、o
 
 診断を許可・停止・完了判定の入力として使用しません。診断の追記は保存点で隔離し、記録エラーが既存処理を中止したり、実行権限や偽の完了を作ったりしないようにします。
 
-Enno の完了 receipt、未提出・失敗の receipt/outbox、task resume／引き継ぎへの追記は、同じ DB の既存の取引内で行います。外側の rollback は診断も取り消します。判断 cache 保存や native UI／followup との記録は別の観測点です。native 会話ログと SQLite、または別 DB 間の atomicity は主張しません。
+task resume／引き継ぎへの追記は、同じ DB の既存の取引内で行います。外側の rollback は診断も取り消します。判断 cache 保存や native UI／followup との記録は別の観測点です。native 会話ログと SQLite、または別 DB 間の atomicity は主張しません。
 
 保存点の失敗は、可能なら `dsh_diagnostic_gaps` に内容を含まない code を記録します。DB 全体が利用不能な場合はプロセス内の loss count と表示の `DIAGNOSTIC_UNAVAILABLE` で区別します。診断表示は次を分けます。
 

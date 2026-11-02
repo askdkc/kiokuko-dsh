@@ -35,6 +35,8 @@ import {
 } from '../akinator/capabilities.js';
 import { capabilityCatalogDigest } from '../akinator/capability-binding.js';
 import {
+  MAX_EXTERNAL_SKILLS,
+  MAX_TOTAL_SKILL_QUERIES,
   claimAgentTaskSkillDiscoveryAttempt,
   completeAgentTaskSkillDiscoveryAttempt,
   failAgentTaskSkillDiscoveryAttempt,
@@ -64,7 +66,6 @@ import { readSkillDiscoveryConfig } from '../skills/config.js';
 import { discoverSkills } from '../skills/discovery-service.js';
 import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.js';
 import { canonicalDirectory } from '../repository/detect-root.js';
-import { ennoStateForPreparedTask } from '../enno-oduno/service.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
 import { codingWorkRequested } from './coding-workflow/intent.js';
 import { initializeCodingWorkflowInTransaction } from './coding-workflow/store.js';
@@ -73,11 +74,6 @@ import type { EmbeddingRuntime } from '../embedding/types.js';
 import { MemoryRetrievalConfig, timeConstraintForRequest, validateMemoryTimeConstraint, type MemoryTimeConstraint } from '../memory/retrieval-contracts.js';
 import { reportMemoryRetrievalObservation } from './memory-retrieval-observer.js';
 import type { MemoryOwnerBinding, MemoryOwnerKind } from './memory-owner.js';
-import {
-  ENNO_MAX_EXTERNAL_SKILLS,
-  ENNO_MAX_TOTAL_SKILL_QUERIES,
-  type EnnoOdunoState,
-} from '../enno-oduno/types.js';
 
 export interface PrepareAgentTaskInput {
   memoryReuse?: MemoryReuseRuntime | undefined;
@@ -154,7 +150,6 @@ export interface PreparedAgentTask {
   warnings: CapabilityWarning[];
   nextAction: 'proceed' | 'answer_from_evidence_or_ask_user' | 'required_capability_unavailable';
   securityNotice: string;
-  ennoOduno: EnnoOdunoState;
 }
 
 export interface AgentTaskExecutionContext {
@@ -425,7 +420,7 @@ function buildPreparedTaskBase(
   scopedContext: ScopedContextResult | null,
   skillDiscovery: SkillDiscoverySummary,
   memoryUseOverride?: MemoryUseSignal,
-): Omit<PreparedAgentTask, 'ennoOduno'> {
+): PreparedAgentTask {
   const memoryUse = context.status === 'ready'
     ? memoryUseOverride ?? deriveMemoryUseSignal(scopedContext)
     : 'none';
@@ -643,8 +638,8 @@ async function resolveSkillDiscovery(
     }
   };
   const claimed = claimAgentTaskSkillDiscoveryAttempt(input.database, prepared.discoveryAttemptIdentity, {
-    queryBudget: ENNO_MAX_TOTAL_SKILL_QUERIES,
-    selectionBudget: ENNO_MAX_EXTERNAL_SKILLS,
+    queryBudget: MAX_TOTAL_SKILL_QUERIES,
+    selectionBudget: MAX_EXTERNAL_SKILLS,
   });
   if (claimed.kind === 'replay') return claimed.summary;
   if (claimed.queryBudget === 0 || claimed.selectionBudget === 0) {
@@ -804,19 +799,19 @@ async function selectFinalTaskContext(
   }
 }
 
-async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: string): Promise<PreparedAgentTask> {
+async function finalizeAgentTask(input: FinalizeAgentTaskInput): Promise<PreparedAgentTask> {
   let context = currentAgentTaskContext(input.database, input.runId, input.context);
   let run = authoritativeTaskRun(input.database, input.runId, context.status);
   if (context.status === 'needs_answer') {
-    return withPreparedEnno(input.database, buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
+    return buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
       runId: input.runId,
       status: run.status,
-    }, null, emptySkillDiscovery(input.discoveryMode), 'none'), dshSessionId);
+    }, null, emptySkillDiscovery(input.discoveryMode), 'none');
   }
 
   if (input.memoryOwner !== 'execution') {
-    return withPreparedEnno(input.database, buildPreparedTaskBase(input.database, input.project, input.executionContext, context,
-      input.capabilities, { runId: input.runId, status: run.status }, null, emptySkillDiscovery(input.discoveryMode), 'none'), dshSessionId);
+    return buildPreparedTaskBase(input.database, input.project, input.executionContext, context,
+      input.capabilities, { runId: input.runId, status: run.status }, null, emptySkillDiscovery(input.discoveryMode), 'none');
   }
 
   const prepared = prepareTaskContextQuery(input, context);
@@ -836,10 +831,10 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: st
       if (preview.candidate.taskProfileHash !== canonicalContentHash(context.session.profile)) {
         throw new KiokukoError('CONFLICT', 'Task profile changed while scoped context was being prepared');
       }
-      return withPreparedEnno(input.database, buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
+      return buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
         runId: input.runId,
         status: run.status,
-      }, null, emptySkillDiscovery(input.discoveryMode), preview.memoryUse), dshSessionId);
+      }, null, emptySkillDiscovery(input.discoveryMode), preview.memoryUse);
     }
   }
 
@@ -857,40 +852,16 @@ async function finalizeAgentTask(input: FinalizeAgentTaskInput, dshSessionId: st
   context = currentAgentTaskContext(input.database, input.runId, context);
   run = authoritativeTaskRun(input.database, input.runId, context.status);
   missingMemoryCapability = memoryCapabilityUnavailableForTask(context, input.capabilities);
-  // Enno's start event is part of the run projection used by scoped-context
-  // selection. Materialize it before selection so an exact task_prepare retry
-  // observes the same projection and replays the same delivery.
-  preparedEnnoState(input.database, {
-    project: input.project,
-    intake: {
-      status: context.status,
-      sessionId: context.session.id,
-      profile: context.session.profile,
-      question: context.question,
-      reasoning: deriveAkinatorReasoning(context.session.task, context.session.profile),
-    },
-    run: { runId: input.runId, status: run.status },
-    skillDiscovery,
-  }, dshSessionId);
   const selected = await selectFinalTaskContext({ input, prepared, context, missingMemoryCapability });
   context = selected.context;
   run = selected.run;
-  return withPreparedEnno(input.database, { ...buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
+  const finalized = buildPreparedTaskBase(input.database, input.project, input.executionContext, context, input.capabilities, {
     runId: input.runId,
     status: run.status,
-  }, selected.scopedContext, skillDiscovery, selected.memoryUse),
-    ...(selected.memoryWarnings ? { memoryWarnings: selected.memoryWarnings } : {}) }, dshSessionId);
-}
-
-function withPreparedEnno(
-  database: SqliteDatabase,
-  prepared: Omit<PreparedAgentTask, 'ennoOduno'>,
-  dshSessionId: string,
-): PreparedAgentTask {
-  return {
-    ...prepared,
-    ennoOduno: preparedEnnoState(database, prepared, dshSessionId),
-  };
+  }, selected.scopedContext, skillDiscovery, selected.memoryUse);
+  return (selected.memoryWarnings === undefined || selected.memoryWarnings.length === 0 || finalized.memoryWarnings !== undefined)
+    ? finalized
+    : { ...finalized, memoryWarnings: selected.memoryWarnings };
 }
 
 function failTaskRunAfterAbort(database: SqliteDatabase, runId: string, cause: unknown): never {
@@ -900,18 +871,6 @@ function failTaskRunAfterAbort(database: SqliteDatabase, runId: string, cause: u
     throw new AggregateError([cause, recoveryError], 'Task timeout recovery could not finalize the run state');
   }
   throw cause;
-}
-
-type PreparedEnnoInput = Pick<PreparedAgentTask, 'project' | 'run' | 'skillDiscovery'> & {
-  intake: Pick<PreparedAgentTask['intake'], 'status' | 'sessionId' | 'profile' | 'question' | 'reasoning'>;
-};
-
-function preparedEnnoState(
-  database: SqliteDatabase,
-  prepared: PreparedEnnoInput,
-  dshSessionId: string,
-): EnnoOdunoState {
-  return ennoStateForPreparedTask(database, prepared, dshSessionId);
 }
 
 export async function prepareAgentTask(database: SqliteDatabase, input: PrepareAgentTaskInput, host: { akinatorMemory?: ProbeConfig } = {}): Promise<PreparedAgentTask> {
@@ -1010,7 +969,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
-    }, input.dshSessionId);
+    });
     if (prepared.intake.profile.taskType !== 'chat') {
       try {
         const frame = updateExecutionFrame(readExecutionFrame(database, opened.runId), executionContext.canonicalCwd, input.task);
@@ -1080,7 +1039,7 @@ export async function answerAgentTask(database: SqliteDatabase, input: AnswerAge
       ...(input.embeddingRuntime === undefined ? {} : { embeddingRuntime: input.embeddingRuntime }),
       ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
       ...(input.signal === undefined ? {} : { signal: input.signal }),
-    }, input.dshSessionId);
+    });
     attachMemoryHints(database, prepared, input.capabilities, host.akinatorMemory);
     return prepared;
   } catch (error) {
