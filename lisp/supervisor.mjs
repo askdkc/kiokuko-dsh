@@ -38,12 +38,15 @@ const finish = () => {
   if (!terminal) return
   if (launch.namespaceInfo) {
     if (!namespace) return // Missing ownership evidence never confirms Stop.
-    try {
-      if (sameProcess(namespace.pid, namespace.identity)) {
-        finishTimer ??= setTimeout(() => { finishTimer = undefined; finish() }, 10)
-        return
-      }
-    } catch { unconfirmed('cannot confirm sandbox child termination'); return }
+    let stopped = false
+    try { stopped = !sameProcess(namespace.pid, namespace.identity) }
+    catch (error) { unconfirmed(`cannot confirm sandbox child termination (${error.code ?? 'UNKNOWN'})`) }
+    // Observation can race /proc teardown. Keep ownership until a later positive
+    // confirmation; one failed lookup must not disable the existing polling.
+    if (!stopped) {
+      finishTimer ??= setTimeout(() => { finishTimer = undefined; finish() }, 10)
+      return
+    }
   }
   clearTimeout(finishTimer)
   clearInterval(namespaceLifetime)

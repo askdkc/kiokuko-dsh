@@ -504,7 +504,7 @@ try {
     }
   }
   const exportsKeys = Object.keys(packageManifest.exports ?? {})
-  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
+  if (JSON.stringify(exportsKeys) !== JSON.stringify(['.', './client', './dsh', './core', './harness', './modules/enno', './modules/lisp', './package.json', './locale/*.json', './models'])) throw new Error('public exports must contain the compatibility, core, explicit module and display metadata entries')
   const smoke = await createAndSmokeTestTarball()
   process.stdout.write(`${JSON.stringify({
     name: metadata.name,

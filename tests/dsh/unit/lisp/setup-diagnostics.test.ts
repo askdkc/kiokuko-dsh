@@ -31,7 +31,8 @@ for (const [primary, boundary] of [['CANCELLED', false], ['COMPILE_TIMEOUT', fal
     const config = LispConfig.parse({sbclPath:process.execPath,startupTimeoutMs:30000,
       maxOutputBytes:primary === 'OUTPUT_LIMIT'?1024:100000})
     let pid: number | undefined, identity: string | undefined
-    const outcome = runLispSetup(layout, config, 'compile.lisp', abort.signal).catch(error => error)
+    const phase = primary === 'CANCELLED' ? 'runtime-identity.lisp' : boundary ? 'check-compiled.lisp' : 'compile.lisp'
+    const outcome = runLispSetup(layout, config, phase, abort.signal).catch(error => error)
     try {
       const end = Date.now()+5000
       while (!pid) {
@@ -56,6 +57,7 @@ for (const [primary, boundary] of [['CANCELLED', false], ['COMPILE_TIMEOUT', fal
         assert.equal(problem.cause.code,primary)
         assert.ok(problem.message.includes(primary))
       }
+      assert.ok(problem.message.includes('Setup phase: ' + phase), 'retain the actual setup phase separately from its failure code')
       assert.match(problem.message,/setup diagnostic tail/)
       for (const value of [secret, ansiSecret, controlSecret, keyedSecret, boundarySecret])
         assert.equal(problem.message.includes(value),false,'canonicalization must not reconstruct secret material')

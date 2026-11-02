@@ -43,6 +43,7 @@ function setupDiagnostics(stderr: Buffer, truncated: boolean): string {
 /** Bounded, supervised, sandboxed setup. No user code or inherited environment. */
 export async function runLispSetup(layout: SandboxLayout, config: LispConfiguration, script: string, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
+  const phase = ['runtime-identity.lisp', 'compile.lisp', 'check-compiled.lisp'].includes(script) ? script : 'setup'
   const launch = await sandboxLaunch(layout, config.sbclPath,
     ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(layout.library, script)], 'setup', true)
   signal.throwIfAborted()
@@ -56,14 +57,14 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
       failure = error; child.kill('SIGTERM')
       stopTimer = setTimeout(() => {
         cleanup()
-        const problem = new LispError('STOP_UNCONFIRMED', `Lisp の準備プロセスの停止を確認できません。\nSetup failure: ${error instanceof LispError ? error.code : error.name}\n${setupDiagnostics(stderr, stderrTruncated)}`,
+        const problem = new LispError('STOP_UNCONFIRMED', `Lisp の準備プロセスの停止を確認できません。\nSetup failure: ${error instanceof LispError ? error.code : error.name}\nSetup phase: ${phase}\n${setupDiagnostics(stderr, stderrTruncated)}`,
           'ホストを停止し、残ったプロセスを確認してから再開してください。')
         problem.cause = error
         reject(problem)
       }, 5000)
     }
     const abort = () => stop(new LispError('CANCELLED', 'Lisp の準備を取り消しました。', recovery))
-    const timer = setTimeout(() => stop(new LispError('COMPILE_TIMEOUT', 'Lisp の準備が時間内に完了しませんでした。', 'startupTimeoutMs を確認し、/kioku-lisp recover で再開してください。')), config.startupTimeoutMs)
+    const timer = setTimeout(() => stop(new LispError('COMPILE_TIMEOUT', `Lisp の準備が時間内に完了しませんでした。\nSetup phase: ${phase}`, 'startupTimeoutMs を確認し、/kioku-lisp recover で再開してください。')), config.startupTimeoutMs)
     const cleanup = () => { clearTimeout(timer); clearTimeout(stopTimer); signal.removeEventListener('abort', abort) }
     for (const output of [child.stdout!, child.stderr!]) output.on('data', (chunk: Buffer) => {
       bytes += chunk.length
@@ -75,7 +76,7 @@ export async function runLispSetup(layout: SandboxLayout, config: LispConfigurat
     child.once('close', code => {
       cleanup()
       if (failure) reject(failure)
-      else if (code !== 0) reject(new LispError('COMPILE_FAILED', `Lisp の準備に失敗しました。\n${setupDiagnostics(stderr, stderrTruncated)}`, recovery))
+      else if (code !== 0) reject(new LispError('COMPILE_FAILED', `Lisp の準備に失敗しました。\nSetup phase: ${phase}\n${setupDiagnostics(stderr, stderrTruncated)}`, recovery))
       else resolve(stdout.toString())
     })
     signal.addEventListener('abort', abort, { once: true })

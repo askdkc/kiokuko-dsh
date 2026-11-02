@@ -19,35 +19,37 @@ async function until(check: () => boolean, message: string, ms = 2500) {
   const deadline = Date.now() + ms
   while (!check()) { assert.ok(Date.now() < deadline, message); await delay(10) }
 }
-async function fixture(reportDelay: number, options: { parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
+async function fixture(reportDelay: number, options: { terminationLookupError?: 'once' | 'persistent'; parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'namespace-supervisor-'))
-  const script = join(base, 'monitor.py')
-  await writeFile(script, `import os,sys,time,json,subprocess,select
-def cancelled(seconds):
- return bool(select.select([6],[],[],seconds)[0])
-print('monitor:'+str(os.getpid()),flush=True)
-print('entered',flush=True)
-time.sleep(${options.coldStartDelay ?? 0})
-print('spawning',flush=True)
-${options.lateSpawn ? `time.sleep(${options.startDelay ?? 0})` : `if cancelled(${options.startDelay ?? 0}): sys.exit(0)`}
-child=subprocess.Popen([sys.executable,'-I','-c',${JSON.stringify(`import time,select; time.sleep(${options.childStartDelay ?? 0}); select.select([6],[],[],30)`)}],start_new_session=False,pass_fds=(6,)${options.detachedStdio ? ',stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL' : ''})
-with open('spawned.tmp','w') as record: json.dump({'monitor':os.getpid(),'child':child.pid},record)
-os.replace('spawned.tmp','spawned.json')
-${options.failBeforeAnnounce ? 'sys.exit(23)' : ''}
-if cancelled(${options.announceDelay ?? 0}):
- child.wait(); sys.exit(0)
-print('monitor:'+str(os.getpid()),flush=True)
-print('child:'+str(child.pid),flush=True)
-${options.monitorExit ? 'sys.exit(0)' : ''}
-if cancelled(${reportDelay}):
- child.wait(); sys.exit(0)
-os.write(5,${options.payload !== undefined ? `${JSON.stringify(options.payload)}.encode()` : `json.dumps({'child-pid':${options.reportPid ?? 'child.pid'}}).encode()`})
-os.close(5)
-print('reported',flush=True)
-${options.exitAfterReport ? 'sys.exit(0)' : ''}
-sys.exit(child.wait())
+  // Use the running test runtime: system Python cold-start is unrelated to
+  // namespace supervision and can consume the entire phase-entry budget on CI.
+  const script = join(base, 'monitor.mjs')
+  await writeFile(script, `import {spawn} from 'node:child_process';
+import {writeFileSync,renameSync,writeSync,closeSync} from 'node:fs';
+import {once} from 'node:events';
+import net from 'node:net';
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const lifetime=new net.Socket({fd:6,readable:true,writable:false});
+const ended=new Promise(resolve=>lifetime.once('end',()=>resolve(true)));lifetime.resume();
+const cancelled=seconds=>Promise.race([ended,sleep(seconds*1000).then(()=>false)]);
+writeSync(1,'monitor:'+process.pid+'\\nentered\\n');
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${(options.coldStartDelay ?? 0) * 1000});
+writeSync(1,'spawning\\n');
+${options.lateSpawn ? `await sleep(${(options.startDelay ?? 0) * 1000});` : `if(await cancelled(${options.startDelay ?? 0}))process.exit(0);`}
+const child=spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(`import net from 'node:net';Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,${(options.childStartDelay ?? 0) * 1000});const lifetime=new net.Socket({fd:6,readable:true,writable:false});lifetime.once('end',()=>process.exit(0));lifetime.resume();setTimeout(()=>process.exit(0),${options.terminationLookupError === 'once' ? 400 : 30000});`)}],{stdio:['ignore',${options.detachedStdio ? "'ignore','ignore'" : "'inherit','inherit'"},'ignore','ignore','ignore',6]});
+const childExit=once(child,'exit');
+writeFileSync('spawned.tmp',JSON.stringify({monitor:process.pid,child:child.pid}));renameSync('spawned.tmp','spawned.json');
+${options.failBeforeAnnounce ? 'process.exit(23);' : ''}
+if(await cancelled(${options.announceDelay ?? 0})){await childExit;process.exit(0);}
+writeSync(1,'monitor:'+process.pid+'\\nchild:'+child.pid+'\\n');
+${options.monitorExit ? 'process.exit(0);' : ''}
+if(await cancelled(${reportDelay})){await childExit;process.exit(0);}
+writeSync(5,${options.payload !== undefined ? JSON.stringify(options.payload) : `JSON.stringify({'child-pid':${options.reportPid ?? 'child.pid'}})`});closeSync(5);
+writeSync(1,'reported\\n');
+${options.exitAfterReport ? 'process.exit(0);' : ''}
+const [code,signal]=await childExit;process.exit(signal?128:code??70);
 `)
-  const launch = { command: '/usr/bin/python3', args: ['-I', script], env: {}, cwd: base, protocol: false, namespaceInfo: true, ...(options.repository ? { repositoryRoot: base } : {}) }
+  const launch = { command: process.execPath, args: [script], env: {}, cwd: base, protocol: false, namespaceInfo: true, ...(options.repository ? { repositoryRoot: base } : {}) }
   // Fixture EOF remains independent of production Stop. The owned session
   // below also bounds teardown before an inheritor can cooperate with EOF.
   // The fixture anchor is unref'ed and inherits no streams: it must neither
@@ -67,6 +69,21 @@ sys.exit(child.wait())
     const identity = new URL('./process-identity.mjs', pathToFileURL(supervisor)).href
     await writeFile(fake, `export{sameProcess}from ${JSON.stringify(identity)};export function processIdentity(){throw new Error('fixture identity lookup failed')}`)
     await writeFile(preload, `import{registerHooks}from'node:module';registerHooks({resolve(spec,context,next){if(spec==='./process-identity.mjs'&&context.parentURL===${JSON.stringify(pathToFileURL(supervisor).href)})return{url:${JSON.stringify(pathToFileURL(fake).href)},shortCircuit:true};return next(spec,context)}})`)
+    args.unshift('--import', preload)
+  }
+  if (options.terminationLookupError) {
+    const fake = join(base, 'terminal-identity.mjs'), preload = join(base, 'terminal-lookup.mjs')
+    const identity = new URL('./process-identity.mjs', pathToFileURL(supervisor)).href
+    await writeFile(fake, `export{processIdentity}from ${JSON.stringify(identity)};import{sameProcess as realSame}from ${JSON.stringify(identity)};
+      let observations=0;export function sameProcess(pid,birth){
+        if(globalThis.fixtureMonitorExited){observations++;
+          if(observations===${options.terminationLookupError === 'once' ? 2 : 1}||${options.terminationLookupError === 'persistent'}&&observations>1){
+            console.error('fixture terminal lookup EIO');throw Object.assign(Error('fixture terminal lookup'),{code:'EIO'})}}
+        return realSame(pid,birth)
+      }`)
+    await writeFile(preload, `import{registerHooks,syncBuiltinESMExports}from'node:module';import cp from'node:child_process';
+      const spawn=cp.spawn;cp.spawn=function(...args){const child=spawn.apply(this,args);child.once('exit',()=>{globalThis.fixtureMonitorExited=true});return child};syncBuiltinESMExports();
+      registerHooks({resolve(spec,context,next){if(spec==='./process-identity.mjs'&&context.parentURL===${JSON.stringify(pathToFileURL(supervisor).href)})return{url:${JSON.stringify(pathToFileURL(fake).href)},shortCircuit:true};return next(spec,context)}})`)
     args.unshift('--import', preload)
   }
   if (options.parentageError) {
@@ -253,6 +270,26 @@ for (const mode of ['missing', 'malformed', 'identity lookup error', 'closed dia
     })
   })
 }
+
+for (const mode of ['once', 'persistent'] as const) test(`namespace termination observation ${mode}: only a confirmed stop releases ownership`, { timeout: 10000 }, async () => {
+  const f = await fixture(0.05, { repository: true, terminationLookupError: mode })
+  await f.run(async () => {
+    const pid = await f.started(), identity = processIdentity(pid)
+    assert.ok(identity)
+    await until(() => f.control.includes('\n'), 'owned runtime was not recorded before Stop')
+    if (mode === 'persistent') f.host.stdin!.end()
+    await until(() => f.stderr.includes('fixture terminal lookup EIO'), 'terminal observation was not exercised')
+    if (mode === 'once') {
+      await until(() => f.didClose, 'a transient observation failure permanently fenced a completed setup')
+      assert.deepEqual(await f.exited, [0, null], 'the real monitor completed successfully before the observation error')
+    }
+    else {
+      await delay(200)
+      assert.equal(f.didExit, false, 'an unavailable observation cannot certify termination')
+    }
+    await until(() => !sameProcess(pid, identity), 'the owned child was not terminated')
+  })
+})
 
 for (const code of ['gone', 'goneESRCH', 'ENOENT', 'EACCES'] as const) {
   test(`namespace parentage lookup ${code}: only confirmed child death settles`, { timeout: 10000 }, async () => {
