@@ -16,9 +16,20 @@ export interface ReplayEvidenceIdentity { directory: string; runId: string; work
 
 /** Read bounded pages and content-addressed public payloads. No model call, durable draft or write. */
 export async function extractDshReplayMemory(input: ReplayEvidenceIdentity, limits: ReplayEvidenceLimits = {}): Promise<ReplayMemoryProposal> {
+  const deadline = performance.now() + Math.min(30000, Math.max(1, limits.maxMilliseconds ?? 5000))
+  for (let retry = 0; ; retry++) {
+    try { return await readReplaySnapshot(input, limits, deadline) }
+    catch (error) {
+      // A live capture may append while a page is read. Discard that partial
+      // observation and retry once, within the original time budget. All page,
+      // path, blob and sealed-manifest checks run again; no effects are retried.
+      if (retry || !(error instanceof AgenticReplayError) || error.code !== 'file_changed' || performance.now() >= deadline) throw error
+    }
+  }
+}
+async function readReplaySnapshot(input: ReplayEvidenceIdentity, limits: ReplayEvidenceLimits, deadline: number): Promise<ReplayMemoryProposal> {
   const maxEvents = Math.min(10000, Math.max(1, limits.maxEvents ?? 10000))
   const maxBytes = Math.min(32 * 1024 * 1024, Math.max(1024, limits.maxBytes ?? 8 * 1024 * 1024))
-  const deadline = performance.now() + Math.min(30000, Math.max(1, limits.maxMilliseconds ?? 5000))
   const manifest = await readAgenticReplayManifest(input.directory, input.runId)
   const eventFile = await resolveAgenticReplayEventsFile(input.directory)
   const before = await checkPrivatePath(eventFile, false)

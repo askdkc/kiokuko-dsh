@@ -1,6 +1,8 @@
 import { KiokukoError } from "../../../src/errors.js";
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -137,7 +139,7 @@ const result = (q: any, label: string, custom?: string) => ({
     },
   ],
 });
-async function record(f: Awaited<ReturnType<typeof fixture>>, count = 1) {
+async function record(f: Awaited<ReturnType<typeof fixture>>, count = 1, seal = true) {
   for (let i = 0; i < count; i++) {
     const e = {
       token: Symbol(),
@@ -159,7 +161,8 @@ async function record(f: Awaited<ReturnType<typeof fixture>>, count = 1) {
       ],
     });
   }
-  await f.recorder.closeSessionRecording(f.session.id, "manual");
+  if (seal) await f.recorder.closeSessionRecording(f.session.id, "manual");
+  else await f.recorder.flushDiagnostics(f.session.id);
 }
 const count = (db: any, table: string) =>
   db
@@ -547,5 +550,57 @@ test("malformed profile services cannot enable reflection and organization decli
     } finally {
       await f.close();
     }
+  }
+});
+
+for (const mode of ["once", "persistent", "sealed"] as const) test(`memory extraction during capture append: ${mode}`, async () => {
+  const f = await fixture();
+  const originalOpen = fs.open;
+  let appends = 0;
+  try {
+    await record(f, 1, mode === "sealed");
+    const trace = (await f.reader.list(f.binding))[0]!;
+    const directory = f.recorder.status(f.session.id).trace!.run_directory!;
+    // Append a real capture note after the page's first physical read. No clock
+    // race, extra model response or weakened integrity check is involved.
+    fs.open = async function (...args: Parameters<typeof fs.open>) {
+      const handle = await originalOpen(...args);
+      if (String(args[0]) === join(directory, "events.jsonl")) {
+        const read = handle.read.bind(handle);
+        handle.read = (async (...params: any[]) => {
+          const result = await (read as any)(...params);
+          if (!appends || mode === "persistent") {
+            appends++;
+            if (mode === "sealed") {
+              const lines = (await readFile(String(args[0]), "utf8")).trim().split("\n");
+              const last = JSON.parse(lines.at(-1)!);
+              await fs.appendFile(String(args[0]), JSON.stringify({ ...last, seq: last.seq + 1, type: "note", actor: "harness" }) + "\n");
+            } else {
+              f.recorder.harnessAction(f.binding, { seq: 100 + appends, data: { action: "fixture", phase: "late-flush", turn: 1, step: 1 } });
+              await f.recorder.flushDiagnostics(f.session.id);
+            }
+          }
+          return result;
+        }) as typeof handle.read;
+      }
+      return handle;
+    } as typeof fs.open;
+    syncBuiltinESMExports();
+    const read = () => f.reader.memoryEvidence(f.binding, trace.agenticreplay_run_id,
+      { workspace: f.workspace, taskId: "memory-task", request: { text: "Check parser", evidenceRefs: [] } });
+    if (mode === "once") {
+      const proposal = await read();
+      assert.equal(appends, 1);
+      assert.equal(proposal.attempts.length, 1);
+      assert.equal(proposal.attempts[0]!.command, "node parser-0.mjs");
+      assert.equal(proposal.attempts[0]!.outcome, "succeeded");
+      assert.equal(proposal.source.traces[0]!.complete, false, "a live capture must remain explicitly incomplete");
+    } else {
+      await assert.rejects(read(), { code: mode === "sealed" ? "trace_integrity_mismatch" : "file_changed" });
+      assert.equal(appends, mode === "sealed" ? 1 : 2, "a busy writer cannot cause unbounded retries");
+    }
+  } finally {
+    fs.open = originalOpen; syncBuiltinESMExports();
+    await f.close();
   }
 });
