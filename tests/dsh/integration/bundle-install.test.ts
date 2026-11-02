@@ -1,7 +1,7 @@
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import assert from 'node:assert/strict'
 import { execFile, spawnSync } from 'node:child_process'
-import { access, copyFile, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { access, copyFile, cp, lstat, mkdir, mkdtemp, readFile, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -41,7 +41,7 @@ async function hasDshCommand(): Promise<boolean> {
 
 test('dsh bundle manifest has one named Kiokuko Cordis row and no default export', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'kiokuko-bundle-source-'))
-  const files = (await run('git', ['ls-files', '-z'])).stdout.split('\0').filter(Boolean)
+  const files = (await run('git', ['ls-files', '-z'])).stdout.split('\0').filter(name => name && !name.startsWith('micro-judge/'))
   const packageCommand = (command: string, args: readonly string[], env?: NodeJS.ProcessEnv) =>
     execFileAsync(command, [...args], { cwd: fixtureRoot, env: { ...process.env, ...env }, maxBuffer: 8 * 1024 * 1024, timeout: 60_000 })
   try {
@@ -53,6 +53,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
       if (info.isSymbolicLink()) await symlink(await readlink(source), destination)
       else if (info.isFile()) await copyFile(source, destination)
     }
+    // CI-generated native binaries and their merged manifest form one artifact set, including untracked outputs.
+    await cp(join(repositoryRoot, 'micro-judge'), join(fixtureRoot, 'micro-judge'), { recursive: true })
     await symlink(join(repositoryRoot, 'node_modules'), join(fixtureRoot, 'node_modules'), 'dir')
     const packagePath = join(fixtureRoot, 'package.json'), patchPath = join(fixtureRoot, 'dsh/cordis.patch.yml')
     const packageManifest = JSON.parse(await readFile(packagePath, 'utf8')) as {

@@ -72,6 +72,10 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const mock = nativeMock(llm), provider = new mock.MockAdapter(script, ['mock', ...openaiModels])
   provider.resolveModel = async (provider: string, model: string) => ({ provider, id: model, name: model, context: { contextWindow: 100000 } })
   let auxiliaryCalls = 0, planReviewCalls = 0, toolExecutions = 0, activeRound = 0, activeReadonly = false
+  let roundStage = 'not-started', lastNative = 'none'
+  ctx.on('session/event', (_session: any, event: any) => {
+    if (['tool/call', 'tool/result', 'turn/end'].includes(event.type)) lastNative = `${event.type}:${event.seq}:${event.data.name ?? ''}`.slice(0, 256)
+  }, { global: true })
   const memoryQuestions: {round:number;phase:'organize'|'review';proposal?:any}[] = []
   let auxiliaryHook: ((request: any) => Promise<void>) | undefined
   let activeFault: RoundFault = {}, activeSession = ''
@@ -224,10 +228,11 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   }
 
   const executeRound = async (number: number, sessionId: string, readonly = false, expectLesson = number === 4, fault: RoundFault = {}): Promise<RoundReport> => {
-    activeRound = number; activeReadonly = readonly
+    activeRound = number; activeReadonly = readonly; roundStage = 'create-agent'
     activeFault = fault; activeSession = sessionId
     let agent = liveAgents.get(sessionId)
     if (!agent) { agent = (await ctx.agents.create({sessionId:session.SessionId(sessionId),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: root }})).agent; liveAgents.set(sessionId, agent) }
+    roundStage = 'inspect-prior-state'
     const beforeMain = provider.requests.length, beforeAux = auxiliaryCalls, beforeReview = planReviewCalls, beforeTools = toolExecutions
     const prior = await database(db => db.prepare('SELECT run_id FROM ledger_runs').all<{run_id:string}>())
     const beforeApproved = await database(countApproved)
@@ -248,15 +253,21 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     }
     script.push(route === 'normal' ? withMemoryReview(mock.textResponse(response), readonly, true) : mock.textResponse(response))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
+    roundStage = 'native-final-response'
     await waitFor(() => {
       if (nativeErrors.length) throw new Error(`${nativeErrors.join('\n')}\nRecent tool results: ${JSON.stringify(agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').slice(-8).map((event: any) => event.data))}`)
       return agent.status === 'idle' && agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && event.data.message.content.some((block: any) => block.text === response))
     }, 'native final response')
+    roundStage = 'native-log-flush'
     await deadline(ctx.sessions.flush(agent.session), 'native log flush')
+    roundStage = 'mirror-checkpoint'
     await adapter.host.checkpointSessionMirror!(agent.session)
+    roundStage = 'resolve-session-close'
     const close = await adapter.host.resolveSessionClose!(agent.session.id, agent.session)
     const sourceEndSeq = agent.session.snapshotEvents().findLast((event: any) => event.type === 'turn/end').seq
+    roundStage = 'close-turn'
     if (close) await adapter.host.lifecycle!.closeTurn({ ...close, sourceEndSeq })
+    roundStage = 'approved-memory'
     if (!readonly && !fault.saveFailure) await waitFor(async () => await database(countApproved) === beforeApproved + 1, 'explicitly approved replay memory')
     if (fault.saveFailure) {
       await waitFor(async () => {
@@ -268,6 +279,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
         db.exec('DROP TRIGGER repeated_fail_before_commit')
       })
     }
+    roundStage = 'verify-stored-state'
     const state = await database(db => {
       const runs = db.prepare('SELECT run_id,status,dsh_session_id FROM ledger_runs').all<{run_id:string;status:string;dsh_session_id:string}>().filter(run => !prior.some(old => old.run_id === run.run_id))
       assert.equal(runs.length, 1, 'one logical request must create exactly one run')
@@ -333,7 +345,13 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     recordRepeatedStage(report)
     return report
   }
-  const round = (...args: Parameters<typeof executeRound>) => deadline(executeRound(...args), `complete lifecycle ${args[0]}`)
+  const round = async (...args: Parameters<typeof executeRound>) => {
+    try { return await deadline(executeRound(...args), `complete lifecycle ${args[0]}`) }
+    catch (cause) {
+      // Failure-only context: keep the original deadline, assertions and cause.
+      throw new Error(`${cause instanceof Error ? cause.message : String(cause)}; stage=${roundStage}; lastNative=${lastNative}; modelRequests=${provider.requests.length}`, { cause })
+    }
+  }
   return { round, database, adapter, provider, setAuxiliaryHook: (hook: typeof auxiliaryHook) => { auxiliaryHook = hook },
     close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); disposeApplicationVerifier(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
 }

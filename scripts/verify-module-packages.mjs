@@ -22,8 +22,8 @@ await access(join(nativeRoot, '@deepseek-ai/dsh-agent-loop/lib/index.js'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-module-pack-'))
 const env = { ...selected.environment, npm_config_cache: join(work, 'cache') }
 delete env.NODE_TEST_CONTEXT
-async function verifyDefault(consumer, combination) {
-  const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination, 'default'], consumer)
+async function verifyDefault(consumer, combination, hostRoot) {
+  const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, hostRoot, combination, 'default'], consumer)
   const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } })
     .find(value => value?.combination === combination && value?.intakeProbe === 'default')
   assert.equal(result?.status, 'passed')
@@ -57,11 +57,12 @@ async function installedPackage(name, from) {
   }
   throw new Error(`Installed dependency not found: ${name}`)
 }
-/** Copy only declared dependencies and their dependency closure; never link the development node_modules. */
+/** Copy declared artifact dependencies plus explicit test-host services; never link development node_modules. */
 async function isolatedDependencies(packageRoot, dependencies) {
   const copied = new Map()
   async function copyDependency(name, from, parent) {
-    const source = await installedPackage(name, from)
+    const source = await installedPackage(name, name.startsWith('@deepseek-ai/') ? dirname(nativeRoot) : from)
+    if (name.startsWith('@deepseek-ai/')) assert.equal(source.directory, await realpath(join(nativeRoot, name)), 'isolated host packages must come from the selected physical graph')
     const previous = copied.get(name)
     if (previous === source.manifest.version) return
     const target = join(previous ? parent : packageRoot, 'node_modules', name)
@@ -74,14 +75,10 @@ async function isolatedDependencies(packageRoot, dependencies) {
   for (const name of Object.keys(dependencies)) await copyDependency(name, root, packageRoot)
   return Object.fromEntries(copied)
 }
-/** The selected DSH host supplies this optional peer when the Lisp adapter is loaded. */
-async function hostToolPeer(consumer, manifest) {
-  const name='@deepseek-ai/dsh-tools'
-  if (!manifest.peerDependencies?.[name]) return {}
-  const installed=await installedPackage(name,root)
-  assert.equal(installed.directory,await realpath(join(nativeRoot,name)), 'module consumer must use the selected official host peer')
-  return isolatedDependencies(consumer,{[name]:manifest.peerDependencies[name]})
-}
+// Install the selected test host beside the artifact: private Session and scope
+// identities cannot cross between the copied consumer and the source host.
+const hostServices = Object.fromEntries(['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic', 'tool-executor-native'].map(name => [`@deepseek-ai/${name === 'cordis' ? name : `dsh-${name}`}`, '*']))
+
 try {
   const staged = join(work, 'staged'), report = await stageModules(staged)
   const packed = {}
@@ -119,14 +116,15 @@ try {
       assert.ok(manifest.dsh.permissions.externalServices.some(service => service.includes('TypeSafe')))
     }
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
-    const resolvedDependencies = { ...await isolatedDependencies(consumer, dependencies), ...await hostToolPeer(consumer,manifest) }
+    const resolvedDependencies = await isolatedDependencies(consumer, { ...dependencies, ...hostServices })
+    const consumerHost = join(consumer, 'node_modules')
     // Type consumers need declaration-only imports too. Node types are validation tooling.
     await isolatedDependencies(consumer, { '@types/node': '*' })
     await writeFile(join(consumer, 'consumer.mts'), "import { createConfiguredPlugin, DshModules } from 'kiokuko-dsh/core'\nconst plugin = createConfiguredPlugin([])\nvoid plugin.Config.parse({})\nvoid new DshModules([], [])\n")
     await command(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--target', 'ES2023', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--types', 'node', 'consumer.mts'], consumer)
     if (configuration.includes('lisp')) await command(process.execPath, [join(root, 'scripts/run-tests.mjs'), 'tests/dsh/integration/lisp/plan-surface.test.ts'], root, { KIOKUKO_DSH_PACKAGE_ROOT: nativeRoot, KIOKUKO_REQUIRE_DSH_NATIVE: '1', KIOKUKO_LISP_PLAN_ENTRY: join(consumer, 'dist/dsh/lisp/surface.js') })
-    const defaultIntake = await verifyDefault(consumer, combination)
-    const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)
+    const defaultIntake = await verifyDefault(consumer, combination, consumerHost)
+    const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, consumerHost, combination], consumer)
     const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(value => value?.combination === combination)
     assert.equal(result?.status, 'passed')
     results.push({ ...result, microJudge, defaultIntake, packedBytes: composed.size, unpackedBytes: composed.unpackedSize, fileCount: composed.files.length, resolvedDependencies })
@@ -148,10 +146,11 @@ try {
   for (const [combination, consumer] of baselines) {
     const manifest = JSON.parse(await readFile(join(consumer, 'package.json'), 'utf8'))
     const dependencies = { ...manifest.dependencies, ...Object.fromEntries(Object.entries(manifest.peerDependencies ?? {}).filter(([name]) => !manifest.peerDependenciesMeta?.[name]?.optional)) }
-    const resolvedDependencies = { ...await isolatedDependencies(consumer, dependencies), ...await hostToolPeer(consumer,manifest) }
+    const resolvedDependencies = await isolatedDependencies(consumer, { ...dependencies, ...hostServices })
+    const consumerHost = join(consumer, 'node_modules')
     const microJudge=combination==='full'?await verifyMicroJudge(consumer):undefined
-    const defaultIntake = combination === 'full' ? await verifyDefault(consumer, combination) : undefined
-    const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, nativeRoot, combination], consumer)
+    const defaultIntake = combination === 'full' ? await verifyDefault(consumer, combination, consumerHost) : undefined
+    const smoke = await command(process.execPath, [join(root, 'scripts/module-package-smoke.mjs'), consumer, consumerHost, combination], consumer)
     const result = smoke.stdout.trim().split('\n').map(line => { try { return JSON.parse(line) } catch { return null } }).find(value => value?.combination === combination)
     assert.equal(result?.status, 'passed')
     results.push({ ...result, ...(microJudge?{microJudge}:{}), ...(defaultIntake ? { defaultIntake } : {}), resolvedDependencies })

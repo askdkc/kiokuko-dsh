@@ -1,7 +1,7 @@
 import { answerTaskStartup } from '../tests/dsh/helpers/task-startup-fixture.ts'
 import { mountNativeTools, executeNativeTool } from '../tests/dsh/helpers/native-tools.ts'
 import assert from 'node:assert/strict'
-import { registerHooks } from 'node:module'
+import { createRequire, registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { join } from 'node:path'
 import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises'
@@ -27,6 +27,9 @@ const [cordis, llm, session, projection, systemPrompt, tools, agents, loop, skil
   ['cordis', 'llm', 'session', 'session-projection', 'system-prompt', 'tools', 'agent', 'agent-loop', 'skill', 'commands', 'token-meter', 'compaction-basic'].map(async name => name === 'agent-loop' && combination === 'full'
     ? { default: await import(pathToFileURL(join(packageRoot, 'dist/dsh/harness/index.js')).href) }
     : import(pathToFileURL(join(nativeRoot, '@deepseek-ai', name === 'cordis' ? name : `dsh-${name}`, 'lib/index.js')))))
+const consumerRequire = createRequire(join(packageRoot, 'package.json'))
+const peerSession = await import(pathToFileURL(consumerRequire.resolve('@deepseek-ai/dsh-session')).href)
+assert.equal(session.Session, peerSession.Session, 'host and plugin must share one physical Session module')
 class FixtureModel extends llm.LlmAdapter {
   requests = []
   script = []

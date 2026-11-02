@@ -372,3 +372,26 @@ for(const outcome of ['reject','provider-error'] as const)test(`native step tool
   assert.equal(handle.agent.session.snapshotEvents().filter((event:any)=>event.type==='turn/end').at(-1).data.reason.kind,outcome==='reject'?'blocked':'error')
  }finally{await handle?.dispose();await f.close()}
 })
+
+for (const followup of [false,true]) test(`consumed steering schedules no empty turn and preserves a later followup (${followup})`,async()=>{
+ const f=await fixture();let handle:any;const requests:any[]=[]
+ try {
+  f.ctx.llm.registerAdapter(['steering-wake'],new class extends LlmAdapter {
+   async *stream(options:any) {
+    requests.push(options)
+    if(requests.length===1)handle.agent.steer(createUserMessage({content:[{type:'text',text:'Verify the current change'}],source:{kind:'user'}}))
+    if(followup&&requests.length===2)handle.agent.followup(createUserMessage({content:[{type:'text',text:'A separate queued request'}],source:{kind:'user'}}))
+    yield {type:'block-start' as const,index:0,blockType:'text' as const}
+    yield {type:'block-end' as const,index:0,block:{type:'text' as const,text:'Observed input'}}
+    yield {type:'finish' as const,reason:{kind:'stop' as const}}
+   }
+  }())
+  handle=await f.ctx.agents.create({sessionId:SessionId('steering-wake-'+followup),agentOptions:{provider:'steering-wake',model:'fixture'}})
+  handle.agent.followup(createUserMessage({content:[{type:'text',text:'The original request'}],source:{kind:'user'}}))
+  await handle.agent.whenIdle()
+  assert.equal(requests.length,followup?3:2,'a consumed steer cannot wake an empty turn')
+  assert.equal(handle.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/start').length,followup?2:1)
+  assert.equal(handle.agent.inbox.nextTurn.length,0);assert.equal(handle.agent.inbox.nextStep.length,0)
+  if(followup)assert.ok(JSON.stringify(requests[2].messages).includes('A separate queued request'))
+ } finally {await handle?.dispose();await f.close()}
+})

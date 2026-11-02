@@ -165,6 +165,8 @@ export class KiokukoHarnessAgent implements Agent {
             // Intake rejection retains inputs; commit the claim only after admission.
             if(first&&ordinary.length)this.inbox.splice('next-turn',0,ordinary.length,[])
             if(steering.length)this.inbox.splice('next-step',0,steering.length,[])
+            // A consumed steer is no longer pending work; later queued input keeps its wake.
+            if(!this.inbox.nextTurn.length&&!this.inbox.nextStep.length)this.wake=false
             if(decision.kind==='reject'){reason={kind:'blocked'};blocked=true;this.audit('intake','handoff');break}
             if(first&&!decision.messages.length)break
           } finally {this.claimedInputs=[]}
