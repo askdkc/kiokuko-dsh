@@ -76,7 +76,12 @@ export class OpenCodeAdapter extends LlmAdapter {
   }
   override async listModels(provider: string) {
     if (!(await this.options.store.read(provider))) return []
-    return (this.options.catalogs.get(provider as OpenCodeRoute)?.models() ?? []).map(model => ({ provider, id: model.id, name: model.name, inputModalities: model.inputModalities }))
+    return (this.options.catalogs.get(provider as OpenCodeRoute)?.models() ?? []).map(model => {
+      // The native picker searches only names and treats separators literally.
+      const spaced = model.name.replace(/[-_]+/gu, ' ')
+      const name = spaced === model.name ? model.name : `${model.name} (${spaced})`
+      return { provider, id: model.id, name, inputModalities: model.inputModalities }
+    })
   }
   private resolved(provider: string, descriptor: OpenCodeModel): LlmResolvedModelInfo {
     return { provider, id: descriptor.id, name: descriptor.name, inputModalities: descriptor.inputModalities, context: { contextWindow: descriptor.contextWindow }, defaultMaxTokens: descriptor.maxTokens,

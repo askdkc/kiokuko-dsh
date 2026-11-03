@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 /** Actual DSH plan review, model loop, tool executor and isolated SQLite.
  * The model and human responses are scripted; no paid model or live profile is used. */
@@ -121,6 +122,8 @@ for (const mode of ['core', 'adapter'] as const)
               await mountNativeExecutor(ctx, packages, fibers)
               ctx.provide('userQuestions', {
                 async ask(request: any) {
+                  const scope = answerFixtureScope(request); if (scope) return scope
+                  if (request.questions[0]?.id === 'taskType') return { answers: [{ id: 'taskType', selected: ['実装・変更'] }] }
 if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, legacy === 'assessment' ? 'decision ON / Lisp OFF' : 'decision OFF / Lisp OFF')
 
                   asked.push(
@@ -500,12 +503,13 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
               assert.ok(
                 asked.every(
                   (id) =>
+                    id.startsWith('repository-learning:') ||
                     id === 'execution-mode' ||
                     id === 'plan-review' ||
                     id.startsWith('coding-lisp-') ||
                     (legacy && id.startsWith('request-clarification-')),
                 ),
-                'only native plan review and normal execution selection are presented',
+                `plan review, execution selection and turn-end memory review use their native surfaces: ${JSON.stringify(asked)}`,
               )
             } finally {
               await handle?.dispose()

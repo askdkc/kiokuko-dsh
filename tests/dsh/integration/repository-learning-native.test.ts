@@ -37,7 +37,7 @@ test(
   async () => {
     // Public plugin bootstrap, not an injected host or external reflector. The
     // transport is deterministic; this proves wiring, not external model quality.
-    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
+    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
     const requests: any[] = [],
       reflections: any[] = [],
       diagnostics: any[] = [],
@@ -348,7 +348,7 @@ test(
   "public native plugin records a failed no-tool turn without promoting a failed auxiliary model to learned success",
   { timeout: 30_000 },
   async () => {
-    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
+    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
     const diagnostics: any[] = [];
     const off = f.ctx.on(
       "session/event",
@@ -431,7 +431,7 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
     `public native automatic learning honors ${scenario} boundaries`,
     { timeout: 30_000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
+      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
       const diagnostics: any[] = [];
       const off = f.ctx.on(
         "session/event",
@@ -512,8 +512,9 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
           const saved = readRepositoryLearning(db, f.dir);
           if (scenario === "refusal") assert.equal(saved.turnCount, 0);
           if (scenario === "cancelled") {
-            assert.equal(saved.turnCount, 1);
-            assert.equal(saved.outcomeCounts.cancelled, 1);
+            assert.equal(saved.turnCount, 0);
+            assert.equal(f.memoryQuestions.length, 0);
+            assert.equal(saved.outcomeCounts.cancelled, 0);
             assert.equal(saved.outcomeCounts.completed, 0);
           }
           if (scenario === "secret") {
@@ -548,7 +549,7 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
     `public native learning recovers from ${interruption} while its old model response is delayed`,
     { timeout: 30000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra });
+      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
       const original = f.model.stream.bind(f.model);
       let release!: () => void;
       let entered!: () => void;
@@ -615,12 +616,8 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
             diagnostics.some((data) => data.saveState === "discarded"),
           );
         release();
-        await waitFor(() =>
-          interruption === "reload"
-            ? snapshot().turnCount === 1
-            : diagnostics.some((data) => data.saveState === "discarded"),
-        );
-        assert.equal(snapshot().turnCount, interruption === "reload" ? 1 : 0);
+        await waitFor(() => diagnostics.some((data) => ["discarded", "not_saved"].includes(data.saveState)));
+        assert.equal(snapshot().turnCount, 0);
         if (interruption !== "reload") {
           await f.reload("compiled");
           await delay(30);
@@ -635,7 +632,7 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
           "Now answer a different ordinary instruction without tools.",
         );
         await waitFor(
-          () => snapshot().turnCount === (interruption === "reload" ? 2 : 1),
+          () => snapshot().turnCount === 1,
         );
       } finally {
         release?.();

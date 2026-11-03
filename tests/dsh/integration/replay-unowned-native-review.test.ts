@@ -37,7 +37,7 @@ const count = (db: any, table: string) =>
     .get(table)
     ? db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n
     : 0;
-test("actual unowned native Bash -> final answer -> automatic repository learning without legacy approval prompts", async () => {
+test("actual unowned native Bash -> final answer -> approved repository learning", async () => {
   const f = await agenticReplayFixture({ shutdownDrainTimeoutMs: 3000 });
   execFileSync("git", ["init", "-q", f.root]);
   const [cordis, llm, session] = await Promise.all(
@@ -155,7 +155,7 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
       "user-questions/request",
       (q: any) => {
         asked.push(q);
-        return { answers: [] };
+        return { answers: [{ id: q.questions[0].id, selected: [q.questions[0].options[0].label] }] };
       },
       { global: true },
     );
@@ -209,8 +209,8 @@ test("actual unowned native Bash -> final answer -> automatic repository learnin
     );
     assert.equal(
       asked.length,
-      0,
-      "automatic native learning must not wait for legacy review approval",
+      2,
+      "native learning requires organization and exact proposal approval",
     );
     assert.equal(count(f.database, "ledger_runs"), 0);
     assert.equal(count(f.database, "replay_memories"), 0);

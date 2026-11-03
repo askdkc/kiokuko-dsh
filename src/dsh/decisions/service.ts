@@ -4,7 +4,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { abortable } from '../http-json.js'
 import { DecisionError, parseDecisionBatch, parseDecisionResult, questionType, type DecisionProvider, type DecisionBatchResult, type DecisionBatch } from './contracts.js'
-import { TypedDecisionsConfig, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, layaCompactionStatus, type DecisionConfiguration } from './config.js'
+import { TypedDecisionsConfig, OPENAI_DECISION_DEFAULTS, selectedDecisionSettings, decisionConfigurationIssue, resolveDecisionConfiguration, LAYA_POLICY_VERSION, layaCompactionStatus, type DecisionConfiguration } from './config.js'
 import { POLICY_VERSION } from './providers.js'
 import { DecisionReadinessMonitor, type ReadinessOptions } from './readiness.js'
 import { MemoryReuseConfig, type MemoryReuseConfiguration } from '../../memory/reuse.js'
@@ -392,6 +392,14 @@ export class DecisionService {
     try { batch = parseDecisionBatch(input) } catch (error) {
       if (!(error instanceof DecisionError)) throw error
       return { status: 'fallback', reason: error.code }
+    }
+    // Intake answers use the user's 51% rule. This is a local evaluation copy:
+    // it neither rewrites saved settings nor relaxes execution/approval checks.
+    if (batch.purpose === 'akinator') {
+      if (config.provider === 'typesafe') config.typesafe.acceptance = { minConfidence: .51 }
+      else if (config.provider === 'openai') config.openai = { ...(config.openai ?? OPENAI_DECISION_DEFAULTS), acceptance: { minProbability: .51, minMargin: 0 } }
+      else if (config.provider === 'nimble') config.nimble.acceptance = { minProbability: .51, minMargin: 0 }
+      else if (config['laya-coreml']) config['laya-coreml'].acceptance = { minProbability: .51, minMargin: 0 }
     }
     const semantic = batch.purpose === 'compaction' || batch.purpose === 'model-handoff'
     const managed = semantic || batch.purpose === 'memory-reuse' || batch.purpose === 'model-routing'

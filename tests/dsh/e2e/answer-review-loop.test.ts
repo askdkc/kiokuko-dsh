@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
@@ -54,7 +55,7 @@ for (const host of ['full', 'core'] as const) for (const scenario of ['finding',
       if (plugin === tools.default) { await mountNativeTools(ctx, tools, packageRoot!, fibers); continue }
       const fiber = ctx.plugin(plugin,config); fibers.push(fiber); await fiber
     }
-    const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => {
+    const ui = ctx.plugin({ name:'answer-test-ui', apply(c: any) { return c.provide('userQuestions',{ ask: async (request: any) => { const scope = answerFixtureScope(request); if (scope) return scope;
 if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
 
       if(request.questions.some((q:any)=>q.options?.some((o:any)=>o.label==='整理して確認する'))) return {answers:request.questions.map((q:any)=>({id:q.id,selected:['今回は保存しない']}))}
@@ -169,7 +170,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       if(!newRequest) assert.equal(questions,questionCount,'correction does not reopen intake or execution choice')
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()!.n,newRequest ? 2 : 1)
       assert.equal(taskTypeQuestions,0,'explicit preparation supplies the advisory task type')
-      assert.equal(taskTypeCalls,newRequest?1:0,'only superseding owned work consults task classification; corrective requests do not reopen it');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
+      assert.equal(taskTypeCalls,newRequest?2:1,'each human request consults task classification once; corrective requests reuse it');assert.equal(rows.length,scenario==='off'?0:newRequest ? 2 : 1);assert.equal(reviewCalls,scenario==='off'?0:newRequest ? 2 : 1)
       assert.ok(rows.every(row=>row.status==='closed'))
       assert.equal(db.prepare("SELECT COUNT(*) AS n FROM ledger_runs WHERE status='active'").get()!.n,0)
       assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_memory_finalizations').get()!.n,0,'answer correction cannot automatically schedule derived memory')

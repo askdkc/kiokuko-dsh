@@ -80,19 +80,12 @@ for (const provider of ['off', 'abstain', 'unavailable'] as const) {
           modelAutoMode: { mode: 'off' },
         },
         nativeAnswer: async (q) => {
-          answerTaskStartup(q, provider === 'off' ? 'decision OFF / Lisp OFF' : 'decision ON / Lisp OFF')
+          if (!q.questions[0].id.startsWith('task-startup:')) return { answers: [{ id: q.questions[0].id,
+            selected: q.questions[0].id === 'taskType' ? [f.model.requests.length ? '質問、相談、会話' : '実装・変更'] : [],
+            custom: q.questions[0].id === 'taskType' ? '' : 'Implement parser.ts without publishing' }] }
           questions++
           startupIds.push(q.questions[0].id)
-          if (questions === 1) {
-            assert.equal(f.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/start').length,0,
-              'initial availability precedes turn/start')
-          } else {
-            assert.equal(questions,2,'only the two genuine queued inputs may ask')
-            assert.equal(f.model.requests.length,1,'the second setting must precede the second provider dispatch')
-            assert.equal(f.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/start'&&e.data.turn===2).length,1,
-              'the queued setting belongs to the actually claimed second turn')
-            assert.notEqual(startupIds[0],startupIds[1])
-          }
+          assert.equal(questions, 1, 'the chat asks startup mode once')
           if (questions === 1) f.agent.followup(second)
           return answerTaskStartup(q, provider === 'off' ? 'decision OFF / Lisp OFF' : 'decision ON / Lisp OFF')
         },
@@ -187,7 +180,7 @@ for (const provider of ['off', 'abstain', 'unavailable'] as const) {
           [],
           'Provider failure must not become a generic agent error',
         )
-        assert.equal(questions, 2, 'each independent queued request gets its own setting; no duplicate input is enqueued')
+        assert.equal(questions, 1, 'queued requests reuse the chat setting; no duplicate input is enqueued')
         assert.equal(f.model.requests.length, 2)
         if (provider !== 'off')
           assert.ok(

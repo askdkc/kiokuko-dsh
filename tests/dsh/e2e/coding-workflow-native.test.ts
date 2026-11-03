@@ -104,7 +104,7 @@ for (const answer of ['closed', 'empty', 'disconnected', 'cancel'] as const) tes
   } finally {await f.close()}
 })
 
-for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new task requires a new choice even with the previous Lisp runtime enabled`, { skip: !installed, timeout: 120000 }, async () => {
+for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new task retains the chat choice and honors explicit manual Lisp OFF`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: mode === 'full', mode, extra, nativeAnswer: async request => {
     const question = request.questions[0]
@@ -116,6 +116,8 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
   try {
     f.responses.push(...codingPrelude(f.mock, 'first'), f.mock.textResponse('Goal prepared; its checks are still pending.'))
     await f.turn('Implement src/parser.mjs. 通常実行で。完了条件: public entry outputs 42')
+    const disabled = await f.ctx.commands.execute(f.agent, '/kioku-lisp disable', [], new AbortController().signal)
+    assert.equal(disabled.result.kind, 'success', disabled.result.text)
     f.responses.push(...codingPrelude(f.mock, 'second', fixtureDefinition('src/second.mjs')),
       f.mock.toolCallResponse('second-write', 'kioku_write', { path: 'src/second.mjs', content: 'console.log(42)\n' }),
       f.mock.toolCallResponse('old-lisp', 'lisp_eval', { operationId: 'forbidden', code: '(kioku.files:propose-write "forbidden" "bad")' }),
@@ -127,7 +129,7 @@ for (const mode of ['full', 'compiled'] as const) test(`native ${mode}: a new ta
         return f.mock.textResponse('The new task uses ordinary tools and still awaits its own checks.')
       })
     await f.turn('Implement src/second.mjs. 通常実行で。完了条件: public entry outputs 42')
-    assert.equal(questions.length, 2); assert.notEqual(questions[0].id, questions[1].id)
+    assert.equal(questions.length, 1)
     assert.equal(existsSync(join(f.dir, 'forbidden')), false)
     assert.equal(await readFile(join(f.dir, 'src/second.mjs'), 'utf8'), 'console.log(42)\n')
   } finally { await f.close() }

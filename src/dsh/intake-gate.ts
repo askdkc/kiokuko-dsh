@@ -14,6 +14,7 @@ import {
   type DshCapabilityCatalog,
 } from './capability-catalog.js'
 import { dshTurnRequestId, resolveGroundedIntakeProfile } from './intake-profile-resolver.js'
+import { answerAkinatorQuestion } from './decisions/akinator-answers.js'
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from './user-interaction.js'
 import type { SkillDiscoveryMode } from '../skills/types.js'
 import { MemoryRetrievalConfig, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../memory/retrieval-contracts.js'
@@ -223,7 +224,10 @@ export class DshIntakeGate {
       while (prepared.intake.status === 'needs_answer') {
         if (event.signal.aborted) break
         if (this.akinatorMemory.mode === 'off' || this.akinatorMemory.mode === 'shadow') delete prepared.intake.memoryHints
-        if (this.#answerer === undefined || prepared.intake.question === null) {
+        const automatic = prepared.intake.question && prepared.intake.question.id !== 'taskType'
+          ? await answerAkinatorQuestion(this.decisions, requestId, grounded.task, prepared.intake.question, event.signal, grounded.evidence)
+          : { status: 'ask' as const }
+        if ((this.#answerer === undefined && automatic.status !== 'answered') || prepared.intake.question === null) {
           const result = { admitted: false, prepared, catalog: event.capabilities }
           this.#prepared.set(cacheKey, {
             fingerprint,
@@ -234,7 +238,8 @@ export class DshIntakeGate {
           })
           return result
         }
-        const value = await this.#answerer.ask(prepared.intake.question, event.signal, event.nativeAgent, prepared.intake.memoryHints, { provenance: false })
+        const value = automatic.status === 'answered' ? automatic.value
+          : await this.#answerer!.ask(prepared.intake.question, event.signal, event.nativeAgent, prepared.intake.memoryHints, { provenance: false })
         const currentCapabilities = this.#readCapabilities === undefined
           ? event.capabilities
           : await this.#readCapabilities({

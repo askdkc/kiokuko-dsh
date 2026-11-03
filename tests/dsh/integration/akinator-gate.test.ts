@@ -98,7 +98,7 @@ function event(root: string, capabilities: Awaited<ReturnType<typeof catalog>>):
   }
 }
 
-test('pre-step uses grounded DSH context and asks only the unresolved task type', async () => {
+test('pre-step asks Akinator purpose, target and success criteria instead of silently filling them', async () => {
   const fixture = await makeFixture()
   const runtime = new DshRuntime({
     repositoryRoot: fixture.root, databasePath: fixture.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
@@ -109,7 +109,7 @@ test('pre-step uses grounded DSH context and asks only the unresolved task type'
     async ask(request) {
       const question = request.questions[0]!
       asked.push(question.id)
-      const values: Record<string, string> = { taskType: '1' }
+      const values: Record<string, string> = { taskType: '1', target: 'src/parser.ts', expected: 'Parser handles empty input' }
       return { answers: [{ id: question.id, selected: [values[question.id]!] }] }
     },
   })
@@ -121,7 +121,7 @@ test('pre-step uses grounded DSH context and asks only the unresolved task type'
       nextCalls += 1
       return { kind: 'enter', messages: [] }
     })
-    assert.deepEqual(asked, ['taskType'])
+    assert.deepEqual(asked, ['taskType', 'target', 'expected'])
     assert.equal(nextCalls, 1)
     assert.equal(decision.kind, 'enter')
   } finally {
@@ -143,7 +143,7 @@ test('pre-step accepts and canonicalizes a multiline user task through run intak
     const result = await gate.prepare({
       ...event(fixture.root, capabilities),
       task,
-      profileHints: { taskType: 'build' },
+      profileHints: { taskType: 'build', target: 'README.md', expected: task },
     })
 
     assert.equal(result.admitted, true)
@@ -203,7 +203,7 @@ test('concurrent preparation of one turn shares a single question and result', a
   })
   const gate = new DshIntakeGate(runtime, answerer)
   const capabilities = await catalog()
-  const firstEvent = event(fixture.root, capabilities)
+  const firstEvent = { ...event(fixture.root, capabilities), profileHints: { target: 'src/parser.ts', expected: 'Parser handles empty input' } }
   try {
     const first = gate.prepare(firstEvent)
     await shown
@@ -265,8 +265,8 @@ test('skipping task type enters ordinary chat without creating a separate run', 
     const result = await gate.prepare({ ...event(fixture.root, capabilities), task: 'Let us chat about SvelteKit.' })
     assert.equal(result.admitted, true)
     assert.equal(result.prepared.intake.profile.taskType, 'chat')
-    assert.equal(result.prepared.intake.profile.target, fixture.root)
-    assert.equal(result.prepared.intake.profile.expected, 'Let us chat about SvelteKit.')
+    assert.equal(result.prepared.intake.profile.target, null)
+    assert.equal(result.prepared.intake.profile.expected, null)
     assert.equal(result.prepared.intake.status, 'ready')
     assert.deepEqual(result.prepared.intake.missingFields, [])
     assert.equal(result.prepared.skillDiscovery.attempted, false)
@@ -350,7 +350,7 @@ for (const kind of ['typesafe', 'nimble'] as const) test(`full gate ${kind}: pro
     const provider = kind === 'typesafe' ? new TypeSafeDecisionProvider(config.typesafe, async () => 'host-key', request) : new NimbleDecisionProvider(config.nimble, async () => undefined, request)
     const service = new DecisionService(config, () => provider, databaseDecisionStore(runtime))
     const gate = new DshIntakeGate(runtime, undefined, undefined, false, undefined, service)
-    const input = { ...event(f.root, capabilities), task: 'この資料を調べてください' }
+    const input = { ...event(f.root, capabilities), task: 'この資料を調べてください', profileHints: { target: 'README.md', expected: 'Report the relevant findings' } }
     const result = await gate.prepare(input)
     assert.equal(result.admitted, true); assert.equal(result.prepared.intake.profile.taskType, 'research')
     const messages = await injectDshContext({ prepared: result.prepared, task: input.task, routeSkillNames: ['kiokuko-single-purpose-functions'] })

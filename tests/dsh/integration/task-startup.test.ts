@@ -49,7 +49,7 @@ for (let index = 0; index < 4; index++) test(`startup combination ${TASK_STARTUP
   await startup.prepare(request()); assert.equal(asks, 1)
 })
 
-test('restart, explicit continuation and new task keep distinct durable choices', async t => {
+test('restart, continuation and ordinary follow-ups reuse the chat choice', async t => {
   const f = await setup(t); let asks = 0
   const questions: DshUserQuestions = { ask: async q => { asks++; return { answers: [{ id: q.questions[0].id, selected: [TASK_STARTUP_OPTIONS[3]] }] } } }
   await new TaskStartup({ decisions: f.make(), root: () => '/repo', lisp: () => f.lisp, questions }).prepare(request())
@@ -57,7 +57,7 @@ test('restart, explicit continuation and new task keep distinct durable choices'
   await restarted.prepare(request()); assert.equal(asks, 1)
   await restarted.prepare(request(2, 'keep going')); assert.equal(asks, 1)
   assert.equal((await decisions.bind(dshTurnRequestId({ dshSessionId: 'session', turn: 2 }))).mode, 'off')
-  await restarted.prepare(request(3, 'Implement a different project')); assert.equal(asks, 2)
+  await restarted.prepare(request(3, 'Implement a different project')); assert.equal(asks, 1)
   assert.equal(f.counts().activations, 0)
 })
 
@@ -224,11 +224,11 @@ test('native clarification reuses its exact original startup binding, not the la
   }}})
   await startup.prepare(request(1,'Edit README.md'))
   await startup.prepare(request(2,'An unrelated Lisp task'))
-  assert.equal(f.counts().enabled,true);assert.equal(asks,2)
+  assert.equal(f.counts().enabled,false);assert.equal(asks,1)
   await startup.prepare({...request(3,'Native confirmation answer'),clarificationFrom:{turn:1,task:'Edit README.md'}})
-  assert.equal(asks,2);assert.equal(f.counts().enabled,false)
+  assert.equal(asks,1);assert.equal(f.counts().enabled,false)
   const bound=await decisions.bind(dshTurnRequestId({dshSessionId:'session',turn:3}))
   assert.deepEqual(bound.startup,{decision:true,lisp:false})
   await startup.prepare({...request(4,'Unmatched original key'),clarificationFrom:{turn:1,task:'Other README.md request'}})
-  assert.equal(asks,3,'unknown original key cannot borrow a mode binding')
+  assert.equal(asks,1,'an unmatched clarification still retains the same chat mode')
 })

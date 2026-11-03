@@ -1,3 +1,5 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
+import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { interpretedPreparation } from '../helpers/coding-script.js'
 import { mountNativeExecutor } from '../helpers/native-tools.js'
 import { recordedRunDirectory } from '../helpers/agenticreplay-fixture.js'
@@ -57,6 +59,12 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     await ctx.plugin(prompt.default, { persona: '' })
     await mountNativeExecutor(ctx, packageRoot!)
     await ctx.plugin(loop.default, { agents: [] })
+    ctx.provide('userQuestions', { async ask(request: any) {
+      const scope = answerFixtureScope(request); if(scope) return scope
+      const q = request.questions[0]
+      if(q.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+      return { answers: [{ id: q.id, selected: [q.id.startsWith('repository-learning:') ? '今回は保存しない' : q.options?.[0]?.label ?? 'research'] }] }
+    } })
     const mock = nativeMock(llm)
     class AgenticReplayModel extends mock.MockAdapter {
       override async *stream(request: any) {

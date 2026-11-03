@@ -21,7 +21,7 @@ test('Core admits a source-bound conversational continuation without a formal Go
     const intent = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'research', evidenceRefs: requestIntentReferenceIds(context) }, context)
     assert.ok(intent, 'Goal-less continuation retains exact human evidence')
     let admitted: Awaited<ReturnType<CoreTasks['prepare']>> | undefined
-    await assert.doesNotReject(async () => { admitted = await new CoreTasks(runtime).prepare({ requestId: 'continue-research', sessionId: 'core-native', turn: 1, task, cwd: root,
+    await assert.doesNotReject(async () => { admitted = await new CoreTasks(runtime).prepare({ requestId: 'continue-research', sessionId: 'core-native', turn: 1, task, cwd: root, profileHints: { target: 'local parser', expected: 'report behavior without editing files' },
       capabilities: [{ kind: 'skill', name: 'kiokuko-soul' }], requestIntent: intent, requestIntentContext: context, signal: new AbortController().signal }) },
     'a conversation continuation without any previous owned task must use new admission, never a nonexistent task resume')
     assert.ok(admitted?.admitted); assert.ok(admitted.authority)

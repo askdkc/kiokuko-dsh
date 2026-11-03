@@ -145,8 +145,9 @@ shown in the card; selection does not prove authentication or successful inferen
 options as the preset; the native question UI preselects a label ending in
 ` (Recommended)`, so the card still opens editable. A preset grants no authority.
 Immutable existing decision bindings also retain the task choice, without granting
-tool or file authority. The same request and explicit continuation reuse the choice;
-an unrelated new request asks again. Cancel/Skip starts no task. Headless operation with `ask` keeps the
+tool or file authority. Later turns in the same chat and repository reuse the accepted
+choice, including new tasks and session reloads. Cancel/Skip starts no task and is not
+inherited by a later turn. Headless operation with `ask` keeps the
 configured decision mode and explicit manual Lisp preference; `on`/`off` supply that
 answer instead. An explicit
 `typedDecisions.startup: { decision: true, lisp: true }` config selects both and

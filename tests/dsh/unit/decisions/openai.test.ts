@@ -15,6 +15,18 @@ const usage = { input_tokens: 9, output_tokens: 1, total_tokens: 10,
 const reply = (answers: unknown[] = [answer()]) => ({ model: 'gpt-6-luna', answers, usage })
 const provider = (request: typeof fetch, credential = async (): Promise<string | undefined> => 'fixture-key') => new OpenAIDecisionProvider(undefined, credential, request)
 
+for (const probability of [.509, .51, .8]) test(`Akinator uses the 51 percent boundary at ${probability}`, async () => {
+  const service = new DecisionService(TypedDecisionsConfig.parse({ provider: 'openai' }), (config, observer) =>
+    new OpenAIDecisionProvider(config.openai, async () => 'fixture-key', async () => Response.json(reply([{
+      ...answer(), confidence: probability,
+      probabilities: [{ value: '20', probability }, { value: '2', probability: 1 - probability }, { value: 'unknown', probability: 0 }],
+    }])), observer))
+  const outcome = await service.evaluate('akinator-threshold', { ...batch, purpose: 'akinator' }, signal())
+  assert.equal(outcome.status, 'completed')
+  if (outcome.status === 'completed') assert.equal(outcome.result.answers[0]!.status, probability >= .51 ? 'selected' : 'abstained')
+  assert.deepEqual((await service.bind('akinator-threshold')).openai, OPENAI_DECISION_DEFAULTS, 'the stored provider settings remain unchanged')
+})
+
 test('explicit OpenAI settings preserve old default config and use the official Decisions wire contract', async () => {
   const base = TypedDecisionsConfig.parse({})
   assert.equal(base.provider, 'typesafe'); assert.equal(Object.hasOwn(base, 'openai'), false)

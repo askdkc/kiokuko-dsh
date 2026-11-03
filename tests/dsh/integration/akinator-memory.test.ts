@@ -347,6 +347,7 @@ test('the DSH gate offers optional historical suggestions without source provena
       answerer, undefined, false, { ...f.config, mode: 'suggest' });
     const result = await gate.prepare({ agent: { id: 'agent' }, sessionId: 'gate-session', turn: 1, step: 1,
       task: 'target.ts の件', cwd: f.root, signal: new AbortController().signal, skillDiscoveryMode: 'off',
+      profileHints: { target: 'target.ts', expected: 'requested checks pass' },
       capabilities });
     assert.equal(result.admitted, true);
     assert.equal(questions, 1);

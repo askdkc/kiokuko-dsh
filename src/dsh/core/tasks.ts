@@ -7,6 +7,7 @@ import type { DecisionService } from '../decisions/service.js'
 import { createMemoryReuseRuntime } from '../memory-reuse.js'
 import { readContextRunRetrievalState } from '../../context/run-state.js'
 import { classifyTaskForIntake, selectInstalledSkills } from '../decisions/workflows.js'
+import { answerAkinatorQuestion } from '../decisions/akinator-answers.js'
 import { legacyModuleRequirements } from '../modules/legacy-bindings.js'
 import { realpathSync } from 'node:fs'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -162,6 +163,7 @@ export class CoreTasks {
       assertCapabilityCatalogBinding(run.metadata, input.capabilities)
       const { state: intakeState, link } = await continueTaskIntake(db, { ...taskIdentity, workspace: project.workspace,
         expectedRevision: state.revision, expectedGeneration: state.generation, capabilities: input.capabilities,
+        decisions: this.decisions, requestId: input.requestId,
         signal: input.signal, answerer: this.answerer, agent: input.agent, validateCapabilities: input.validateCapabilities })
       const intake = intakeState.session
       const admitted = intakeState.status !== 'needs_answer' && taskCanExecute(readTaskSnapshot(db, taskIdentity))
@@ -256,9 +258,14 @@ export class CoreTasks {
       try {
         input.signal.throwIfAborted()
         let state = await getAkinatorStateService(db, { workspace: project.workspace, sessionId: opened.intakeSessionId })
-        while (state.status === 'needs_answer' && state.question && this.answerer) {
+        while (state.status === 'needs_answer' && state.question) {
           const question = state.question
-          const value = await this.answerer.ask(question, input.signal, input.agent)
+          const automatic = question.id !== 'taskType'
+            ? await answerAkinatorQuestion(this.decisions, input.requestId, input.task, question, input.signal)
+            : { status: 'ask' as const }
+          if (automatic.status !== 'answered' && !this.answerer) break
+          const value = automatic.status === 'answered' ? automatic.value
+            : await this.answerer!.ask(question, input.signal, input.agent)
           await input.validateCapabilities?.()
           input.signal.throwIfAborted()
           assertPreparation()

@@ -8,6 +8,8 @@ import { DshRunIntakeService } from './run-intake-service.js'
 import type { DshIntakeAnswerer, DshUserQuestionAgent } from './intake-questions.js'
 import { readTaskSnapshot, type TaskIdentity } from './task-state.js'
 import { withImmediateTransaction } from '../db/transaction.js'
+import { answerAkinatorQuestion } from './decisions/akinator-answers.js'
+import type { DecisionService } from './decisions/service.js'
 
 /** Continue the existing intake without creating a run or granting execution. */
 export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity & {
@@ -15,6 +17,7 @@ export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity
   capabilities: readonly { kind: 'skill' | 'tool'; name: string; description?: string }[];
   signal: AbortSignal; answerer?: DshIntakeAnswerer | undefined; agent?: DshUserQuestionAgent | undefined;
   validateCapabilities?: (() => Promise<void>) | undefined
+  decisions?: DecisionService | undefined; requestId?: string
 }) {
   let revision = input.expectedRevision, generation = input.expectedGeneration
   const assertCurrent = () => {
@@ -29,9 +32,11 @@ export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity
   assertCurrent()
   const link = readRunIntakeLink(db, { workspace: input.workspace, runId: input.taskId })
   let state = await getAkinatorStateService(db, { workspace: input.workspace, sessionId: link.sessionId })
-  while (state.status === 'needs_answer' && state.question && input.answerer) {
+  while (state.status === 'needs_answer' && state.question) {
     const question = state.question
-    const value = await input.answerer.ask(question, input.signal, input.agent)
+    const automatic = await answerAkinatorQuestion(input.decisions, input.requestId ?? input.taskId, state.session.task, question, input.signal)
+    if (automatic.status !== 'answered' && !input.answerer) break
+    const value = automatic.status === 'answered' ? automatic.value : await input.answerer!.ask(question, input.signal, input.agent)
     await input.validateCapabilities?.()
     assertCurrent()
     withImmediateTransaction(db, () => {

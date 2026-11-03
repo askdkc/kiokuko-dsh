@@ -58,6 +58,25 @@ const [cordis, nativeTools, nativeScope] = nativeAvailable
   ? await Promise.all([load('cordis'), load('dsh-tools'), load('dsh-scope')])
   : [undefined, undefined, undefined]
 const signal = () => new AbortController().signal
+test('ordinary native requests reach Akinator when the action target is missing', async t => {
+  const asked: string[] = []
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    questions: { ask: async request => {
+      const q = request.questions[0]
+      asked.push(q.id)
+      return { answers: [{ id: q.id, selected: [], custom: q.id === 'target' ? 'src/parser.ts' : 'Empty input returns an empty result' }] }
+    } },
+  })
+  await f.capture([human('vague-request', 'Fix it')])
+  assert.deepEqual(asked, ['target', 'expected'])
+  assert.equal(f.admissions.length, 0, 'clarifying scope must not manufacture execution authority')
+  const messages = [human('vague-request', 'Fix it')]
+  const projected = await f.intake.answerMessages({ agent: f.agent, turn: 1, step: 1, messages, signal: signal() }, messages)
+  assert.match(JSON.stringify(projected), /src\/parser.ts/)
+  assert.match(JSON.stringify(projected), /Empty input returns an empty result/)
+  assert.deepEqual(projected[0], messages[0], 'the original request is preserved')
+});
 for (const unowned of [false, true]) for (const name of ['cordis_inspect_list','cordis_inspect_query','kioku_read'])
   test(`read-only inspection: ${name}, unowned=${unowned}, unresolved intent`, async t => {
     const task = 'Inspect the current plugin without changing files.'

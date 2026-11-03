@@ -17,10 +17,10 @@ const extra={lisp:{enabled:true,executionMode:'development',sbclPath:process.env
 const result=(q:any,id:string)=>{const r=nativeToolResults(q.messages).find((r:any)=>r.toolCallId===id);assert.ok(r,id);return r}
 for(const explicit of [false,true])test(`ordinary implementation offers Lisp before the first model request (${explicit?'adapter':'public'})`,{timeout:120000},async()=>{
  let asked=0
- const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision OFF / Lisp OFF')}throw new Error('unexpected question') }})
+ const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision OFF / Lisp OFF')}if(['taskType','target','expected'].includes(q.questions[0].id))return{answers:[{id:q.questions[0].id,selected:q.questions[0].id==='taskType'?['実装・変更']:[],custom:q.questions[0].id==='taskType'?'':'the current source improvement'}]};throw new Error('unexpected question') }})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('src/parser.ts の関数を実装して。外部公開しないで。');assert.equal(asked,1)
  f.responses.push(f.mock.textResponse('Continuing.'));await f.turn('この作業を続行してください');assert.equal(asked,1)
- f.responses.push(f.mock.textResponse('Research only.'));await f.turn('コードは変更しないで。原因を調査して説明して。');assert.equal(asked,2,'a separate research task receives its own startup setting')
+ f.responses.push(f.mock.textResponse('Research only.'));await f.turn('コードは変更しないで。原因を調査して説明して。');assert.equal(asked,1,'a separate research task reuses the chat startup setting')
  }finally{await f.close()}
 })
 test('a configured request-intent decision arms the early Lisp offer for conversational implementation wording',{timeout:120000},async()=>{
@@ -40,7 +40,7 @@ test('a configured request-intent decision arms the early Lisp offer for convers
    return {provider:'fixture',requestedModel:'fixture',policyVersion:'fixture',answers:batch.questions.map((q:any)=>({id:q.id,status:'abstained',reason:'insufficient'}))}
   }
  }) as any)
- const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision ON / Lisp OFF')}throw new Error('unexpected question')}})
+ const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision ON / Lisp OFF')}if(['taskType','target','expected'].includes(q.questions[0].id))return{answers:[{id:q.questions[0].id,selected:q.questions[0].id==='taskType'?['実装・変更']:[],custom:q.questions[0].id==='taskType'?'':'the current source improvement'}]};throw new Error('unexpected question')}})
  try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
 })
 test('manual ON routes implementation through Lisp without a mandatory prototype; optional inspection and OFF work',{timeout:120000},async()=>{

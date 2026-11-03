@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../../helpers/intake-fixture.js'
 import { answerTaskStartup } from '../../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
@@ -69,7 +70,8 @@ test(`real DSH continuity ${continuity}: final requests after compaction and sam
   })
   const questionFiber = ctx.plugin({ name: 'execution-test-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
-if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+      const scope = answerFixtureScope(request); if (scope) return scope
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
 
       return { answers: request.questions.map(q => {
         if(q.options?.some((o:any)=>o.label==='今回は保存しない'))return {id:q.id,selected:['今回は保存しない']}

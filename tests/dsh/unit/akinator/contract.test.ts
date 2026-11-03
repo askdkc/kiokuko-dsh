@@ -58,7 +58,7 @@ test('Akinator input resolution preserves multiline user tasks while rejecting u
   const profile = resolveGroundedIntakeProfile({ task, cwd: '/repo' })
 
   assert.equal(profile.task, 'ABC\n\nEFG\n\tWHAT?')
-  assert.equal(profile.profileHints.expected, 'ABC\n\nEFG\n\tWHAT?')
+  assert.equal(profile.profileHints.expected, null)
   assert.equal(
     resolveGroundedIntakeProfile({ task: 'ABC\rEFG', cwd: '/repo' }).task,
     resolveGroundedIntakeProfile({ task: 'ABC\nEFG', cwd: '/repo' }).task,

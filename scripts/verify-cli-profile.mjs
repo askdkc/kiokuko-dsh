@@ -234,6 +234,10 @@ async function tui(resumeSessionId) {
     })
   }
   const selections = new Map()
+  const pendingQuestion = () => {
+    const rows = fresh(), answered = new Set(rows.filter(value => value.type === 'native-question-response').map(value => value.requestSequence))
+    return rows.find(value => value.type === 'native-question' && !answered.has(value.requestSequence))
+  }
   const selectQuestion = (request, selected, onAnswered = () => {}) => {
     if (!enterReady()) return
     let selection = selections.get(request.requestSequence)
@@ -241,9 +245,7 @@ async function tui(resumeSessionId) {
       selection = createQuestionSelection(request.questions[0], selected)
       selections.set(request.requestSequence, selection)
     }
-    const latest = fresh().filter(value => value.type === 'native-question').at(-1)
-    const active = latest?.requestSequence === request.requestSequence && !fresh().some(value =>
-      value.type === 'native-question-response' && value.requestSequence === request.requestSequence)
+    const active = pendingQuestion()?.requestSequence === request.requestSequence
     const action = selection({ screen: screen(), frame: renderedFrame, active })
     if (!action) return
     appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'questionSelection',
@@ -251,12 +253,30 @@ async function tui(resumeSessionId) {
     if (action === 'submit') answerQuestion(request, selected, onAnswered)
     else child.write(action === 'down' ? '\x1b[B' : '\x1b[A')
   }
-  const declinedQuestions = new Set(), startupQuestions = new Set()
+  const declinedQuestions = new Set(), startupQuestions = new Set(), scopeAnswers = new Map()
+  const memoryOffer = question => question?.id?.startsWith('repository-learning:')
+    || question?.detail === 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
   let startupLisp = scope==='all'&&Boolean(resumeSessionId), cancelStartup = false
   const wait = (predicate, description, timeoutMs) => until(predicate, description, timeoutMs, () => {
     const ready = enterReady()
-    const request = fresh().filter(value => value.type === 'native-question').at(-1)
+    const request = pendingQuestion()
     const question = request?.questions?.[0]
+    if (!request || fresh().some(value => value.type === 'native-question-response' && value.requestSequence === request.requestSequence)) return
+    if (['target', 'expected'].includes(question?.id)) {
+      if (!ready || !screen().includes(question.question)) return
+      let answer = scopeAnswers.get(request.requestSequence)
+      if (!answer) {
+        assert.equal(question.options?.length ?? 0, 0)
+        answer = { text: question.id === 'target' ? 'the isolated profile task state' : 'the isolated profile task state is inspected', frame: renderedFrame }
+        scopeAnswers.set(request.requestSequence, answer)
+        child.write(answer.text)
+      } else if (!answer.submitted && renderedFrame > answer.frame && screen().includes(answer.text)) {
+        answer.submitted = true
+        enter(() => fresh().some(value => value.type === 'native-question-response' && value.requestSequence === request.requestSequence
+          && value.outcome === 'answered' && value.answers?.some(item => item.id === question.id && item.custom === answer.text)))
+      }
+      return
+    }
     if (question?.id?.startsWith('task-startup:')) {
       if (!ready || startupQuestions.has(request.requestSequence)) return
       const selected = cancelStartup ? '取消・作業を保持' : startupLisp ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF'
@@ -271,8 +291,7 @@ async function tui(resumeSessionId) {
       selectQuestion(request, '通常実行')
       return
     }
-    if (question?.detail !== 'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.'
-      || declinedQuestions.has(request.requestSequence) || !ready) return
+    if (!memoryOffer(question) || declinedQuestions.has(request.requestSequence) || !ready) return
     assert.deepEqual(question.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
     selectQuestion(request, '今回は保存しない', () => {
       declinedQuestions.add(request.requestSequence)
@@ -308,13 +327,14 @@ async function tui(resumeSessionId) {
     // handling, without treating arbitrary output as an acknowledgement.
     enter(() => inputWasHandled({ exited: exit, submittedFrame: frame, frame: renderedFrame, composer: composerText(),
       freshQuestionVisible: fresh().slice(eventOffset).some(value => value.type === 'native-question'
-        && value.questions?.some(question => question.options?.some(option => screen().includes(option.label)))) }))
+        && value.questions?.some(question => screen().includes(question.question)
+          || question.options?.some(option => screen().includes(option.label)))) }))
     return input
   }
   async function line(text) {
     await wait(() => {
-      const request = fresh().filter(value => value.type === 'native-question').at(-1)
-      return !request?.questions?.[0]?.detail?.startsWith('The task is complete. May I organize')
+      const request = pendingQuestion()
+      return !memoryOffer(request?.questions?.[0])
         || declinedQuestions.has(request.requestSequence)
     }, 'native memory-review prompt did not close')
     const input = await typeInput(text)
@@ -441,8 +461,8 @@ async function tui(resumeSessionId) {
         // A coding completion card can arrive after turn/end. Do not type the
         // next command into that card's custom-answer field.
         await wait(() => native('plugin:kiokuko-dsh/repository-learning').some(value =>
-          value.event.data.phase === 'capture' && value.event.data.status === 'saved'
-          && value.event.data.reflection === 'model') && declinedQuestions.size > 0 && enterReady() && composerText() === '',
+          value.event.data.phase === 'capture' && value.event.data.status === 'declined'
+          && value.event.data.saveState === 'not_saved') && declinedQuestions.size > 0 && enterReady() && composerText() === '',
         'live development learning and native completion review did not settle', 120000)
       }
       await line('profile-fixture-slow')
@@ -479,16 +499,15 @@ async function tui(resumeSessionId) {
         const completed = native('turn/end').find(value => value.sessionId === created.sessionId && value.event.seq > lispInput.event.seq && value.event.data.reason.kind === 'completed')
         return completed && native('plugin:kiokuko-dsh/repository-learning').some(value => value.sessionId === created.sessionId
           && value.event.data.turn === completed.event.data.turn && value.event.data.phase === 'capture'
-          && value.event.data.status === 'saved' && value.event.data.reflection === 'model') && enterReady()
-      }, 'completed native Lisp turn did not save automatic repository learning')
+          && value.event.data.status === 'declined' && value.event.data.saveState === 'not_saved') && enterReady()
+      }, 'completed native Lisp turn did not respect declined memory saving')
       await wait(() => {
         const review = fresh()
           .slice(completionReviewOffset)
           .find(
             (value) =>
               value.type === 'native-question' &&
-              value.questions?.[0]?.detail ===
-                'The task is complete. May I organize its recorded experience into proposed memories? Nothing is saved until you review and approve it.',
+              memoryOffer(value.questions?.[0]),
           )
         return review && declinedQuestions.has(review.requestSequence) && enterReady() && composerText() === ''
       }, 'managed Lisp task completion review did not settle before the next composer input')
@@ -535,6 +554,8 @@ async function tui(resumeSessionId) {
     assert.ok(output.includes('\x1b[?25h'), 'cursor not restored')
     assert.doesNotMatch(output, /skipping the interactive CLI|plugin tree failed to load|UnhandledPromiseRejection/)
     assert.equal(fresh().filter(value => value.type === 'native-error').length, 0, JSON.stringify(fresh().filter(value => value.type === 'native-error')))
+    assert.equal(native('plugin:kiokuko-dsh/repository-learning').filter(value => value.event.data.status === 'saved').length, 0,
+      'Declining every native memory review must never save repository learning')
     return { sessionId: finalSessionId, initialSessionId: created.sessionId, taskChecks, recovery, eventCount: created.eventCount, resumed: Boolean(resumeSessionId), exitCode: exit.exitCode,
       commandReadyMs: kiokukoEnabled ? fresh().find(value => value.type === 'native-commands' && value.names.includes('kioku-lisp')).time - created.time : null,
       humanSeq: human.event.seq, answerSeq: answer.event.seq }

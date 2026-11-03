@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -19,8 +19,14 @@ class Host {
   agents = new Map<string, any>();
   sessions = new Map<string, any>();
   modelCalls: any[] = [];
+  questions: any[] = [];
+  answer?: (request: any) => Promise<any>;
   model?: (request: any) => AsyncIterable<any>;
   get(name: string) {
+    if (name === "userQuestions" && this.answer) return { ask: async (request: any) => {
+      this.questions.push(request);
+      return this.answer!(request);
+    } };
     if (name === "agents")
       return {
         list: () => [...this.agents.values()],
@@ -63,7 +69,7 @@ class Host {
   }
 }
 async function fixture(nestedLaunch = false) {
-  const root = await mkdtemp(join(tmpdir(), "repo-learning-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "repo-learning-")));
   execFileSync("git", ["init", "-q", root]);
   const launchCwd = nestedLaunch ? join(root, "nested") : root;
   await mkdir(launchCwd, { recursive: true });
@@ -75,6 +81,10 @@ async function fixture(nestedLaunch = false) {
   });
   await runtime.start();
   const host = new Host();
+  // This fixture explicitly approves both native review steps; production has
+  // no default answer. Consent rejection is exercised separately below.
+  host.answer = async request => ({ answers: [{ id: request.questions[0].id,
+    selected: [request.questions[0].options[0].label] }] });
   let memory: DshLifecycleMemory;
   host.model = async function* (request) {
     const input = JSON.parse(request.messages[0].content[0].text);
@@ -221,6 +231,71 @@ function turn(
   });
   a.append("turn/end", { turn: id, reason: { kind: outcome } });
 }
+test("every completed turn asks before organizing and saves only the approved proposal", async () => {
+  const f = await fixture();
+  try {
+    const a = f.agent("consent");
+    f.host.answer = async request => ({ answers: [{ id: request.questions[0].id, selected: ["今回は保存しない"] }] });
+    turn(a, 1);
+    await f.memory.whenIdle();
+    assert.equal(f.host.questions.length, 1);
+    assert.equal(f.host.modelCalls.length, 0);
+    assert.equal((await f.snapshot()).turnCount, 0);
+    f.host.answer = async request => ({ answers: [{ id: request.questions[0].id, selected: [request.questions[0].options[0].label] }] });
+    turn(a, 2);
+    await f.memory.whenIdle();
+    assert.equal(f.host.questions.length, 3);
+    assert.match(f.host.questions[2].questions[0].detail, /Create output directory/);
+    assert.equal((await f.snapshot()).turnCount, 1, JSON.stringify(a.events.filter(e => e.type === 'kiokuko/repository-learning')));
+  } finally { await f.close(); }
+});
+test("an unavailable review UI cannot silently save turn memories", async () => {
+  const f = await fixture();
+  try {
+    delete f.host.answer;
+    turn(f.agent("headless"), 1);
+    await f.memory.whenIdle();
+    assert.equal(f.host.modelCalls.length, 0);
+    assert.equal((await f.snapshot()).turnCount, 0);
+  } finally { await f.close(); }
+});
+test("a no-tool turn still prompts, and closing its proposal saves nothing", async () => {
+  const f = await fixture();
+  try {
+    const a = f.agent("no-tool");
+    f.host.answer = async request => ({ answers: [{ id: request.questions[0].id,
+      selected: f.host.questions.length === 1 ? ["整理して確認する"] : [] }] });
+    a.append("turn/start", { turn: 1 });
+    a.append("user/message", { source: { kind: "user" }, content: [{ type: "text", text: "Explain the parser" }] });
+    a.append("assistant/message", { turn: 1, message: { content: [{ type: "text", text: "The parser reads tokens." }] } });
+    a.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+    await f.memory.whenIdle();
+    assert.equal(f.host.questions.length, 2);
+    assert.equal((await f.snapshot()).turnCount, 0);
+  } finally { await f.close(); }
+});
+test("a new turn discards a pending save approval and its late answer", async () => {
+  const f = await fixture();
+  let resolve!: (value: any) => void, shown!: () => void;
+  const displayed = new Promise<void>(done => { shown = done; });
+  try {
+    const a = f.agent("late-approval");
+    let questionId = '';
+    f.host.answer = async request => {
+      if (f.host.questions.length === 1) return { answers: [{ id: request.questions[0].id, selected: ["整理して確認する"] }] };
+      questionId = request.questions[0].id;
+      shown();
+      return new Promise(done => { resolve = done; });
+    };
+    turn(a, 1);
+    await displayed;
+    a.append("turn/start", { turn: 2 });
+    resolve({ answers: [{ id: questionId, selected: ["この内容を保存する"] }] });
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, 0);
+    assert.equal((await a.step(2)).kind, 'enter');
+  } finally { await f.close(); }
+});
 for (const nestedLaunch of [false, true]) {
 test(`normal lifecycle reflects, persists and injects repository learning after restart (${nestedLaunch ? "nested cwd" : "root cwd"})`, async () => {
   const f = await fixture(nestedLaunch);
@@ -259,7 +334,7 @@ test(`normal lifecycle reflects, persists and injects repository learning after 
   }
 });
 }
-test("no tools and cancelled turns are observed without being promoted to success; duplicate event is not resaved", async () => {
+test("cancelled turns neither prompt nor save; duplicate event is ignored", async () => {
   const f = await fixture();
   try {
     const a = f.agent("simple");
@@ -276,9 +351,8 @@ test("no tools and cancelled turns are observed without being promoted to succes
     f.host.emit("session/event", a.a.session, terminal);
     await f.memory.whenIdle();
     const snapshot = await f.snapshot();
-    assert.equal(snapshot.turnCount, 1);
-    assert.equal(snapshot.points[0]?.outcome, "cancelled");
-    assert.match(snapshot.compact, /unverified/);
+    assert.equal(snapshot.turnCount, 0);
+    assert.equal(f.host.questions.length, 0);
   } finally {
     await f.close();
   }
@@ -577,10 +651,10 @@ for (const boundary of [
       const calls = f.host.modelCalls.length;
       await f.restart();
       await f.memory.whenIdle();
-      assert.equal((await f.snapshot()).turnCount, 1);
+      assert.equal((await f.snapshot()).turnCount, boundary === "transaction" ? 0 : 1);
       assert.equal(
         f.host.modelCalls.length,
-        calls + (boundary === "transaction" ? 1 : 0),
+        calls,
       );
       assert.equal(
         await f.runtime.withDatabase(
@@ -591,11 +665,11 @@ for (const boundary of [
               )
               .get<{ n: number }>()!.n,
         ),
-        0,
+        boundary === "transaction" ? 1 : 0,
       );
       turn(a, 2);
       await f.memory.whenIdle();
-      assert.equal((await f.snapshot()).turnCount, 2);
+      assert.equal((await f.snapshot()).turnCount, boundary === "transaction" ? 1 : 2);
     } finally {
       f.runtime.withDatabase = original;
       await f.close();

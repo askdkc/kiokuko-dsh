@@ -6,7 +6,7 @@ Memory body delivery defaults to 16,000 Unicode characters; relation metadata ha
 Kiokuko adds memory, planning, verification, and observability to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-Memory is advisory. Native turn observations and repository learning remain available; curated memories require the exact preview revision the user approves. Retrieval or reflection failure does not authorize effects or stop unrelated permitted work. [Review, recall and forgetting](docs/replay-memory-review.md).
+Memory is advisory. Every completed native turn offers memory review, including no-tool answers. Repository learning and curated memories are saved only after the user approves the displayed proposal. Retrieval or reflection failure does not authorize effects or stop unrelated permitted work. [Review, recall and forgetting](docs/replay-memory-review.md).
 
 ## Kiokuko-owned harness (unreleased)
 
@@ -146,7 +146,7 @@ See [setup, APIs, limits and recovery](docs/lisp.md).
 <a id="startup-defaults"></a>
 ## Startup defaults for Lisp and decisions
 
-Every non-trivial task asks once whether to use typed decisions and Lisp, then remembers the answer for that request. Settings → General → **Kiokuko startup defaults** sets the answer that card preselects, so a routine task starts from your usual choice.
+The first turn asks whether to use typed decisions and Lisp, then reuses that choice for subsequent turns in the same chat and repository, including after restart. Settings → General → **Kiokuko startup defaults** sets the answer that card preselects, so a routine task starts from your usual choice.
 
 | Setting | Values | Effect |
 |---|---|---|

@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { z } from "zod";
 import { TASK_TYPES, type TaskType } from "../akinator/types.js";
+import { applyAnswer, evaluateProfile } from "../akinator/domain.js";
+import { answerAkinatorQuestion } from "./decisions/akinator-answers.js";
+import type { DecisionService } from "./decisions/service.js";
+import { createDshIntakeAnswerer, type DshUserQuestions } from "./intake-questions.js";
 import { KiokukoError } from "../errors.js";
 import { withImmediateTransaction } from "../db/transaction.js";
 import type { SqliteDatabase } from "../db/adapter.js";
@@ -104,6 +108,8 @@ interface ModelOperationReplay {
 }
 interface HostOptions {
   runtime: DshCoreRuntime;
+  decisions?: DecisionService;
+  questions?: DshUserQuestions;
   demand?: OnDemandIntake;
   agents: { get(id: string): unknown };
   sessions: { get(id: string): unknown };
@@ -277,6 +283,21 @@ export class DshTaskWorkflow {
       deferTaskTypeInference: true,
       profileHints: { taskType },
     });
+    let intake = { task: request, profile: grounded.profileHints, questionCount: 0 };
+    let evaluation = evaluateProfile(intake.profile, intake.questionCount);
+    while (evaluation.status === 'needs_answer' && evaluation.question) {
+      const question = evaluation.question;
+      const automatic = await answerAkinatorQuestion(this.options.decisions, operationId, request, question, signal);
+      if (automatic.status !== 'answered' && !this.options.questions) break;
+      const value = automatic.status === 'answered' ? automatic.value
+        : await createDshIntakeAnswerer(this.options.questions!).ask(question, signal, agent);
+      signal.throwIfAborted();
+      this.current(agent);
+      if (agent.session.id !== owner.sessionId || realpathSync(agent.session.header!.cwd!) !== owner.repositoryRoot)
+        throw new KiokukoError('CONFLICT', 'Task intake owner changed');
+      intake = applyAnswer(intake, { questionId: question.id, value });
+      evaluation = evaluateProfile(intake.profile, intake.questionCount);
+    }
     const skills = await this.options.skills.snapshot({
       scope: agent,
       cwd: owner.repositoryRoot,
@@ -339,7 +360,7 @@ export class DshTaskWorkflow {
             task: {
               title: request,
               query: request,
-              profileHints: grounded.profileHints,
+              profileHints: intake.profile,
             },
             captureProfile: "minimal",
             coverage: {

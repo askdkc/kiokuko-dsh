@@ -58,6 +58,7 @@ import {
 import { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { ModelHandoff, ModelHandoffConfig } from '../model-handoff.js'
 import { DshLifecycleMemory } from '../lifecycle-memory.js'
+import { answerAkinatorQuestion } from '../decisions/akinator-answers.js'
 import { ModelAutoConfig } from '../model-auto/contracts.js'
 import { ModelAutoCoordinator } from '../model-auto/coordinator.js'
 import { ModelAutoStore } from '../model-auto/store.js'
@@ -563,6 +564,9 @@ export async function mountCore(
     lisp: () => get(LISP_CODING_SERVICE) as LispCodingService | undefined })
   const demand = new OnDemandIntake(
     {
+      answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
+        dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
+        [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string')),
       diagnostic: createIntakeDiagnosticSink(runtime),
       recovery: runtime.auxiliaryRecovery,
       assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -797,13 +801,14 @@ export async function mountCore(
         ),
       requestContext: requestIntentContextFor,
       interpret: interpretRequestIntent,
-      prepare: async (input, taskType, requestIntent, requestIntentContext) => {
+      prepare: async (input, taskType, requestIntent, requestIntentContext, intakeProfile) => {
         const task = await prepareCoreTask(
           input as PreStep,
           input.signal,
           taskType,
           requestIntent,
           requestIntentContext,
+          intakeProfile,
         )
         return task.admitted && task.profile.taskType !== 'chat'
       },
@@ -831,6 +836,8 @@ export async function mountCore(
   )
   const taskWorkflow = new DshTaskWorkflow({
     runtime,
+    decisions,
+    ...(questions ? { questions } : {}),
     demand,
     agents,
     sessions,
@@ -1068,6 +1075,7 @@ export async function mountCore(
     advisoryType?: TaskProfile['taskType'],
     suppliedIntent?: RequestIntentDecision,
     suppliedContext?: RequestIntentContext,
+    intakeProfile?: TaskProfile,
   ): Promise<CoreTask> {
     const key = `${payload.agent.session.id}\u0000${payload.turn}`
     await discardStaleActive(payload.agent)
@@ -1283,9 +1291,7 @@ export async function mountCore(
       request = {
         ...request,
         deferTaskTypeInference: classification.deferInference,
-        ...(classification.taskType
-          ? { profileHints: { taskType: classification.taskType } }
-          : {}),
+        profileHints: { ...intakeProfile, ...(classification.taskType ? { taskType: classification.taskType } : {}) },
       }
       for (const prepare of beforeTask) {
         const profileHints = await prepare(request)

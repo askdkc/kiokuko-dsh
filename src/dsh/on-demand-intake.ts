@@ -14,7 +14,10 @@ import { abortable } from './boundary-worker.js'
 import type { AuxiliaryRecovery } from './auxiliary-recovery.js'
 import { filterRequestMemory } from './request-memory.js'
 import { MemorySnapshotStale } from './memory-request-fence.js'
-import type { DshUserQuestions } from './intake-questions.js'
+import { createDshIntakeAnswerer, type DshUserQuestions } from './intake-questions.js'
+import { applyAnswer, deriveProfile, evaluateProfile } from '../akinator/domain.js'
+import type { AkinatorQuestion, TaskProfile } from '../akinator/types.js'
+import type { AkinatorAnswer } from './decisions/akinator-answers.js'
 import {
   isLispImplementation,
   isLispNativeCommand,
@@ -148,6 +151,7 @@ interface Dependencies {
     observation: IntakeDiagnosticObservation,
   ) => Promise<void>
   readonly questions?: DshUserQuestions
+  readonly answerIntake?: (input: DemandInput, task: string, question: AkinatorQuestion, context?: RequestIntentContext) => Promise<AkinatorAnswer>
 
   readonly answerContext?: DshAnswerContext | undefined
   readonly recovery?: AuxiliaryRecovery
@@ -193,6 +197,7 @@ interface Dependencies {
     taskType: TaskType,
     requestIntent?: RequestIntentDecision,
     requestIntentContext?: RequestIntentContext,
+    intakeProfile?: TaskProfile,
   ) => Promise<boolean>
   readonly ready: (agent: DemandAgent, turn?: number) => boolean
 }
@@ -219,6 +224,8 @@ interface Turn {
   preparation?: Promise<void>
   selectionPending?: boolean
   nativeUnowned?: boolean
+  nativeIntake?: TaskProfile
+  nativeIntakeSources?: Partial<Record<keyof TaskProfile, 'decision' | 'human'>>
   /** An issued source question fences effects until real preparation, not model inference. */
   clarificationPending?: boolean
   /** Only project context actually produced for this exact captured turn. */
@@ -869,6 +876,7 @@ export class OnDemandIntake {
             'native_unowned_request',
           )
         }
+        await this.clarifyNativeRequest(state)
         state.status = 'answer'
         await this.diagnose(state, { kind: 'native_unowned' })
         await this.diagnose(state, { kind: 'resume' })
@@ -1054,6 +1062,36 @@ export class OnDemandIntake {
     } finally {
       delete state.capture
     }
+  }
+  /** Clarification is human input, independent of optional task ownership. */
+  private async clarifyNativeRequest(state: Turn): Promise<void> {
+    const missingScope = executionClarification(state.task, state.requestIntent, state.requestIntentContext)
+    if (!this.host.answerIntake && !missingScope) return
+    const answerer = this.host.questions && createDshIntakeAnswerer(this.host.questions)
+    let current = { task: state.task, profile: deriveProfile(state.task, {}, { inferTaskType: false }), questionCount: 0 }
+    let evaluation = evaluateProfile(current.profile, current.questionCount)
+    const sources: Partial<Record<keyof TaskProfile, 'decision' | 'human'>> = {}
+    while (evaluation.status === 'needs_answer' && evaluation.question) {
+      const automatic = await this.host.answerIntake?.(state.input, state.task, evaluation.question, state.requestIntentContext)
+      this.assertCurrent(state)
+      if ((!automatic || automatic.status === 'disabled') && !missingScope) return
+      // With decisions explicitly OFF, preserve ordinary conversation behavior;
+      // unresolved action references still receive concrete clarification.
+      if ((!automatic || automatic.status === 'disabled') && evaluation.question.id === 'taskType') {
+        current.profile = deriveProfile(state.task)
+        evaluation = evaluateProfile(current.profile, current.questionCount)
+        if (evaluation.question?.id !== 'taskType') continue
+      }
+      if (!answerer && automatic?.status !== 'answered') return
+      const value = automatic?.status === 'answered' ? automatic.value
+        : await abortable(answerer!.ask(evaluation.question!, state.input.signal, state.input.agent), state.input.signal)
+      this.assertCurrent(state)
+      sources[evaluation.question!.id] = automatic?.status === 'answered' ? 'decision' : 'human'
+      current = applyAnswer(current, { questionId: evaluation.question!.id, value })
+      evaluation = evaluateProfile(current.profile, current.questionCount)
+    }
+    state.nativeIntake = current.profile
+    state.nativeIntakeSources = sources
   }
   private assertCurrent(state: Turn): void {
     state.input.signal.throwIfAborted()
@@ -1364,6 +1402,7 @@ export class OnDemandIntake {
         taskType,
         requestIntent ?? state.requestIntent,
         state.requestIntentContext,
+        state.nativeIntake,
       )
       this.assertCurrent(state)
       signal.throwIfAborted()
@@ -2049,6 +2088,7 @@ export class OnDemandIntake {
     const text =
       ON_DEMAND_GUIDANCE +
       intentText +
+      (state?.nativeIntake ? `\nAkinator answers for this exact request (scope clarification, not execution permission):\n${JSON.stringify({ profile: state.nativeIntake, sources: state.nativeIntakeSources })}` : '') +
       (state?.memoryDeferred?`\nOptional memory is quarantined and excluded from this request. Native permissions still apply. Deferred checks: ${JSON.stringify(this.host.recovery?.status(state.session.id)??[state.auxiliaryReceipt])}`:'')+
       (context && !context.activeGoal && !context.activeTask
         ? `\n${NO_ACTIVE_GOAL_GUIDANCE}`

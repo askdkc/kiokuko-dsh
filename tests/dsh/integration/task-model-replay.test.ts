@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFileSync } from 'node:child_process'
@@ -23,7 +24,7 @@ async function fixture() {
   let stops = 0, skillReads = 0, completions = 0, currentWork = new AbortController(), onStop = () => {}, onComplete = () => {}
   const demand = { controlTask: () => 'Inspect the exact current repository without changing unrelated files.', taskStateChanged() {} } as unknown as OnDemandIntake
   const freshService = () => {
-    const service = new DshTaskWorkflow({ runtime, agents, sessions, demand,
+    const service = new DshTaskWorkflow({ questions: { async ask(request: any) { const answer = answerFixtureScope(request); if (!answer) throw new Error('Unexpected intake question'); return answer } }, runtime, agents, sessions, demand,
       skills: { async snapshot() { skillReads++; return { complete: true, skills: [] } } }, tools: { schemas: () => [] },
       lisp: () => ({ async stopTask() { stops++; currentWork.abort(); onStop() }, async taskJobsIdle() { return true }, taskJobsIdleSync() { return true } }),
       onCompleted() { completions++; onComplete() },

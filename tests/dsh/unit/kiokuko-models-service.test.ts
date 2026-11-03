@@ -210,6 +210,25 @@ for (const modelApi of ['legacy', 'current'] as const) test(`Web ${modelApi} mod
   }
 });
 
+for (const kind of ['opencode', 'opencode-go'] as const) test(`${kind} publishes spaced search names without changing model selection IDs`, async () => {
+  const f = await fixture();
+  try {
+    const [name, baseURL, protocol] = CONNECTION_DEFAULTS[kind];
+    const c = ConnectionSchema.parse({ id: `kiokuko-${kind}`, kind, name, baseURL, protocol });
+    await f.service.save(c, 0);
+    await f.store.modify(credentialKey(c), async () => ({ type: 'api_key', key: 'fixture-key' }));
+    const models = await f.adapter().listModels(c.id);
+    const glm = models.find(m => m.id === 'glm-5.3');
+    assert.ok(glm, 'the shipped OpenCode catalog includes GLM-5.3');
+    assert.ok(glm.name.toLowerCase().includes('glm 5.3'), 'the native picker must receive the spaced search spelling');
+    assert.ok(glm.name.toLowerCase().includes('glm-5.3'), 'the original search spelling must remain available');
+    assert.equal(glm.provider, c.id);
+    await f.service.select(c.id, glm.id, 'current', 'search-session');
+    assert.deepEqual(f.selected, [{ id: 'search-session', binding: { provider: c.id, model: 'glm-5.3' } }]);
+    assert.deepEqual(await f.service.models(c.id), models, 'Settings and the native picker share the same advertised names');
+  } finally { await f.close(); }
+});
+
 test("all supported connection kinds register stable owned routes and custom protocols remain explicit", async () => {
   const f = await fixture();
   try {

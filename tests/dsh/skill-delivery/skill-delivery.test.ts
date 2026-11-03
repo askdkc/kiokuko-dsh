@@ -144,7 +144,7 @@ test('delivery counterexample: artifact present but disconnected system injectio
 })
 
 test('delivery counterexample: disconnected native Skill reader is caught while automatic SOUL still arrives',native,async t=>{
-  const f=await fixture(false)
+  const f=await fixture(false, 'compiled', { lisp: { enabled: false } }, undefined, 'decision OFF / Lisp OFF')
   const original=subject.DshSkillPrompts.prototype.get
   const disconnect=t.mock.method(subject.DshSkillPrompts.prototype,'get',async function(this: InstanceType<typeof subject.DshSkillPrompts>,name:string,path?:string){
     return name==='kiokuko-lisp'?undefined:original.call(this,name,path)
@@ -155,7 +155,7 @@ test('delivery counterexample: disconnected native Skill reader is caught while 
     await f.turn('Inspect the installed kiokuko-lisp Skill with the native skill tool and report its contents.')
     assert.equal(f.model.requests.length,3)
     const preparation = nativeToolResults(f.model.requests.at(-1).messages).find((block: any) => block.toolCallId === 'prepare-disconnected-read')
-    assert.equal(preparation?.isError, false, 'the counterexample must reach the reader after real intake preparation')
+    assert.equal(preparation?.isError, false, `the counterexample must reach the reader after real intake preparation: ${JSON.stringify(preparation)}`)
     requireBody(f.model.requests.at(-1),'kiokuko-soul')
     assert.throws(()=>requireBody(f.model.requests.at(-1),'kiokuko-lisp'),/compiled body absent/u)
   } finally {disconnect.mock.restore();await f.close()}

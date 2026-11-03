@@ -1,4 +1,5 @@
 import { abortable } from "./http-json.js";
+import type { DshUserQuestions } from "./intake-questions.js";
 import { observeNativeUserCancellation } from "./native-cancellation-observer.js";
 import { withImmediateTransaction } from "../db/transaction.js";
 import { randomUUID } from "node:crypto";
@@ -22,6 +23,7 @@ import {
   isRetiredRepositoryTurn,
   readRepositoryLearning,
   repositoryLearningKey,
+  type RepositoryTurnLearning,
 } from "../memory/repository-learning.js";
 import {
   reflectRepositoryTurn,
@@ -69,6 +71,24 @@ type State = {
   refused: boolean;
   lastSeq: number;
 };
+type TurnProposal = Pick<RepositoryTurnLearning, 'outcome' | 'summary' | 'tags' | 'evidenceRefs' | 'lessons' | 'reflectionStatus'>;
+function proposalText(proposal: TurnProposal): string {
+  return [
+    `結果: ${proposal.outcome}\n記録する要約: ${proposal.summary}`,
+    ...(proposal.lessons ?? []).map((lesson, index) => [
+      `${index + 1}. ${lesson.hypothesis}`,
+      `適用条件: ${lesson.applicability}`,
+      `次に行うこと: ${lesson.nextAction}`,
+      `確認方法: ${lesson.verifyWith}`,
+      `根拠: ${lesson.evidenceRefs.join(', ')}`,
+      ...(lesson.supersedes?.length ? [`置き換える記憶: ${lesson.supersedes.join(', ')}`, `訂正理由: ${lesson.correctionReason}`] : []),
+    ].join('\n')),
+    ...(proposal.lessons?.length ? [] : ['新しい教訓の案はありません。保存するのは上記の要約と出典だけです。']),
+    `タグ: ${proposal.tags?.join(', ') ?? ''}`,
+    `出典: ${proposal.evidenceRefs.join(', ')}`,
+    `整理の結果: ${proposal.reflectionStatus}`,
+  ].join('\n\n');
+}
 const SECTION = "memory:repository-learning";
 const sessionRecords = import("@deepseek-ai/dsh-session").catch(
   () => undefined,
@@ -194,10 +214,11 @@ export class DshRepositoryLearning {
       .finally(() => this.pending.delete(record));
     this.pending.add(record);
   }
-  private observe(state: State, event: Event): void {
+  private observe(state: State, event: Event, historical = false): void {
     if (event.seq <= state.lastSeq) return;
     state.lastSeq = event.seq;
     if (event.type === "turn/start") {
+      this.cancel(state.agent);
       state.turn = event.data?.turn;
       state.request = "";
       state.observations = [];
@@ -276,6 +297,7 @@ export class DshRepositoryLearning {
     if (event.type !== "turn/end") return;
     const turn = state.turn;
     delete state.turn;
+    if (historical) return;
     if (state.refused) {
       this.diagnostic(state.agent, {
         phase: "capture",
@@ -293,6 +315,11 @@ export class DshRepositoryLearning {
           : kind === "failed" || kind === "error"
             ? "failed"
             : "unknown";
+    if (outcome === "cancelled" || outcome === "unknown") {
+      this.cancel(state.agent);
+      this.diagnostic(state.agent, { phase: "capture", turn, status: "discarded", saveState: "not_saved" });
+      return;
+    }
     const terminalRef = `native:${state.agent.session.id}:${event.seq}`;
     const input: RepositoryTurnReflectionInput = {
       sessionId: state.agent.session.id,
@@ -310,6 +337,39 @@ export class DshRepositoryLearning {
     for (const [controller, owner] of this.controllers)
       if (owner === agent)
         controller.abort(new Error("repository_learning_discarded"));
+  }
+  private async approve(
+    agent: Agent,
+    input: RepositoryTurnReflectionInput,
+    signal: AbortSignal,
+    proposal?: TurnProposal,
+  ): Promise<boolean> {
+    const questions = this.host.get("userQuestions", false) as DshUserQuestions | undefined;
+    if (!questions || !this.owned(agent) || signal.aborted) {
+      this.diagnostic(agent, { phase: "capture", turn: input.turnId, status: "review_unavailable", saveState: "not_saved" });
+      return false;
+    }
+    const id = `repository-learning:${input.sessionId}:${input.turnId}:${randomUUID()}`;
+    const label = proposal === undefined ? "整理して確認する" : "この内容を保存する";
+    const result = await abortable(questions.ask({
+      agent, signal, questions: [{
+        id,
+        header: "Kiokuko · 記憶の確認",
+        question: proposal === undefined
+          ? "このターンは終了しました。今回の記憶を整理して確認しますか？"
+          : "保存する記憶はこの内容でよいですか？",
+        detail: proposal === undefined
+          ? "まだ保存しません。整理後に内容を表示し、承認された場合だけ保存します。新しい入力・Stop・閉じるでは保存しません。"
+          : `対象はこのリポジトリのターン ${input.turnId} です。実行ログからの案で、タスクの成功を保証するものではありません。\n\n${proposalText(proposal)}`,
+        options: [{ label }, { label: "今回は保存しない" }],
+      }],
+    }), signal);
+    const answer = result.answers[0];
+    const approved = !signal.aborted && this.owned(agent) && result.answers.length === 1
+      && answer?.id === id && answer.selected.length === 1
+      && answer.selected[0] === label && !answer.custom?.trim();
+    if (!approved) this.diagnostic(agent, { phase: "capture", turn: input.turnId, status: "declined", saveState: "not_saved" });
+    return approved;
   }
   private enqueue(
     agent: Agent,
@@ -408,6 +468,7 @@ export class DshRepositoryLearning {
           controller,
         );
         try {
+          if (!await this.approve(agent, input, controller.signal)) return;
           const latest = await this.runtime.withDatabase((db) =>
             readRepositoryLearning(db, this.root, { maxChars: 8192 }),
           );
@@ -423,8 +484,17 @@ export class DshRepositoryLearning {
           );
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.stopped) return;
+          const proposal = {
+            outcome: input.outcome,
+            summary: input.summary,
+            tags: ["repository-learning", input.outcome],
+            evidenceRefs: [...input.evidenceRefs],
+            lessons: structuredClone(reflection.lessons),
+            reflectionStatus: reflection.status,
+          };
+          if (!await this.approve(agent, input, controller.signal, proposal)) return;
           const saved = await this.runtime.withDatabase((db) => {
-            if (!this.owned(agent))
+            if (!this.owned(agent) || controller.signal.aborted)
               throw new Error("repository_learning_discarded");
             assertCaptureAllowed(
               db,
@@ -440,12 +510,7 @@ export class DshRepositoryLearning {
               sessionId: input.sessionId,
               turnId: input.turnId,
               terminalSeq,
-              outcome: input.outcome,
-              summary: input.summary,
-              tags: ["repository-learning", input.outcome],
-              evidenceRefs: input.evidenceRefs,
-              lessons: reflection.lessons,
-              reflectionStatus: reflection.status,
+              ...proposal,
             });
           });
           this.diagnostic(agent, {
@@ -575,7 +640,7 @@ export class DshRepositoryLearning {
     if (start !== undefined)
       for (let seq = start; seq < end; seq++) {
         const event = agent.session.eventAt?.(seq);
-        if (event) this.observe(state, event);
+        if (event) this.observe(state, event, true);
       }
     this.disposers.push(
       agent.ctx?.on(

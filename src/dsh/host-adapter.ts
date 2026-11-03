@@ -1,6 +1,7 @@
 import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
 import { TaskStartup } from "./task-startup.js";
+import { answerAkinatorQuestion } from "./decisions/akinator-answers.js";
 import { nativeExecutionOwnership } from "./native-execution-ownership.js";
 import { NativeTaskAuthority } from "./native-task-authority.js";
 import { readOwnedIdentity } from "./owned-read-owner.js";
@@ -872,6 +873,9 @@ export function createDshHostAdapter(
     hasDemandTools && agents && sessions
       ? new OnDemandIntake(
           {
+            answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
+              dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
+              [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string')),
             diagnostic: createIntakeDiagnosticSink(runtime),
             recovery: runtime.auxiliaryRecovery,
             assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -1112,13 +1116,13 @@ export function createDshHostAdapter(
                 step: input.step,
                 signal: input.signal,
               } as any),
-            prepare: async (input, taskType, requestIntent) => {
+            prepare: async (input, taskType, requestIntent, _context, intakeProfile) => {
               const event = await admission.mapPreStep(
                 input,
                 taskType,
                 requestIntent,
               );
-              const result = await gate.prepareRequestedWork(event);
+              const result = await gate.prepareRequestedWork({ ...event, profileHints: { ...intakeProfile, ...event.profileHints } });
               if (result.admitted)
                 detachedDemandSessions.delete(input.agent.session!.id);
               return (
@@ -1157,6 +1161,8 @@ export function createDshHostAdapter(
     demand && agents && sessions && skills?.snapshot && tools?.schemas
       ? new DshTaskWorkflow({
           runtime,
+          decisions,
+          ...(userQuestions ? { questions: userQuestions } : {}),
           demand,
           agents,
           sessions,

@@ -1,7 +1,6 @@
 import { canonicalContentHash } from '../serialization/validate.js'
 import { abortable } from './http-json.js'
 import { LispCodingCancelled } from './coding-question.js'
-import { codingContinuation } from './coding-workflow/intent.js'
 import { dshTurnRequestId } from './intake-profile-resolver.js'
 import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshUserQuestions } from './intake-questions.js'
@@ -31,9 +30,6 @@ export function parseTaskStartupAnswer(response: unknown, questionId: string): T
     : (TASK_STARTUP_OPTIONS as readonly string[]).indexOf(text)
   return index < 0 ? undefined : index === CANCEL_INDEX ? { decision: false, lisp: false, cancelled: true }
     : { decision: index < 2, lisp: index % 2 === 0 }
-}
-function continuation(task: string): boolean {
-  return codingContinuation(task) || /^(?:continue|resume|keep going|続けて(?:ください)?|続行(?:して)?|再開(?:して)?)[.!。！]?$/iu.test(task.trim())
 }
 
 /** One pre-assembly choice, stored in existing immutable decision bindings. No execution authority is created. */
@@ -83,11 +79,12 @@ export class TaskStartup {
         : undefined
       const config = await decisions.readStartup(requestId) ?? prior ?? configured
       let choice: TaskStartupChoice | undefined = prior?.startup ?? configured.startup
-      if (!choice && continuation(input.task)) {
+      if (!choice) {
         const previous = this.last.get(prefix)
         const rows = previous && previous.id < before ? [previous] : await decisions.startupBefore(prefix, before)
         // Ambiguous same-turn generations cannot donate a choice to another task.
-        if (rows[0]?.config.startup && (!rows[1] || rows[0].id.split(':')[2] !== rows[1].id.split(':')[2])) {
+        if (rows[0]?.config.startup && !rows[0].config.startup.cancelled
+          && (!rows[1] || rows[0].id.split(':')[2] !== rows[1].id.split(':')[2])) {
           choice = rows[0].config.startup
           const manual = lisp?.manualOverride?.(input.agent)
           if (manual && !choice.cancelled) choice = { ...choice, lisp: manual.choice === 'yes' }
@@ -100,7 +97,7 @@ export class TaskStartup {
       if (!choice && this.host.questions) {
         const response = await abortable(this.host.questions.ask({ agent: input.agent, signal: input.signal, questions: [{
           id: key, header: 'Kiokuko · 作業開始', question: 'この作業で decision と Lisp を使いますか？',
-          detail: `既定の選択を付けただけです。この作業では自由に変更できます。decision: ${config.provider} / ${selectedDecisionSettings(config)?.model ?? '未設定'}。未認証時に他へ切り替えません。Lisp の通常の権限・承認・Stop は維持します。取消・Skip は作業を保持して中止します。`,
+          detail: `この選択は同じチャットの次のターンにも引き継ぎます。既定の選択は変更できます。decision: ${config.provider} / ${selectedDecisionSettings(config)?.model ?? '未設定'}。未認証時に他へ切り替えません。Lisp の通常の権限・承認・Stop は維持します。取消・Skip は作業を保持して中止します。`,
           options,
         }] }), input.signal).catch(error => {
           if (error?.code === 'ASK_CANCELLED' && !input.signal.aborted) return { answers: [{ id: key, selected: [] }] }

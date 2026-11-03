@@ -28,7 +28,11 @@ import { canonicalContentHash } from '../../../src/serialization/validate.js'
 // Module lifecycle tests explicitly disable optional inference; native request-intent
 // suites exercise the enabled independent assessment and its unavailable boundary.
 const mountFixtureCore: typeof mountCore = (ctx, config = {}, modules) =>
-  mountCore(ctx, { typedDecisions: { mode: 'off' }, ...config }, modules)
+  mountCore(ctx, { typedDecisions: { mode: 'off' }, ...config }, [
+    { module: { id: 'fixture-scope', coreVersion: 1, requires: [], configure: value => value,
+      async mount({ host, defer }) { defer(host.beforeTask(async () => ({ target: 'fixture source', expected: 'requested fixture result' }))); return { stopIngress() {}, async drain() {}, async dispose() {} } } } },
+    ...(modules ?? []),
+  ])
 
 function scopedHooks() {
   const listeners = new Map<string, Function>(), handlers = new Map<string, Function[]>()

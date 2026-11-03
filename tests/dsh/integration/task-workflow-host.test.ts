@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
 import { mountNativeTools, mountToolExecutor, executeNativeTool } from '../helpers/native-tools.js'
 /** SQLite host service and native tool dispatch; the Skill inventory is a fixture,
  * not evidence about a model provider or the full plugin startup. */
@@ -35,7 +36,7 @@ async function fixture() {
   const agent = { id: 'primary', session: { id: 'primary-session', seq: 0, header: { cwd: root }, snapshotEvents: () => [] }, status: 'idle', async whenIdle() {} }
   agents.set(agent.id, agent); sessions.set(agent.session.id, agent.session)
   const changes: TaskSnapshot[] = [], waiters: Array<(task: TaskSnapshot) => void> = []
-  const options = { runtime, agents, sessions, skills: { async snapshot() { return { complete: true, skills: [] } } }, tools: { schemas: () => [] },
+  const options = { questions: { async ask(request: any) { const answer = answerFixtureScope(request); if (!answer) throw new Error('Unexpected intake question'); return answer } }, runtime, agents, sessions, skills: { async snapshot() { return { complete: true, skills: [] } } }, tools: { schemas: () => [] },
     emit(task: TaskSnapshot) { changes.push(task); for (const waiter of [...waiters]) waiter(task) } }
   const service = new DshTaskWorkflow(options)
   const until = (predicate: (task: TaskSnapshot) => boolean) => new Promise<TaskSnapshot>((resolve, reject) => {

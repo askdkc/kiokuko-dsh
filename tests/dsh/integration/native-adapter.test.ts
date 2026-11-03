@@ -281,7 +281,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     } finally {
       afterNativeEnter.close()
     }
-    assert.deepEqual(questionAgents, [])
+    assert.deepEqual(questionAgents, [event.nativeAgent, event.nativeAgent])
     assert.deepEqual(selectionQuestions, ['execution-mode'])
     assert.ok(decision.messages.length > 0)
     // The host proposes messages; only the native loop's durable append proves delivery.
@@ -444,7 +444,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     })
     assert.deepEqual(recoveredNextStep.profileHints, recoveredEvent.profileHints)
     assert.equal((await adapter.host.intakeGate!.prepare(recoveredNextStep)).prepared.run.runId, recoveredRun)
-    assert.equal(questionIds.length, questionsBeforeRecovery)
+    assert.equal(questionIds.length, questionsBeforeRecovery + 2, 'a new request resolves its own target and success criteria once')
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
     assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled', terminalTurn: 2, authority: recoveredClose!.authority });assert.equal(recoveredClose!.authority!.taskId,recoveredRun);assert.equal(recoveredClose!.authority!.sessionId,fallbackSession.id)
     await adapter.host.lifecycle!.closeTurn(recoveredClose!)
@@ -647,7 +647,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal((await adapter.host.intakeGate!.preStep(pivotEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
     const pivotRun = adapter.host.resolveSessionRunId!(chatSession)!
     assert.notEqual(pivotRun, thirdChatRun)
-    assert.equal(questionIds.length, questionsBeforePivot)
+    assert.equal(questionIds.length, questionsBeforePivot + 2, 'pivoted work resolves its new scope')
     const afterPivot = openConnection(f.databasePath)
     try {
       assert.equal(afterPivot.prepare('SELECT status FROM ledger_runs WHERE run_id = ?').get<{ status: string }>(thirdChatRun)?.status, 'completed')

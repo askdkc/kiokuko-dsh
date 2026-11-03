@@ -204,11 +204,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     assert.equal(result.prepared, true, `public preparation must admit this request before phase assertions: ${JSON.stringify(result)}`)
     assert.equal(result.taskType, fixtureTaskType)
     assert.equal(result.originalTask, fixtureRequests[fixtureTaskType])
-    if (protocol.name === 'deepseek') {
-      const deadline = Date.now() + 3000
-      while (auxiliaryRequests.length === auxiliaryBefore && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
-      assert.equal(auxiliaryRequests.length, auxiliaryBefore + 1, 'observe reflection before disposing this fixture')
-    }
+    assert.equal(auxiliaryRequests.length, auxiliaryBefore, 'declined memory organization cannot invoke reflection')
   }
   let questions: any, credentials: any, settings: any
   let wire: any, adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
@@ -303,7 +299,7 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
     try { await preparedTurn(phaseAgent) } finally { console.warn = previousWarn }
     assert.equal(requests.length, 4, JSON.stringify(phaseAgent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').map((event: any) => event.data)))
-    if (protocol.name === 'deepseek') assert.equal(auxiliaryRequests.length, 2, 'each finished foreground turn attempts its independent reflection')
+    if (protocol.name === 'deepseek') assert.equal(auxiliaryRequests.length, 0, 'declining organization prevents every reflection')
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
     assert.deepEqual(phaseNames, ['curator_check', 'memory_checkpoint'], `phase fallback diagnostics: ${phaseWarnings.join(' | ') || '(none)'}`)

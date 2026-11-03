@@ -153,6 +153,46 @@ async function verifyPackedOpenCodeReplayRecovery() {
   assert.deepEqual(malformedHistory[0].content[0].arguments,
     '{"action":"propose","token":"sk-testsecret123456789"}}', "history stays untouched for the ordinary session save path");
 }
+async function verifyOpenCodePickerSearch() {
+  // Register through the installed plugin's API; no provider requests or host patches.
+  await page.evaluate(async () => {
+    const request = async (body) => {
+      const response = await fetch('/api/kiokuko.models', body ? {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      } : undefined);
+      if (!response.ok) throw new Error(`Model fixture setup failed: ${response.status}`);
+      return response.json();
+    };
+    const state = await request();
+    await request({ op: 'save', revision: state.revision, connection: {
+      id: 'kiokuko-search-go', kind: 'opencode-go', name: 'OpenCode Go',
+      baseURL: 'https://opencode.ai/zen/go/v1', protocol: 'chat-completions', models: [],
+    } });
+    await request({ op: 'key', id: 'kiokuko-search-go', key: 'synthetic-search-only' });
+  });
+  await page.reload();
+  const trigger = page.getByRole('button', { name: /^Select model/ }).first();
+  await trigger.click();
+  const drill = page.getByRole('menuitem', { name: /^Model/ });
+  if (await drill.isVisible()) await drill.click();
+  const search = page.getByRole('searchbox', { name: 'Search models…', exact: true });
+  const glm = page.getByRole('menuitemradio', { name: 'GLM-5.3 (GLM 5.3)', exact: true });
+  for (const query of ['glm 5.3', 'GLM-5.3', 'glm5.3']) {
+    await search.fill(query);
+    await glm.waitFor();
+    assert.equal(await page.getByRole('menuitemradio', { name: /^GLM-5\.2/ }).count(), 0);
+    assert.equal(await search.inputValue(), query);
+  }
+  await search.fill('no-such-model-999');
+  await page.getByText('No matching models.', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Clear search', exact: true }).click();
+  await glm.waitFor();
+  assert.equal(await search.inputValue(), '');
+  await search.fill('glm 5.3');
+  await page.screenshot({ path: join(base, 'opencode-search.png') });
+  await glm.click();
+  await page.getByRole('button', { name: /^Select model, current GLM-5\.3 \(GLM 5\.3\)/ }).waitFor();
+}
 async function stop() {
   if (host) {
     const current = host;
@@ -318,6 +358,7 @@ try {
   await newSessionForTest(page, conversation, poll);
   const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();
   await editor.waitFor();
+  await verifyOpenCodePickerSearch();
   await editor.fill("/kiokuko model");
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const dialog = page.getByRole("dialog", {
@@ -456,6 +497,7 @@ try {
       requests: bodies.length,
       scenarios: [
         "packed OpenCode malformed-history rejection and corrected-call recovery",
+        "native OpenCode picker spaced/hyphenated search, empty recovery and selection",
         "empty native configuration",
         "Settings",
         "exact command",

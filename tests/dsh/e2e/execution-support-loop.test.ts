@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../helpers/intake-fixture.js'
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
@@ -68,7 +69,8 @@ test(`real DSH ${mode}: chat, scoped read, pause, other session, unload/reload, 
   })
   const questionFiber = ctx.plugin({ name: 'execution-test-questions', apply(context: any) {
     return context.provide('userQuestions', { async ask(request: DshUserQuestionRequest) {
-if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
+      const scope = answerFixtureScope(request); if (scope) return scope
+if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
 
       return { answers: await Promise.all(request.questions.map(async q => {
         if (q.options?.some(option => option.label === '整理して確認する')) {
