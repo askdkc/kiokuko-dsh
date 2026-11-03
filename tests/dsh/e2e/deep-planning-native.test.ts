@@ -328,7 +328,7 @@ test('Deep native: failure after input claim and before pre-step keeps input and
     assert.ok((await fixture.deep.reports.snapshot(fixture.parent.session.id)).some(e=>e.kind==='report'))
   } finally {remove();await fixture.close()}
 })
-test('Deep native: allowlisted read creates a citable artifact; provider receives no shell, mutation, Enno or spawn tools', nativeOptions, async () => {
+test('Deep native: allowlisted read creates a citable artifact; provider receives no shell, mutation or spawn tools', nativeOptions, async () => {
   const fixture=await deepNativeFixture((mock,_root,dbPath)=>[
     mock.textResponse('{"kind":"leaf","reason":"Inspect the source"}'),
     (request:any)=>{assert.deepEqual(request.tools.map((t:any)=>t.name).sort(),['deep_list_files','deep_read_file','deep_search_files']);return mock.toolCallResponse('read-proof','deep_read_file',{path:'source.txt'})},

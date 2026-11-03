@@ -38,7 +38,8 @@ export class LispWorker {
     readonly hostCall?: (method: string, args: unknown, context: LispRpcContext) => Promise<unknown>,
     readonly rpcAllowed: (method: string) => boolean = () => true,
     readonly beforeJob?: () => Promise<void>,
-    readonly auditJob?: (input: z.infer<typeof Program>, launch: () => Promise<Job>) => Promise<Job>) {}
+    readonly auditJob?: (input: z.infer<typeof Program>, launch: () => Promise<Job>) => Promise<Job>,
+    readonly onFailure?: (error: Error) => void) {}
   get busy(): boolean { return this.#pending !== undefined }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
@@ -53,6 +54,7 @@ export class LispWorker {
   async start(): Promise<void> {
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
+    launch.env.KIOKU_EXECUTION_MODE = this.config.executionMode
     // stop() can run while executable/sandbox preparation is awaiting I/O.
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
     const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
@@ -99,6 +101,7 @@ export class LispWorker {
     finally { clearTimeout(timer); this.#startupReject = undefined }
   }
   private break(error: Error): void {
+    const first = !this.#fatal && !this.#closed
     this.#fatal ??= error
     this.#startupReject?.(error)
     this.#pending?.abort.abort(error)
@@ -106,6 +109,7 @@ export class LispWorker {
     this.#pending = undefined
     this.#child?.kill('SIGTERM')
     for (const job of this.jobs.values()) job.child.kill('SIGTERM')
+    if (first) this.onFailure?.(error)
   }
   private receive(data: Buffer): void {
     try {

@@ -18,7 +18,7 @@ Persistent: coding choice or /kioku-lisp enable. /kioku-lisp enable-task optiona
 
 Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Source/data deletion and durable user DB mutation require concrete review; declare destructiveTargets. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
 
-Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts; direct Lisp/FFI or generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
+Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts. All workers are OS-isolated; direct Lisp/FFI cannot access workspace files or inherited credentials. Generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
 
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
@@ -86,9 +86,13 @@ approval never authorizes writes; only host changes receipts establish APPLIED/U
 
 ## Evidence, recovery and adapters
 
-Idle suspension: five minutes/slot pressure, never during turns/evaluations/approvals/jobs.
-Use auto-starts, status does not. WORKER_RESUMED ran no code: rebuild state, never
-effects. Abnormal stops require recovery.
+Workers persist by default; configured idle suspension never interrupts turns/evaluations/approvals/jobs.
+The host master shares startup/capacity across children and detects their exit. Clean host
+restarts and stopped idle children auto-start on the next admitted request when journals
+are settled; status does not start them. Do not ask the user to recover a clean restart.
+Fault replacements are bounded to two per owner per minute. WORKER_RESUMED ran no code:
+rebuild state, never effects. Explicit cancellation, uncertain effects, unconfirmed
+termination and the restart limit require inspection/recovery.
 Results: 16 KiB, no source echoes/duplicates. Page journaled evidence, never rerun/fetch
 all history. Fix missing paths with native reads; input errors need no recovery. Report
 observed errors/recovery; missing results never prove deletion/restoration.

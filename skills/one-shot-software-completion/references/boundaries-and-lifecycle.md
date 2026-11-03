@@ -57,11 +57,9 @@ rollout/restart ordering when old and new versions can coexist.
 
 ## Admitted execution paths
 
-Frame/Trace/Bound/Implement/Verify/Finish are responsibilities assigned to the
-current role. Zenki plans; Goki implements and verifies only its approved
-WorkUnit; Enno owns final acceptance. A WorkUnit report is not run completion.
-Normal execution completes the observable request with the available native
-permissions; it adds no orchestration approval.
+Trace the request through Kiokuko's model/tool loop to the observable result.
+Native permissions apply at each operation. Intermediate reports and passing
+checks do not establish completion of the whole request.
 
 When the host admits protected Lisp, use its Skill and current state: native
 read/glob/grep/skill remain subject to existing permissions; workspace mutation

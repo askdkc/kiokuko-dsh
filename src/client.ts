@@ -442,7 +442,7 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
       try {
         const value = await request()
         if (disposed) return
-        if (value) { setStatus(value); setError(''); if (value.enabled && ['RECOVERY_REQUIRED', 'STOP_UNCONFIRMED'].includes(value.state) && value.state !== lastState) setOpen(true); lastState = value.state }
+        if (value) { setStatus(value); setError(''); lastState = value.state }
         else if (lastState) setError('Lisp の接続が失われました。保護は解除されていません。プラグインを戻して /kioku-lisp status を確認してください。')
       } catch (failure) { if (!disposed && lastState) setError(messageOf(failure)) }
       finally { if (!disposed) timer = setTimeout(() => void refresh(), document.hidden ? 10000 : 2000) }
@@ -833,7 +833,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
         jsx('button', { type: 'button', disabled: busy || snapshot.closed, onClick: () => settle(true), 'aria-label': '質問を閉じる', children: '閉じる（Esc）' })] }),
       jsx('p', { id: `${titleId}-keys`, children: pending.review ? '回答済みの内容です。Enterで次の質問を表示、Escで閉じます。' : hint }),
       jsxs('div', { className: 'kiokuko-intake-body', children: [
-        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels }) : question.detail ? jsx('p', { children: question.detail, ...(question.id.startsWith('coding-lisp-') ? { 'data-coding-goal': true, style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } } : {}) }) : null,
+        reviewing ? jsx(MarkdownText, { text: question.detail, labels: reviewCopy!.labels }) : question.detail ? jsx('div', { className: 'kiokuko-intake-detail', role: 'region', 'aria-label': '確認する内容（全文）', tabIndex: 0, children: jsx('p', { children: question.detail, ...(question.id.startsWith('coding-lisp-') ? { 'data-coding-goal': true } : {}) }) }) : null,
         !pending.review && !snapshot.closed && snapshot.state === 'continued' ? jsx('p', { children: '処理は継続中です。この質問には後から回答できます。' }) : null,
         snapshot.countdown ? jsx('p', { children: `回答待ち: ${Math.ceil(snapshot.countdown.remainingMs / 1000)}秒${snapshot.countdown.running ? '' : '（操作中は停止）'}` }) : null,
         pending.review ? jsx('p', { children: `回答済み: ${pending.review.find(a => a.id === question.id)?.selected.join('、') ?? ''} ${pending.review.find(a => a.id === question.id)?.custom ?? ''}` }) : null,
@@ -859,7 +859,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       jsxs('footer', { children: [
         batch.page > 0 ? jsx('button', { type: 'button', disabled: busy, onClick: () => page(batch.page - 1), children: '前の質問' }) : null,
         pending.questions.length > 1 ? jsx('span', { children: `${batch.page + 1}/${pending.questions.length}` }) : null,
-        jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.ordinal ? `入力番号: ${draft.ordinal}` : multi ? `${draft.checked.length}件を選択中` : draft.selected === null ? '' : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
+        jsx('span', { role: 'status', 'aria-live': 'polite', children: error || (busy ? '送信中…' : draft.ordinal ? `入力番号: ${draft.ordinal}` : multi ? `${draft.checked.length}件を選択中` : draft.selected === null ? (question.options.length ? '選択肢を選ぶと確定できます。' : '自由入力すると確定できます。') : `${draft.selected + 1}. ${question.options[draft.selected]!.label}を選択中`) }),
         pending.review ? batch.page < pending.questions.length - 1 ? jsx('button', { type: 'button', onClick: () => page(batch.page + 1), children: '次の質問（Enter）' }) : null
           : jsx('button', { type: 'button', disabled: disabled || (multi ? !draft.checked.length && !draft.custom.trim() : draft.selected === null && !draft.custom.trim()), onClick: () => settle(), children: batch.page < pending.questions.length - 1 ? '次の質問（Enter）' : `確定（${multi ? shortcutPlatform().label + '+' : ''}Enter）` }),
       ] }),
@@ -882,6 +882,8 @@ function installIntakeStyle(): (() => void) | undefined {
 .kiokuko-intake header,.kiokuko-intake footer{display:flex;gap:8px;align-items:center;flex-wrap:wrap;flex-shrink:0}
 .kiokuko-intake h2{font-size:16px;line-height:1.4;margin:0;flex:1}
 .kiokuko-intake-body{overflow:auto;min-height:0;display:flex;flex-direction:column;gap:8px}
+.kiokuko-intake-body>*{flex-shrink:0}
+.kiokuko-intake-body>.kiokuko-intake-detail{flex-shrink:1;min-height:3em;max-height:min(160px,25dvh);overflow:auto;overflow-wrap:anywhere}
 .kiokuko-intake p{margin:0;white-space:pre-wrap;line-height:1.4;font-size:12px}
 .kiokuko-intake button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,#bbb);border-radius:8px;padding:8px 10px;min-height:40px;cursor:pointer}
 .kiokuko-intake button:disabled{cursor:default;opacity:.6}

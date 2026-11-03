@@ -3,6 +3,8 @@ on:
   push: null
   pull_request: null
   workflow_dispatch: null
+  schedule:
+    - cron: '17 3 * * *'
   release:
     types: [published]
 permissions:
@@ -33,6 +35,8 @@ jobs:
         shell: bash
         run: node scripts/resolve-dsh-upstream.mjs
       - id: plan
+        env:
+          KIOKUKO_EXPECTED_DSH_SHA: ${{ steps.dsh.outputs.sha }}
         run: node scripts/ci-plan.mjs "${{ runner.temp }}/selected-ci.json"
       - uses: actions/upload-artifact@v7
         with:

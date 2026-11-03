@@ -9,7 +9,7 @@ This document describes the full compatibility package. The
 Skills and uses the shared database, intake, ledger and scoped memory. It mounts
 source-backed index reasoning by default. AgenticReplay, Deep, other advanced-memory workers,
 session-history repair and the full browser client are optional. Enno retains the existing compatibility host adapter;
-Lisp adds composable tools in the normal development environment; explicit protected mode retains its legacy approval boundaries.
+Lisp adds composable tools in isolated workers. Project effects use the host tool permission boundary; explicit protected mode retains its additional approval policy.
 Omitted managed Skills are preserved on disk. Configured startup rejects unsafe
 Skill collisions before mounting its runtime; it does not rewrite `AGENTS.md`.
 
@@ -210,7 +210,7 @@ uploaded automatically. Deletion and disabling instructions are in
 [AgenticReplay recording](docs/agenticreplay-recording.md).
 # Optional Common Lisp mode
 
-With lisp.enabled: true, Lisp runs in supervised workers with the normal user environment and child processes. It coexists with ordinary tools; worker failure does not restrict normal coding. Kiokuko-owned kioku_read/write/edit/remove/exec/result use Node filesystem/process APIs, independently of stock DSH filesystem/bash sandbox and approval configuration. DSH tool identity, Plan/goal state, cancellation and admitted execution ownership still apply.
+With lisp.enabled: true, Lisp runs in supervised OS-isolated workers without workspace access or inherited credentials. Project file changes and child processes go through host tools and their operation permissions. It coexists with ordinary tools; worker failure does not restrict normal coding. Kiokuko-owned kioku_read/write/edit/remove/exec/result use Node filesystem/process APIs, independently of stock DSH filesystem/bash sandbox and approval configuration. DSH tool identity, Plan/goal state, cancellation and admitted execution ownership still apply.
 
 Project edits, development-related external reads, PATH commands, builds/tests, generated/temp/disposable artifacts, helper compilation/registration need no additional approval. Derived memory organization requires post-task permission and saving requires native user approval of the exact shown revision. Decline saves nothing; uncertain saves reconcile their original approved key without replaying work. Source/data deletion and existing durable user DB mutations require concrete confirmation. Declare destructiveTargets for such commands. Arbitrary Lisp/shell code is not a security sandbox; unclassified code is not rejected merely because static side-effect analysis is impossible. Direct effects bypassing the owned tools have no host verification receipt.
 

@@ -39,9 +39,9 @@ When requirements compete, prioritize safety and data preservation, accessibilit
 
 ## Expert selection
 
-Select one dominant expert for each UI component or cohesive flow, add at most two more only when the same WorkUnit genuinely crosses those risks, and record a concrete reason for each. On an Enno-Oduno `ui` route the WorkUnit also carries `code.*` expertise, because UI behavior is code behavior; sibling `test`, `docs`, and `operations` units inherit neither.
+Select one dominant expert for each UI component or cohesive flow, add at most two more only when the same WorkUnit genuinely crosses those risks, and record a concrete reason for each. Interactive UI changes also select `code.*` expertise. Tests, documentation and operations select expertise for their actual risks.
 
-Do not read every UI reference “for completeness.” If implementation exposes a new risk, return the WorkUnit for an explicit selection or update the non-Enno working plan before reading the additional fragment.
+Do not read every UI reference “for completeness.” If implementation exposes a new risk, update the working plan and expert selection before reading the additional fragment.
 
 ## Expert index
 

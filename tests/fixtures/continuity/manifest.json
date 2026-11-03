@@ -1,7 +1,7 @@
 {
-  "id": "continuity-v1",
-  "sha256": "fa25d34c414f0a458dc411a10f8cf5ddefb8bacecb8ef08465290bc577412515",
-  "scoring": "Exact JSON fields fixed in scenarios.json; task-paired bootstrap across six context recovery probes.",
+  "id": "continuity-v2",
+  "sha256": "05c1b2ca0a1847201f24728b44987b85bd2dba7e2d63afd9a153c2775f22f644",
+  "scoring": "Exact JSON fields fixed in scenarios.json; task-paired bootstrap across five context recovery probes.",
   "groups": [
     "A: baseline execution evidence",
     "B: continuity projection"

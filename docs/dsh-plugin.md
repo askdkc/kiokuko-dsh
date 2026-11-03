@@ -11,7 +11,7 @@ not remove files or dependencies from an installed full package.
 
 ## Compatibility
 
-Compatibility depends on the native APIs exercised by the disposable-profile tests, not a package-version prefix. CI resolves official DSH master once, builds that exact revision and records it with the test evidence. Historical release records and locked fixtures remain reproducibility data, not proof of current-upstream support.
+Compatibility depends on the native APIs exercised by the disposable-profile tests, not a package-version prefix. Each CI run resolves the latest official DSH master, builds that revision and records it with the test evidence. The resolved SHA forces compatibility coverage even for prose-only changes; daily GitHub runs also detect upstream-only changes. The SHA is shared within that run, never reused as a fixed baseline for later runs. Historical release records and locked fixtures remain reproducibility data, not proof of current-upstream support.
 
 On hosts exposing the batch executor API, development Lisp preserves the Agent’s selected native or PTC executor. Host-owned nested calls use DSH’s exported invocation pipeline, retaining scoped policy, cancellation settlement and host-only task authority. They are not submitted as model batches.
 
@@ -439,151 +439,39 @@ depend on a consumer-side build permission.
 
 ## Runtime contract
 
-The Core SQLite database remains the semantic authority for Akinator, memory,
-receipts and durable evidence. DeepSeek `SessionEvent`
-is the canonical current-session transcript and tool-evidence boundary.
-Kiokuko copies events and verified attachment bytes into a separate,
-rebuildable cache for bounded export and post-completion finalization. Cache
-listeners contain their own failures; only an orchestration-requested native
-`sessions.flush()` remains an awaited, fail-closed durability boundary.
+Kiokuko owns the input → model → tool → result → continue/finish loop through
+DSH's AgentFactory/Agent API. The default bundle disables the stock AgentLoop;
+model connections, native SessionEvent records and Web/CLI consumers retain
+their DSH contracts. The explicit legacy-loop profile selects the stock loop
+instead of the Kiokuko factory; the two loops never drive the same agent.
 
-Conversation-first intake permits text answers before execution preparation. Native `read`, `glob`, `grep`, `web_search`, and `web_fetch` demands automatically prepare the complete original request; when its action type is unresolved, `research` is advisory only. Models can read a plan or inspect files directly without a separate `prepare_requested_work` call. Missing targets, unresolved user choices, native permissions, current session ownership, and pending memory checks still govern admission. Other unclassified tools and arbitrary PTC programs retain explicit preparation requirements.
+The native session retains the human request, attachments, model responses and
+tool results. Kiokuko's SQLite database owns task identity, execution receipts
+and memory. AgenticReplay records correlated execution for inspection; it does
+not replace the memory store or authorize replay of effects.
 
-The dsh integration provides:
+Current session ownership, explicit operation permissions, cancellation and
+Plan state are checked at the operation boundary. Memory retrieval, extraction
+and saving are optional: their failure cannot authorize an operation, block
+unrelated development or establish completion. Diagnostics distinguish work,
+verification, receipt persistence and memory storage.
 
-- the exact bundled `kiokuko-soul` system-prompt section and seven standard Skill
-  providers;
-- named context fragments deduplicated against the retained native conversation
-  and current message batch. Turns and phase changes append only changed
-  fragments; the SOUL body stays in the system prompt. Compaction, session resume,
-  and plugin reload restore missing fragments from current host state. A proposed
-  message is not treated as delivered until the native loop retains or queues it;
-- the original human request and attachments remain native messages. Kiokuko's
-  task context contains only additional intake facts, omitting exact request
-  copies and request prefixes in those fields;
-- one current Akinator question at a time only when the task type remains
-  ambiguous; the canonical workspace and exact user request ground the target
-  and completion fields without asking the user to repeat known context, and
-  unresolved intake blocks the model and tools;
-- Japanese task-type labels with concrete examples and guidance distinguishing
-  file changes from drafting text. Kiokuko's initial Web question supports
-  number keys 1–8 to select and Enter to confirm; digits entered in the custom
-  field (including full-width digits) resolve in the same displayed order.
-  Shift+Enter and IME composition do not submit. Pending drafts survive a
-  Session switch. Every single-select question carrying one to nine options uses
-  the same numbered card — Kiokuko's own intake, the Deep selection
-  question, an agent-composed choice such as a release step, and another
-  plugin's question alike — so a shortcut is never missing from a question this
-  composer shows. Carriers a single number key cannot address — multi-select
-  batches, optionless prompts, several questions in one request, and catalogs
-  larger than nine options outside the Deep flow — retain their native
-  UI. Plan-review cards also use numbered choices: discussion first, refusal
-  when offered, then approval. Cmd/Ctrl+1–3 selects a choice and Enter confirms;
-  selecting a number alone never submits approval. The plan remains rendered as
-  Markdown, and answers preserve the host's exact option labels. Discussion
-  cancels the request through the native carrier;
-- an explicit `chat` intake choice (including free-form aliases such as
-  `just chatting` and `雑談`) and the task-type question's **Skip this
-  question** action; both skip target/success follow-ups and never create a separate run, and the chat choice carries across conversational
-  follow-ups until an explicit actionable request starts a new run;
-- the Kiokuko operations, with the two model-facing operations
-  exposed as model tools and host identity injected after argument validation;
-- Oduno ideal directives distinguish the mandatory Skill reading list from
-  Akinator-discovered Skill contributions, constrain the latter to the exact
-  selected names (including an exact empty list), and return bounded corrective
-  field diagnostics to DSH when a submission is rejected;
-- request-scoped Ponytail state for concurrent DSH conversations, with native
-  commands routed to the exact invoking agent and session;
-- revision, route, phase, lease, idempotency, confirmation, verifier, and
-  meditation gates through the Kiokuko core;
-- final verification compares the workspace at verification start, so completed
-  implementation edits are allowed. Git and ordinary directories use the same
-  file selection as their repository snapshots; unchanged content and ignored
-  build output do not trigger plan approval. Actual source changes still
-  invalidate evidence, while an unavailable mutation audit stops with a host
-  error instead of requesting another plan or repeating completed work;
-- a non-terminal tool result whose next action requires host work (plan confirmation or
-  final verification) calls DSH `concludeTurn()` only after
-  the successful result exists. Plan submission therefore concludes its model
-  step before DSH opens a dedicated `plan-review` interaction. Receipt,
-  handoff, outbox, and seal commit atomically; a separate durable job then owns
-  approval or cancellation. `agent/turn-stopping` only kicks that worker, so no model tool call remains
-  live while the user decides and no stale confirmation directive can race the
-  next Goki role. The card offers approve/cancel; **Chat about it** returns the
-  normal composer, and the next human message becomes same-run revision
-  feedback before Zenki resumes. DSH defines the card chrome from its own UI
-  locale, while Kiokuko supplies the plan body as Markdown. Kiokuko derives an
-  English or Japanese body language from the original task, instructs Zenki to
-  keep every natural-language plan field in that language, and renders headings,
-  lists, paths, commands, dependencies, checks, and limits without changing the
-  DSH `plan-review` intent or decision labels;
-- a durable run-to-`turn/start` binding and an immutable terminal `turn/end`
-  boundary. A successful Oduno meditation result deliberately does not call
-  `concludeTurn()`: the same native turn remains open for one visible assistant
-  response summarizing the outcome, changes, verification, and remaining
-  uncertainty. On the resulting genuinely terminal idle boundary, the adapter
-  awaits DSH's exact live `sessions.flush(session)` before the ledger close,
-  including the tool result and that final assistant/turn suffix. The
-  background finalizer reads only that inclusive range even if the session has
-  already received later turns. If the final response is empty or its provider
-  fails, a durable plugin-owned result appears in chat, using recorded work,
-  verification, and remaining issues. It does not impersonate a model message
-  or make another model request. The fallback remains visible after reload;
-- bounded turn continuation, exact run/session/workspace/route binding, and
-  in-memory plaintext continuation tokens.
+Owned operations keep stable request identities and durable receipts. Exact
+retries return saved results; changed arguments conflict. After interruption,
+unknown effects are reported without re-execution. Receipt persistence retries
+and memory adoption retries reuse their existing journals and staged results.
 
-Natural model stops before a required phase submission enter the same durable
-three-delivery loop guard. Boundary workers serialize per session, not across
-unrelated sessions. New human input aborts pending questions and supersedes old
-jobs; delivery rechecks ownership after native flushing. Future retry times and
-expired-owner recovery are scheduled from the database after restart as well
-as during normal operation.
+A follow-up stays in its native session. Resume requires the exact session and
+repository binding; ambiguous or stale ownership cannot be replaced with a
+repository-wide latest task. Explicit task completion advances its authority;
+final closing rechecks that authority so a delayed close cannot retire resumed
+work. An idle model or a passing intermediate test is not task completion.
 
-CI requires full native-loop coverage against the pinned published runtime,
-including natural stops, identical work-report retries, approval cancellation,
-and both empty and failed final responses. Package installation alone is not
-treated as proof of workflow completion.
-
-Expected validation or omission failures become bounded retry receipts. The
-first identical failure retries the same phase with temporary evidence; the
-second asks Akinator. A deterministic continuation is delivered only after a
-native flush. Human input supersedes a pending continuation, and plugin delivery
-IDs alone are deduplicated at the next pre-step.
-
-A DSH model-request failure, including a WebSocket failure, also leaves an
-unfinished run active and does not automatically replay model or tool work.
-When the user continues in a later turn, the adapter revalidates the exact
-DSH session before reinjecting any pending continuation.
-
-Ordinary chat remains open while the agent is idle between conversational
-messages. An explicit build, debug, review, research, writing, analysis, or
-DevOps request closes the preceding chat run before starting its task run.
-An unfinished, resumable non-chat run remains bound across later user turns so
-a follow-up instruction does not orphan the existing plan. Completed,
-cancelled, and blocked runs are closed before the next independent request
-starts; blocked runs retain their failed ledger outcome rather than lingering
-as unusable active bindings. Disposing the DSH session closes its current run
-after queued events are durable.
-
-Short status checks such as `all fixed?` are classified as analysis rather than
-as a new fix request, and commit-message requests are classified as writing.
-If either arrives while an earlier run has not started work, the old run is
-cancelled and the explicit lightweight request starts independently.
-
-After a plugin reload or process restart has cleared in-memory turn state, the
-adapter resumes only the single unambiguous active run already bound
-to the same persistent DSH session and canonical repository. The session is
-revalidated through the core continuation gate and
-previous ordinary-memory context is not replayed implicitly. Multiple matching
-runs, a continuation limit, a conflicting execution lease, or a changed
-capability catalog still fails closed instead of selecting or advancing a run.
-User questions retain the exact live native Agent object; confirmation answers
-revalidate both that scope and the bound catalog/revision before they can mutate
-the core state machine.
-
-`runId` is required for dsh resume. The plugin never selects a repository-wide
-latest run. Ambiguous, stale, cancelled, aborted, lease-conflicting, or
-unavailable states stop without converting the failure into a normal success.
+Lisp is an optional tool surface. Every Lisp worker is OS-isolated; workspace
+changes and external commands use host tools and their permission checks.
+The development surface coexists with ordinary tools, and its worker failure
+leaves those tools available. See [owned execution](owned-execution.md) for
+operation receipts, recovery and the protected compatibility mode.
 
 ## Verification
 

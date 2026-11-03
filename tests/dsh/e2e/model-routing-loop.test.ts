@@ -213,7 +213,7 @@ test('native model-auto applies the selected effort to first prompt and request,
   const questions = h.ctx.plugin({ name: 'model-auto-ui', apply(ctx: any) {
     return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
 return ({ answers: request.questions.map((q: any) =>
-      ({ id: q.id, selected: [q.id === 'enno-execution-mode' ? '通常実行' : q.options?.[0]?.label ?? 'build'] })) }) } })
+      ({ id: q.id, selected: [q.id === 'execution-mode' ? '通常実行' : q.options?.[0]?.label ?? 'build'] })) }) } })
   } }); await questions
   class CodexAdapter extends h.mock.MockAdapter {
     override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model,
@@ -408,7 +408,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.equal(await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS n FROM entries').get()?.n), 0, 'declined post-task review creates no memory')
     assert.equal(await readFile(join(h.root, 'README.md'), 'utf8'), 'after\n')
     const counts = await adapter.host.runtime!.withDatabase(db => ['dsh_turn_receipts', 'dsh_continuation_outbox', 'dsh_coding_workflows'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
-    assert.deepEqual(counts, [0, 0, 0, 0])
+    assert.deepEqual(counts, [0, 0, 0])
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questionHost.dispose(); await h.dispose() }
 })
 test('native code normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
@@ -441,7 +441,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
 
     const question = request.questions[0];
     if (question.id.startsWith('coding-lisp-')) { codingChoices++; return { answers: [{ id: question.id, selected: ['使わない'] }] } }
-    assert.equal(question.id, 'enno-execution-mode'); questionCount++
+    assert.equal(question.id, 'execution-mode'); questionCount++
     return { answers: [{ id: question.id, selected: [questionCount === 1 ? '取消・作業を保持' : '通常実行'] }] }
   } }) } }); await questions
   const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({

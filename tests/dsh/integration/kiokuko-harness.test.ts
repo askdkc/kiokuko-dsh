@@ -7,6 +7,9 @@ import Agents from '@deepseek-ai/dsh-agent'
 import Sessions, { SessionId } from '@deepseek-ai/dsh-session'
 import Projections from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import Tools from '@deepseek-ai/dsh-tools'
+import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
+import * as Harness from '../../../src/dsh/harness/index.js'
 import Llm, { LlmAdapter, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { KiokukoAgentFactory } from '../../../src/dsh/harness/factory.js'
 import {currentTaskAuthority,withTaskAuthority} from '../../../src/dsh/task-authority-context.js'
@@ -21,9 +24,11 @@ test('legacy compatibility overlay restores one stock factory and removes its Ki
   assert.equal(rows.some((r:any)=>r.insert),false,'Overlay must not duplicate bundle entries')
 })
 
-async function fixture() {
+async function fixture(productionPlugin = false) {
   const ctx = new Context(), requests: unknown[] = []
   for (const plugin of [Llm, Sessions, Projections, Agents]) await ctx.plugin(plugin)
+  if (productionPlugin) for (const plugin of [SystemPrompt, Tools]) await ctx.plugin(plugin)
+  if (productionPlugin) await ctx.plugin(NativeExecutor)
   ctx.llm.registerAdapter(['harness-fixture'], new class extends LlmAdapter {
     async *stream(options: any) {
       requests.push(options)
@@ -33,10 +38,11 @@ async function fixture() {
     }
   }())
   let factory!: KiokukoAgentFactory
-  const plugin = await ctx.plugin({name:'harness-contract',inject:['agents','sessions','llm'],apply(scope:Context) {
+  const plugin = productionPlugin ? await ctx.plugin(Harness, {provider:'harness-fixture',model:'contract-model'}) : await ctx.plugin({name:'harness-contract',inject:['agents','sessions','llm'],apply(scope:Context) {
     factory = new KiokukoAgentFactory(scope, { provider: 'harness-fixture', model: 'contract-model' })
     scope.agents.setFactory(factory)
   }})
+  if (productionPlugin) factory = ctx.kiokukoHarness
   return { ctx, factory, requests, async close() { await factory.dispose(); await plugin.dispose(); await ctx.fiber.dispose() } }
 }
 
@@ -57,15 +63,20 @@ test('rejected intake retains input and waits for another wake instead of silent
 })
 
 test('harness captures its durable model selection for pre-step and the matching request', async () => {
-  const f=await fixture();let handle:any
+  const f=await fixture(true);let handle:any
   try {
     const selections:any[]=[]
+    const errors:string[]=[]
+    f.ctx.on('agent/error',event=>{errors.push(String(event.error))})
     f.ctx.on('agent/pre-step',async(payload:any,next)=>{selections.push(payload.modelSelection);return next()})
     handle=await f.ctx.agents.create({sessionId:SessionId('kiokuko-model-selection')})
     assert.deepEqual(handle.agent.model.current(),{provider:'harness-fixture',model:'contract-model'})
     handle.agent.model.select({provider:'harness-fixture',model:'selected-model'})
+    assert.deepEqual(f.ctx.sessionProjections.snapshot(handle.agent.session).values.modelSelection?.next,
+      {provider:'harness-fixture',model:'selected-model'},'Web and CLI must receive the same durable selection')
     handle.agent.followup(createUserMessage({content:[{type:'text',text:'Use the selected model'}],source:{kind:'user'}}))
     await handle.agent.whenIdle()
+    assert.deepEqual(errors,[])
     assert.deepEqual(selections,[{provider:'harness-fixture',model:'selected-model'}])
     assert.equal((f.requests[0] as any).model,'selected-model')
   } finally {await handle?.dispose();await f.close()}

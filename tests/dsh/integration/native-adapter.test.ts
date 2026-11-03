@@ -71,7 +71,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
         { type: 'turn/start', seq: start, time: start, data: { turn } },
         { type: 'user/message', seq: start + 1, time: start + 1, data: { id: `${id}-user-${turn}`, role: 'user', content: [{ type: 'text', text: `turn ${turn}` }], source: { kind: 'user' } }, surfaceOp: 'append' as const },
         { type: 'request/header', seq: start + 2, time: start + 2, data: { header: { config: { provider: 'test', model: 'test' } }, reason: index === 0 ? 'initial' : 'series' } },
-        { type: 'turn/end', seq: start + 3, time: start + 3, data: { turn, reason: { kind: 'completed' } } },
+        { type: 'turn/end', seq: start + 3, time: start + 3, data: { turn, reason: { kind: 'blocked' } } },
       ]
     }).flat()
     const session = { id, header: { cwd: f.root }, snapshotEvents: () => events }
@@ -446,7 +446,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     assert.equal((await adapter.host.intakeGate!.prepare(recoveredNextStep)).prepared.run.runId, recoveredRun)
     assert.equal(questionIds.length, questionsBeforeRecovery)
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
-    assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled',authority:recoveredClose!.authority });assert.equal(recoveredClose!.authority!.taskId,recoveredRun);assert.equal(recoveredClose!.authority!.sessionId,fallbackSession.id)
+    assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled', terminalTurn: 2, authority: recoveredClose!.authority });assert.equal(recoveredClose!.authority!.taskId,recoveredRun);assert.equal(recoveredClose!.authority!.sessionId,fallbackSession.id)
     await adapter.host.lifecycle!.closeTurn(recoveredClose!)
     const discussionSession = createNativeSession('selection-discussion-session')
     const discussionAgent = { id: 'selection-discussion-agent', session: discussionSession }
@@ -656,7 +656,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterPivot.close()
     }
     const pivotClose = await adapter.host.resolveSessionClose!(chatSession.id, chatSession)
-    assert.deepEqual(pivotClose, { runId: pivotRun, status: 'cancelled', authority: pivotClose?.authority })
+    assert.deepEqual(pivotClose, { runId: pivotRun, status: 'cancelled', terminalTurn: 4, authority: pivotClose?.authority })
     assert.equal(pivotClose?.authority?.taskId, pivotRun)
     assert.equal(pivotClose?.authority?.sessionId, chatSession.id)
     assert.equal(pivotClose?.authority?.repositoryRoot, realpathSync(f.root))
@@ -673,11 +673,14 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     })), /incomplete|mandatory|catalog/u)
 
     soulModelInvocable = true
-    const writingEvent = await adapter.host.mapPreStep!({
+    const mappedWriting = await adapter.host.mapPreStep!({
       agent: event.nativeAgent as any,
       messages: [{ role: 'user', content: [{ type: 'text', text: 'gimme commit message.' }], source: { kind: 'user' } }],
       turn: 5, step: 1, signal: event.signal,
     })
+    const writingIntent = bindMainModelRequestIntent({ relation: 'new', action: 'answer', evidenceRefs: requestIntentReferenceIds(mappedWriting.requestIntentContext!) }, mappedWriting.requestIntentContext!)
+    assert.ok(writingIntent)
+    const writingEvent = { ...mappedWriting, requestIntent: writingIntent, profileHints: { ...mappedWriting.profileHints, taskType: 'writing' as const } }
     assert.equal((await adapter.host.intakeGate!.preStep(writingEvent, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
     const writingRun = adapter.host.resolveSessionRunId!(event.nativeSession as { id: string })!
     assert.notEqual(writingRun, firstActionRun)
@@ -687,6 +690,10 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     } finally {
       afterWritingPivot.close()
     }
+    // Only this explicitly finished turn is completion evidence. The earlier
+    // synthetic boundaries model stopped work, not twelve pre-completed turns.
+    const writingEnd = primarySession.snapshotEvents().find(row => row.type === 'turn/end' && (row.data as any).turn === 5)!
+    ;(writingEnd.data as any).reason = { kind: 'completed' }
     const writingClose = await adapter.host.resolveIdleClose!('native-agent', 'native-session', event.nativeSession, event.nativeAgent)
     assert.deepEqual(writingClose, { runId: writingRun, status: 'completed', terminalTurn: 5, authority: writingClose?.authority })
     assert.equal(writingClose?.authority?.taskId, writingRun)

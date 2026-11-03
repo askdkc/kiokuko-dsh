@@ -319,6 +319,10 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   const workflow=createRequire(import.meta.url)('yaml').parse(text),jobs=workflow.jobs;
   assert.deepEqual(Object.keys(jobs),['select','micro-judge-native','checks','verify']);
   assert.ok(jobs.select.steps.some(s=>s.run?.includes('scripts/ci-plan.mjs')));
+  assert.equal(jobs.select.steps.find(s=>s.id==='plan').env?.KIOKUKO_EXPECTED_DSH_SHA,'${{ steps.dsh.outputs.sha }}');
+  assert.ok(workflow.on.schedule?.length,'upstream-only changes must receive regular compatibility coverage');
+  const depot=createRequire(import.meta.url)('yaml').parse(readFileSync(new URL('../.depot/workflows/ci.yml',import.meta.url),'utf8'));
+  assert.equal(depot.jobs.select.steps.find(s=>s.id==='plan').env?.KIOKUKO_EXPECTED_DSH_SHA,'${{ steps.dsh.outputs.sha }}');
   assert.ok(jobs.select.steps.some(s=>s.with?.['fetch-depth']===0));
   assert.equal(jobs['micro-judge-native'].strategy.matrix.include,'${{ fromJSON(needs.select.outputs.native) }}');
   assert.equal(jobs.checks.strategy.matrix.include,'${{ fromJSON(needs.select.outputs.lanes) }}');

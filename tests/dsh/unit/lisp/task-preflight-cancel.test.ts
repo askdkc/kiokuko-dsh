@@ -80,7 +80,8 @@ for (const method of ['start-job', 'tool-call'] as const) {
     t.mock.method(CompiledLispCache.prototype, 'ensure', async () => ({ key: 'fixture', path: base, reused: true, prepareMs: 0 }))
     t.mock.method(LispWorker.prototype, 'start', async () => {})
     t.mock.getter(LispWorker.prototype, 'healthy', () => true)
-    t.mock.method(LispWorker.prototype, 'request', async function(this: LispWorker) {
+    t.mock.method(LispWorker.prototype, 'request', async function(this: LispWorker, _method: string, input: {code?: string}) {
+      if (input.code?.includes('ISOLATION_FAILED')) return {version:1,type:'result',id:'isolation-probe',ok:true,value:'protected',proposals:[]}
       const args = method === 'start-job' ? { program: 'node', argv: ['--version'], timeoutMs: 1000 }
         : { name: 'kioku_exec', args: { command: 'node --version', background: true } }
       await this.hostCall!(method, args, { generation: this.generation, evaluationId: 'fixture-evaluation', rpcId: 'fixture-rpc', signal: new AbortController().signal })
@@ -118,7 +119,8 @@ test('cancellation keeps an owned job unresolved until its host receipt confirms
   t.mock.method(CompiledLispCache.prototype, 'ensure', async () => ({ key: 'fixture', path: base, reused: true, prepareMs: 0 }))
   t.mock.method(LispWorker.prototype, 'start', async () => {})
   t.mock.getter(LispWorker.prototype, 'healthy', () => true)
-  t.mock.method(LispWorker.prototype, 'request', async function(this: LispWorker) {
+  t.mock.method(LispWorker.prototype, 'request', async function(this: LispWorker, _method: string, input: {code?: string}) {
+    if (input.code?.includes('ISOLATION_FAILED')) return {version:1,type:'result',id:'isolation-probe',ok:true,value:'protected',proposals:[]}
     await this.hostCall!('start-job', { program: 'node', argv: ['--version'], timeoutMs: 1000 },
       { generation: this.generation, evaluationId: 'fixture-evaluation', rpcId: 'fixture-rpc', signal: new AbortController().signal })
     return { version: 1, type: 'result', id: 'fixture-evaluation', ok: true, value: 'started', proposals: [] }

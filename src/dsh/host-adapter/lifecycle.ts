@@ -175,6 +175,14 @@ export function createLifecycle(deps: LifecycleDependencies) {
         );
       }
     });
+  const nativeTurnCompleted = (item: TurnRecord): boolean => {
+    const session = item.nativeSession as NativeAgent['session'];
+    const boundary = [...(session?.snapshotEvents?.() ?? [])]
+      .reverse().find((event) => event.type === "turn/end" &&
+        (event.data as { turn?: number })?.turn === item.turn);
+    const data = boundary?.data as { turn?: number; reason?: { kind?: string } } | undefined;
+    return data?.turn === item.turn && data.reason?.kind === "completed";
+  };
   const resolveIdleClose = async (
     agentId: string,
     sessionId?: string,
@@ -240,8 +248,15 @@ export function createLifecycle(deps: LifecycleDependencies) {
         status: "cancelled",
         terminalTurn: item.turn,
       };
-    // Idle means the driver has no active work, not that the task reached a
-    // terminal state. Keep only genuinely resumable active states open.
+    // Idle alone is not completion. The exact native turn must have finished,
+    // and every registered completion criterion must have current evidence.
+    if (nativeTurnCompleted(item) && await completionReady(item))
+      return {
+        ...closeAuthority(item),
+        runId: item.runId,
+        status: "completed",
+        terminalTurn: item.turn,
+      };
     return undefined;
   };
   const resolveSessionRunId = (session: { id: string }): string | undefined => {
@@ -316,7 +331,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
         status: "cancelled",
       };
     }
-    if (!(await completionReady(item))) {
+    if (!nativeTurnCompleted(item) || !(await completionReady(item))) {
       await deliverCompletionReport(nativeSession);
       return {
         ...closeAuthority(item),
@@ -544,7 +559,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
     item: TurnRecord,
     status: "completed" | "failed" | "cancelled",
   ): Promise<void> => {
-    if (status === "completed" && !(await completionReady(item)))
+    if (status === "completed" &&
+      ((item.prepared.intake.profile.taskType !== "chat" && !nativeTurnCompleted(item)) || !(await completionReady(item))))
       status = "cancelled";
     if (status !== "completed") {
       await runLifecycle.closeTurn({

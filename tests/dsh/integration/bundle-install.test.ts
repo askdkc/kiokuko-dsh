@@ -41,7 +41,9 @@ async function hasDshCommand(): Promise<boolean> {
 
 test('dsh bundle manifest has one named Kiokuko Cordis row and no default export', async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), 'kiokuko-bundle-source-'))
-  const files = (await run('git', ['ls-files', '-z'])).stdout.split('\0').filter(name => name && !name.startsWith('micro-judge/'))
+  // Match the verifier's working-tree inventory, including new source files
+  // before staging. A local source install must test the actual current source.
+  const files = (await run('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).stdout.split('\0').filter(name => name && !name.startsWith('micro-judge/'))
   const packageCommand = (command: string, args: readonly string[], env?: NodeJS.ProcessEnv) =>
     execFileAsync(command, [...args], { cwd: fixtureRoot, env: { ...process.env, ...env }, maxBuffer: 8 * 1024 * 1024, timeout: 60_000 })
   try {

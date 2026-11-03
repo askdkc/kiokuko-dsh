@@ -177,7 +177,7 @@ export function bindDshToolInvocation(
 ): DshToolHostBinding {
   const operation = validOperation(execution.name)
   validCallId(execution.callId)
-  const forbiddenFields = new Set(modelToolContract(operation).hostOwnedFields)
+  const forbiddenFields = new Set([...modelToolContract(operation).hostOwnedFields, 'runId', 'deliveryId'])
   if (containsHostIdentity(execution.arguments, forbiddenFields)) {
     throw new KiokukoError('SECURITY_REJECTION', 'dsh tool arguments contain host-owned identity')
   }
@@ -234,7 +234,7 @@ export function createDshToolDefinitions(host: DshToolHost): readonly DshToolDef
   return Object.freeze(MODEL_TOOL_OPERATION_NAMES.map((operation) => {
     const parameters = freezeJson(modelFacingTransportSchema(operation))
     const transport = z.fromJSONSchema(parameters as z.core.JSONSchema.BaseSchema)
-    const forbidden = new Set(modelToolContract(operation).hostOwnedFields)
+    const forbidden = new Set([...modelToolContract(operation).hostOwnedFields, 'runId', 'deliveryId'])
     return Object.freeze({
       name: operation,
       description: descriptionFor(operation),

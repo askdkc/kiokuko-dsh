@@ -336,6 +336,15 @@ const UNOWNED_NATIVE_TOOLS = new Set([
   'todo_write',
   'skill',
 ])
+function nativeEvidenceRead(execution: Execution): boolean {
+  return NATIVE_EVIDENCE_READS.has(execution.name) ||
+    (execution.name === 'working_directory' && !!execution.arguments &&
+      typeof execution.arguments === 'object' && !Array.isArray(execution.arguments) &&
+      Object.keys(execution.arguments).length === 0)
+}
+function unownedNativeTool(execution: Execution): boolean {
+  return UNOWNED_NATIVE_TOOLS.has(execution.name) || nativeEvidenceRead(execution)
+}
 function denied(reason: string): { kind: 'deny'; reason: string } {
   return { kind: 'deny', reason }
 }
@@ -2147,8 +2156,8 @@ export class OnDemandIntake {
     return (
       !this.#stopped &&
       !execution.signal.aborted &&
-      UNOWNED_NATIVE_TOOLS.has(execution.name) &&
-      (!state?.clarificationPending || NATIVE_EVIDENCE_READS.has(execution.name) || execution.name === 'skill') &&
+      unownedNativeTool(execution) &&
+      (!state?.clarificationPending || nativeEvidenceRead(execution) || execution.name === 'skill') &&
       execution.parent === undefined &&
       !!state &&
       state.nativeUnowned === true &&
@@ -2611,8 +2620,8 @@ export class OnDemandIntake {
             if (state.clarificationPending && (
               execution.name === 'bash' || isLispNativeCommand(execution, actual.execute) ||
               (isLispImplementation(actual.execute) && this.pendingLispEffect(execution)) ||
-              (state.nativeUnowned && UNOWNED_NATIVE_TOOLS.has(execution.name) &&
-                !NATIVE_EVIDENCE_READS.has(execution.name) && execution.name !== 'skill')
+              (state.nativeUnowned && unownedNativeTool(execution) &&
+                !nativeEvidenceRead(execution) && execution.name !== 'skill')
             )) return denied('The current request is awaiting clarification. Native commands cannot bypass that question; resolve it and prepare the exact request first.')
             if (
               state.confirmationResume &&
@@ -2649,7 +2658,7 @@ export class OnDemandIntake {
               state.status === 'answer' &&
               !state.nativeUnowned &&
               execution.parent === undefined &&
-              NATIVE_EVIDENCE_READS.has(execution.name)
+              nativeEvidenceRead(execution)
             ) {
               const clarification = executionClarification(
                 state.task,
@@ -2669,7 +2678,7 @@ export class OnDemandIntake {
             }
             if (
               state.nativeUnowned &&
-              UNOWNED_NATIVE_TOOLS.has(execution.name) &&
+              unownedNativeTool(execution) &&
               execution.parent === undefined
             ) {
               if (
@@ -2865,7 +2874,7 @@ export class OnDemandIntake {
             if (
               state.status !== 'answer' ||
               execution.parent !== undefined ||
-              !NATIVE_EVIDENCE_READS.has(execution.name) ||
+              !nativeEvidenceRead(execution) ||
               canonicalContentHash(execution.arguments) !==
                 proof.evidenceReadDigest
             )
@@ -3052,7 +3061,7 @@ export class OnDemandIntake {
         if (proof.evidenceReadDigest !== undefined)
           return state.status === 'answer' &&
             execution.parent === undefined &&
-            NATIVE_EVIDENCE_READS.has(execution.name) &&
+            nativeEvidenceRead(execution) &&
             canonicalContentHash(execution.arguments) ===
               proof.evidenceReadDigest
             ? undefined

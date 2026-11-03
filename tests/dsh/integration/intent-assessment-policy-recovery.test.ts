@@ -33,7 +33,7 @@ for (const scenario of ['insufficient','confirmed','supported','contradicted','r
   if(scenario==='cancelled'){await assert.rejects(assessRequestIntent(service,'request',context,c,controller.signal));return}
   const result=(await assessRequestIntent(service,'request',context,c,controller.signal,{userConfirmed:scenario==='confirmed'}))!
   assert.equal(calls,1)
-  const allows=scenario==='confirmed'||scenario==='supported'
+  const allows=['confirmed','supported','insufficient','refusal'].includes(scenario)
   assert.equal(assessmentAllowsPreparation(result),allows,JSON.stringify(result))
   assert.equal(result.semantic,scenario==='refusal'?'unavailable':scenario==='supported'?'supported':scenario==='contradicted'?'contradicted':'insufficient')
   if(scenario==='confirmed'){

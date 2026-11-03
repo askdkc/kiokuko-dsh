@@ -172,7 +172,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,
-        selected: [question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'enno-execution-mode' ? '通常実行' : question.options?.[0]?.label ?? 'build'] })) }
+        selected: [question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'execution-mode' ? '通常実行' : question.options?.[0]?.label ?? 'build'] })) }
     }
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),

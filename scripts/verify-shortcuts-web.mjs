@@ -63,10 +63,11 @@ export async function apply(ctx) {
       await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,blank:ctx.sessionProjections.snapshot(request.agent.session).values.sessionListMetadata?.blank,modelRequests:model.requests.length})+'\\n');
       return {kind:'success',text:'Fixture history ready'};
     }
-    const q={id:mode==='search'?'enno-model-zenki':mode==='value'?'deep-budget-value':'unknown-shortcut',header:mode==='search'?'実行方式とモデル':mode==='value'?'Deep planning':'Shortcut verification',question:'Shortcut fixture '+mode,
+    const q={id:mode==='value'?'deep-budget-value':'unknown-shortcut',header:mode==='value'?'Deep planning':'Shortcut verification',question:'Shortcut fixture '+mode,
       options:mode==='empty'?[]:Array.from({length:count},(_,i)=>({label:'Choice '+(i+1)+' — 長い候補名も表示する',description:'Keyboard verification'})),...(mode==='multi'?{multiSelect:true}:{})};
     if(mode==='intake'){q.id='taskType';q.header='Kiokuko · 作業の選択';q.question='今回は何をしてほしいですか？';q.options=['実装・変更','不具合調査、情報調査','文章作成','質問、相談、会話'].map(label=>({label}));}
     if(mode==='review'){q.options=[{label:'Approve'},{label:'Reject'}];q.intent={kind:'plan-review',approve:'Approve'};q.detail='# Review fixture';}
+    if(mode==='memory-review'){q.question='保存する記憶はこの内容でよいですか？';q.detail=JSON.stringify({source:'fixture',attempts:Array.from({length:180},(_,i)=>({step:i,observation:'Long recorded evidence '.repeat(20)}))},null,2);q.options=['この内容を保存する','修正する','保存しない'].map(label=>({label}));}
     try {const answer=await ctx.userQuestions.ask({agent:request.agent,signal:request.signal,questions:mode==='batch'?[q,{...q,id:'second',question:'Second question',options:[{label:'Second A'},{label:'Second B'}]}]:[q]});
       await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,answer})+'\\n'); return {kind:'success',text:'Recorded '+mode};
     } catch(e){await appendFile(${JSON.stringify(answers)},JSON.stringify({mode,error:e.code??e.message})+'\\n');return {kind:'success',text:'Dismissed '+mode};}
@@ -113,6 +114,23 @@ export async function apply(ctx) {
     // Verify the durable fixture through a fresh snapshot, not transient live chrome.
     await page.reload()
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
+    // Idle Lisp recovery is discoverable without repeatedly taking focus from chat.
+    const lispStatusRoute = '**/api/kiokuko.lisp?*'
+    await page.route(lispStatusRoute, route => route.fulfill({json:{enabled:true,state:'RECOVERY_REQUIRED'}}))
+    await page.reload()
+    const lispStatus = page.getByRole('button',{name:'Lisp: 確認が必要',exact:true})
+    const lispDialog = page.getByRole('dialog',{name:'Lisp の状態と復旧',exact:true})
+    await lispStatus.waitFor()
+    assert.equal(await lispDialog.isVisible(),false,'idle Lisp recovery must not interrupt restored chat')
+    await lispStatus.click()
+    await lispDialog.waitFor()
+    await page.keyboard.press('Escape')
+    await page.reload()
+    await lispStatus.waitFor()
+    assert.equal(await lispDialog.isVisible(),false,'reloading must not reopen a dismissed Lisp notice')
+    await page.unroute(lispStatusRoute)
+    await page.reload()
+    await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const ask = async mode => { await command('/shortcut-fixture '+mode); await page.locator('.kiokuko-intake').waitFor(); await page.locator('.kiokuko-intake').focus() }
     await ask('intake')
     await page.keyboard.press('ControlOrMeta+4')
@@ -120,6 +138,26 @@ export async function apply(ctx) {
     await page.keyboard.press('Enter')
     assert.deepEqual((await poll(async ()=>(await records()).find(r=>r.mode==='intake'))).answer.answers[0].selected,['質問、相談、会話'])
     await page.locator('.kiokuko-intake').waitFor({state:'hidden'})
+    await ask('memory-review')
+    const memoryCard = page.locator('.kiokuko-intake')
+    const memoryChoice = memoryCard.getByRole('button', { name: '2. 修正する', exact: true })
+    const memoryConfirm = memoryCard.getByRole('button', { name: '確定（Enter）', exact: true })
+    assert.equal(await memoryConfirm.isEnabled(), false, 'human selection remains required')
+    for (const viewport of [{width:1280,height:900},{width:420,height:800},{width:640,height:450}]) {
+      await page.setViewportSize(viewport)
+      const bounds = await memoryChoice.boundingBox()
+      assert.ok(bounds && bounds.y >= 0 && bounds.y + bounds.height <= viewport.height,
+        'long memory evidence must not bury the choice below the viewport')
+      await memoryChoice.click()
+      assert.equal(await memoryChoice.getAttribute('aria-pressed'), 'true')
+      assert.equal(await memoryConfirm.isEnabled(), true)
+      await memoryConfirm.click({trial:true})
+    }
+    await page.screenshot({path:join(base,'memory-review-long.png')})
+    await memoryConfirm.click()
+    assert.deepEqual((await poll(async ()=>(await records()).find(r=>r.mode==='memory-review'))).answer.answers[0].selected,['修正する'])
+    await memoryCard.waitFor({state:'hidden'})
+    await page.setViewportSize({width:1280,height:900})
     for (const count of [1, 9, 10, 24]) {
       await ask(String(count)); const card = page.locator('.kiokuko-intake')
       assert.equal(await card.locator('kbd').count(), count)
@@ -140,7 +178,7 @@ export async function apply(ctx) {
     await card.focus(); await page.keyboard.press('Enter'); await page.keyboard.press('2'); await page.keyboard.press('Enter')
     assert.equal((await poll(async () => (await records()).find(r => r.mode === 'batch'))).answer.answers.length, 2)
     await card.waitFor({ state: 'hidden' })
-    for (const mode of ['empty','search','value']) {
+    for (const mode of ['empty','value']) {
       await ask(mode); await card.locator('textarea').fill(mode==='empty'?'自由入力':'120000'); await card.locator('textarea').press('Enter')
       assert.equal((await poll(async () => (await records()).find(r => r.mode===mode))).answer.answers[0].custom, mode==='empty'?'自由入力':'120000')
       await card.waitFor({state:'hidden'})

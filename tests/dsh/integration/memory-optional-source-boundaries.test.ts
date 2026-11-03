@@ -13,8 +13,6 @@ import { createLifecycle } from '../../../src/dsh/host-adapter/lifecycle.js'
 import { DshRunLifecycle, mountDshIdleLifecycle, mountDshSessionLifecycle } from '../../../src/dsh/session-bridge.js'
 import { readTaskSnapshot, requestTaskStop, confirmTaskStop, recordTaskEvidence, transitionTask, authorizeTaskLease } from '../../../src/dsh/task-state.js'
 
-// Install at tests/dsh/integration/memory-optional-source-boundaries.test.ts.
-// Frozen source-only proposal. These tests have not been executed.
 for (const kind of ['idle', 'disposed'] as const) for (const flushFails of [false, true]) {
   test(`${kind} close ${flushFails ? 'retains native flush failure' : 'does not require optional memory-range metadata'}`, async () => {
     const session = { id: 'exact-native-session' }
@@ -76,7 +74,9 @@ async function fixture() {
 test('superseded completion flushes the native session but ignores mirror and optional-range failures', async () => {
   const f = await fixture()
   let flushes = 0, mirrorCalls = 0, releases = 0
-  const session = { id: f.task.sessionId }, agent = { id: 'native-agent', session }
+  const session = { id: f.task.sessionId, snapshotEvents: () => [
+    { type: 'turn/end', seq: 1, data: { turn: 1, reason: { kind: 'completed' } } },
+  ] }, agent = { id: 'native-agent', session }
   const item: any = { runId: f.task.runId, sessionId: session.id, authority: f.task.authority,
     cwd: f.root, repositoryRoot: f.root, turn: 1, nativeSession: session, nativeAgent: agent,
     prepared: { intake: { profile: f.task.profile } }, closed: false }

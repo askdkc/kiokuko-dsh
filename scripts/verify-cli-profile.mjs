@@ -267,8 +267,7 @@ async function tui(resumeSessionId) {
       })
       return
     }
-    if (question?.id === 'enno-execution-mode') {
-      assert.ok(question.options.some(option => option.label === '通常実行'), 'Expected the native ordinary execution choice')
+    if (question?.id === 'execution-mode') {
       selectQuestion(request, '通常実行')
       return
     }
@@ -293,7 +292,9 @@ async function tui(resumeSessionId) {
     const input = { id: `${child.pid}:${++inputSequence}`, text, eventOffset: fresh().length, outputOffset, frame: renderedFrame }
     observe('inputSent', { ...input })
     child.write(text)
-    await wait(() => renderedFrame > input.frame && composerText() === text, `TUI did not freshly echo ${text} in its composer`)
+    // Wrapped terminal rows omit boundary spaces; the native user/message below
+    // still verifies the exact submitted text, including whitespace.
+    await wait(() => renderedFrame > input.frame && composerText()?.replace(/\s/gu, '') === text.replace(/\s/gu, ''), `TUI did not freshly echo ${text} in its composer`)
     observe('inputEchoed', { inputId: input.id, text, outputOffset, frame: renderedFrame })
     return input
   }
@@ -462,10 +463,6 @@ async function tui(resumeSessionId) {
       const completionReviewOffset = fresh().length
       await line(lispRequest)
       await wait(() => {
-        if (enterReady() && screen().includes('この作業をどう実行しますか') && screen().includes('通常実行')) {
-          const request = fresh().filter(value => value.type === 'native-question').at(-1)
-          if (request?.questions[0]?.id === 'enno-execution-mode') selectQuestion(request, '通常実行')
-        }
         return fresh().some(value => value.type === 'fixture-lisp-consumed' && value.text === lispRequest && value.sessionId === created.sessionId)
       }, 'Lisp result was not consumed by the native model', 90000)
       const consumed = fresh().find(value => value.type === 'fixture-lisp-consumed' && value.text === lispRequest && value.sessionId === created.sessionId)

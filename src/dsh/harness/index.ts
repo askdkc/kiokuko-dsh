@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
+import * as DshAgent from '@deepseek-ai/dsh-agent'
 import { KiokukoAgentFactory } from './factory.js'
 import { kiokukoInboxProjection, kiokukoTurnBoundaries } from './projections.js'
 
@@ -16,6 +17,10 @@ export async function apply(ctx:Context,raw:z.input<typeof Config>={}) {
   const projections=ctx.get('sessionProjections',false)
   projections?.register(kiokukoTurnBoundaries)
   projections?.register(kiokukoInboxProjection)
+  // Current DSH exposes this client projection; published older hosts do not.
+  const modelProjection=(DshAgent as {modelSelectionProjectionDefinition?:unknown}).modelSelectionProjectionDefinition
+  // Keep the native definition intact across the older/newer register typings.
+  if(modelProjection)await projections?.register(modelProjection as any)
   ctx.systemPrompt.variable('provider',context=>(context as any).modelSelection?.provider??context.agent?.options.provider)
   ctx.systemPrompt.variable('model',context=>(context as any).modelSelection?.model??context.agent?.options.model)
   ctx.effect(function*(){yield ctx.agents.setFactory(factory);yield()=>factory.dispose()},'Kiokuko harness factory')

@@ -22,8 +22,8 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
 const [cordis, tools] = await Promise.all([load('cordis'), load('dsh-tools')])
 const cliRoot = process.env.KIOKUKO_CLI_SOURCE_ROOT
-for (const provider of ['typesafe', 'openai'] as const) for (const host of ['official', ...(cliRoot ? ['cli'] : [])]) for (const verdict of ['supported', 'insufficient', 'contradicted'] as const) for (const answer of verdict==='insufficient'?['confirm','cancel','empty']:['none']) {
-  test(`ordinary document edit: ${host}, ${provider}, independent ${verdict}, native answer ${answer}`, { timeout: 20000 }, async t => {
+for (const provider of ['typesafe', 'openai'] as const) for (const host of ['official', ...(cliRoot ? ['cli'] : [])]) for (const verdict of ['supported', 'insufficient', 'contradicted'] as const) {
+  test(`ordinary document edit: ${host}, ${provider}, independent ${verdict}`, { timeout: 20000 }, async t => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'ordinary-edit-'))), path = join(base, 'README.md')
     await writeFile(path, 'Original introduction.\n')
     const ctx = new cordis.Context(), fibers: any[] = [], db = openConnection(join(base, 'state.sqlite3'))
@@ -31,8 +31,8 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
     await mountNativeTools(ctx, tools, packages, fibers)
     const events = [{ type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }]
     const session = { id: 'ordinary', header: { id: 'ordinary', cwd: base }, snapshotEvents: () => events }
-    let queued:any,questions=0,turn=1
-    const agent: any = { id: 'ordinary-agent', session, followup(message:any){queued=message} }
+    let questions=0,turn=1
+    const agent: any = { id: 'ordinary-agent', session, followup(){assert.fail('advisory uncertainty must not queue a confirmation')} }
     ctx.provide('agents', { get: (id: string) => id === agent.id ? agent : undefined })
     ctx.provide('sessions', { get: (id: string) => id === session.id ? session : undefined, list: () => [session] })
     if (host === 'cli') {
@@ -72,7 +72,7 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
         if (value) assessments.push(value)
         return value
       },
-      questions:{async ask(request:any){questions++;const q=request.questions[0];assert.match(q.question,/README.md/);if(answer==='confirm'){assert.equal(q.options[0].label,'この依頼の対象・操作・制約のまま進める');return {answers:[{id:q.id,selected:[q.options[0].label]}]}}return {answers:answer==='empty'?[]:[{id:q.id,selected:[]}]}}} as any,
+      questions:{async ask(request:any){questions++;assert.equal(verdict,'contradicted');assert.match(request.questions[0].question,/README.md/);return {answers:[]}}} as any,
       prepare: async input => { admissions++; readyTurn = input.turn; task = workingLispTask(db, { sessionId: session.id, agentId: agent.id, root: base }, 'turn-' + input.turn); return true },
       ready: (a, turn) => a === agent && readyTurn !== undefined && (turn === undefined || turn === readyTurn),
     })
@@ -106,15 +106,8 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
     assert.equal(prepared.isError, false, JSON.stringify(prepared))
     assert.equal(providerCalls, 1, 'candidate providerSent=false does not mean the independent provider was not called')
     assert.equal(assessments[0]?.semantic, verdict)
-    if(verdict==='insufficient'){
-      assert.equal(prepared.value.prepared,false,'uncertainty must never auto-admit');assert.equal(admissions,0);assert.equal(await readFile(path,'utf8'),'Original introduction.\n');assert.equal(questions,1)
-      if(answer!=='confirm'){assert.equal(queued,undefined);assert.equal((await execute('kioku_write',{path:'README.md',content:'forbidden'})).isError,true);assert.equal(await readFile(path,'utf8'),'Original introduction.\n');assert.equal(questions,1,'cancellation cannot repeatedly ask or auto-admit');return}
-      assert.equal(prepared.value.status,'clarification_answer_queued');assert.ok(queued)
-      intake.finish(session,turn);turn++;events.push({type:'turn/start',seq:turn,time:turn,data:{turn}})
-      context=createRequestIntentContext({task:taskText,messageRefs:requestIntentMessageRefs([message,queued],taskText),proposals:[{id:'assistant-final',revision:null,digest:'a'.repeat(64),text:'Awaiting your native answer.'}]})!
-      await intake.capture({agent,turn,step:0,messages:[message,queued],signal:signal()})
-      prepared=await execute(TASK_PREPARE_TOOL,submit());assert.equal(assessments.at(-1)?.outcome,'user_confirmed');assert.equal(assessments.at(-1)?.semantic,'insufficient');assert.equal(questions,1,'same confirmed question cannot loop')
-    }
+    assert.equal(questions, verdict === 'contradicted' ? 1 : 0)
+    if (verdict === 'insufficient') assert.equal(assessments[0]?.outcome, 'advisory')
     assert.equal(prepared.value.prepared, verdict !== 'contradicted', JSON.stringify(prepared))
     if (verdict === 'contradicted') { assert.equal(admissions, 0); assert.equal(nativeBodies, 0); return }
     assert.equal(admissions, 1)

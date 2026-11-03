@@ -23,6 +23,10 @@ const native = /^(?:crates\/|lisp\/|guardrail\/|micro-judge\/|src\/dsh\/(?:lisp\
 export function selectChanges(request) {
   const changes = request.changes;
   const full = reason => ({ mode: 'full', reason, browser: true, platforms: Object.keys(ciPlatforms) });
+  if (request.dshSha !== undefined) {
+    assert.match(request.dshSha, /^[a-f0-9]{40}$/, 'Latest official DSH must be resolved to a full SHA');
+    return full('latest official DSH is an independent compatibility input');
+  }
   if (request.full) return full('manual, release, tag, or explicit complete coverage');
   if (!request.available || !Array.isArray(changes) || !changes.length) return full('diff is unavailable or empty');
   let browser = false, application = false;
@@ -177,7 +181,9 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
   const ciPlatform=process.argv.find(arg=>arg.startsWith('--ci-platform='))?.slice(14);
   assert.ok(output, 'Usage: ci-plan.mjs output.json');
   const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH)) : {};
-  const request = { ...readChangedFiles(root, event), full: ['workflow_dispatch', 'release'].includes(process.env.GITHUB_EVENT_NAME)
+  const dshSha = process.env.KIOKUKO_EXPECTED_DSH_SHA;
+  if (process.env.GITHUB_ACTIONS === 'true') assert.match(dshSha ?? '', /^[a-f0-9]{40}$/, 'CI must resolve latest official DSH before selecting coverage');
+  const request = { ...readChangedFiles(root, event), ...(dshSha === undefined ? {} : {dshSha}), full: ['workflow_dispatch', 'release'].includes(process.env.GITHUB_EVENT_NAME)
     || String(process.env.GITHUB_REF ?? '').startsWith('refs/tags/') };
   execFileSync('git', request.base ? ['diff', '--check', request.base, 'HEAD'] : ['diff', '--check'], { cwd: root, stdio: 'inherit' });
   const selection = createCiPlan(JSON.parse(readFileSync(path.join(root, 'scripts/verification.json'))), request, checkoutIdentity(root,undefined,ciPlatform));

@@ -11,7 +11,7 @@ const bytes = value => Buffer.byteLength(typeof value === 'string' ? value : JSO
 const compare = (baselineBytes, currentBytes) => ({ baselineBytes, currentBytes, savedBytes: baselineBytes - currentBytes })
 const definitions = createDshToolDefinitions({ bind() { throw new Error('No tools execute in this evaluation') }, async execute() { throw new Error('No tools execute in this evaluation') } })
 const visible = definitions.map(({ name, description, parameters }) => ({ name, description, parameters }))
-const baseline = visible.map(definition => ({ ...definition, description: definition.name === 'enno_delegate' ? definition.description :
+const baseline = visible.map(definition => ({ ...definition, description:
   `Kiokuko ${definition.name} semantic operation. Supply nested values as their native JSON types; never encode an object or array as a JSON string. Host identity, routing, lease, and idempotency fields are supplied by the dsh host. The result is a TurnOutcome: applied results carry the business response in value and the next-turn state in handoff; predictable rejections return retry or clarify without a tool transport error. The business payload contract is: ${JSON.stringify(modelFacingInputSchema(definition.name))}` }))
 const memory = []
 for (const [name, items] of [

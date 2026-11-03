@@ -322,7 +322,7 @@ CHOICES contains 1-8 (restart-name description) pairs. No expression replay or a
         (unless (member restart (compute-restarts condition)) (error "RECOVERY_STALE"))
         (invoke-restart restart)))))
 (in-package :kioku.environment)
-(defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "executionMode" (or (uiop:getenv "KIOKU_EXECUTION_MODE") "protected") "network" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "normal user environment" yason:false) "hostWrites" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "owned tools and direct Lisp; only host receipts prove observed effects" "proposals only") "libraries" #("yason" "cl-ppcre" "cl-csv")))
+(defun status () (kioku.internal:object "generation" kioku.internal:*generation* "sbcl" (lisp-implementation-version) "os" (software-type) "architecture" (machine-type) "scratch" (namestring (kioku.files:scratch)) "executionMode" (or (uiop:getenv "KIOKU_EXECUTION_MODE") "protected") "network" yason:false "hostWrites" (if (equal (uiop:getenv "KIOKU_EXECUTION_MODE") "development") "host tools and proposals; operation permissions apply" "proposals only") "libraries" #("yason" "cl-ppcre" "cl-csv")))
 (in-package :kioku.tools)
 (defun available-tools () (kioku.internal:rpc "tools-list" (kioku.internal:object)))
 (defun call-tool (name &optional (arguments (kioku.internal:object)))

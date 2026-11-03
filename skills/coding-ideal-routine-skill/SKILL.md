@@ -45,7 +45,7 @@ description: コードを書く、変更するすべての依頼で使用する�
 
 ## 2. 部品ではなく、つながった利用経路を見る
 
-DSH の実装タスクで明示的な coding workflow を使う場合は、初回の変更前に `coding_workflow status` を読む。`applicable:false` は通常チャットに workflow がないという観測であり、エラーや通常操作の禁止ではない。準備済みのタスクでは、`propose` で Goal・依存関係付きの全項目・各項目の観測可能な条件・別の最終 Goal 条件を原子的に登録する。先に必要な読取調査を行ってよい。元依頼の権限と対象を広げない。Enno では既存 ideal・plan を提出し、その共通表示を使う。別の Goal を提案しない。
+DSH の実装タスクで明示的な coding workflow を使う場合は、初回の変更前に `coding_workflow status` を読む。`applicable:false` は通常チャットに workflow がないという観測であり、エラーや通常操作の禁止ではない。準備済みのタスクでは、`propose` で Goal・依存関係付きの全項目・各項目の観測可能な条件・別の最終 Goal 条件を原子的に登録する。先に必要な読取調査を行ってよい。元依頼の権限と対象を広げない。既に登録された Goal と検証条件があれば再利用する。
 
 通常 native 実装依頼ではモデル要求前に Lisp を提案し、ON 済みならその経路を使う。Goal 準備は同じ依頼の人間の回答を再利用する。全ての goal.criterionIds を、実装を担当する少なくとも1つの items[].goalCriterionIds に対応付ける。未対応 ID の診断では該当 item を自分で選んで修正し、最終条件を消したり対応を捏造しない。
 

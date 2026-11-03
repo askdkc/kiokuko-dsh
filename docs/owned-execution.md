@@ -69,12 +69,12 @@ Unrelated generated files and ordinary reads do not invalidate declared source c
 omits it or has `approvalMode:ask`. Ordinary tools and Lisp coexist. Process RPC
 and workspace proposals use the owned executor; helper toolsets still compile
 and validate their schemas/examples. Worker failures leave ordinary tools
-available. `executionMode:protected` explicitly selects the legacy isolated
-worker/approval/fence behavior for compatibility; it is not the default.
-
-Lisp source can directly call filesystem/FFI APIs in development mode. Such
-effects are not independent process/test proof. Prefer `kioku.tools:call-tool`
-and `kioku.process` for observed results. Plan blocks effectful owned/Lisp
+available. Every Lisp worker uses OS isolation: direct filesystem/FFI calls
+cannot access the workspace or inherited credentials. Project effects pass
+through `kioku.tools:call-tool`, `kioku.process` or workspace proposals, where
+the host checks current ownership, permissions and cancellation before acting.
+`executionMode:protected` retains its additional tool fence and proposal policy;
+it is not the default. Plan blocks effectful owned/Lisp
 operations. An explicit human implementation instruction or plan approval
 requests Plan exit at the next accepted native boundary; merely presenting a
 plan does not exit it.

@@ -81,13 +81,10 @@ invalidated by review edits; repeating a checklist proves nothing.
 In Kiokuko, enter through `kiokuko-soul`; also apply
 `kiokuko-single-purpose-functions` for code and the applicable UI/workflow Skills.
 Reuse their contract, plan and evidence rather than generating duplicate plans
-or checklists. In DSH, the host owns intake, model routing, delegation and
-continuation. Respect the current role/WorkUnit scope; this Skill neither creates
-an Enno run nor authorizes extra agents, retries, publication or deployment.
-
-Assign Frame/Trace/Bound/Implement/Verify/Finish to the admitted role: Zenki
-plans, Goki implements/verifies its WorkUnit, Enno accepts the run. A WorkUnit
-report is not final acceptance. Normal work adds no orchestration approval.
+or checklists. In DSH, Kiokuko owns the model/tool loop and preserves native
+session and tool contracts. Complete the observable request within the user's
+scope and permissions. This Skill does not authorize extra agents, retries,
+publication or deployment. Passing an intermediate check is not final acceptance.
 
 For admitted Lisp, follow its Skill, with prototype-driven-planning for
 coding/plans: native reads, scratch → proposals → host confirmation → durable

@@ -5,7 +5,7 @@ export function assertionForCriterion(evidence:string):'selected_tests_pass'|'ou
 export const COMPLETION_BINDING_GUIDE={
   native_command:{requiredFields:['kind','command','cwd','sourcePaths','assertion'],
     sourcePaths:'At least one repository-relative current implementation/test path; include an asserted artifact. No absolute path or parent traversal.',
-    conditions:{selected_tests_pass:'Observe complete passing selected-test output from the exact bound command; binding or exit 0 alone is not proof.',
+    conditions:{selected_tests_pass:'Observe complete Node TAP output from the exact bound command: use node --test --test-reporter=tap with the selected test files. Spec reporter output cannot establish coverage. Binding or exit 0 alone is not proof.',
       output_matches:'Requires expectedOutput and exact observed output.',artifact_matches:'Requires artifactPath, artifactSha256 and artifactPath in sourcePaths.',
       exit_zero:'Only when the current non-coding criterion permits it; never sufficient for a coding criterion.'}},
 } as const
@@ -27,7 +27,7 @@ export function completionInputError(issues:readonly CompletionInputIssue[]):Kio
     issues:issues.slice(0,16).map(issue=>({...issue,correction:corrections[issue.field.replace(/\.\d+$/u,'')]??'Read task_completion status and correct this field without changing task scope or native permissions.'})),
     bindingGuide:structuredClone(COMPLETION_BINDING_GUIDE),
     examples:[{condition:'For a current selected_tests criterion in native mode; replace the illustrative ID, command and paths using its actual authorized procedure.',
-      arguments:{action:'bind',criterionId:'current-criterion-id',method:{kind:'native_command',command:'node --test tests/example.test.mjs',cwd:'.',sourcePaths:['src/example.mjs','tests/example.test.mjs'],assertion:'selected_tests_pass'}}},
+      arguments:{action:'bind',criterionId:'current-criterion-id',method:{kind:'native_command',command:'node --test --test-reporter=tap tests/example.test.mjs',cwd:'.',sourcePaths:['src/example.mjs','tests/example.test.mjs'],assertion:'selected_tests_pass'}}},
       {condition:'For a current output criterion in native mode; use its real expected output and authorized paths.',arguments:{action:'bind',criterionId:'current-output-criterion-id',method:{kind:'native_command',command:'node src/example.mjs',cwd:'.',sourcePaths:['src/example.mjs'],assertion:'output_matches',expectedOutput:'42'}}}],
     nextAction:'correct_current_binding_input',note:'Examples are shapes, not permission or evidence. A successful bind remains unverified until the exact approved check is observed on current sources.'}
   return new KiokukoError('VALIDATION_ERROR',`Invalid task_completion input.\nRecovery: ${JSON.stringify(recovery)}`,recovery)

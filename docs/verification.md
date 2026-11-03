@@ -17,14 +17,21 @@ fixtures remain `prerequisite-missing` for checks that require them.
 
 CI schedules **Linux x64** and **macOS ARM64**. Full selection has 21 jobs:
 selection, two native micro-judge builds, 17 verification lanes and the aggregate.
+Every CI run resolves the latest official DSH `master` before selecting coverage.
+That SHA is an independent input to the plan and its digest: repository-only
+diffs, including prose-only changes, cannot reduce GitHub compatibility coverage.
+All lanes build that run's resolved SHA; the next run resolves upstream again.
+Resolution failure fails the run rather than falling back to a locked fixture.
+A daily GitHub run at 03:17 UTC also checks upstream-only changes. Depot keeps its
+Linux-only coverage, but likewise resolves latest DSH and never skips it for prose.
 Linux ARM64 is not scheduled or claimed as CI coverage. Its runtime/build support
 remains in the native target registry; this workflow does not produce its binary.
 
 The required `verify` aggregate consumes `select`, `micro-judge-native` and `checks`.
 Every selected lane and native artifact must be present, successful, fresh and
 bound to the same selected plan and source. Failure, cancellation, a missing
-selected report, an extra target or an altered artifact fails acceptance. Only
-prose-only selection can legitimately skip both executable job groups. The
+selected report, an extra target or an altered artifact fails acceptance. Local
+diff-only plans without an upstream input may skip prose-only work; CI may not. The
 remaining Linux x64/macOS ARM64 check inventories and their deadlines are unchanged.
 The CI review bundle contains exactly its selected targets; standalone native
 bundle verification still requires the complete supported-target inventory.

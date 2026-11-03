@@ -53,7 +53,7 @@ for (const scenario of [
         nativeAnswer: async (request: any) => ({
           answers: request.questions.map((q: any) => {
             assert.ok(
-              ['enno-execution-mode', 'taskType'].includes(q.id) ||
+              ['execution-mode', 'taskType'].includes(q.id) ||
                 q.id.startsWith('coding-lisp-'),
               q.id,
             )

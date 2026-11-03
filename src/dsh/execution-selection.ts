@@ -6,7 +6,7 @@ import { KiokukoError } from '../errors.js'
 import { LegacyModelConfigurationSchema, ModelConfigurationSchema, LegacyModelConfigurationDraftSchema, ModelBindingSchema } from './model-configuration.js'
 
 export const ExecutionSelectionSchema = z.object({
-  mode: z.enum(['pending', 'normal', 'enno', 'deep-thinker']),
+  mode: z.enum(['pending', 'normal', 'deep-thinker']),
   status: z.enum(['selecting', 'ready', 'reselect']),
   configuration: z.union([ModelConfigurationSchema, LegacyModelConfigurationSchema]).optional(),
   deepConfiguration: z.union([DeepConfigurationSchema, LegacyDeepConfigurationSchema]).optional(),
@@ -20,7 +20,6 @@ export const ExecutionSelectionSchema = z.object({
     turn: z.number().int().nonnegative(),
   }).strict().optional(),
 }).strict().superRefine((value, ctx) => {
-  if (value.mode === 'enno') ctx.addIssue({ code: 'custom', message: 'Enno execution modes are retired' })
   if (value.headWorker && value.mode === 'deep-thinker') ctx.addIssue({ code: 'custom', message: 'Head/worker selection does not own Deep routing' })
   if (value.discussion && value.status === 'ready') ctx.addIssue({ code: 'custom', message: 'Discussion cannot authorize execution' })
   if (value.mode === 'deep-thinker' && (!value.deepConfiguration || value.configuration || value.draft)) ctx.addIssue({ code: 'custom', message: 'Deep requires its independent configuration' })
@@ -65,7 +64,6 @@ export function writeExecutionSelection(database: SqliteDatabase, runId: string,
 }
 /** Only explicit, affirmative instructions count; negative clauses win. */
 export function explicitExecutionMode(task: string): 'normal' | undefined {
-  if (/(?:enno(?:-oduno)?).{0,12}(?:使わず|使わない|利用しない|なしで)|(?:without|do not use|don't use)\s+(?:enno(?:-oduno)?)|通常実行(?:で|を)/iu.test(task)) return 'normal'
-  if (/役小角/u.test(task)) return 'normal'
+  if (/通常実行(?:で|を)/u.test(task)) return 'normal'
   return undefined
 }

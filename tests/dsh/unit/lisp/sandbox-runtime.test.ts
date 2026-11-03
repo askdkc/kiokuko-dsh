@@ -49,7 +49,7 @@ test('protected launch pins relocated host Node without trusting adjacent execut
       await assert.rejects(sandboxLaunch(layout,${JSON.stringify(other)},[],'fixture'),e=>e.code==='EXECUTABLE_SCOPE');
       await assert.rejects(sandboxLaunch(layout,${JSON.stringify(fakeNode)},[],'fixture'),e=>e.code==='EXECUTABLE_SCOPE');
       layout.protected=false;
-      assert.equal((await sandboxLaunch(layout,'node',[],'fixture')).command,${JSON.stringify(fakeNode)});
+      assert.equal((await sandboxLaunch(layout,'node',[],'fixture')).args.at(-1),process.execPath);
       console.log('relocated-host-only');
     `
     const result = await promisify(execFile)(node, ['--import', 'tsx', '--input-type=module', '-e', source], {

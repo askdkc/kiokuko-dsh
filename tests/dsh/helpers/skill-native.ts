@@ -73,7 +73,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
         startupQuestions.push({ id: q.id, selected: selected! })
         return response.answers[0]
       }
-      assert.ok((['taskType','enno-execution-mode'].includes(q.id) || q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')),JSON.stringify(q))
+      assert.ok((['taskType','execution-mode'].includes(q.id) || q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')),JSON.stringify(q))
       return{id:q.id,selected:[(q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) ? '使わない' : q.id==='taskType'?'chat':'通常実行']}
     })})})}}))
   }

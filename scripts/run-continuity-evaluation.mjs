@@ -34,7 +34,7 @@ async function evaluate(configPath) {
     contextWindow: z.number().int().min(4096).max(1048576), maxOutputTokens: z.number().int().min(16).max(4096),
     repetitions: z.number().int().min(1).max(20), seed: z.number().int().min(0).max(4294967295),
     maxRequests: z.number().int().min(1).max(1000), maxTokens: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-    maxDurationMs: z.number().int().min(100).max(3600000), allowRemote: z.boolean(), fixture: z.literal('continuity-v1'),
+    maxDurationMs: z.number().int().min(100).max(3600000), allowRemote: z.boolean(), fixture: z.literal('continuity-v2'),
   }).strict().parse(JSON.parse(await readFile(configPath, 'utf8')))
   const url = new URL(config.baseUrl)
   assert.ok(['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash, 'Invalid endpoint')
@@ -65,11 +65,6 @@ async function evaluate(configPath) {
           acquiredRange: { firstLine: 1, lastLine: 2, totalLines: 40 }, digest: hash('fixture result'), ...scenario.evidence }] : []
         const view = adaptContinuity({ owner: { runId: 'fixture-run', workspace, sessionId: 'fixture-session', mode: 'normal' },
           generation: 'fixture', frame, evidence })
-        if (scenario.report) {
-          const ref = { kind: 'enno-work-result', key: 'fixture-run:dependency', revision: hash(scenario.report) }
-          view.sources.push(ref)
-          view.items.push({ key: ref.key, kind: 'reported-result', text: scenario.report, basis: 'model-report', validity: 'unknown', sources: [ref] })
-        }
         const projection = renderContinuationView(buildContinuationView({ owner: view.owner, stamp: view.stamp, sources: view.sources,
           items: view.items, coverage: view.coverage, omittedItems: view.omittedItems }), ContinuityConfig.parse({ mode: 'active' }))
         const legacyEvidence = evidence.map(item => `Recent evidence presentation (specified ranges only): ${item.presentation}; acquired: ${item.acquisition}`).join('\n')

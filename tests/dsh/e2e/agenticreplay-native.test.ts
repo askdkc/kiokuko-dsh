@@ -96,7 +96,7 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     ctx.on('agent/error', (event: any) => { errors.push(event.error) })
     ctx.on('tools/result', (execution: any, result: any) => { results.set(execution.callId, result) }, { global: true })
     const run = (agent: any) => {
-      agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `Research the fixture using agenticreplay_test_tool without Enno and report its result. {"password":"${S}"} OPENAI_API_KEY=${S}` }] }))
+      agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: `Research the fixture using agenticreplay_test_tool and report its result. {"password":"${S}"} OPENAI_API_KEY=${S}` }] }))
       return agent.whenIdle()
     }
     const command = async (agent: any, text: string) => {

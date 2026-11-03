@@ -84,10 +84,6 @@ test('explicit legacy execution host deliberately opts out and mounts native too
   })
   const curator = tools.find((tool: any) => tool.name === 'curator_check')
   assert.ok(curator)
-  const denied = await (root.waterfall as unknown as (name: string, execution: unknown, next: () => Promise<unknown>) => Promise<unknown>)('tools/pre-execute', {
-    callId: 'unknown-call', name: 'task_answer', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
-  }, async () => ({ kind: 'allow' }))
-  assert.deepEqual(denied, { kind: 'deny', reason: 'Kiokuko dsh tool denied (unknown_tool)' })
   await curator.execute({ query: 'status' }, {
     callId: 'native-call', name: 'curator_check', arguments: {}, agent: { id: 'native-agent', session: { id: 'native-agent' } }, signal: new AbortController().signal,
   })

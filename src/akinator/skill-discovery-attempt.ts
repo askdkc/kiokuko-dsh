@@ -89,7 +89,7 @@ type StoredDiscoveryFailure =
 
 export interface AgentTaskSkillDiscoveryAttemptIdentity {
   runId: string;
-  phase: 'intake' | 'zenki';
+  phase: 'intake';
   requestDigest: string;
   mode: SkillDiscoveryMode;
 }
@@ -423,7 +423,7 @@ export function claimAgentTaskSkillDiscoveryAttempt(
 ): AgentTaskSkillDiscoveryAttemptClaim {
   if (!boundedText(identity.runId, 256)
     || !HASH.test(identity.requestDigest)
-    || (identity.phase !== 'intake' && identity.phase !== 'zenki')
+    || identity.phase !== 'intake'
     || !DISCOVERY_MODES.includes(identity.mode)
     || !boundedBudget(requestedBudget.queryBudget, MAX_TOTAL_SKILL_QUERIES)
     || !boundedBudget(requestedBudget.selectionBudget, MAX_EXTERNAL_SKILLS)) {

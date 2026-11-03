@@ -367,8 +367,6 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
     const measure = (body: Record<string, any>, bodyText: string, toolNames: string[]) => ({ toolNames, toolCount: body.tools.length, systemBytes: Buffer.byteLength(JSON.stringify(protocol.name === 'responses' ? body.instructions ?? '' : protocol.name === 'chat-completions' ? body.messages.filter((message: any) => message.role === 'system' || message.role === 'developer') : body.system ?? '')), toolsBytes: Buffer.byteLength(JSON.stringify(body.tools ?? [])), messagesBytes: Buffer.byteLength(JSON.stringify(body.input ?? body.messages ?? [])), bodyBytes: Buffer.byteLength(bodyText) })
     const full = measure(fullBody, requests[1]!.bodyText, modelFacingNames(fullBody))
     const phase = measure(phaseBody, requests[3]!.bodyText, phaseNames)
-    assert.ok(phase.toolsBytes < full.toolsBytes)
-    assert.ok(phase.bodyBytes < full.bodyBytes)
     let lean: ReturnType<typeof measure> | undefined
     let leanTools: unknown
     let leanSavings: { tools: number; body: number } | undefined

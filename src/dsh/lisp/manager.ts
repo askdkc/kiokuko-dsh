@@ -15,9 +15,9 @@ import { EvalInput, LispError, digest, fail, failure, identifier, type LispConfi
 import { LispStore } from './store.js'
 import { sessionCodingWorkflow } from '../coding-workflow/store.js'
 import { LispWorker, type LispRpcContext, type Job } from './worker.js'
-import { prepareLayout } from './sandbox.js'
+import { LispSupervisor } from './supervision.js'
 import { verifyLispVendor } from './integrity.js'
-import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
+import type { CompilationStatus } from './compiled-cache.js'
 import { backupUsage, checkedBytes, snapshot, under, type FrozenChange } from './files.js'
 import { describeVerifiers, type LispCiRequest } from './ci.js'
 import { PackageRequest, type PackageResult } from './packages.js'
@@ -41,7 +41,7 @@ interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; 
   taskSettlement?: Promise<void>;
   codeLease?: { evaluationId: string; adapter: CodeIntelligenceAdapterV1 };
   ownedJobs?:Set<string>; ownedCalls?:Set<Promise<unknown>>; ownedDispatches?:Set<AbortController>; ownedStop?:Promise<void>;
-  slotReserved?: boolean; hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
+  hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
   packageBase?: NonNullable<PackageResult['base']>;
   currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
 export interface ManagerOptions {
@@ -92,7 +92,7 @@ export class LispManager {
   readonly #config: LispConfiguration
   readonly #store: LispStore
   readonly #library: string
-  readonly #compiled: CompiledLispCache
+  readonly #supervisor: LispSupervisor
   readonly #taskTools: TaskToolCatalog
   readonly #hot: HotToolRuntime
   #closed = false
@@ -100,7 +100,6 @@ export class LispManager {
   readonly #claims = new Set<Promise<void>>()
   #ownsSessions = false
   #artifactReserved = 0
-  #admissionQueue: Promise<void> = Promise.resolve()
   readonly #inflight = new Map<string, string>()
   constructor(readonly options: ManagerOptions) {
     this.#config = options.config
@@ -110,7 +109,7 @@ export class LispManager {
       authorizeEffect: async owner => { await this.taskAuthority.authorizeEffect(owner) },
       ...(options.config.executionMode==='development'&&options.toolCall?{execute:async (owner, name, args, signal, callId) => options.toolCall!(owner, name, args, signal, callId, await this.taskAuthority.authorizeEffect(owner, 'owned'))}:{}) })
     this.#library = options.library ?? fileURLToPath(new URL('../../../lisp/', import.meta.url))
-    this.#compiled = new CompiledLispCache(join(options.dataRoot, 'compiled'), this.#library, this.#config)
+    this.#supervisor = new LispSupervisor(this.#config, options.dataRoot, this.#library)
     this.#taskTools = new TaskToolCatalog(this.#store)
     this.#hot = new HotToolRuntime({ store: this.#store, ...(options.questions ? { questions: options.questions } : {}),
       authorizeEffect: async owner => { await this.taskAuthority.authorizeEffect(owner) },
@@ -216,7 +215,7 @@ export class LispManager {
       state.state = 'STOPPING'
       for (const abort of state.active) abort.abort(new LispError('CANCELLED', '作業用 Lisp の処理を取り消しました。'))
       try {
-        await state.worker?.stop()
+        await this.#supervisor.stop(state.worker)
         // A task can still be preparing its compiled runtime without a worker.
         // Keep its admission visible until its own cleanup has settled.
         await state.taskSettlement
@@ -235,7 +234,7 @@ export class LispManager {
     const resident=this.#agents.get(JSON.stringify([owner.sessionId,owner.agentId]))
     // Schemas do not make arbitrary Lisp pure. Only reuse this caller's already
     // protected heap; other callers and development heaps get private scratch.
-    if(mode!=='eval'&&resident?.owner.root===owner.root&&resident.worker?.layout.protected&&!resident.worker.stopped){
+    if(mode!=='eval'&&resident?.owner.root===owner.root&&resident.worker?.layout.protected&&resident.worker.config.executionMode==='protected'&&!resident.worker.stopped){
       return this.runResidentTask(resident,code,input,signal,mode)
     }
     if ([...this.#agents.values()].some(s => s.owner.sessionId === owner.sessionId && s.state === 'STOP_UNCONFIRMED'))
@@ -255,25 +254,14 @@ export class LispManager {
     let worker: LispWorker | undefined
     try {
       assertCurrent()
-      await this.reserveSlot(state)
-      const compiled = await this.#compiled.ensure(combined, () => {})
-      assertCurrent()
-      const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
-      const layout = await prepareLayout(base, this.#library)
-      layout.compiled = compiled.path
-      // This function evaluator has no repository mount or host RPC authority.
-      // Repository observation and approved effects use their existing host paths.
-      layout.protected = true
-      worker = new LispWorker(layout,{...this.#config,executionMode:'protected'},undefined,()=>false)
-      state.worker = worker
-      assertCurrent()
-      await worker.start()
-      assertCurrent()
-      const canary = join(base, 'host-canary')
-      await writeFile(canary, 'protected', { mode: 0o600 })
-      const probe = await this.journalRequest(state, worker, 'eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${JSON.stringify(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${JSON.stringify(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) :protected)` }, this.#config.startupTimeoutMs, combined)
-      if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
-      assertCurrent()
+      // Disposable computations share the master's admission and startup path,
+      // but receive neither a repository mount nor host RPC authority.
+      worker = await this.#supervisor.start(state, {
+        signal: combined, assertCurrent, executionMode: 'protected', rpcAllowed: () => false,
+        assigned: child => { state.worker = child; worker = child },
+        inspect: (child, code) => this.journalRequest(state, child, 'eval', { inputs: [], code }, this.#config.startupTimeoutMs, combined, false),
+      })
+      const layout = worker.layout
       state.state='EVALUATING'
       if (mode === 'compile') {
         const checked = await this.journalRequest(state, worker, 'task-compile', { code }, this.#config.timeoutMs, combined,false)
@@ -304,7 +292,7 @@ export class LispManager {
     } finally {
       try {
         if (worker) {
-          try { await worker.stop() }
+          try { await this.#supervisor.stop(worker) }
           catch (error) { state.state = 'STOP_UNCONFIRMED'; state.error = failure(error); throw error }
         }
         await this.stopOwned(state)
@@ -374,52 +362,31 @@ export class LispManager {
     const admission = (async () => {
       let worker: LispWorker | undefined
       try {
-        await this.reserveSlot(state)
-        const compiled = await this.#compiled.ensure(abort.signal, status => { state.compilation = status })
-        if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
-        const base = await mkdtemp(join(this.options.dataRoot, 'w-'))
-        const layout = await prepareLayout(base, this.#library)
-        layout.compiled = compiled.path
-        layout.workspace = state.owner.root
-        layout.protected = this.#config.executionMode === 'protected'
-        worker = new LispWorker(layout, this.#config, (method, args, context) => this.bridge(state, method, args, context), undefined,
-          () => this.taskAuthority.bound(state.execution, async () => { await this.taskAuthority.authorizeEffect(state.owner, this.#config.executionMode === 'protected' ? 'protected' : 'direct') }),
-          (input, launch) => this.journalProtectedJob(state, input, launch))
-        state.worker = worker
-        if (this.#closed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。')
-        await worker.start()
-        if(this.#config.executionMode==='protected'){
-        // Real runtime probe: private host file is outside every granted read/write root.
-        const canary = join(base, 'host-canary')
-        await writeFile(canary, 'protected', { mode: 0o600 })
-        const quote = (value: string) => JSON.stringify(value)
-        const probe = await this.journalRequest(state, worker, 'eval', { inputs: [], code: `(let ((read-denied (handler-case (progn (with-open-file (s ${quote(canary)}) (read-char s)) nil) (file-error () t))) (delete-denied (handler-case (progn (delete-file ${quote(canary)}) nil) (file-error () t)))) (unless (and read-denied delete-denied) (error "ISOLATION_FAILED")) (kioku.files:write-text (merge-pathnames "probe" (kioku.files:scratch)) "ok") :protected)` }, this.#config.startupTimeoutMs)
-        if (!probe.ok || await readFile(canary, 'utf8') !== 'protected') fail('ISOLATION_FAILED', 'OS によるファイル保護を確認できません。')
-        }
-        if (this.#closed || state.state !== 'PREFLIGHT') { await worker.stop(); fail('CANCELLED', '起動を取り消しました。') }
+        worker = await this.#supervisor.start(state, {
+          signal: abort.signal, workspace: state.owner.root, executionMode: this.#config.executionMode,
+          assertCurrent: () => { if (this.#closed || state.disposed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。') },
+          compilation: status => { state.compilation = status },
+          assigned: child => { state.worker = child },
+          failed: (child, error) => {
+            // Process events, not UI polling, report an idle child's failure.
+            // Active operations settle through their journal-aware catch path.
+            if (state.worker === child && state.state === 'READY') this.halted(state, error)
+          },
+          hostCall: (method, args, context) => this.bridge(state, method, args, context),
+          beforeJob: () => this.taskAuthority.bound(state.execution, async () => { await this.taskAuthority.authorizeEffect(state.owner, this.#config.executionMode === 'protected' ? 'protected' : 'direct') }),
+          auditJob: (input, launch) => this.journalProtectedJob(state, input, launch),
+          inspect: (child, code) => this.journalRequest(state, child, 'eval', { inputs: [], code }, this.#config.startupTimeoutMs, abort.signal, false),
+        })
         state.state = 'READY'; state.inputBytes = 0; delete state.error
         return worker
       } catch (error) {
-        try { await worker?.stop() } catch (stop) { error = stop }
         if (error instanceof LispError && error.code === 'WORKER_LIMIT') { state.state = 'SUSPENDED'; delete state.error }
         else this.halted(state, error)
         throw error
       }
     })()
     state.admission = admission
-    try { return await admission } finally { delete state.admission; delete state.slotReserved; state.active.delete(abort); this.scheduleIdle(state) }
-  }
-  /** Serialize only slot allocation/eviction; compilation remains concurrent. */
-  private reserveSlot(state: AgentState): Promise<void> {
-    const allocation = this.#admissionQueue.then(async () => {
-      if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
-      const occupied = () => [...this.#agents.values()].filter(a => a.slotReserved || (a.worker && !a.worker.stopped)).length
-      if (occupied() >= this.#config.maxWorkers) throw new LispError('WORKER_LIMIT', 'Lisp の起動枠はすべて使用中です。既存リポジトリの worker と状態は保持します。', '使い終わったセッションを明示的に disable するか、maxWorkers の設定を確認して再試行してください。')
-      if (this.#closed || state.disposed || state.state !== 'PREFLIGHT') fail('CANCELLED', 'Lisp の起動を取り消しました。')
-      state.slotReserved = true
-    })
-    this.#admissionQueue = allocation.catch(() => {})
-    return allocation
+    try { return await admission } finally { delete state.admission; state.active.delete(abort); this.scheduleIdle(state) }
   }
   private canSuspend(state: AgentState): boolean {
     return !this.#closed && !state.disposed && state.state === 'READY' && !state.hostBusy && !state.admission && state.active.size === 0
@@ -446,18 +413,40 @@ export class LispManager {
       try {
         const pending = await this.#store.hasPending(state.owner.sessionId)
         if (pending) { state.state = 'READY'; return }
-        await state.worker!.stop()
+        await this.#supervisor.stop(state.worker)
         state.state = 'SUSPENDED'; delete state.error; delete state.worker
       } catch (error) { this.halted(state, error); throw error }
     })()
     state.suspension = suspension
     try { await suspension } finally { delete state.suspension }
   }
-  /** Normal suspension is resumable; crashes and explicit cancellation are not. */
+  /** Admit a fresh generation only after the master has reconciled its old child and journals. */
   async prepare(owner: LispOwner): Promise<unknown> {
     await this.authorizeCodingTask(owner)
     const state = this.entry(owner)
     if (state.suspension) await state.suspension
+    if (state.state === 'READY' && !state.worker?.healthy)
+      this.halted(state, new LispError('WORKER_EXITED', 'Lisp の子プロセスが終了しています。'))
+    const cold = state.error?.code === 'WORKER_NOT_RESUMED' && !state.worker
+    const exited = state.error?.code === 'WORKER_EXITED' && state.active.size === 0 && !state.admission
+    if (cold || exited) {
+      const previous = state.worker
+      if (exited) {
+        try { await this.#supervisor.stop(previous) }
+        catch (error) { this.halted(state, error); return this.status(owner) }
+      }
+      const pending = await this.#store.hasPending(owner.sessionId)
+      const managed = await this.managedUnresolved(owner)
+      // A cancel, another admission, or a late callback can win while we read.
+      if (!pending && managed.total === 0 && state.worker === previous &&
+          state.state === 'RECOVERY_REQUIRED' && state.error?.code === (cold ? 'WORKER_NOT_RESUMED' : 'WORKER_EXITED')) {
+        if (exited && !this.#supervisor.admitRestart(state)) {
+          this.halted(state, new LispError('WORKER_RESTART_LIMIT', 'Lisp の異常終了が続いたため自動再起動を停止しました。', '停止理由を確認してから /kioku-lisp recover を実行してください。'))
+          return this.status(owner)
+        }
+        state.state = 'SUSPENDED'; delete state.error; delete state.worker
+      }
+    }
     if (state.state === 'SUSPENDED') { await this.startWorker(state); state.resumed = true }
     else if (state.admission) await state.admission
     return this.status(owner)
@@ -779,7 +768,7 @@ export class LispManager {
       executionMode:this.#config.executionMode,
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
       limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
-        aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: this.#config.executionMode==='development'?'normal-user-environment':process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
+        aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations, operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates,
       ...(taskSummary ? { task: taskSummary } : {}),
       hot: await this.#hot.status(owner),
@@ -1154,7 +1143,7 @@ export class LispManager {
         if (!response.ok) { state.state = 'READY'; return result }
         const applied = await this.#proposals.apply(owner, id, worker.generation, response.proposals, combined, undefined, state.packageBase)
         const uncertain = applied.some(change => change.state === 'UNKNOWN')
-        if (uncertain) { await worker.stop(); this.halted(state, new LispError('RECONCILIATION_REQUIRED', '変更結果が未確定です。記録とバックアップを照合してください。')) }
+        if (uncertain) { await this.#supervisor.stop(worker); this.halted(state, new LispError('RECONCILIATION_REQUIRED', '変更結果が未確定です。記録とバックアップを照合してください。')) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         const complete = applied.every(change => change.state === 'APPLIED' || change.state === 'UNCHANGED')
         const finished = { ...result, ok: complete, state: uncertain ? 'UNKNOWN' : complete ? 'SUCCEEDED' : 'FAILED', changes: applied }
@@ -1173,13 +1162,13 @@ export class LispManager {
         if (reserved) {
           // Close admission before attempting a potentially failing journal write.
           state.state = 'STOPPING'
-          try { await worker.stop() } catch (stop) { outcome = { ...outcome, stopFailure: failure(stop) }; error = stop }
+          try { await this.#supervisor.stop(worker) } catch (stop) { outcome = { ...outcome, stopFailure: failure(stop) }; error = stop }
           this.halted(state, error)
           try {
             const current = await this.#store.get(owner, id)
             if (current?.state === 'RUNNING') await this.#store.transition(owner, id, ['RUNNING'], 'UNKNOWN', outcome)
           } catch (journal) { outcome = { ...outcome, journalFailure: failure(journal) }; this.halted(state, journal) }
-        } else if (!worker.healthy) { try { await worker.stop() } catch (stop) { error = stop }; this.halted(state, error) }
+        } else if (!worker.healthy) { try { await this.#supervisor.stop(worker) } catch (stop) { error = stop }; this.halted(state, error) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         return outcome
       } finally { await state.codeLease?.adapter.dispose(); delete state.codeLease; state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id) delete state.currentVerification }
@@ -1207,13 +1196,14 @@ export class LispManager {
       let ownedStopFailure: unknown
       try { await this.stopOwned(state) }
       catch(error){ownedStopFailure=new LispError('STOP_UNCONFIRMED', `管理中のプロセスの停止を確認できません。${failure(error).message}`)}
-      await state.worker?.stop()
+      await this.#supervisor.stop(state.worker)
       if (state.admission) {
         try { await state.admission } catch (error) { if (error instanceof LispError && error.code === 'STOP_UNCONFIRMED') throw error }
       }
-      this.#compiled.assertStopped()
+      this.#supervisor.assertCompilationStopped()
       if (ownedStopFailure) throw ownedStopFailure
       state.state = 'RECOVERY_REQUIRED'
+      state.error = failure(new LispError('CANCELLED', 'Lisp の処理を取り消しました。'))
     }
     catch (error) { this.halted(state, error); throw error }
   }

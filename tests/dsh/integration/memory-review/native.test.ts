@@ -27,7 +27,7 @@ for(const intakeMode of ['on-demand','eager','legacy-owner'] as const)test(`${in
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'review-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){
 if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
-return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='enno-execution-mode'?'通常実行':'chat']}))}}})}}))
+return {answers:request.questions.map((q:any)=>({id:q.id,selected:[q.id==='execution-mode'?'通常実行':'chat']}))}}})}}))
     const mock=nativeMock(llm)
     let mainCalls=0,reviewCalls=0,explainNext:string|undefined,prepareExplanation=false
     const requests:any[]=[];const errors:string[]=[];ctx.on('agent/error',(event:any)=>errors.push(String(event.error?.message)))

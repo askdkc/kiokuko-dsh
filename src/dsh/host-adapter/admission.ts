@@ -351,6 +351,9 @@ export function createAdmission({
       }
       bindTaskRepository(database, identity)
       if (event.signal.aborted) return undefined
+      // Completion can settle while the final model response is streaming.
+      // Retain that response without issuing another execution lease.
+      if (readTaskSnapshot(database, identity).state === 'Done') return undefined
       // A continued native turn can reuse an already Working task without a
       // fresh admission. Capture its current lease from SQLite as well; never
       // synthesize authority from the model or a cached turn record.
@@ -1011,7 +1014,9 @@ export function createAdmission({
             ? true
             : previousWasChat
               ? event.profileHints?.taskType === "chat"
-              : durableOpen &&
+              : event.requestIntent?.relation !== 'new' &&
+                (!coding || !['completed', 'cancelled', 'superseded'].includes(coding.state)) &&
+                durableOpen &&
                 !previous.failed &&
                 previous.prepared.run.status === "active" &&
                 (event.profileHints?.taskType ??

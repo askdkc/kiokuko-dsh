@@ -41,10 +41,10 @@ for (const mode of ['native', 'ptc'] as const) test(`raw register validates tran
     for (const args of [{ limit: 'many' }, { includeUnready: 1 }, { cwd: 'workspace', workspace: 1 }, { cwd: 'workspace', workspace: 'outer', workspaceId: 'forged' }]) {
       const result = await invoke(args)
       assert.equal(result.isError, true, JSON.stringify(result))
-      assert.match(JSON.stringify(result), 'workspaceId' in args ? /host-owned identity/ : /published transport schema/)
+      assert.match(JSON.stringify(result), 'workspace' in args ? /host-owned identity/ : /published transport schema/)
       assert.equal(binds, 0); assert.equal(effects, 0)
     }
-    const result = await invoke({ workspace: 'workspace' })
+    const result = await invoke({})
     assert.equal(result.isError, false, JSON.stringify(result))
     assert.equal(binds, 1); assert.equal(effects, 1)
   } finally {

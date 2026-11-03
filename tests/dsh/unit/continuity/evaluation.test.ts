@@ -22,7 +22,7 @@ test('configured evaluation uses isolated fixtures, enforces total reservations,
     };`)
     const config = { model: 'fixture', revision: 'fixed', baseUrl: 'http://127.0.0.1/v1', apiKeyEnv: 'CONTINUITY_TEST_KEY',
       temperature: 0, contextWindow: 4096, maxOutputTokens: 32, repetitions: 1, seed: 42, maxRequests: 20,
-      maxTokens: 8256, maxDurationMs: 10000, allowRemote: false, fixture: 'continuity-v1' }
+      maxTokens: 8256, maxDurationMs: 10000, allowRemote: false, fixture: 'continuity-v2' }
     const configPath = join(root, 'config.json'), output = join(root, 'results')
     await writeFile(configPath, JSON.stringify(config))
     execFileSync(process.execPath, ['--import', mock, '--import', 'tsx', 'scripts/run-continuity-evaluation.mjs', '--config', configPath, '--output', output],

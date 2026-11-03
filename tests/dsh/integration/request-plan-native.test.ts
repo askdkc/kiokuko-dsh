@@ -134,7 +134,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                       selected:
                         q.intent?.kind === 'plan-review'
                           ? [q.intent.approve]
-                          : q.id === 'enno-execution-mode'
+                          : q.id === 'execution-mode'
                             ? ['通常実行']
                             : q.id.startsWith('coding-lisp-')
                               ? ['使わない']
@@ -493,14 +493,14 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                 'an insufficient plan candidate asks once and cannot execute without resolved evidence',
               )
               assert.equal(
-                asked.filter((id) => id === 'enno-execution-mode').length <= 1,
+                asked.filter((id) => id === 'execution-mode').length <= 1,
                 true,
                 'execution selection is never repeated',
               )
               assert.ok(
                 asked.every(
                   (id) =>
-                    id === 'enno-execution-mode' ||
+                    id === 'execution-mode' ||
                     id === 'plan-review' ||
                     id.startsWith('coding-lisp-') ||
                     (legacy && id.startsWith('request-clarification-')),

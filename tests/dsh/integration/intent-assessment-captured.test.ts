@@ -39,6 +39,7 @@ for (const request of requests) for (const verdict of ['supported', 'insufficien
     assert.ok(context)
     assert.equal(requestIntentReferenceIds(context).length, 2, 'message and active task are the two incident-shaped refs')
     const config = TypedDecisionsConfig.parse({ provider: 'typesafe' })
+    let assessment: Awaited<ReturnType<typeof assessRequestIntent>>
     let providerCalls = 0, assessments = 0, admissions = 0, effects = 0, questions = 0, ready = false
     const decisions = new DecisionService(config, (_config, observer) => new TypeSafeDecisionProvider(config.typesafe, async () => 'fixture-key', async (_url, init) => {
       providerCalls++
@@ -66,7 +67,7 @@ for (const request of requests) for (const verdict of ['supported', 'insufficien
     const intake = new OnDemandIntake({ validate: async () => {}, existing: async () => false,
       classify: async () => ({ deferInference: true }), requestContext: async () => context,
       interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'fixture_classifier_abstained') }),
-      assess: async (_input, source, candidate) => { assessments++; return assessRequestIntent(decisions, 'captured-request', source, candidate, signal()) },
+      assess: async (_input, source, candidate) => { assessments++; return assessment = await assessRequestIntent(decisions, 'captured-request', source, candidate, signal()) },
       prepare: async () => { admissions++; ready = true; return true }, ready: () => ready,
       questions: { async ask(request) { questions++; return { answers: [{ id: request.questions[0].id, selected: [] }] } } },
     })
@@ -83,24 +84,17 @@ for (const request of requests) for (const verdict of ['supported', 'insufficien
     const result = await execute(TASK_PREPARE_TOOL, submit)
     assert.equal(result.isError, false)
     const value = result.value as any
-    assert.equal(value.prepared, verdict === 'supported')
-    assert.equal(providerCalls, 1); assert.equal(assessments, 1); assert.equal(admissions, verdict === 'supported' ? 1 : 0)
-    if (verdict === 'supported') {
-      assert.equal((await execute('effect_probe', {})).isError, false); assert.equal(effects, 1)
-    } else if (verdict !== 'contradicted') {
-      assert.equal(value.status, 'awaiting_clarification')
-      assert.deepEqual(value.semanticChecks, criteria.map((criterion, index) => verdict.startsWith('partial-') && index !== 1
-        ? { criterion, status: 'selected', choiceId: 'supported' }
-        : { criterion, status: 'abstained', reason: verdict.replace('partial-', '') }))
-      assert.equal(questions, 0, 'Provider abstention alone must not ask the human to repair inference')
-      assert.equal(value.nextAction, 'wait_for_user')
-      assert.equal(value.originalTask, request.task)
-      assert.equal((await execute('effect_probe', {})).isError, true); assert.equal(effects, 0)
-      assert.equal((await execute(TASK_PREPARE_TOOL, submit)).value.prepared, false)
-      assert.equal(providerCalls, 1, 'identical submission does not reissue inference')
-      assert.equal(admissions, 0)
+    const admitted = verdict !== 'contradicted'
+    assert.equal(value.prepared, admitted)
+    assert.equal(providerCalls, 1); assert.equal(assessments, 1)
+    assert.equal(admissions, admitted ? 1 : 0)
+    assert.equal((await execute('effect_probe', {})).isError, !admitted)
+    assert.equal(effects, admitted ? 1 : 0)
+    if (admitted && verdict !== 'supported') {
+      assert.equal(assessment?.outcome, 'advisory')
+      assert.equal(assessment?.semantic, 'insufficient')
+      assert.equal(questions, 0, 'Provider abstention does not require human repair')
     }
-    assert.equal(effects, verdict === 'supported' ? 1 : 0)
-    assert.equal(admissions, verdict === 'supported' ? 1 : 0)
+
   })
 }

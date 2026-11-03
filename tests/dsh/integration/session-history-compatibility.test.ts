@@ -166,45 +166,6 @@ for (const [name, cause] of [['unknown-text', 'other cancellation'], ['null', nu
   })
 }
 
-test('native cancellation persists a hook cause and reopens without repair', options, async () => {
-  const f = await fixture()
-  try {
-    const names = ['dsh-llm', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop']
-    // Agent drivers use the built module graph, as the local DSH application does.
-    const [llm, projection, prompt, tools, agents, loop] = await Promise.all(names.map(name => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(
-      sourceRoot ? join(sourceRoot, sourceModules[name]!, 'lib/index.js') : modulePath(name),
-    ).href))))
-    for (const [plugin, config] of [[(llm!.default ?? llm!), undefined], [(f.session.default ?? f.session), undefined], [(projection!.default ?? projection!), undefined],
-      [(prompt!.default ?? prompt!), { persona: '' }], [(tools!.default ?? tools!), undefined], [(agents!.default ?? agents!), undefined], [(loop!.default ?? loop!), { agents: [] }]] as const) {
-      const fiber = f.ctx.plugin(plugin, config)
-      await fiber
-      f.disposers.push(() => fiber.dispose())
-    }
-    const executorFibers:any[]=[];await mountNativeExecutor(f.ctx, packageRoot, executorFibers);f.disposers.push(async()=>{for(const fiber of executorFibers.reverse())await fiber.dispose()})
-    const mock = nativeMock(llm)
-    const adapter = new mock.MockAdapter([mock.textResponse('Finished fixture response.')])
-    f.ctx.llm.registerAdapter(['mock'], adapter)
-    const composition = await mountDshComposition(f.ctx, {})
-    f.disposers.push(composition.dispose)
-    await composition.historyCheck
-    const agent = (await f.ctx.agents.create({sessionId:f.session.SessionId('native-hook-abort'),agentOptions:{ provider: 'mock', model: 'mock' },meta:{ cwd: f.root }})).agent
-    f.disposers.push(async () => { agent.cancel({ kind: 'disposed' }) })
-    agent.followup(llm!.createUserMessage({ content: [{ type: 'text', text: 'Finish this fixture.' }], source: { kind: 'user' } }))
-    for (let count = 0; count < 500; count++) {
-      if (agent.status === 'idle' && agent.session.snapshotEvents().some((row: any) => row.type === 'turn/end')) break
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
-    assert.equal(agent.status, 'idle')
-    await f.ctx.sessions.flush(agent.session)
-    const loaded = await restored(f.backend, agent.session.id)
-    const ending = loaded.state.events.findLast((row: any) => row.type === 'turn/end')
-    assert.deepEqual(ending.data.reason, { kind: 'aborted', reason: { kind: 'hook', reason: 'kiokuko dsh Enno continuation stopped: state_unavailable' } })
-    assert.equal(adapter.requests.length, 1)
-    const path = await f.backend.resolveCurrentLog(agent.session.id)
-    await assert.rejects(access(`${path}.bak`), { code: 'ENOENT' })
-  } finally { await f.close() }
-})
-
 for (const compression of ['zstd', 'none'] as const) test(`startup migrates legacy ${compression} sources and retains the original generation`, options, async () => {
   const f = await fixture(compression)
   try {

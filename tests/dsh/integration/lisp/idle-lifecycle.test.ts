@@ -21,13 +21,16 @@ async function fixture(idleTimeoutMs = 300000, questions?: DshUserQuestions) {
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   migrateDatabase(db)
   const store = new LispStore(async fn => fn(db))
-  const manager = new LispManager({ store, dataRoot: join(base, 'data'), ...(questions ? { questions } : {}),
-    config: LispConfig.parse({ executionMode: 'protected', enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) })
+  const options = { store, dataRoot: join(base, 'data'), ...(questions ? { questions } : {}),
+    config: LispConfig.parse({ executionMode: 'protected', enabled: true, maxWorkers: 1, idleTimeoutMs, startupTimeoutMs: 60000, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl' }) }
+  let manager = new LispManager(options)
   await manager.start()
   const owner = (id: string): LispOwner => {
     const binding = { sessionId: id, agentId: id, root }; workingLispTask(db, binding); return binding
   }
-  return { manager, store, root, owner, async close() { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
+  return { get manager() { return manager }, store, root, owner,
+    async restart() { await manager.dispose(); manager = new LispManager(options); await manager.start() },
+    async close() { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) } }
 }
 async function until(check: () => Promise<boolean>) {
   const deadline = Date.now() + 10000
@@ -82,6 +85,15 @@ test('idle timeout releases workers despite status polling, while active turns a
     await f.manager.disposeSession(second.sessionId)
     assert.equal((await status(f.manager, second)).state, 'SUSPENDED')
     assert.equal((await f.manager.prepare(second) as any).state, 'READY', 'a normally disposed conversation can reopen')
+    const once = {operationId:'cold-result',code:'(+ 20 22)'}
+    assert.equal((await f.manager.execute(second,'lisp_eval',once) as any).value.printed,'(42)')
+    await f.restart()
+    assert.equal((await f.manager.execute(second,'lisp_eval',once) as any).replay,true,'restart preserves results without rerunning code')
+    assert.equal((await f.manager.prepare(second) as any).state,'READY','a clean host restart prepares a fresh worker without manual recovery')
+    await f.store.reserve(second,'unresolved','proposal','digest','generation',{})
+    await f.store.transition(second,'unresolved',['RUNNING'],'UNKNOWN',{})
+    await f.restart()
+    assert.equal((await f.manager.prepare(second) as any).state,'RECOVERY_REQUIRED','unresolved operations still require reconciliation')
   } finally { await f.close() }
 })
 
@@ -135,6 +147,30 @@ test('concurrent cold admission never exceeds maxWorkers', native, async () => {
     const states = await Promise.all(owners.map(owner => status(f.manager, owner)))
     assert.equal(states.filter(s => s.state === 'READY').length, 1)
     assert.equal(states.filter(s => s.state === 'SUSPENDED').length, 3)
+  } finally { await f.close() }
+})
+
+test('the host replaces an idle failed child with bounded restarts and never replays its work', native, async () => {
+  const f = await fixture(), owner = f.owner('supervised')
+  try {
+    await f.manager.enable(owner, true)
+    const once = { operationId: 'before-child-exit', code: '(+ 20 22)' }
+    assert.equal((await f.manager.execute(owner, 'lisp_eval', once) as any).value.json, 42)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = await status(f.manager, owner)
+      process.kill(before.runtimePid, 'SIGKILL')
+      await until(async () => (await status(f.manager, owner)).state === 'RECOVERY_REQUIRED')
+      const resumed = await f.manager.prepare(owner) as any
+      if (attempt === 2) {
+        assert.equal(resumed.state, 'RECOVERY_REQUIRED')
+        assert.equal(resumed.error.code, 'WORKER_RESTART_LIMIT')
+      } else {
+        assert.equal(resumed.state, 'READY', 'the master replaces a stopped idle child without human recovery')
+        assert.notEqual(resumed.generation, before.generation)
+        assert.equal((await f.manager.execute(owner, 'lisp_eval', once) as any).replay, true)
+        assert.equal((await f.manager.execute(owner, 'lisp_eval', { operationId: `fresh-${attempt}`, code: '(+ 1 1)' }) as any).value.json, 2)
+      }
+    }
   } finally { await f.close() }
 })
 

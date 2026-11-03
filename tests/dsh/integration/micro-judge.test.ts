@@ -472,7 +472,7 @@ for (const fault of [
     },
   )
 
-test('explicit typed-decision OFF does not fabricate a solver verdict; missing enabled provider is unavailable', async () => {
+test('explicit typed-decision OFF does not fabricate a solver verdict; missing enabled provider remains advisory', async () => {
   const context = createRequestIntentContext({
     task: 'Implement src/example.ts.',
     messageRefs: [{ id: 'current-user', digest: hash('current-user') }],
@@ -509,7 +509,7 @@ test('explicit typed-decision OFF does not fabricate a solver verdict; missing e
     candidate.decision,
     signal(),
   )
-  assert.equal(missing?.outcome, 'unavailable')
+  assert.equal(missing?.outcome, 'advisory')
   assert.equal(missing?.semantic, 'unavailable')
 })
 

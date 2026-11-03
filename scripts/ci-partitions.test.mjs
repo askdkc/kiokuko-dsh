@@ -162,6 +162,15 @@ test('pnpm prerequisites provision full main and representative core lanes',()=>
 });
 test('selected coverage fails safe and retains the complete inventory in full mode',()=>{
   const request=(file,status='M')=>({available:true,changes:[{status,path:file}]});
+  // Upstream can change even when this repository changes only prose.
+  for(const file of ['docs/guide.md','src/dsh/task-state.ts']){
+    const current=createCiPlan(contract,{...request(file),dshSha:'a'.repeat(40)},selectionIdentity);
+    assert.equal(current.mode,'full','latest DSH is an independent compatibility input');
+    assert.deepEqual(current.lanes,full.lanes);
+    const next=createCiPlan(contract,{...request(file),dshSha:'b'.repeat(40)},selectionIdentity);
+    assert.notEqual(current.digest,next.digest,'a new upstream revision cannot reuse the previous plan identity');
+  }
+  for(const dshSha of ['', 'master', 'a'.repeat(39)])assert.throws(()=>createCiPlan(contract,{...request('docs/guide.md'),dshSha},selectionIdentity));
   for(const [file,count,reports]of [['docs/guide.md',2,0],['src/dsh/task-state.ts',5,2],['src/client.ts',6,3],['src/dsh/lisp/sandbox.darwin.ts',7,3],['src/dsh/lisp/sandbox.ts',7,3]]){
     const p=createCiPlan(contract,request(file),selectionIdentity);assert.equal(p.jobCount,count,file);assert.equal(p.lanes.length,reports,file);
     assert.equal(validateCiEvidence(contract,goodEntries(state,p),state,p),true,file);
@@ -189,6 +198,8 @@ test('Depot CI selects one Linux native producer instead of relabeling unsupport
   assert.ok(selection.lanes.length>0);
   assert.ok(selection.lanes.every(lane=>lane.key==='linux-x64'&&lane.runner==='ubuntu-24.04'));
   assert.ok(selection.lanes.every(lane=>lane.release===false));
+  const docs=createCiPlan(contract,{available:true,changes:[{status:'M',path:'docs/guide.md'}],dshSha:'a'.repeat(40)},{...selectionIdentity,ciPlatform:'linux-x64'});
+  assert.deepEqual(docs.lanes,selection.lanes,'latest DSH must still run on the supported Depot host for docs changes');
   assert.throws(()=>createCiPlan(contract,{full:true},{...selectionIdentity,ciPlatform:'darwin-arm64'}),/Only the Linux x64 Depot CI platform is supported/);
 });
 test('PR merge-base and push-before diff parsing preserve rename/deletion and unavailable fail-safe',()=>{

@@ -15,7 +15,7 @@ test('pstack evaluation includes independent boundary cases and both named targe
   const fixture = JSON.parse(await readFile('tests/fixtures/skill-prompts/pstack-scenarios.json', 'utf8'))
   assert.deepEqual(fixture.models, ['gpt-6-astra', 'gpt-6.1-sol'])
   assert.equal(fixture.repetitions, 3)
-  for (const id of ['small-fix', 'missing-model', 'authority', 'japanese', 'benchmark', 'review']) {
+  for (const id of ['small-fix', 'authority', 'japanese', 'benchmark', 'review']) {
     assert.ok(fixture.cases.some((c: {id: string}) => c.id === id))
   }
 })

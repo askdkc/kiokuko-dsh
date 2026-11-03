@@ -64,6 +64,11 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     }
     const native=await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})
     assert.equal(native.isError,false,JSON.stringify(native));assert.equal(native.value.available,true)
+    const guarded=join(root,'source-to-preserve.txt')
+    await writeFile(guarded,'original source')
+    const direct=await evaluate(`(handler-case (progn (delete-file ${JSON.stringify(guarded)}) "deleted") (file-error () "denied"))`)
+    assert.equal(direct,'denied','arbitrary Lisp must not bypass the host operation approval boundary')
+    assert.equal(await readFile(guarded,'utf8'),'original source')
     await evaluate('(kioku.files:propose-write "new/deep/source.txt" "source result")')
     assert.equal(await readFile(join(root,'new/deep/source.txt'),'utf8'),'source result')
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_owned_operations WHERE state='completed' AND receipt_json LIKE '%kioku_write%'").get<any>().n,1)

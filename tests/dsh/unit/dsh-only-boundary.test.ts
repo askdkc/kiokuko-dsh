@@ -58,21 +58,6 @@ test('every active source is reachable from a declared DSH package entrypoint', 
   assert.deepEqual([...allSources].filter((file) => !reached.has(file)), [])
 })
 
-test('active source has no legacy client branch or generic Enno projection', async () => {
-  const forbidden = /\b(?:Codex|Claude|OpenCode|Hermes|EnnoClientKind|EnnoHarnessDirective|clientBinding)\b|directive\.harness/gu
-  const violations: Array<{ file: string; matches: string[] }> = []
-  for (const file of allSources) {
-    const source = await readFile(file, 'utf8')
-    // Provider names in Web connection management and vendored transports are
-    // protocol identities, not retired generic client implementations.
-    const providerIntegration = /model-(?:configuration|selection-ui)\.ts$/u.test(file) || /src\/dsh\/models\//u.test(file) || file === path.join(root, 'src/models-client.ts')
-    const audited = providerIntegration ? source.replace(/\b(?:OpenCode|Codex|Claude|Hermes)\b/gu, 'ModelProvider') : source
-    const matches = [...audited.matchAll(forbidden)].map((match) => match[0])
-    if (matches.length > 0) violations.push({ file: path.relative(root, file), matches })
-  }
-  assert.deepEqual(violations, [])
-})
-
 test('active source has no retired generic-client compatibility identifiers', async () => {
   const forbidden = /\bclient_kind\b|\bmcp_tool\b|digestForVersion|legacyRequestDigests|legacyScopedDeliveryId|rebuildLegacyHybridSearch/u
   const violations: Array<{ file: string; match: string }> = []

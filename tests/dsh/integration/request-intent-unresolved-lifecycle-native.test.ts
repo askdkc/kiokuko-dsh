@@ -77,7 +77,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         clarificationQuestions += request.questions.filter((question: any) => question.id.startsWith('request-clarification-')).length
         return { answers: request.questions.map((question: any) => ({ id: question.id,
           selected: question.id.startsWith('request-clarification-') ? [] : [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'
-            : question.id === 'expected' ? 'A concise explanation' : question.id === 'enno-execution-mode' ? '通常実行' : 'No unrelated changes'] })) }
+            : question.id === 'expected' ? 'A concise explanation' : question.id === 'execution-mode' ? '通常実行' : 'No unrelated changes'] })) }
       } })
     } }))
     ctx.on('agent/error', (event: any) => errors.push(event.error))

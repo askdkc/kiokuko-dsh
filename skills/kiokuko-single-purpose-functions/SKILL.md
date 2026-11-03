@@ -50,7 +50,7 @@ to check the complete workflow. An isolated edit needs no additional audit.
 
 For each new or materially changed function, or for the smallest WorkUnit owning one cohesive use case: classify the dominant risk, select one expert below, add at most two more only when the same contract genuinely crosses those risks, record a concrete reason for each, and read the selected files before implementation or review. A different expert set or reason to change means a separate WorkUnit or a separate function contract inside it.
 
-Enno-Oduno plans bind `expertRefs` to the WorkUnit revision: a `code` route requires at least one `code.*`, a `ui` route requires `code.*` and `ui.*`, and `test`, `docs`, and `operations` routes inherit neither. Outside Enno-Oduno, keep the same mapping in the working plan or review notes:
+Code changes select `code.*` expertise; interactive UI changes also select `ui.*`. Tests, documentation and operations select expertise for their actual risks. Keep the mapping in the working plan or review notes:
 
 ```text
 target -> responsibility -> expert IDs -> focused verifier

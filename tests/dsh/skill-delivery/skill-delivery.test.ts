@@ -52,7 +52,7 @@ async function enableLisp(f: Awaited<ReturnType<typeof fixture>>, command: strin
 }
 
 for (const mode of ['full', 'compiled'] as const) for (const activation of ['enable', 'enable-task']) {
-  test(`Lisp planning delivery: ${mode}, ${activation}, fresh first/follow-up and protected reload recovery`, {
+  test(`Lisp planning delivery: ${mode}, ${activation}, fresh first/follow-up and clean reload`, {
     ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
   }, async () => {
     const f = await fixture(false, mode, { lisp: { executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } })
@@ -65,18 +65,14 @@ for (const mode of ['full', 'compiled'] as const) for (const activation of ['ena
       for (let turn = 0; turn < 3; turn++) {
         if (turn === 2) await f.reload(mode)
         const firstRequest = f.model.requests.length
-        if (turn === 2 && activation === 'enable') {
-          const status = (await f.ctx.commands.execute(f.agent, '/kioku-lisp status --json', [], new AbortController().signal)).result
-          assert.equal(status.kind, 'success', status.text)
-          assert.equal(JSON.parse(status.text).state, 'RECOVERY_REQUIRED')
-          await f.turn('説明してください。')
-          assert.equal(f.model.requests.length, firstRequest, 'protected reload requires recovery; an earlier request cannot prove planning delivery')
-          assert.equal(f.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'blocked')
-          continue
-        }
         f.responses.push(f.mock.textResponse('現在の契約を確認しました。'))
         await f.turn('説明してください。')
         assert.equal(f.model.requests.length, firstRequest + 1, 'planning must reach a fresh model request')
+        if (turn === 2 && activation === 'enable') {
+          const status = (await f.ctx.commands.execute(f.agent, '/kioku-lisp status --json', [], new AbortController().signal)).result
+          assert.equal(status.kind, 'success', status.text)
+          assert.equal(JSON.parse(status.text).state, 'READY', 'a clean reload resumes without manual recovery')
+        }
         const request = f.model.requests.at(-1)
         assert.ok(textOf(request).includes(expected))
         const system = request.system ?? request.messages.filter((m: any) => m.role === 'system')
@@ -314,7 +310,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
     const q = request.questions[0]
     if (q.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp ON')
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
-    if (q.id === 'enno-execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
+    if (q.id === 'execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
     approvals++; observedDetail = q.detail
     return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
@@ -399,7 +395,7 @@ test('compiled Skill delivery: real DeepSeek serializer sends the bodies in the 
   } finally {off();http.mock.restore();await f.close()}
 })
 
-for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy to fresh requests and respects protected reload recovery`, {
+for (const taskMode of [false, true]) for (const representation of ['compiled', 'full'] as const) test(`Lisp ${taskMode ? 'task' : 'persistent'} ${representation} delivers auto policy to fresh requests after clean reload`, {
   ...native, skip: !enabled || (!taskMode && process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1'), timeout: 180000,
 }, async () => {
   const f = await fixture(false, representation, {lisp:{executionMode:'protected',enabled:true, approvalMode:'auto', startupTimeoutMs:60000}})
@@ -412,11 +408,7 @@ for (const taskMode of [false, true]) for (const representation of ['compiled', 
       if (phase === 'reload' && !taskMode) {
         const status = (await f.ctx.commands.execute(f.agent, '/kioku-lisp status --json', [], new AbortController().signal)).result
         assert.equal(status.kind, 'success', status.text)
-        assert.equal(JSON.parse(status.text).state, 'RECOVERY_REQUIRED')
-        await f.turn('Explain the current Lisp approval policy without executing anything.')
-        assert.equal(f.model.requests.length, firstRequest, 'protected reload must not reuse an earlier model request as evidence of fresh delivery')
-        assert.equal(f.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'blocked')
-        continue
+        assert.equal(JSON.parse(status.text).state, 'READY', 'enabling a clean reloaded session resumes its worker')
       }
       f.responses.push(f.mock.textResponse('Policy received.'))
       await f.turn('Explain the current Lisp approval policy without executing anything.')
@@ -462,8 +454,7 @@ for (const provider of ['jev', 'laya-strict', 'laya-v1'] as const) test(`decisio
   try {
     const selected = await command(`/kioku-decisions use ${provider === 'jev' ? 'jev' : 'laya'}`)
     assert.equal(selected.kind, 'success', selected.text)
-    // Reload before starting a worker: provider persistence is independent of
-    // the explicit recovery required by a previously enabled protected worker.
+    // Reload before starting a worker to verify provider persistence separately.
     await f.reload('compiled')
     for (const phase of ['initial', 'follow-up']) {
       const status = await command('/kioku-decisions status')

@@ -28,7 +28,7 @@ export interface IntentAssessment {
   /** Normalized provider outcomes, not a claim about human ambiguity or authority. */
   semanticChecks?: readonly SemanticCheck[]
   detector: MicroJudgeResult
-  outcome: 'consistent' | 'user_confirmed' | 'clarify' | 'unavailable'
+  outcome: 'consistent' | 'user_confirmed' | 'advisory' | 'clarify' | 'unavailable'
 }
 const criteria = [
   [
@@ -99,7 +99,7 @@ export function compileIntentRelations(
   context: RequestIntentContext,
   candidate: RequestIntentDecision,
   semantic: SemanticVerdict,
-  interpretation: 'independent' | 'native-user' = 'independent',
+  interpretation: 'independent' | 'native-user' | 'main-model' = 'independent',
 ): FiniteDomainProblem {
   const domains: FiniteDomainProblem['domains'] = [],
     constraints: Expression[] = [],
@@ -156,10 +156,16 @@ export function compileIntentRelations(
       ? [0, 1]
       : [1],
   )
-  // This is the admission policy requirement, not a rewritten semantic verdict.
+  // Auxiliary abstention is advisory for a fully bound ordinary main-model
+  // interpretation. Exact source identity and explicit lifecycle permissions
+  // are still checked below; a contradictory judgment is never ignored.
+  // Prior assistant text is ordinary context. Native plan proposals retain
+  // their separate interpretation and approval boundary.
   const interpretationRequirement = value(
     'bool',
-    semantic === 'supported' || (semantic === 'insufficient' && interpretation === 'native-user' && mayConfirmRequestInterpretation(candidate))
+    semantic === 'supported' || (semantic === 'insufficient' && interpretation === 'native-user' && mayConfirmRequestInterpretation(candidate)) ||
+      ((semantic === 'insufficient' || semantic === 'unavailable') && interpretation === 'main-model' && candidate.source === 'main-model' &&
+        context.proposals.every(proposal => proposal.id.startsWith('assistant-')) && ordinaryRequestInterpretation(candidate))
       ? [1] : semantic === 'contradicted' ? [0] : [0, 1],
   )
   // A candidate task transition must belong to the host's current legal operation set.
@@ -191,15 +197,18 @@ export function compileIntentRelations(
 /** Confirmation is supplied only by the intake's private native-answer receipt.
  * It is never inferred from a model submission or an auxiliary abstention.
  * Scope expansion and lifecycle operations retain their separate protocols. */
-export function mayConfirmRequestInterpretation(candidate: RequestIntentDecision): boolean {
+function ordinaryRequestInterpretation(candidate: RequestIntentDecision): boolean {
   return candidate.source !== 'unresolved' &&
     (candidate.relation === 'new' || candidate.relation === 'same_scope_continuation') &&
     ['answer', 'research', 'verify', 'change'].includes(candidate.action) &&
     (candidate.action !== 'change' || candidate.changeScope !== 'unknown') &&
-    candidate.taskOperation === undefined && candidate.evidence.proposalRefs.length === 0
+    candidate.taskOperation === undefined
+}
+export function mayConfirmRequestInterpretation(candidate: RequestIntentDecision): boolean {
+  return ordinaryRequestInterpretation(candidate) && candidate.evidence.proposalRefs.length === 0
 }
 export function assessmentAllowsPreparation(result: IntentAssessment): boolean {
-  return result.outcome === 'consistent' || result.outcome === 'user_confirmed'
+  return result.outcome === 'consistent' || result.outcome === 'user_confirmed' || result.outcome === 'advisory'
 }
 export async function assessRequestIntent(
   service: DecisionService | undefined,
@@ -270,7 +279,7 @@ export async function assessRequestIntent(
       signal.throwIfAborted()
     }
   const interpreted = options.userConfirmed === true && semantic === 'insufficient' && mayConfirmRequestInterpretation(candidate)
-  const problem = compileIntentRelations(context, candidate, semantic, interpreted ? 'native-user' : 'independent')
+  const problem = compileIntentRelations(context, candidate, semantic, interpreted ? 'native-user' : candidate.source === 'main-model' ? 'main-model' : 'independent')
   const detector = await runMicroJudge(
     problem,
     canonicalContentHash([requestId, semanticInputDigest]),
@@ -278,12 +287,11 @@ export async function assessRequestIntent(
     options,
   )
   const outcome =
-    semantic === 'unavailable' ||
     detector.state === 'unavailable' ||
     !detector.result.complete
       ? 'unavailable'
       : detector.result.status === 'entailed'
-        ? interpreted ? 'user_confirmed' : 'consistent'
+        ? interpreted ? 'user_confirmed' : semantic === 'supported' ? 'consistent' : 'advisory'
         : 'clarify'
   return {
     semantic,

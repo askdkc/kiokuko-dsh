@@ -10,7 +10,7 @@ For explicit semantic decisions and `/kioku-typesafe-key` setup, see
 [TypeSafe from Lisp](typesafe.md). Answers can guide inspection and proposals;
 the existing permission and approval boundaries still apply.
 
-The default is `lisp.executionMode: development`. Old `approvalMode` values remain readable. Set `executionMode: protected` explicitly to select the legacy worker/approval/fence behavior. See [owned execution and memory evidence](owned-execution.md).
+The default is `lisp.executionMode: development`. Old `approvalMode` values remain readable. Set `executionMode: protected` explicitly to select the additional approval and tool-fence policy. See [owned execution and memory evidence](owned-execution.md).
 
 ## Task state at execution boundaries
 
@@ -87,7 +87,26 @@ Session disposal also stops its workers. Normal suspension appears as `SUSPENDED
 retains protection and resumes automatically on the next use; status polling never
 starts a worker. Variables, definitions and references are lost on restart; the
 agent receives the new generation and must rebuild helpers without replaying
-completed effects. Crashes and explicit cancellation still require human recovery.
+completed effects. A clean host restart or an exited idle child resumes on the next
+admitted request after confirmed process termination and journal reconciliation.
+Fault replacements are limited to two per owner in 60 seconds. Explicit cancellation,
+unresolved effects, unconfirmed termination and exhausted restart limits require recovery.
+
+Kiokuko owns a local master–worker hierarchy: `LispManager` binds requests and their
+existing operation journals; `LispSupervisor` owns shared capacity, compiled startup,
+isolation probes and confirmed release for persistent and disposable children;
+`LispWorker` owns one RPC evaluation slot and reports process failures immediately.
+The external `supervisor.mjs` retains OS process ownership and stops descendants when
+the host pipe closes. Local process events and bounded RPC deadlines provide liveness
+signals; no network heartbeat, separate task router or recovery daemon is involved.
+Restarting replaces a process generation, never a journaled operation. A worker whose
+termination is uncertain continues to consume capacity.
+
+This separates durable work from execution, as in the
+[DeepSeek executor](https://github.com/deepseek-ai/dsh-superagent-prototype/blob/main/src/executor/dsh.ts),
+and uses bounded, per-child recovery following
+[OTP supervision](https://www.erlang.org/doc/system/sup_princ.html).
+It preserves the existing Kiokuko execution loop and DSH Agent/SessionEvent contracts.
 
 One canonical repository has one runtime owner and one persistent supervisor/SBCL,
 including across separate DSH databases and sessions. Git subdirectories and symlink
@@ -192,7 +211,7 @@ not the complete worker startup or the speed of an individual Lisp computation.
   copied into the worker's read-only inputs. Files from other sessions and arbitrary
   absolute paths are refused. The original attachment store stays inaccessible to
   Lisp and its subprocesses. Limits: 64 MiB per file, 256 MiB per worker generation.
-- Lisp/FFI/Python/shell use the normal user environment. Prefer owned tools and broker APIs for host-observed execution; direct arbitrary effects are not verification evidence.
+- Lisp/FFI runs inside OS isolation without workspace access or inherited credentials. Project file changes and external Python/shell commands cross the host tool boundary, which checks operation permissions and records the result.
 - Project proposals freeze targets, preserve backups and reject duplicate targets. Writes/edits are authorized; source/data deletion requires concrete confirmation. Generated/temp/disposable artifacts are routine development.
 - Refusal, skip, timeout, cancelled confirmation or unavailable UI means no change.
   File identities/content are checked again after approval. Links, directories,
@@ -271,8 +290,8 @@ The host serializes conflicting target proposals and checks their captured hashe
 
 ## Stop and recover
 
-The control beside the session input shows the Lisp state and opens a recovery view on a detected
-failure. It offers stop/recovery without needing a model response. The commands
+The control beside the session input shows the Lisp state. Selecting it opens the
+recovery view; failures do not repeatedly open a modal. It offers stop/recovery without needing a model response. The commands
 remain available when the AI loop is stopped:
 
 ```text
@@ -366,7 +385,7 @@ subprocesses use the same output limit and parent-liveness supervisor as workers
 Published bundles are limited to 256 MiB each. Concurrent first enables share one
 serialized build under the host's existing exclusive data-directory lease.
 
-Lisp workers and processes use the normal user environment and process groups for termination. kioku.process run/start-job use the owned execution service; directory defaults to the admitted workspace and may select a real subdirectory. Collect background results rather than rerunning commands.
+Lisp workers remain OS-isolated. Host processes launched through kioku.process run/start-job use the normal user environment and supervised process groups after the host permission check; directory defaults to the admitted workspace and may select a real subdirectory. Collect background results rather than rerunning commands.
 `python`, `shell`, `run-lines`, `python-stdout` and `shell-stdout` also accept
 `:directory`. The output-only helpers signal an error on process failure, so a
 composed operation stops before its next step. Use `run` when the function needs

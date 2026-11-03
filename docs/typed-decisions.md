@@ -1,7 +1,7 @@
 # Typed AI decisions
 
 Kiokuko uses one host-owned decision service for provisional Akinator task types,
-installed Skill relevance, past memory reuse, Zenki draft review, [post-display answer review](answer-review.md), and semantic decisions inside Lisp.
+installed Skill relevance, past memory reuse, [post-display answer review](answer-review.md), and semantic decisions inside Lisp.
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
