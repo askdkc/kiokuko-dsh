@@ -40,7 +40,8 @@ export class NativeWorkerRouting {
     const routing = this
     this.wrapper = async function (this: NativeBackend, spec: any) {
       if (routing.stopped || spec.delivery !== 'parent' || !['spawn', 'fork'].includes(spec.provider)) return original.call(this, spec)
-      const parent = spec.request?.parent as RoutableAgent | undefined
+      const request = spec.parent ? spec : spec.request
+      const parent = request?.parent as RoutableAgent | undefined
       if (!parent) return original.call(this, spec)
       // Native child scheduling must resolve its own task authority. An async
       // launch from a managed parent operation must not carry the parent's lease
@@ -59,8 +60,9 @@ export class NativeWorkerRouting {
         .run(childId, parent.session!.id, JSON.stringify(owner), new Date().toISOString()))
       routing.admitting.add(childId)
       try {
-        const { provider: _provider, model: _model, reasoningEffort: _effort, ...other } = spec.request.agentOptions ?? {}
-        const result = await start({ ...spec, childId, request: { ...spec.request, agentOptions: { ...other, ...owner.pair.worker } } })
+        const { provider: _provider, model: _model, reasoningEffort: _effort, ...other } = request.agentOptions ?? {}
+        const agentOptions = { ...other, ...owner.pair.worker }
+        const result = await start({ ...spec, childId, ...(spec.parent ? { agentOptions } : { request: { ...request, agentOptions } }) })
         if (result.childId !== childId) throw new KiokukoError('INTEGRITY_ERROR', 'Native worker Session identity changed')
         await routing.options.runtime.withDatabase(db => db.prepare("UPDATE dsh_native_worker_routes SET state='active' WHERE child_session_id=? AND state='admitting'").run(childId))
         return result

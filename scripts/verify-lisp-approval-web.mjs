@@ -1,7 +1,7 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { intentDecisionWebFixture } from './lib/intent-decision-web-fixture.mjs'
-import { declineOptionalMemoryOffers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
+import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, real native Plan tools and Web approval UI; disposable profile and scripted local model.
@@ -24,7 +24,7 @@ const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(
 let host, browser, page, decisionFixture, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout
-  while (Date.now() < end) { const value = await fn(); if (value) return value; await new Promise(r => setTimeout(r, 100)) }
+  while (Date.now() < end) { await answerFixtureQuestions(page); const value = await fn(); if (value) return value; await new Promise(r => setTimeout(r, 100)) }
   throw new Error('Timed out waiting for Plan Web acceptance')
 }
 try {
@@ -95,7 +95,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   const url = await boot()
   browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
   page = await browser.newPage({ locale: 'en-US' })
-  await declineOptionalMemoryOffers(page)
+  await installFixtureQuestionAnswers(page)
   await page.goto(url)
   const welcome = page.getByRole('button', { name: 'Continue', exact: true })
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })
@@ -116,7 +116,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
     // The enabled button reflects the current draft and submits through DSH's
     // native input state machine without racing installation of the Enter keymap.
     await page.getByRole('button', { name: 'Send message', exact: true }).click()
-    if (/ (?:seed|apply\S*|verify|packages)$/.test(text)) await answerTaskStartupForTest(page, text.endsWith(' seed') ? 'decision ON / Lisp OFF' : 'decision ON / Lisp ON')
+    if (text.endsWith(' seed')) await answerTaskStartupForTest(page, 'decision ON / Lisp OFF')
   }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
   const waitApproval = () => poll(async()=>{const failure=(await records()).find(row=>row.fixtureError);if(failure)throw new Error(failure.fixtureError);return await page.getByText('Auto-approve all Lisp actions for this profile and continue',{exact:false}).first().isVisible()},30000)

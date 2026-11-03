@@ -3,14 +3,15 @@ import { KiokukoError } from '../../errors.js'
 import type { RoutableAgent } from '../model-routing.js'
 import type { ModelBinding } from '../model-configuration.js'
 
+interface SpawnRequest {
+  parent: RoutableAgent; prompt: { type: 'text'; text: string }[];
+  agentOptions: ModelBinding; maxDepth: number; toolFilter?: { allow: readonly string[] };
+}
 export interface DshSpawnBackend {
   getProvider?: (name:string)=>{capabilities:Record<string,boolean>}|undefined
-  startActivation(spec: {
+  startActivation(spec: SpawnRequest & {
     provider: 'spawn'; label: string; signal: AbortSignal; delivery: 'caller';
-    request: {
-      parent: RoutableAgent; prompt: { type: 'text'; text: string }[];
-      agentOptions: ModelBinding; maxDepth: number; toolFilter?: { allow: readonly string[] };
-    };
+    request: SpawnRequest;
   }): Promise<{ readonly childId: string; result: Promise<{ output: unknown; stopReason: string }>; dispose(): Promise<void> }>
 }
 
@@ -52,10 +53,15 @@ export class ManagedAgentExecutor<B extends object> {
     const mode=spawnRestrictionMode(this.backend,request.parent)
     if(!mode)throw new KiokukoError('SERVICE_UNAVAILABLE','Native spawn cannot enforce model, depth and scoped tool restrictions')
     const pending: { binding: B; child?: RoutableAgent; filter?:ToolFilter } = { binding, ...(mode==='scope'?{filter:{allow:[...request.toolFilter.allow]}}:{}) }
+    const spawnRequest: SpawnRequest = {
+      parent: request.parent, prompt: request.prompt, agentOptions: request.agentOptions,
+      maxDepth: request.maxDepth, ...(mode === 'backend' ? { toolFilter: request.toolFilter } : {}),
+    }
+    // Current DSH reads the request at the top level; older DSH reads `request`.
+    // Both shapes carry the same exact parent and restrictions, without retrying a spawn.
     const run = await this.#pending.run(pending, () => this.backend!.startActivation({
+      ...spawnRequest, request: spawnRequest,
       provider: 'spawn', label: request.label, signal: request.signal, delivery: 'caller',
-      request: { parent: request.parent, prompt: request.prompt, agentOptions: request.agentOptions,
-        maxDepth: request.maxDepth, ...(mode==='backend'?{toolFilter:request.toolFilter}:{}) },
     }))
     let disposal: Promise<void> | undefined
     const dispose = () => disposal ??= Promise.resolve().then(() => run.dispose())

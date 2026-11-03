@@ -48,7 +48,7 @@ for(const version of ['alpha.2','alpha.3'] as const)test(`native spawn ${version
  let executor:ManagedAgentExecutor<object>,spec:any
  const child={id:'child',session:{id:'child'},ctx:{get:()=>({restrict(filter:any){seen.push(filter);return()=>{}}})}} as any
  const backend={getProvider:()=>({capabilities:{agentOptions:true,depthLimit:true,...(version==='alpha.2'?{toolFilter:true}:{agentPreset:true})}}),
-  async startActivation(input:any){spec=input;executor.created(child);if(version==='alpha.3')assert.deepEqual(seen,[{allow:[]}]);return {childId:'child',result:Promise.resolve({output:'done',stopReason:'completed'}),async dispose(){}}}}
+  async startActivation(input:any){spec=input;const request=version==='alpha.2'?input.request:input;assert.equal(request.parent,parent);assert.deepEqual(request.agentOptions,{provider:'mock',model:'mock'});assert.equal(request.maxDepth,1);executor.created(child);if(version==='alpha.3')assert.deepEqual(seen,[{allow:[]}]);return {childId:'child',result:Promise.resolve({output:'done',stopReason:'completed'}),async dispose(){}}}}
  executor=new ManagedAgentExecutor(backend)
  await executor.execute(binding,{parent,prompt:[],agentOptions:{provider:'mock',model:'mock'},maxDepth:1,toolFilter:{allow:[]},signal:new AbortController().signal,label:'bounded'},async(_result,agent)=>{assert.equal(agent,child);assert.equal(executor.binding(child),binding)})
  if(version==='alpha.2'){assert.deepEqual(spec.request.toolFilter,{allow:[]});assert.deepEqual(seen,[])}else assert.equal('toolFilter'in spec.request,false)

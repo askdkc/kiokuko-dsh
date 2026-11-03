@@ -84,7 +84,7 @@ async function command(argv,env=baseEnv,log='command') {
   const started=new Date().toISOString();
   const child=spawn(resolved[0],resolved.slice(1),{cwd:root,env,shell:false,stdio:['ignore','pipe','pipe'],detached:process.platform!=='win32'});
   let stdout='',stderr='',timedOut=false;
-  child.stdout.on('data',chunk=>{stdout+=chunk;process.stdout.write(chunk);});child.stderr.on('data',chunk=>{stderr+=chunk;process.stderr.write(chunk);});
+  child.stdout.on('data',chunk=>{stdout+=chunk;if(log!=='final-pack')process.stdout.write(chunk);});child.stderr.on('data',chunk=>{stderr+=chunk;process.stderr.write(chunk);});
   let killTimer;
   const signalGroup=signal=>{if(child.exitCode!==null||child.signalCode!==null)return;try {if(process.platform!=='win32'&&child.pid)process.kill(-child.pid,signal);else child.kill(signal);}catch(e){if(e.code!=='ESRCH')throw e;}};
   // Native runners own detached test groups. Give their signal handlers time to
@@ -170,18 +170,24 @@ for(const check of checks) {
   if(buildsDist)rmSync(path.join(root,'dist'),{recursive:true,force:true});
   const observed=await command(check.argv,env,check.id);
   const reports=readdirSync(reportDir).filter(f=>f.endsWith('.json')).map(f=>JSON.parse(readFileSync(path.join(reportDir,f))));
-  let passed=observed.exitCode===0&&!observed.timedOut;
+  const executed=observed.exitCode===0&&!observed.timedOut;
+  let passed=executed;
+  record.argv=observed.argv;record.logFile=path.join(output,`${check.id}.log`);
+  if(!executed)record.reason=observed.timedOut?'command timed out':observed.error??`command exited with code ${observed.exitCode}${observed.signal?' ('+observed.signal+')':''}`;
   if(check.result==='node')passed&&=reports.length>0&&reports.every(r=>validateNodeResult(r,contract.testExclusions??[]));
-  if(check.result==='script'){let completion;try{completion=JSON.parse(readFileSync(completionFile));}catch{}passed&&=validCompletion(completion,check.id,nonce,check.completionEvidence??{});if(!validCompletion(completion,check.id,nonce,check.completionEvidence??{}))record.reason='missing or invalid check-bound completion receipt';}
+  if(check.result==='script'){let completion;try{completion=JSON.parse(readFileSync(completionFile));}catch{}passed&&=validCompletion(completion,check.id,nonce,check.completionEvidence??{});if(executed&&!validCompletion(completion,check.id,nonce,check.completionEvidence??{}))record.reason='missing or invalid check-bound completion receipt';}
   if(check.result==='python')passed&&=/Ran [1-9][0-9]* tests? in/.test(observed.stderr)&&/\nOK\s*$/.test(observed.stderr);
   if(reports.length)passed&&=reports.every(r=>validateNodeResult(r,contract.testExclusions??[]));
   record.status=passed?'passed':missingTests.length&&reports.every(r=>(r.counts?.failed??0)===0)?'prerequisite-missing':'failed';
   if(missingTests.length)record.missingTestCapabilities=missingTests;record.started=observed.started;record.ended=observed.ended;record.durationMs=Date.parse(observed.ended)-Date.parse(observed.started);record.exitCode=observed.exitCode;record.signal=observed.signal;record.error=observed.error;record.reportFiles=readdirSync(reportDir);
   if(sourceDigest(root)!==initial||artifact&&(artifact.hash!==hashFile(artifact.path)||artifact.distDigest!==treeDigest(path.join(root,'dist')))){record.status='stale';record.reason='source or artifact changed during check';}
+  if(record.status!=='passed')console.error(`VERIFY FAILED ${check.id}: ${record.reason??record.status}\nCommand: ${JSON.stringify(observed.argv)}\nLog: ${record.logFile}\n${(observed.stderr||observed.stdout).slice(-6000)}`);
   if(buildsDist&&record.status==='passed'&&existsSync(path.join(root,'dist')))builtArtifact={execution:observed,distDigest:treeDigest(path.join(root,'dist'))};
   writeFileSync(path.join(output,'progress.json'),JSON.stringify(results,null,2));
 }
 const stable=sourceDigest(root)===initial&&(!artifact||hashFile(artifact.path)===artifact.hash&&treeDigest(path.join(root,'dist'))===artifact.distDigest);
 const passed=stable&&results.every(r=>['passed','platform-excluded','scope-excluded'].includes(r.status));
 const report={schema:'verification-result-v1',package:contract.package,commit,profile:plan.profile,partition:plan.partition,completeScope:plan.completeScope,runtime:process.version,platform:process.platform,architecture:process.arch,sourceDigest:initial,contractDigest,artifact,...(selection?{selectionDigest:selection.digest,bundleScope:selection.bundleScope}:{}),status:interrupted?'interrupted':stable?(passed?'passed':'failed'):'stale',completionReady:passed&&plan.completeScope,checks:results};
-writeFileSync(path.join(output,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({output,status:report.status,profile:plan.profile,completionReady:report.completionReady}));process.exitCode=passed?0:1;
+writeFileSync(path.join(output,'result.json'),JSON.stringify(report,null,2));
+if(!passed)console.error('Failed verification checks: '+JSON.stringify(results.filter(r=>!['passed','platform-excluded','scope-excluded'].includes(r.status)).map(({id,status,reason,argv,exitCode,logFile})=>({id,status,reason,argv,exitCode,logFile}))));
+console.log(JSON.stringify({output,status:report.status,profile:plan.profile,completionReady:report.completionReady}));process.exitCode=passed?0:1;

@@ -1,4 +1,4 @@
-import { answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
+import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { webTestPort } from './test-web-port.mjs';
@@ -84,6 +84,7 @@ export async function apply(ctx) {
     await writeFile(answers, '')
     browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
     page = await browser.newPage({ locale: 'en-US', viewport: { width: 1280, height: 900 } })
+    await installFixtureQuestionAnswers(page)
     page.on('pageerror', e => console.error('Browser error:', e.message))
     await page.goto(url)
     // Both onboarding stages load asynchronously. A one-shot visibility check can
@@ -229,7 +230,7 @@ export async function apply(ctx) {
     await card.focus(); await page.keyboard.press('Backspace'); await page.keyboard.type('24')
     await card.getByRole('button',{name:'確定（Enter）',exact:true}).click({trial:true})
     const cardBounds = await card.boundingBox()
-    assert.ok(cardBounds && cardBounds.width>=300 && cardBounds.x>=0 && cardBounds.x+cardBounds.width<=420,'question does not collapse inside a narrow host pane')
+    assert.ok(cardBounds && cardBounds.width>=300 && cardBounds.x>=0 && cardBounds.x+cardBounds.width<=420,'question does not collapse inside a narrow host pane: '+JSON.stringify(cardBounds))
     const footer = await card.locator('footer').boundingBox()
     assert.ok(footer && footer.x>=0 && footer.x+footer.width<=420 && footer.y>=0 && footer.y+footer.height<=800,'confirmation remains visible in narrow layout')
     await page.screenshot({path:join(base,'shortcuts-narrow.png')})
@@ -245,6 +246,6 @@ export async function apply(ctx) {
   }
 } catch (error) { if(page){console.error(await page.locator('body').ariaSnapshot());await page.screenshot({path:join(base,'failure.png')})} console.error(logs.slice(-8000).replace(/token=[^\s]+/g, 'token=[redacted]')); console.error('Evidence:',base); throw error }
 finally { await browser?.close(); if(child){child.kill('SIGTERM'); await new Promise(resolve=>{child.once('exit',resolve);setTimeout(resolve,5000).unref()})} if(process.env.KIOKUKO_KEEP_SHORTCUT_EVIDENCE!=='1')await rm(base,{recursive:true,force:true}) }
-async function poll(read, timeout=15_000) { const end=Date.now()+timeout;while(Date.now()<end){const value=await read();if(value)return value;await new Promise(resolve=>setTimeout(resolve,100))}throw new Error('Required browser fixture condition timed out') }
+async function poll(read, timeout=15_000) { const end=Date.now()+timeout;while(Date.now()<end){await answerFixtureQuestions(page);const value=await read();if(value)return value;await new Promise(resolve=>setTimeout(resolve,100))}throw new Error('Required browser fixture condition timed out') }
 
 completeVerification({});

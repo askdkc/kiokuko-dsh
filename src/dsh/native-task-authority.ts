@@ -56,7 +56,7 @@ export class NativeTaskAuthority {
     const original = this.original = backend.startActivation, host = this
     this.wrapper = async function (this: Backend, spec: any) {
       if (host.stopped || spec.delivery !== 'parent' || !['spawn', 'fork'].includes(spec.provider)) return original.call(this, spec)
-      const parent = spec.request?.parent as Agent | undefined
+      const parent = (spec.parent ?? spec.request?.parent) as Agent | undefined
       if (!parent || !host.local(parent)) return original.call(this, spec)
       host.exact(parent)
       const execution: Execution = { agent: parent }

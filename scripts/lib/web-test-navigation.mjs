@@ -59,3 +59,33 @@ export async function answerTaskStartupForTest(page, selected = 'decision OFF / 
   await card.waitFor({ state: 'hidden' })
   return { key, selected }
 }
+
+// Explicit test-user answers for checks whose subject is not Akinator or memory.
+function fixtureQuestions(page) {
+  return [
+    ['対象のリポジトリ、ファイル、機能、またはサービスは何ですか？', 'the fixture repository source'],
+    ['完了と判断する成功条件は何ですか？', 'the requested fixture result is verified'],
+    ['このターンは終了しました。今回の記憶を整理して確認しますか？', null],
+    ['作業は完了しました。今回の記憶を整理してよいですか？', null],
+  ].map(([name, answer]) => {
+    const card = page.getByRole('region', { name, exact: true })
+    return { card, async respond() {
+      if (answer === null) await card.getByRole('button', { name: /今回は保存しない/ }).click()
+      else await card.getByRole('textbox').fill(answer)
+      await card.getByRole('button', { name: '確定（Enter）', exact: true }).click()
+      await card.waitFor({ state: 'hidden' })
+    } }
+  })
+}
+export async function answerFixtureQuestions(page) {
+  if (!page) return
+  for (const { card, respond } of fixtureQuestions(page)) if (await card.isVisible()) {
+    // Polls can answer without an actionability check. Temporarily remove the
+    // handler so it cannot consume the same card ahead of this explicit answer.
+    await page.removeLocatorHandler(card)
+    try { await respond() } finally { await page.addLocatorHandler(card, respond) }
+  }
+}
+export async function installFixtureQuestionAnswers(page) {
+  for (const { card, respond } of fixtureQuestions(page)) await page.addLocatorHandler(card, respond)
+}

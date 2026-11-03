@@ -205,7 +205,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     ctx.llm.listProviders = () => nativeProviders().filter((provider: any) => ['mock', 'head', 'worker'].includes(provider.id))
     const activationRequests: any[] = []
     const startActivation = ctx.subagents.startActivation
-    ctx.subagents.startActivation = function(spec: any) { activationRequests.push(spec); return startActivation.call(this, spec) }
+    ctx.subagents.startActivation = function(spec: any) { activationRequests.push(spec.request ?? spec); return startActivation.call(this, spec) }
     const questions: any[] = []
     const nativeQuestions = ctx.get('userQuestions', false)
     assert.ok(nativeQuestions)
@@ -262,7 +262,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     assert.ok(preparation && !preparation.data.message.isError, 'parent must prepare through the real native tool registry before launching children')
     assert.equal(questions.some(request => request.agent?.session?.header?.origin === 'subagent'), false)
     assert.ok(activationRequests.length > 0)
-    assert.ok(activationRequests.every(spec => spec.request.agentOptions.provider === 'worker' && spec.request.agentOptions.model === 'deepseek-flash'))
+    assert.ok(activationRequests.every(spec => spec.agentOptions.provider === 'worker' && spec.agentOptions.model === 'deepseek-flash'))
     assert.ok(requests.filter(request => request.sessionId !== 'standard-parent').every(request => request.provider === 'worker' && request.model === 'deepseek-flash'))
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.model === 'gpt-6.1-sol'))
     assert.equal(parent.agent.options.provider, 'mock', 'head overlay must not mutate the original native model')

@@ -1,3 +1,4 @@
+import { NativeChildOwnership } from './native-child-ownership.js'
 import { createLispHostDispatch, lispHostToolWasNotDispatched } from './host-tool-dispatch.js'
 import { formatLispStatus, type LispStatusView } from './status-text.js'
 import { ManagedDispatchDenied, managedAdmissionDenied, currentManagedOperation, observeManagedResult } from '../managed-operation-runner.js'
@@ -680,10 +681,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), manualOverride: (agent: LispCodingInput['agent']) => preparation.manualOverride(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
+  const childOwnership = new NativeChildOwnership(root.get('subagents', false) as any, agents)
+  disposers.push(() => childOwnership.dispose())
   const workerRouter = (binding: ReturnType<typeof owner>) => {
     const parentId = binding.agent.session.header.parentSession, parent = parentId ? agents.get(parentId) : undefined
     return () => !!parent && agents.get(parent.id) === parent && sessions.get(parent.session.id) === parent.session
-      && agents.isOwnedBy?.(binding.agent.id, parent) === true && manager.enabled.get(parent.session.id) === binding.owner.root
+      && (agents.isOwnedBy ? agents.isOwnedBy(binding.agent.id, parent) : childOwnership.owns(binding.agent, parent)) && manager.enabled.get(parent.session.id) === binding.owner.root
   }
   const admitWorker = async (candidate: {id:string}, signal?: AbortSignal) => {
     const binding = owner(candidate)
@@ -776,7 +779,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   // Bind before DSH captures the first step's executable tool set. Prompt-only
   // registration is too late: the model can see tools that cannot dispatch.
   disposers.push((ctx as any).on('agent/created', async (event: {agent: Agent; signal?: AbortSignal}) => {
-    if (isNativeSubagent(event.agent)) await admitWorker(event.agent, event.signal)
+    if (isNativeSubagent(event.agent)) { childOwnership.created(event.agent); await admitWorker(event.agent, event.signal) }
   }, {global:true}))
   // Native children deliberately bypass parent intake. Give their exact root
   // Lisp dispatch its own command capability after native guards/approvals;

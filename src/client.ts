@@ -159,6 +159,7 @@ function StartupDefaultsControl(props: Record<string, unknown>): unknown {
 declare const createSnapshotStore: <T>(initial: T) => SnapshotStore<T>
 declare const jsx: (component: unknown, props: Record<string, unknown>, key?: string | number) => unknown
 declare const jsxs: (component: unknown, props: Record<string, unknown>, key?: string | number) => unknown
+declare const createPortal: (children: unknown, container: Element) => unknown
 declare const Fragment: unknown
 declare const useState: <T>(initial: T | (() => T)) => [T, (value: T) => void]
 declare const useRef: <T>(initial: T) => { current: T }
@@ -636,7 +637,7 @@ function shortcutAria(index: number, count: number): Record<string, string> {
 }
 const shortcutOwners = new WeakMap<Document, HTMLElement[]>()
 /** Only the focused group (or the most recently focused visible group) owns a key. */
-function useShortcutGroup(ref: { current: HTMLElement | null }, handler: (event: IntakeKeyEvent) => void): void {
+function useShortcutGroup(ref: { current: HTMLElement | null }, handler: (event: IntakeKeyEvent) => void, placement?: unknown): void {
   const latest = useRef(handler); latest.current = handler
   useEffect(() => {
     const element = ref.current, doc = element?.ownerDocument
@@ -661,7 +662,7 @@ function useShortcutGroup(ref: { current: HTMLElement | null }, handler: (event:
       doc.removeEventListener('keydown', listener, true)
       const i = stack.indexOf(element); if (i >= 0) stack.splice(i, 1)
     }
-  }, [ref])
+  }, [ref, placement])
 }
 function questionInputKind(question: IntakeItem): 'choice' | 'search' | 'value' {
   if (question.header === 'Deep planning' && question.id === 'deep-role-model') return 'search'
@@ -704,6 +705,17 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
   const generation = useRef(0)
   const sentChannel = useRef<PendingSnapshot['channel']>('none')
   const card = useRef<HTMLElement | null>(null), optionElements = useRef<Array<HTMLElement | null>>([])
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && window.matchMedia?.('(max-width:640px)').matches === true)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const media = window.matchMedia('(max-width:640px)')
+    const update = () => setNarrow(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+  // DSH's sticky composer establishes a fixed-position containing block.
+  // Keep the narrow overlay in the viewport while retaining this card's draft.
+  useEffect(() => { card.current?.focus({ preventScroll: true }) }, [narrow])
   const original = pending.questions[batch.page]!
   const options = original.options ?? []
   const alternatives = options.filter(option => option.label !== original.intent?.approve)
@@ -728,7 +740,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
     win?.addEventListener('blur', release); win?.addEventListener('focus', hold)
     return () => { generation.current++; mounted.current = false; unsubscribe?.(); pending.releaseFocus?.(); win?.removeEventListener('blur', release); win?.removeEventListener('focus', hold) }
   }, [pending])
-  useEffect(() => { if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' }) }, [draft.selected])
+  useEffect(() => { if (draft.selected !== null) optionElements.current[draft.selected]?.scrollIntoView({ block: 'nearest' }) }, [draft.selected, narrow])
   const update = (value: IntakeDraft) => {
     if (inFlight.current || !editable()) return
     const current = readIntakeDraft(pending), next = { ...current, drafts: current.drafts.map((d, i) => i === current.page ? value : d) }
@@ -821,10 +833,10 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       event.preventDefault(); event.stopPropagation(); if (!multi || batch.page < pending.questions.length - 1) settle()
     }
   }
-  useShortcutGroup(card, keyDown)
+  useShortcutGroup(card, keyDown, narrow)
   const disabled = busy || !editable(), titleId = `kiokuko-intake-${pending.key}`
   const hint = question.options.length ? `${shortcutPlatform().label}+1〜${Math.min(9, question.options.length)}、または数字で${multi ? 'チェック切替' : '選択'}。${question.options.length > 9 ? `10以上は番号を続けて入力、Backspaceで訂正${multi ? '、Spaceでチェック' : ''}。` : ''}${multi ? `${shortcutPlatform().label}+Enterで全回答を送信。` : 'Enterで確定。'}` : `自由入力後、${multi ? shortcutPlatform().label + '+' : ''}Enterで確定。Shift+Enterで改行。`
-  return jsxs('section', { className: 'kiokuko-intake', tabIndex: 0, 'data-kiokuko-shortcuts': '',
+  const content = jsxs('section', { className: 'kiokuko-intake', tabIndex: 0, 'data-kiokuko-shortcuts': '',
     ref: (el: HTMLElement | null) => { card.current = el }, 'aria-labelledby': titleId, 'aria-busy': busy, onKeyDown: keyDown,
     onFocusCapture: () => pending.holdFocus?.(),
     onBlurCapture: (event: { relatedTarget: Node | null }) => { if (!card.current?.contains(event.relatedTarget)) pending.releaseFocus?.() },
@@ -865,6 +877,7 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
       ] }),
     ],
   })
+  return narrow ? createPortal(content, document.body) : content
 }
 
 function installIntakeStyle(): (() => void) | undefined {

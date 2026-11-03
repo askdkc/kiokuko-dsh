@@ -16,6 +16,7 @@ async function clientArtifact(entry, output) {
     const { createSnapshotStore } = require("@deepseek-ai/dsh-client-store");
     const { jsx, jsxs, Fragment } = require("react/jsx-runtime");
     const { useState, useRef, useEffect } = require("react");
+    const { createPortal } = require("react-dom");
     const { Modal, Button, IconDownloadOutline16, MarkdownText } = require("@deepseek-ai/dsh-client-ui-primitives");
 ${body.split('\n').map(line => `    ${line}`).join('\n')}
     return module.exports;

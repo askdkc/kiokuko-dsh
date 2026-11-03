@@ -1,3 +1,4 @@
+import { answerFixtureScope } from '../tests/dsh/helpers/intake-fixture.ts'
 import { answerTaskStartup } from '../tests/dsh/helpers/task-startup-fixture.ts'
 import { mountNativeTools, executeNativeTool } from '../tests/dsh/helpers/native-tools.ts'
 import assert from 'node:assert/strict'
@@ -66,7 +67,6 @@ const registeredCommands = new Map()
 ctx.on('agent/error', payload => failures.push(String(payload.error?.stack ?? JSON.stringify(payload))))
 let handle
 const startupQuestions = new Set()
-let startupLisp = false
 let semanticReady = false, semanticCalls = 0, intentReady = false, intentComparisons = 0
 const originalFetch = globalThis.fetch
 globalThis.fetch = async (_url, init) => {
@@ -87,7 +87,7 @@ globalThis.fetch = async (_url, init) => {
 try {
   for (const plugin of [llm, session, projection, systemPrompt, tools, agents, skills, commands, tokenMeter]) { if (plugin === tools) await mountNativeTools(ctx, tools, nativeRoot, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
-  fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); if (question.id.startsWith('task-startup:')) { const answer = answerTaskStartup(request, startupLisp ? 'decision ON / Lisp ON' : 'decision ON / Lisp OFF'); assert.ok(!startupQuestions.has(question.id), 'same packed startup question must not repeat'); startupQuestions.add(question.id); return answer }; if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; if (question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) return { answers: [{ id: question.id, selected: ['使わない'] }] }; if (question.id === 'execution-mode') return { answers: [{ id: question.id, selected: ['通常実行'] }] }; throw new Error('Unexpected packed question: '+question.id) } }) } }))
+  fibers.push(await ctx.plugin({ name: 'module-questions', apply(context) { context.provide('userQuestions', { async ask(request) { const question = request.questions[0]; questions.push(question.id); const scopeAnswer = answerFixtureScope(request); if (scopeAnswer) return scopeAnswer; if (question.id.startsWith('repository-learning:')) { assert.equal(question.options[1].label, '今回は保存しない'); return { answers: [{ id: question.id, selected: ['今回は保存しない'] }] } }; if (question.id.startsWith('task-startup:')) { const answer = answerTaskStartup(request, 'decision ON / Lisp OFF'); assert.ok(!startupQuestions.has(question.id), 'same packed startup question must not repeat'); startupQuestions.add(question.id); return answer }; if (question.id === 'taskType') return { answers: [{ id: question.id, selected: ['文章作成'] }] }; if (question.id.startsWith('coding-lisp-') || question.id.startsWith('lisp-early-')) return { answers: [{ id: question.id, selected: ['使わない'] }] }; if (question.id === 'execution-mode') return { answers: [{ id: question.id, selected: ['通常実行'] }] }; throw new Error('Unexpected packed question: '+question.id) } }) } }))
   fibers.push(await ctx.plugin(compaction.default, { thresholdRatio: .8 }))
   fibers.push(await ctx.plugin({ name: 'semantic-fixture-credentials', apply(context) { context.provide('credentials', {
     resolve: async () => semanticReady || intentReady ? { value: 'fixture-only', source: 'env' } : undefined,
@@ -129,7 +129,7 @@ try {
     await parent.whenIdle()
     assert.deepEqual(failures, [])
     assert.equal(provider.requests.length, 1)
-    assert.deepEqual(questions, [...startupQuestions]); assert.equal(startupQuestions.size, 1, 'one explicit startup choice before the default native request')
+    assert.ok(questions.every(id => startupQuestions.has(id) || ['taskType', 'target', 'expected'].includes(id) || id.startsWith('repository-learning:')), JSON.stringify(questions)); assert.equal(startupQuestions.size, 1, 'one explicit startup choice before the default native request')
     const { openConnection } = await import(pathToFileURL(join(packageRoot, 'dist/db/connection.js')))
     const db = openConnection(configuration.databasePath)
     try {
@@ -143,8 +143,8 @@ try {
     await parent.whenIdle()
     assert.ok(provider.requests.length > count, `native model path did not run: ${task}; ${JSON.stringify(failures)}; ${JSON.stringify(parent.session.snapshotEvents().filter(event => event.type === "turn/end"))}`)
   }
-  assert.ok(questions.every(id => id === 'taskType' || startupQuestions.has(id)), 'Only validated startup and task-type questions are permitted')
-  assert.equal(startupQuestions.size, 3, 'each distinct ordinary task asks once')
+  assert.ok(questions.every(id => ['taskType', 'target', 'expected'].includes(id) || id.startsWith('repository-learning:') || startupQuestions.has(id)), 'Only explicit fixture intake and memory questions are permitted')
+  assert.equal(startupQuestions.size, 1, 'startup choice is reused for later tasks in the same chat')
   assert.ok(provider.requests.every(request => !JSON.stringify(request).includes('submit_ideal')), 'ordinary requests do not receive role directives')
   // Exercise memory lifecycle through the packed full/core native entry points.
   const { openConnection } = await import(pathToFileURL(join(packageRoot, 'dist/db/connection.js')))
@@ -338,7 +338,6 @@ try {
     assert.equal(enabled.kind, 'success', enabled.text)
     const artifact = JSON.parse(await readFile(join(packageRoot, 'dist/dsh/skill-prompts.json'), 'utf8'))
     const expected = artifact.resources.find(resource => resource.id === 'kiokuko-lisp/SKILL.md').content
-    startupLisp = true // Explicitly keep Lisp ON for the following Lisp-only acceptance steps.
     const beforeLispRequest = provider.requests.length
     parent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Explain the available Lisp coding contract.' }], source: { kind: 'user' } }))
     await parent.whenIdle()

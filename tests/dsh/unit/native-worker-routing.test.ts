@@ -7,7 +7,7 @@ import { NativeWorkerRouting, type NativeWorkerOwner } from '../../../src/dsh/na
 import { currentTaskAuthority, withTaskAuthority } from '../../../src/dsh/task-authority-context.js'
 
 const pair = { preset: 'gpt-6.1-sol-deepseek-v4.1-flash' as const, head: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'high' }, worker: { provider: 'deepseek', model: 'deepseek-flash' } }
-function fixture(header: { parentSession?: string; origin?: string; delegationDepth?: number } = {}) {
+function fixture(header: { parentSession?: string; origin?: string; delegationDepth?: number } = {}, flat = false) {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../migrations/037_native_worker_routing.sql', import.meta.url), 'utf8'))
   const root = { id: 'root', session: { id: 'root-session', header: { cwd: '/repo', createdAt: 1, ...header } } }
@@ -17,7 +17,7 @@ function fixture(header: { parentSession?: string; origin?: string; delegationDe
   const calls: any[] = []
   const backend = { async startActivation(spec: any): Promise<{ childId: string }> {
     calls.push(spec)
-    const child = { id: spec.childId, session: { id: spec.childId, header: { parentSession: spec.request.parent.session.id, origin: 'subagent', cwd: '/repo' } } }
+    const child = { id: spec.childId, session: { id: spec.childId, header: { parentSession: (spec.request ?? spec).parent.session.id, origin: 'subagent', cwd: '/repo' } } }
     agents.set(child.id, child); sessions.set(child.session.id, child.session)
     assert.deepEqual(await router.worker(child, spec.signal), pair.worker, 'child is bound before first request')
     return { childId: child.id }
@@ -31,21 +31,24 @@ function fixture(header: { parentSession?: string; origin?: string; delegationDe
     validate: async () => validate(),
   }
   let router: NativeWorkerRouting = new NativeWorkerRouting(options)
-  const launch = (provider = 'spawn', parent: any = root, delivery = 'parent') => backend.startActivation({ provider, delivery, signal: new AbortController().signal, label: 'test',
-    request: { parent, prompt: [], maxDepth: 2, toolFilter: { allow: ['read'] }, agentOptions: { provider: 'original', model: 'head', reasoningEffort: 'high', maxTokens: 123 } } })
+  const launch = (provider = 'spawn', parent: any = root, delivery = 'parent') => {
+    const request = { parent, prompt: [], maxDepth: 2, toolFilter: { allow: ['read'] }, agentOptions: { provider: 'original', model: 'head', reasoningEffort: 'high', maxTokens: 123 } }
+    return backend.startActivation({ provider, delivery, signal: new AbortController().signal, label: 'test', ...(flat ? request : { request }) })
+  }
   return { db, root, agents, sessions, backend, original, calls, launch, get router() { return router },
     setValidation: (callback: () => Promise<void>) => { validate = callback },
     owner: () => owner, setOwner: (next: NativeWorkerOwner | undefined) => { owner = next },
     restore: () => { router.dispose(); router = new NativeWorkerRouting(options) },
     close: () => { router.dispose(); db.close() } }
 }
-for (const provider of ['spawn', 'fork']) test(`native ${provider} gets explicit worker options without changing safety or parent`, async t => {
-  const f = fixture(); t.after(f.close)
+for (const flat of [false, true]) for (const provider of ['spawn', 'fork']) test(`native ${flat ? 'current' : 'legacy'} ${provider} gets explicit worker options without changing safety or parent`, async t => {
+  const f = fixture({}, flat); t.after(f.close)
   const run = await f.launch(provider)
-  assert.deepEqual(f.calls[0].request.agentOptions, { ...pair.worker, maxTokens: 123 })
-  assert.deepEqual(f.calls[0].request.toolFilter, { allow: ['read'] })
-  assert.equal(f.calls[0].request.maxDepth, 2)
-  assert.equal(f.calls[0].request.parent, f.root)
+  const request = f.calls[0].request ?? f.calls[0]
+  assert.deepEqual(request.agentOptions, { ...pair.worker, maxTokens: 123 })
+  assert.deepEqual(request.toolFilter, { allow: ['read'] })
+  assert.equal(request.maxDepth, 2)
+  assert.equal(request.parent, f.root)
   assert.deepEqual(await f.router.head(f.root, new AbortController().signal), pair.head)
   f.restore()
   assert.deepEqual(await f.router.worker(f.agents.get(run.childId), new AbortController().signal), pair.worker)

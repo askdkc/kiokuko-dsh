@@ -171,6 +171,16 @@ test('arbitrary stdout, missing or wrong completion identities never satisfy a s
  for(const code of ["console.log('starting assertions')","import{writeFileSync}from'node:fs';writeFileSync(process.env.KIOKUKO_VERIFY_COMPLETION_FILE,JSON.stringify({schema:'verification-completion-v1',id:'other-check',nonce:process.env.KIOKUKO_VERIFY_NONCE,status:'passed',evidence:{}}));"]){
  const root=fixture([{...check,argv:['node','script.mjs'],result:'script'}]);writeFileSync(path.join(root,'script.mjs'),code);const {child,report}=execute(root);assert.equal(child.status,1);assert.equal(report.completionReady,false);}
 });
+test('failed commands retain their invocation and causal output instead of a receipt-only error',()=>{
+ const root=fixture([{...check,argv:['node','broken.mjs'],result:'script'}]);
+ writeFileSync(path.join(root,'broken.mjs'),"console.error('specific runtime failure');process.exit(7)");
+ const {child,report}=execute(root),failed=report.checks[0];
+ assert.equal(child.status,1);assert.equal(failed.exitCode,7);
+ assert.deepEqual(failed.argv,[process.execPath,'broken.mjs']);
+ assert.match(failed.reason,/command exited with code 7/);
+ assert.match(readFileSync(failed.logFile,'utf8'),/specific runtime failure/);
+ assert.match(child.stderr,/VERIFY FAILED suite/);assert.match(child.stderr,/specific runtime failure/);
+});
 test('only this invocation\'s clean unchanged build is reused for its final archive',()=>{
  for(const mutation of ['unchanged','bytes','mode']){
   const root=fixture([

@@ -1,4 +1,4 @@
-import { answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
+import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import {completeVerification} from './verification-completion.mjs';
@@ -23,7 +23,7 @@ const env = { ...selected.environment, HOME: join(base, 'home'), DSH_HOME: join(
 let host, browser, page, logs = ''
 async function poll(fn, timeout = 60000) {
   const end = Date.now() + timeout
-  while (Date.now() < end) { const value = await fn(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 100)) }
+  while (Date.now() < end) { await answerFixtureQuestions(page); const value = await fn(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 100)) }
   throw new Error('Timed out waiting for coding Web acceptance')
 }
 try {
@@ -100,7 +100,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   }
   const url = await launch()
   browser = await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})})
-  page = await browser.newPage({ locale: 'en-US' }); await page.goto(url)
+  page = await browser.newPage({ locale: 'en-US' }); await installFixtureQuestionAnswers(page); await page.goto(url)
   const welcome = page.getByRole('button',{name:'Continue',exact:true}), credentials=page.getByRole('dialog',{name:'Add an API key to get started',exact:true})
   await page.addLocatorHandler(credentials,()=>credentials.getByRole('button',{name:'Configure later',exact:true}).click())
   await welcome.or(credentials).first().waitFor();if(await welcome.isVisible())await welcome.click()
@@ -109,7 +109,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
     await newSessionForTest(page, conversation, poll)
   }
   const records=async()=>(await readFile(receipts,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
-  const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click();if(mode!=='resume')await answerTaskStartupForTest(page)}
+  const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click();if(mode==='seed'||mode==='pending')await answerTaskStartupForTest(page)}
   const expectRecoveredGoal=async()=>{const mode=page.getByText('この作業をどう実行しますか？',{exact:true}),goal=page.locator('[data-coding-goal]');await mode.or(goal).first().waitFor();assert.equal(await mode.isVisible(),false,'existing pending coding Goal must not request a new execution mode')}
   await newSession();await command('seed');await poll(async()=>(await records()).find(r=>r.mode==='seed'))
   await page.setViewportSize({width:390,height:844});await command('complete')
