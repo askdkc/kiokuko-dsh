@@ -251,6 +251,7 @@ test("all supported connection kinds register stable owned routes and custom pro
       const profile = connectionProfile(ConnectionSchema.parse({ ...connection("http://localhost:8080", "custom", "kiokuko-protocol"), protocol }));
       assert.equal(profile.api, api);
       assert.equal(profile.piProvider!.getModels()[0]!.api, api);
+      assert.partialDeepStrictEqual(profile, { maxRequestImages: 50, imageOffloadCountQuantum: 10 });
     }
     assert.throws(() => ConnectionSchema.parse({ ...connection("http://localhost:8080"), protocol: "responses" }));
     assert.doesNotMatch(JSON.stringify(await f.service.list()), /fixture-token|fixture-refresh|fixture-key/);

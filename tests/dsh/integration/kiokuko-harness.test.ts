@@ -196,9 +196,13 @@ test('injected context parks until wake and child handles keep independent ident
     parent.agent.inject(createUserMessage({content:[{type:'text',text:'Advisory context'}],source:{kind:'user'}}))
     await parent.agent.whenIdle()
     assert.equal(f.requests.length, 0)
-    const child = await parent.agent.ctx.agents.create({ sessionId:SessionId('kiokuko-child'), parentAgent:parent.agent,
+    const registry = f.ctx.agents
+    const legacyOwnership = 'isOwnedBy' in registry && typeof registry.isOwnedBy === 'function'
+    const child = await parent.agent.ctx.agents.create({ sessionId:SessionId('kiokuko-child'),
+      ...(legacyOwnership ? { parentAgent: parent.agent } : {}),
       meta:{origin:'subagent',parentSession:parent.agent.id,delegationDepth:1} })
-    assert.equal(f.ctx.agents.isOwnedBy(child.agent.id,parent.agent), true)
+    if ('isOwnedBy' in registry && typeof registry.isOwnedBy === 'function')
+      assert.equal(registry.isOwnedBy(child.agent.id,parent.agent), true)
     let inherited:unknown='not observed'
     f.factory.lifecycle.onStep(async(event,next)=>{if(event.agent===child.agent)inherited=currentTaskAuthority();return next()})
     const callerLease={taskId:'parent-task',sessionId:parent.agent.id,repositoryRoot:'/workspace',revision:1,generation:1} as any
@@ -211,7 +215,9 @@ test('injected context parks until wake and child handles keep independent ident
     await parent.agent.whenIdle()
     assert.equal(f.requests.length,2)
     assert.equal(parent.agent.inbox.nextStep.length,0)
-    await child.dispose(); await parent.dispose()
+    await parent.dispose()
+    assert.equal(f.ctx.agents.get(child.agent.id), undefined, 'disposing the parent scope disposes its owned child handle')
+    await child.dispose()
   } finally { await f.close() }
 })
 

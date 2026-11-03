@@ -243,13 +243,15 @@ export function connectionProfile(
   if (connection.kind === "infron")
     provider = infronProvider(provider, connection.serviceTier, report);
   provider = openCodeSessionProvider(provider, connection.baseURL);
-  return {
+  const profile = {
     provider: connection.id,
     displayName: connection.name,
     api,
     baseURL,
     piProvider: provider,
     streamIdleTimeoutMs: 300_000,
+    maxRequestImages: 50,
+    imageOffloadCountQuantum: 10,
     maxRequestImageBytes: 20 * 1024 * 1024,
     requestImagePixelBudget: 2048 * 2048,
     requestImageMaxBytes: 1024 * 1024,
@@ -259,4 +261,5 @@ export function connectionProfile(
     modelErrors: new Map(),
     retryPolicy: resolveRetryPolicy(undefined, connection.id),
   };
+  return profile;
 }

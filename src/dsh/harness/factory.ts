@@ -353,7 +353,9 @@ export class KiokukoAgentFactory implements AgentFactory {
       // the Agent itself remains unpublished and cannot run until setup commits.
       signal.throwIfAborted();detachSession=agent.ctx.sessions.enter(session);agent.ctx.sessions.announce(session)
       const commit=await duringSetup(options.setup?.(agent.ctx,agent),signal);signal.throwIfAborted();ownerCtx.fiber.assertActive();commit?.commit()
-      detachAgent=this.ctx.agents.enter(agent,options.parentAgent)
+      // Older DSH accepts an explicit parent; current DSH owns the handle through ownerCtx.
+      const registration = 'parentAgent' in options ? [agent, options.parentAgent] : [agent]
+      detachAgent=Reflect.apply(this.ctx.agents.enter,this.ctx.agents,registration)
       await this.ctx.agents.announce(agent,source,signal);signal.throwIfAborted()
       agent.release();return handle
     } catch(error) { await handle.dispose();throw error }
