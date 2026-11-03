@@ -126,6 +126,26 @@ function addQuestionHandler(page, card, respond) {
   })
 }
 
+/** Decline a currently visible memory-review offer outside the interception
+ * path, so a following composer action is not swallowed behind it. Throws
+ * after bounded attempts while any offer stays mounted. */
+export async function declinePendingMemoryOffer(page, { timeout = 10_000 } = {}) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const decline = page.getByRole('button', { name: /今回は保存しない/ })
+    if (!(await decline.isVisible().catch(() => false))) return
+    try {
+      await decline.click({ timeout: 5000 })
+      if (await decline.isVisible().catch(() => false)) await decline.press('Enter', { timeout: 5000 })
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('has been closed')) return
+      throw error
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error('Memory-review offer stayed mounted after bounded declines')
+}
+
 /** Number of currently mounted memory-review and fixture cards. Keyboard
  * presses bypass locator handlers, so drivers must see zero before sending
  * digit shortcuts that would otherwise land on a pending review instead. */

@@ -1,6 +1,6 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
-import { declineOptionalMemoryOffers, openSettings, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
+import { declineOptionalMemoryOffers, declinePendingMemoryOffer, openSettings, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed package, native Web profile with no configured keys, real local API and tool loop.
@@ -387,6 +387,9 @@ try {
   await page.keyboard.press("Escape");
   await dialog.waitFor({ state: "hidden" });
   await poll(() => editor.evaluate((element) => document.activeElement === element), 10_000);
+  // A completed turn's memory offer can hold the composer's interception; a
+  // mounted offer makes the next send fail with its own reason instead.
+  await declinePendingMemoryOffer(page);
   await editor.fill("Say hello and call models_test_tool");
   await editor.press("Enter");
   await answerTaskStartupForTest(page);
@@ -414,9 +417,26 @@ try {
   assert.equal(bodies[1].provider.service_tier,'flex','native retry must preserve the first attempt tier');
   assert.ok(bodies.slice(2).every(body=>body.provider.service_tier==='standard'),'the next tool-result request observes the saved tier');
   assert.ok(bodies.every((body) => !body.extra_body));
+  // The '/kiokuko model' send races a completed-turn memory offer: clear the
+  // offer directly and retry send+wait as one unit, so a swallowed keystroke
+  // or a fresh offer cannot stall the command dialog.
+  await declinePendingMemoryOffer(page);
   await editor.fill("/kiokuko model");
-  await editor.press("Enter");
-  await dialog.waitFor();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await editor.press("Enter", { timeout: 10_000 });
+    } catch (error) {
+      if (error instanceof Error && error.name !== "TimeoutError") throw error;
+    }
+    try {
+      await dialog.waitFor({ timeout: 15_000 });
+      break;
+    } catch (error) {
+      const offer = page.getByRole("button", { name: /今回は保存しない/ });
+      if (attempt === 2) throw error;
+      if (await offer.isVisible().catch(() => false)) await declinePendingMemoryOffer(page);
+    }
+  }
   await commandPanel
     .getByLabel("Add connection", { exact: true })
     .selectOption("nous");
