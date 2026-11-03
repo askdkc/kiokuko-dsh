@@ -31,10 +31,12 @@ export async function declineOptionalMemoryOffers(page) {
   const decline = page.getByRole('button', { name: /今回は保存しない/ })
   const state = { declined: 0 }
   await page.addLocatorHandler(decline, async () => {
-    await decline.click()
-    // Submit only while the question control remains mounted; a global Enter
-    // can otherwise send a command that was already typed into the composer.
-    if (await decline.isVisible()) await decline.press('Enter')
+    try {
+      await decline.click()
+      // Submit only while the question control remains mounted; a global Enter
+      // can otherwise send a command that was already typed into the composer.
+      if (await decline.isVisible()) await decline.press('Enter')
+    } catch (error) { if (!toleratedDisposal(error)) throw error }
     state.declined++
   })
   return state
@@ -77,15 +79,37 @@ function fixtureQuestions(page) {
     } }
   })
 }
+
+/** An auto-answer can still run while a test disposes its page. Let only real
+ * answer failures escape as an uncaught promise would otherwise mask the
+ * primary verification failure during shutdown. */
+function toleratedDisposal(error) {
+  return error instanceof Error && error.message.includes('has been closed')
+}
+async function addQuestionHandler(page, card, respond) {
+  return page.addLocatorHandler(card, async () => {
+    try { return await respond() } catch (error) { if (!toleratedDisposal(error)) throw error }
+  })
+}
+
+/** Number of currently mounted memory-review and fixture cards. Keyboard
+ * presses bypass locator handlers, so drivers must see zero before sending
+ * digit shortcuts that would otherwise land on a pending review instead. */
+export async function fixtureQuestionCardsVisible(page) {
+  if (!page) return 0
+  let count = 0
+  for (const { card } of fixtureQuestions(page)) if (await card.isVisible()) count++
+  return count
+}
 export async function answerFixtureQuestions(page) {
   if (!page) return
   for (const { card, respond } of fixtureQuestions(page)) if (await card.isVisible()) {
     // Polls can answer without an actionability check. Temporarily remove the
     // handler so it cannot consume the same card ahead of this explicit answer.
     await page.removeLocatorHandler(card)
-    try { await respond() } finally { await page.addLocatorHandler(card, respond) }
+    try { await respond() } finally { await addQuestionHandler(page, card, respond) }
   }
 }
 export async function installFixtureQuestionAnswers(page) {
-  for (const { card, respond } of fixtureQuestions(page)) await page.addLocatorHandler(card, respond)
+  for (const { card, respond } of fixtureQuestions(page)) await addQuestionHandler(page, card, respond)
 }

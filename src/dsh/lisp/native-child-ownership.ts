@@ -1,8 +1,22 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { scopeChainOf } from '@deepseek-ai/dsh-scope'
+import { createRequire } from 'node:module'
 
 interface Agent { id: string; session: { id: string; header: { parentSession?: string } } }
 interface Backend { startActivation(spec: any): Promise<any> }
+
+type ScopeChainOf = (key: object) => readonly object[]
+
+/** The DSH scope package is a native peer that isolated consumer installs
+ * deliberately omit. Resolve it once at first use and let the wrapper capture
+ * alone carry ownership when the module is unavailable. */
+const scopeChainOf = loadScopeChainOf()
+function loadScopeChainOf(): ScopeChainOf | undefined {
+  try {
+    return createRequire(import.meta.url)('@deepseek-ai/dsh-scope').scopeChainOf as ScopeChainOf | undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Capture native launch authority before agent/created, when current DSH has
  * not yet published the child into its activation tree. Session metadata alone
@@ -40,7 +54,7 @@ export class NativeChildOwnership {
   }
   owns(child: Agent, parent: Agent): boolean {
     return this.agents.get(child.id) === child && this.agents.get(parent.id) === parent
-      && (this.parents.get(child) === parent || scopeChainOf(child).slice(1).includes(parent))
+      && (this.parents.get(child) === parent || scopeChainOf?.(child)?.slice(1).includes(parent) === true)
   }
   dispose(): void {
     if (this.backend && this.backend.startActivation === this.wrapper && this.original) this.backend.startActivation = this.original

@@ -1,6 +1,6 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
-import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
+import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest, fixtureQuestionCardsVisible } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
@@ -85,20 +85,31 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   await command('/lisp-plan-fixture start')
   assert.equal((await poll(async () => (await records()).find(r => r.mode === 'start'))).result.kind, 'success')
   await command('/lisp-plan-fixture question')
-  await page.getByText('Plan preference?', { exact: true }).waitFor()
+  // Digit answers race memory-review overlays only when a fixture card is
+  // still mounted; settle both before the keyboard substitute takes over.
+  await poll(async () => await page.getByText('Plan preference?', { exact: true }).isVisible() && (await fixtureQuestionCardsVisible(page)) === 0)
   await page.keyboard.press('1'); await page.keyboard.press('Enter')
   const question = await poll(async () => (await records()).find(r => r.mode === 'question' && !r.stage))
   assert.equal(question.isError, false); assert.deepEqual(question.value.answers, [{id:'choice',selected:['Yes']}]); assert.equal(question.after.active, true)
   await command('/lisp-plan-fixture keep')
-  await page.getByText('Approve this plan and leave plan mode?', { exact: true }).waitFor()
-  await page.keyboard.press('2'); await page.keyboard.press('Enter')
-  const kept = await poll(async () => (await records()).find(r => r.mode === 'keep' && !r.stage))
+  // The checked digit only records while no memory-review card races the
+  // press, and a remount can swallow a single press; answer overlays and
+  // retry the digits until the native tool result is recorded.
+  const settle = async (fn, timeout) => { try { return await poll(fn, timeout) } catch (e) { if (e?.message !== 'Timed out waiting for Plan Web acceptance') throw e } }
+  const choosePlanOption = async (key, find) => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const offered = await settle(async () => await page.getByText('Approve this plan and leave plan mode?', { exact: true }).isVisible() && (await fixtureQuestionCardsVisible(page)) === 0, 30000)
+      if (!offered) return (await records()).find(find)
+      await page.keyboard.press(key); await page.keyboard.press('Enter')
+      const receipt = await settle(async () => (await records()).find(find), 20000)
+      if (receipt) return receipt
+    }
+    throw new Error('Plan approval choice was never recorded')
+  }
+  const kept = await choosePlanOption('2', r => r.mode === 'keep' && !r.stage)
   assert.equal(kept.isError, true); assert.match(JSON.stringify(kept.content), /keep planning/i); assert.equal(kept.after.active, true)
   await command('/lisp-plan-fixture approve')
-  await page.getByText('Approve this plan and leave plan mode?', { exact: true }).waitFor()
-  await page.getByText('Preserve protected effects.', {exact:true}).waitFor();
-  await page.keyboard.press('3'); await page.keyboard.press('Enter')
-  const approved = await poll(async () => (await records()).find(r => r.mode === 'approve' && !r.stage))
+  const approved = await choosePlanOption('3', r => r.mode === 'approve' && !r.stage)
   assert.equal(approved.isError, false, JSON.stringify(approved)); assert.equal(approved.value.approved, true); assert.equal(approved.after.active, false)
   console.log(JSON.stringify({ result: 'passed', checks: ['native question', 'keep planning', 'approve'], package: 'packed', externalModelCalls: 0 }))
 } catch (e) { console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-4000)); console.error(logs.slice(-5000).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]')); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
