@@ -95,6 +95,15 @@ async function makeFixture(t: nativeTest.TestContext, options: Partial<Dependenc
   })
   const fibers: any[] = []
   await mountNativeTools(ctx, nativeTools, packages, fibers)
+  for (const name of ['glob', 'read', 'write', 'ask_user_question']) {
+    ctx.tools.register({
+      name,
+      description: 'Native intake boundary probe.',
+      parameters: {},
+      output: { schema: {}, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
+      execute: () => `executed:${name}`,
+    })
+  }
   const events = [event('turn/start', 1)]
   const session = { id: 'goal-round-session', snapshotEvents: () => events }
   const agent = { id: 'goal-round-agent', session }
@@ -173,7 +182,8 @@ test('goal-round-only turn binds the intake like an ordinary human turn', async 
   const outcome = await f.capture([goalRound(1)])
   assert.equal(outcome, true)
   const read = await f.execute('glob', { pattern: '*.md' })
-  assert.equal(read.isError, false)
+  assert.equal(read.isError, false, JSON.stringify(read))
+  assert.match(JSON.stringify(read), /executed:glob/)
   assert.equal(f.admissions.length, 0)
   assert.equal(f.preparedTypes.length, 0)
 })
@@ -181,26 +191,40 @@ test('goal-round-only turn binds the intake like an ordinary human turn', async 
 test('goal rounds after a human request rebind the newest turn', async (t) => {
   const f = await makeFixture(t)
   await f.capture([human('original', 'Prepare repository work and continue.')])
+  f.events.push(event('turn/end', 1), event('turn/start', 2))
   const outcome = await f.capture([goalRound(2)], 2)
   assert.equal(outcome, true)
   const read = await f.execute('read', { file_path: 'README.md' })
-  assert.equal(read.isError, false)
+  assert.equal(read.isError, false, JSON.stringify(read))
+  assert.match(JSON.stringify(read), /executed:read/)
   assert.equal(f.admissions.length, 0)
 })
 
 test('goal-round capture still requires explicit preparation for owned work', async (t) => {
-  const f = await makeFixture(t)
+  const f = await makeFixture(t, { nativeOwnership: async () => 'owned' })
   await f.capture([goalRound(1)])
-  const denied = await f.execute('ask_user_question', {
-    questions: [{ id: 'q1', question: 'Pick one' }],
-  })
+  const denied = await f.execute('write', { file_path: 'probe.txt', content: 'not authorized' })
   assert.equal(denied.isError, true)
+  assert.match(JSON.stringify(denied), /prepare_requested_work/)
+  assert.doesNotMatch(JSON.stringify(denied), /executed:write/)
+  assert.equal(f.admissions.length, 0)
 })
 
 test('goal-round models can submit the advisory preparation carrier', async (t) => {
-  const f = await makeFixture(t)
+  const f = await makeFixture(t, { nativeOwnership: async () => 'owned' })
   await f.capture([goalRound(1)])
   const prepared = await f.prepare()
   assert.equal(prepared.isError, false)
   assert.equal(f.preparedTypes[0], 'build')
+})
+
+test('goal-round models may ask for clarification without owned effect preparation', async (t) => {
+  const f = await makeFixture(t, { nativeOwnership: async () => 'owned' })
+  await f.capture([goalRound(1)])
+  const question = await f.execute('ask_user_question', {
+    questions: [{ id: 'q1', question: 'Pick one' }],
+  })
+  assert.equal(question.isError, false, JSON.stringify(question))
+  assert.match(JSON.stringify(question), /executed:ask_user_question/)
+  assert.equal(f.admissions.length, 0)
 })

@@ -27,10 +27,11 @@ export async function openSettings(page, { timeout = 30000 } = {}) {
   if (await opened.isVisible()) return
   throw lastTimeout ?? new Error('Settings navigation timed out')
 }
+const memoryOfferHandlers = new WeakMap()
 export async function declineOptionalMemoryOffers(page) {
   const decline = page.getByRole('button', { name: /今回は保存しない/ })
   const state = { declined: 0 }
-  await page.addLocatorHandler(decline, async () => {
+  const handler = async () => {
     try {
       // Transient overlays or rerenders must not eat a whole action deadline
       // or kill the process; bounded attempts let the interception settle.
@@ -51,7 +52,9 @@ export async function declineOptionalMemoryOffers(page) {
         return
       }
     } catch (error) { handlerFailures.push(error instanceof Error ? error.message : String(error)) }
-  })
+  }
+  await page.addLocatorHandler(decline, handler)
+  memoryOfferHandlers.set(page, { decline, handler })
   return state
 }
 
@@ -131,19 +134,27 @@ function addQuestionHandler(page, card, respond) {
  * after bounded attempts while any offer stays mounted. */
 export async function declinePendingMemoryOffer(page, { timeout = 10_000 } = {}) {
   const deadline = Date.now() + timeout
-  while (Date.now() < deadline) {
-    const decline = page.getByRole('button', { name: /今回は保存しない/ })
-    if (!(await decline.isVisible().catch(() => false))) return
-    try {
-      await decline.click({ timeout: 5000 })
-      if (await decline.isVisible().catch(() => false)) await decline.press('Enter', { timeout: 5000 })
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('has been closed')) return
-      throw error
+  const registered = memoryOfferHandlers.get(page)
+  // Otherwise the automatic handler consumes the target of our own click and
+  // Playwright retries that click against an offer that has already disappeared.
+  if (registered) await page.removeLocatorHandler(registered.decline)
+  try {
+    while (Date.now() < deadline) {
+      const decline = page.getByRole('button', { name: /今回は保存しない/ })
+      if (!(await decline.isVisible().catch(() => false))) return
+      try {
+        await decline.click({ timeout: Math.max(1, Math.min(5000, deadline - Date.now())) })
+        if (await decline.isVisible().catch(() => false)) await decline.press('Enter', { timeout: Math.max(1, Math.min(5000, deadline - Date.now())) })
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('has been closed')) return
+        throw error
+      }
+      await page.waitForTimeout(100)
     }
-    await page.waitForTimeout(100)
+    throw new Error('Memory-review offer stayed mounted after bounded declines')
+  } finally {
+    if (registered && !page.isClosed()) await page.addLocatorHandler(registered.decline, registered.handler)
   }
-  throw new Error('Memory-review offer stayed mounted after bounded declines')
 }
 
 /** Number of currently mounted memory-review and fixture cards. Keyboard

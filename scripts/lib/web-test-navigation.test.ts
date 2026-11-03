@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { chromium, type Page } from 'playwright'
-import { openSettings } from './web-test-navigation.mjs'
+import { declineOptionalMemoryOffers, declinePendingMemoryOffer, openSettings } from './web-test-navigation.mjs'
 
 // A real browser drives the shell contract that failed in CI: a late onboarding
 // close dismisses an already-open account menu before Settings can be clicked.
@@ -76,5 +76,32 @@ test('Settings navigation reconciles onboarding and account-menu state', { timeo
       assert.equal((await page.evaluate(() => (window as any).navigation)).accountClicks, before + 1, 'navigation handler is removed after failure')
     }
     finally { await page.close() }
+  })
+  for (const intercepted of [false, true]) await t.test(`explicit memory decline with auto-handler ${intercepted ? 'installed' : 'absent'}`, async () => {
+    const page = await browser.newPage(); page.setDefaultTimeout(1000)
+    try {
+      await page.setContent(`<section id="offer"><button id="decline">今回は保存しない</button></section>
+        <input aria-label="Composer" value="do not send"><button id="next">Next action</button>
+        <script>
+          window.declines = 0; window.submissions = 0;
+          document.querySelector('#decline').onclick = event => event.target.setAttribute('aria-pressed', 'true');
+          document.querySelector('#decline').onkeydown = event => {
+            if (event.key === 'Enter') { window.declines++; document.querySelector('#offer').hidden = true; event.preventDefault(); }
+          };
+          document.querySelector('input').onkeydown = event => { if (event.key === 'Enter') window.submissions++; };
+        </script>`)
+      const state = intercepted ? await declineOptionalMemoryOffers(page) : undefined
+      await declinePendingMemoryOffer(page, { timeout: 2000 })
+      assert.equal(await page.locator('#offer').isVisible(), false)
+      assert.equal(await page.evaluate(() => (window as any).declines), 1)
+      // An explicit answer must leave the automatic handler available for later offers.
+      if (state) {
+        await page.evaluate(() => { document.querySelector<HTMLElement>('#offer')!.hidden = false })
+        await page.getByRole('button', { name: 'Next action' }).click()
+        assert.equal(state.declined, 1)
+        assert.equal(await page.evaluate(() => (window as any).declines), 2)
+      }
+      assert.equal(await page.evaluate(() => (window as any).submissions), 0)
+    } finally { await page.close() }
   })
 })
