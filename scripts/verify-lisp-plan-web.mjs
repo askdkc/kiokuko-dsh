@@ -76,7 +76,24 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   const conversation = page.locator('[data-conversation-content]:visible').first()
   await newSessionForTest(page, conversation, poll)
   const editor = conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first()
-  const command = async text => { await editor.fill(text); await page.getByRole('button', { name: 'Send message', exact: true }).click(); if (text.endsWith(' seed')) await answerTaskStartupForTest(page, 'decision OFF / Lisp OFF') }
+  // A memory-review interception retries while the offer awaits its reply;
+  // one native round-trip can exceed a single action deadline on loaded
+  // runners, so the driver retries on its own timeout instead of failing
+  // with the interceptor still mounted.
+  const sendable = async action => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try { await action({ timeout: 15000 }) } catch (error) {
+        if (attempt < 3 && error instanceof Error && error.name === 'TimeoutError') continue
+        throw error
+      }
+      return
+    }
+  }
+  const command = async text => {
+    await sendable(() => editor.fill(text))
+    await sendable(() => page.getByRole('button', { name: 'Send message', exact: true }).click())
+    if (text.endsWith(' seed')) await answerTaskStartupForTest(page, 'decision OFF / Lisp OFF')
+  }
   const records = async () => (await readFile(receipts, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse)
   await command('/lisp-plan-fixture seed')
   await poll(async () => (await records()).find(r => r.mode === 'seed'))
