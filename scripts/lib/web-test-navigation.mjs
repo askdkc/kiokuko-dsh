@@ -32,12 +32,25 @@ export async function declineOptionalMemoryOffers(page) {
   const state = { declined: 0 }
   await page.addLocatorHandler(decline, async () => {
     try {
-      await decline.click()
-      // Submit only while the question control remains mounted; a global Enter
-      // can otherwise send a command that was already typed into the composer.
-      if (await decline.isVisible()) await decline.press('Enter')
-    } catch (error) { if (!toleratedDisposal(error)) throw error }
-    state.declined++
+      // Transient overlays or rerenders must not eat a whole action deadline
+      // or kill the process; bounded attempts let the interception settle.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try { await decline.click({ timeout: 8000 }) } catch (error) {
+          if (error instanceof Error && error.message.includes('has been closed')) return
+          if (attempt === 2) { handlerFailures.push(error instanceof Error ? error.message : String(error)); return }
+          continue
+        }
+        // Submit only while the question control remains mounted; a global Enter
+        // can otherwise send a command that was already typed into the composer.
+        try { if (await decline.isVisible()) await decline.press('Enter', { timeout: 8000 }) } catch (error) {
+          if (error instanceof Error && error.message.includes('has been closed')) return
+          handlerFailures.push(error instanceof Error ? error.message : String(error))
+          return
+        }
+        state.declined++
+        return
+      }
+    } catch (error) { handlerFailures.push(error instanceof Error ? error.message : String(error)) }
   })
   return state
 }
@@ -71,24 +84,45 @@ function fixtureQuestions(page) {
     ['作業は完了しました。今回の記憶を整理してよいですか？', null],
   ].map(([name, answer]) => {
     const card = page.getByRole('region', { name, exact: true })
+    const confirm = card.getByRole('button', { name: '確定（Enter）', exact: true })
     return { card, async respond() {
-      if (answer === null) await card.getByRole('button', { name: /今回は保存しない/ }).click()
-      else await card.getByRole('textbox').fill(answer)
+      if (answer === null) {
+        // A rerender can detach the offer between click attempts; each attempt
+        // re-resolves the control against the current card.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            await card.getByRole('button', { name: /今回は保存しない/ }).click({ timeout: 8000 })
+            if (await confirm.isVisible().catch(() => false)) await confirm.click({ timeout: 8000 })
+            await card.waitFor({ state: 'hidden', timeout: 8000 })
+            return
+          } catch (error) {
+            if (error instanceof Error && error.message.includes('has been closed')) return
+            if (attempt === 2) throw error
+          }
+        }
+        return
+      }
+      await card.getByRole('textbox').fill(answer)
       await card.getByRole('button', { name: '確定（Enter）', exact: true }).click()
       await card.waitFor({ state: 'hidden' })
     } }
   })
 }
 
-/** An auto-answer can still run while a test disposes its page. Let only real
- * answer failures escape as an uncaught promise would otherwise mask the
- * primary verification failure during shutdown. */
-function toleratedDisposal(error) {
-  return error instanceof Error && error.message.includes('has been closed')
-}
-async function addQuestionHandler(page, card, respond) {
+/** Handler-internal answer failures, kept for driver diagnostics. Playwright
+ * invokes these handlers outside the awaited action path, so any rejection
+ * would otherwise surface as a fatal uncaught promise instead of the real
+ * verification failure the drivers already watch through their own checks. */
+const handlerFailures = []
+export function fixtureQuestionHandlerFailures() { return [...handlerFailures] }
+
+/** An auto-answer can still run while a test disposes its page. Handler-internal
+ * failures are recorded, never rethrown: only real driver assertions should
+ * fail the verification, with their own actionable messages. */
+function addQuestionHandler(page, card, respond) {
   return page.addLocatorHandler(card, async () => {
-    try { return await respond() } catch (error) { if (!toleratedDisposal(error)) throw error }
+    try { return await respond() }
+    catch (error) { handlerFailures.push(error instanceof Error ? error.message : String(error)) }
   })
 }
 

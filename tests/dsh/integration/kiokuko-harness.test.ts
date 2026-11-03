@@ -89,7 +89,14 @@ test('context preparation failure parks retained input and only a new wake retri
   agent=(await f.ctx.agents.create({sessionId:SessionId('context-outage')})).agent
   agent.followup(createUserMessage({content:[{type:'text',text:'Retain before preparation'}],source:{kind:'user'}}));await agent.whenIdle()
   assert.equal(calls,1,'Preparation must stop after its first failure');assert.equal(agent.inbox.nextTurn.length,1);assert.equal(f.requests.length,0)
-  assert.equal(agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1).data.reason.kind,'error')
+  const failedReason=(agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1) as any).data.reason
+  assert.equal(failedReason.kind,'error')
+  // The durable failure records the real cause instead of an opaque sentinel.
+  assert.match(failedReason.error.message,/Context unavailable/)
+  assert.equal(failedReason.error.code,'UNKNOWN')
+  const auditRecord=agent.session.snapshotEvents().find((e:any)=>e.type==='plugin:kiokuko-dsh/harness-action'&&e.data.action==='turn'&&e.data.phase==='error') as any
+  assert.equal(auditRecord.data.diagnostic.message,'Context unavailable')
+  assert.equal(auditRecord.data.diagnostic.code,'UNKNOWN')
   fault=false;agent.steer(createUserMessage({content:[{type:'text',text:'The context is available now'}],source:{kind:'user'}}));await agent.whenIdle()
   assert.equal(agent.inbox.nextTurn.length,0);assert.equal(f.requests.length,1)
   assert.equal(agent.session.snapshotEvents().filter((e:any)=>e.type==='user/message'&&e.data.content?.some((b:any)=>b.text==='Retain before preparation')).length,1)
@@ -104,7 +111,11 @@ test('provider preparation failure records the accepted request and a failed tur
     await agent.whenIdle()
     const events=agent.session.snapshotEvents()
     assert.equal(events.filter(event=>event.type==='user/message').length,1)
-    assert.equal(events.filter(event=>event.type==='turn/end').at(-1)?.data.reason.kind,'error')
+    const failedReason=(events.filter(event=>event.type==='turn/end').at(-1) as any)?.data.reason
+    assert.equal(failedReason.kind,'error')
+    // An LlmError keeps its provider failure facts verbatim per the current DSH contract.
+    assert.equal(failedReason.error.code,'NO_ADAPTER')
+    assert.match(failedReason.error.message,/no adapter registered for provider "absent-provider"/)
     assert.equal(events.filter(event=>event.type==='assistant/message').length,0)
   } finally {await f.close()}
 })

@@ -3,7 +3,7 @@ import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type Ag
   type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { AssistantStreamAccumulator, BlockAssembler, LlmError, markAgentLoopRequest, createAssistantMessage, createSystemMessage, createUserMessage,
-  createToolResultMessage, type UserMessage, type ContextFormed, type LlmCallConfig, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
+  createToolResultMessage, type UserMessage, type ContextFormed, type LlmCallConfig, type LlmFailure, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, interruptedTurnClosers, ToolCallRecovery, type Session, type SessionEvent,
   type TurnEndReason, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { renderPrompt, renderContextSections, joinContextSections } from '@deepseek-ai/dsh-system-prompt'
@@ -15,10 +15,22 @@ import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import {withoutInheritedTaskAuthority} from '../task-authority-context.js'
 
 declare module '@deepseek-ai/dsh-session' {
-  interface PluginRecordMap { 'plugin:kiokuko-dsh/harness-action': { action:string; phase:string; turn:number; step:number; parentSession?:string; callId?:string } }
+  interface PluginRecordMap { 'plugin:kiokuko-dsh/harness-action': { action:string; phase:string; turn:number; step:number; parentSession?:string; callId?:string; diagnostic?:LlmFailure } }
 }
 declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'runtime-context': {kind:'runtime-context'} & ContextFormed; 'plugin:kiokuko-dsh': {kind:typeof KIOKUKO_DSH_SOURCE_KIND;form:'instructions'|'snapshot';sections?:readonly {name:string;text:string}[]} } }
 export interface HarnessOptions extends AgentOptions { maxSteps?: number }
+
+/** Durable turn-failure facts under the current DSH contract: a caught
+ * `LlmError` keeps its provider failure verbatim; anything else is flattened
+ * into a bounded, redacted diagnostic instead of a sentinel that erases the
+ * cause behind an opaque record. */
+function turnFailureDiagnostic(error:unknown):LlmFailure {
+  if(error instanceof LlmError)return error.failure
+  const diagnostic=memoryFailureDiagnostic(error)
+  const code=(error as {code?:unknown}|undefined)?.code
+  const named=typeof code==='string'&&code.trim()!==''?code.trim():undefined
+  return {message:diagnostic.message,code:(named??'UNKNOWN').slice(0,64)}
+}
 type PersistenceHandle = { header: any; inheritedEventCount: any; read(from:number,to?:number,options?:unknown):Promise<{events:SessionEvent[];eventState:any}>;
   append(events:readonly SessionEvent[]):Promise<void>;close():Promise<void> }
 
@@ -79,10 +91,11 @@ export class KiokukoHarnessAgent implements Agent {
     const head=seed.find(e=>e.seq===session.surface.nodes[0]);if(head?.type==='system/message'){this.systemSeq=head.seq;this.systemText=head.data.message.content.map(b=>b.type==='text'?b.text:'').join('')}
   }
   get status(): 'idle'|'running' { return this.driver ? 'running':'idle' }
-  private audit(action:string,phase:string,callId?:string) {
+  private audit(action:string,phase:string,callId?:string,diagnostic?:LlmFailure) {
     try {
       appendPluginRecord(this.session,'plugin:kiokuko-dsh/harness-action',{action,phase,turn:this.turn,step:this.step,
-        ...(this.session.header.parentSession?{parentSession:this.session.header.parentSession}:{}),...(callId?{callId}:{})})
+        ...(this.session.header.parentSession?{parentSession:this.session.header.parentSession}:{}),...(callId?{callId}:{}),
+        ...(diagnostic?{diagnostic}:{})})
     } catch {
       // A native Session brand mismatch (development trees that load two
       // dsh-session copies) must not block agent lifecycle; this record is
@@ -187,8 +200,9 @@ export class KiokukoHarnessAgent implements Agent {
         }
       } catch(error) {
         blocked=true // Retained input must not turn a preparation failure into a retry loop.
-        reason=signal.aborted?{kind:'aborted',reason:signal.reason as AgentCancelCause}:{kind:'error',error:{code:'KIOKUKO_HARNESS_ERROR',message:'Kiokuko execution failed; inspect the recorded action and provider/tool diagnostics.'}}
-        this.audit('turn',signal.aborted?'cancel':'error')
+        const failure=turnFailureDiagnostic(error)
+        reason=signal.aborted?{kind:'aborted',reason:signal.reason as AgentCancelCause}:{kind:'error',error:failure}
+        this.audit('turn',signal.aborted?'cancel':'error',undefined,signal.aborted?undefined:failure)
         if(!signal.aborted)this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:new Error(memoryFailureDiagnostic(error).message)})
       } finally { this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result') }
       if(blocked||signal.aborted&&!this.wake)break

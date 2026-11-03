@@ -81,6 +81,14 @@ settings change. The panel distinguishes the next requested tier from the last
 request and its reported served tier. Missing response metadata means **unknown**;
 Flex can be served as Standard by Infron.
 
+**Refresh models** also reads the endpoint's own listing for each model's published
+`input_modalities`; a model advertising image input (for example `z-ai/glm-5.3-flash`)
+adopts with image input enabled while text-only rows adopt text-only. A listing that
+withholds the field, refuses the read, or times out keeps the previously stored
+capability, and manual registration remains the explicit way to set it. This
+enrichment never fails the refresh; discovery remains the request whose failure the
+refresh reports.
+
 ## Storage and permissions
 
 Non-secret connection settings live in `kiokuko-models.json` under the active profile

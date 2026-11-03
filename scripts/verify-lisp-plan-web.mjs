@@ -1,6 +1,6 @@
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
-import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest, fixtureQuestionCardsVisible } from './lib/web-test-navigation.mjs';
+import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest, fixtureQuestionCardsVisible, fixtureQuestionHandlerFailures } from './lib/web-test-navigation.mjs';
 import { webTestPort } from './test-web-port.mjs';
 import { completeVerification } from './verification-completion.mjs';
 // Packed Kiokuko, native agent-loop Plan tools and Web approval UI; scripted local generation.
@@ -129,7 +129,7 @@ ctx.commands.register({name:'lisp-plan-fixture',description:'Native Plan accepta
   const approved = await choosePlanOption('3', r => r.mode === 'approve' && !r.stage)
   assert.equal(approved.isError, false, JSON.stringify(approved)); assert.equal(approved.value.approved, true); assert.equal(approved.after.active, false)
   console.log(JSON.stringify({ result: 'passed', checks: ['native question', 'keep planning', 'approve'], package: 'packed', externalModelCalls: 0 }))
-} catch (e) { console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-4000)); console.error(logs.slice(-5000).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]')); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
+} catch (e) { console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-4000)); console.error(logs.slice(-5000).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]')); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); const handlerFailures = fixtureQuestionHandlerFailures(); if (handlerFailures.length) console.error('fixture handler failures: ' + JSON.stringify(handlerFailures)); throw e }
 finally {
   await browser?.close()
   if (host && host.exitCode === null) { host.kill('SIGTERM'); await Promise.race([new Promise(r => host.once('exit', r)), new Promise(r => setTimeout(r, 5000))]); if (host.exitCode === null) host.kill('SIGKILL') }

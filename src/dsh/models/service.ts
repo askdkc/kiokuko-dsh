@@ -40,6 +40,7 @@ import {
   storableMaxTokens,
 } from "./profiles.js";
 import { OpenCodeAdapter } from "./vendor/opencode-adapter.js";
+import { infronModalities } from "./vendor/infron-listing.js";
 import {
   OpenCodeCatalog,
   type OpenCodeRoute,
@@ -581,7 +582,23 @@ export class KiokukoModelsService {
     }
     if (c.kind === "codex") return;
     const key = await this.apiKey(c),
-      models = this.adopt(c, await this.discover(c, key));
+      // The Infron listing discloses per-model input modalities that discovery's
+      // id-and-capacity rows withhold. Enrichment never fails this refresh: it
+      // resolves empty on refusal, timeout or error, so model discovery remains
+      // the request whose failure is reported.
+      modalities =
+        c.kind === "infron"
+          ? infronModalities(
+              c,
+              key,
+              AbortSignal.any([this.lifecycle.signal, AbortSignal.timeout(15_000)]),
+            ).catch(() => undefined)
+          : undefined,
+      [discovered, enriched] = await Promise.all([
+        this.discover(c, key),
+        modalities,
+      ]),
+      models = this.adopt(c, discovered, enriched);
     if (!models.length)
       throw new Error(
         "Model discovery returned no models; register models manually",
@@ -662,6 +679,7 @@ export class KiokukoModelsService {
   private adopt(
     c: Connection,
     discovered: readonly LlmDiscoveredModel[],
+    gatewayModalities?: ReadonlyMap<string, readonly string[]>,
   ): ManualModel[] {
     const shipped =
       adapterBuiltinProviders()
@@ -687,13 +705,29 @@ export class KiokukoModelsService {
             contextWindow,
           ),
           reasoning: known?.reasoning ?? prior?.reasoning ?? false,
-          image:
-            entry.inputModalities !== undefined
-              ? entry.inputModalities.includes("image")
-              : (known?.input.includes("image") ?? prior?.image ?? false),
+          image: this.imageCapability(entry, known, prior, gatewayModalities),
         });
       return parsed.success ? [parsed.data] : [];
     });
+  }
+  /**
+   * Decide one discovered row's stored image capability. The adapter's own
+   * disclosure wins (a catalog knows its models), then the gateway listing's
+   * `input_modalities` for the row's id, then the row the endpoint previously
+   * stored — so an id-only listing never erases an explicitly registered
+   * capability, and a disclosed text-only row never keeps an earlier stale one.
+   */
+  private imageCapability(
+    entry: LlmDiscoveredModel,
+    known: { input: readonly string[] } | undefined,
+    prior: ManualModel | undefined,
+    gatewayModalities: ReadonlyMap<string, readonly string[]> | undefined,
+  ): boolean {
+    if (entry.inputModalities !== undefined)
+      return entry.inputModalities.includes("image");
+    const gateway = gatewayModalities?.get(entry.id);
+    if (gateway !== undefined) return gateway.includes("image");
+    return known?.input.includes("image") ?? prior?.image ?? false;
   }
   /** Snapshot once, including an ordinary-model choice, so defaults only affect new chats. */
   async headWorkerSelection(sessionId: string): Promise<{ configuration?: HeadWorkerConfiguration; revision: number }> {

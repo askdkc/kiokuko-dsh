@@ -63,7 +63,14 @@ export function installDshModelRouting(agent: RoutableAgent, beforeAssembly: (si
   }
   const disposers = [
     agent.ctx.on('system-prompt/assemble', async (_assembly: any, context: { signal?: AbortSignal; modelSelection?: ModelBinding }, next: () => Promise<any>) => {
-      if (routingFailure) throw routingFailure
+      // A stale maintenance failure surfaces exactly once, then clears: the
+      // next assembly runs a fresh choose() instead of rethrowing a recovered
+      // outage forever until some later inbox insert re-runs the maintenance.
+      if (routingFailure) {
+        const stale = routingFailure
+        routingFailure = undefined
+        throw stale
+      }
       await choose(context.signal ?? new AbortController().signal)
       if (nativeRouting && assembled && context.modelSelection && !same(assembled, context.modelSelection)) {
         throw new Error('Model route changed after native step preparation')

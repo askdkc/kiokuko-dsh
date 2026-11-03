@@ -714,6 +714,111 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
   }
 });
 
+test("an Infron refresh stores image capability the gateway listing publishes", async () => {
+  const requests: Array<{ url: string | undefined; authorization: string | string[] | undefined }> = [];
+  const server = createServer(async (req, res) => {
+    if (req.url !== "/v1/models") {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "not a listing request" }));
+      return;
+    }
+    requests.push({ url: req.url, authorization: req.headers.authorization });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(
+      JSON.stringify({
+        data: [
+          { id: "z-ai/glm-5.3-flash", input_modalities: ["text", "image", "video"] },
+          { id: "z-ai/glm-5-turbo", input_modalities: ["text"] },
+          { id: "plain-model" },
+        ],
+      }),
+    );
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const f = await fixture();
+  try {
+    const c = ConnectionSchema.parse({
+      id: "kiokuko-infron",
+      kind: "infron",
+      name: "Infron",
+      baseURL: `http://127.0.0.1:${(server.address() as any).port}/v1`,
+      protocol: "chat-completions",
+      models: [],
+    });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "fixture-key");
+    f.discover(async (request) => {
+      assert.equal(request.provider, undefined, "a moved base URL is interrogated, not answered from the catalog");
+      assert.equal(request.baseURL, c.baseURL);
+      assert.equal(request.apiKey, "fixture-key");
+      return [
+        { id: "z-ai/glm-5.3-flash", name: "GLM 5.3 Flash", contextWindow: 1_000_000, maxTokens: 131_100 },
+        { id: "z-ai/glm-5-turbo", name: "GLM 5 Turbo" },
+        { id: "plain-model", name: "Plain Model" },
+      ];
+    });
+    await f.service.refresh(c.id);
+    assert.deepEqual(requests, [
+      { url: "/v1/models", authorization: "Bearer fixture-key" },
+    ]);
+    const stored = (await f.config.read()).connections[0]!;
+    assert.deepEqual(stored.models.map((m) => [m.id, m.image]), [
+      ["z-ai/glm-5.3-flash", true],
+      ["z-ai/glm-5-turbo", false],
+      ["plain-model", false],
+    ]);
+    assert.deepEqual(
+      connectionProfile(stored).piProvider!.getModels().map((m) => [m.id, m.input]),
+      [
+        ["z-ai/glm-5.3-flash", ["text", "image"]],
+        ["z-ai/glm-5-turbo", ["text"]],
+        ["plain-model", ["text"]],
+      ],
+      "the stored capability must reach the request path in the Pi provider's own spelling",
+    );
+  } finally {
+    await f.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("an Infron listing refusal keeps a registered image capability and adopts new rows text-only", async () => {
+  const listings: Array<string | undefined> = [];
+  const server = createServer(async (req, res) => {
+    listings.push(req.url);
+    res.writeHead(500);
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const f = await fixture();
+  try {
+    const id = "z-ai/glm-5.3-flash";
+    const c = ConnectionSchema.parse({
+      id: "kiokuko-infron",
+      kind: "infron",
+      name: "Infron",
+      baseURL: `http://127.0.0.1:${(server.address() as any).port}/v1`,
+      protocol: "chat-completions",
+      models: [{ id, name: "GLM 5.3 Flash", contextWindow: 1_000_000, maxTokens: 131_072, reasoning: false, image: true }],
+    });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "fixture-key");
+    f.discover(async () => [{ id }, { id: "second-model", name: "Second" }]);
+    await f.service.refresh(c.id);
+    const stored = (await f.config.read()).connections[0]!;
+    assert.deepEqual(stored.models.map((m) => [m.id, m.image]), [
+      [id, true],
+      ["second-model", false],
+    ]);
+    assert.deepEqual(listings, ["/v1/models"]);
+  } finally {
+    await f.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("request budgets remain bounded with missing or invalid adapter capacity metadata", () => {
   for (const missing of [undefined, null, NaN, Infinity, -1, 0, 1.5, "204800", Number.MAX_SAFE_INTEGER + 1]) {
     assert.equal(requestMaxTokens(missing, missing), 32768);
