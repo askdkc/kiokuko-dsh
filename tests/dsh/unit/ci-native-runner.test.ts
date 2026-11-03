@@ -74,7 +74,9 @@ test('native CI runs every suite with the explicitly selected runtime', async ()
     assert.equal(new Set(repeated).size, repeated.length)
     const lisp = nativeCiPlan('lisp', environment)
     assert.equal(lisp.env.KIOKUKO_REQUIRE_LISP_RUNTIME, '1')
-    assert.ok(lisp.args.slice(1).every((file: string) => file === 'tests/dsh/e2e/coding-workflow-native.test.ts' || ['tests/dsh/unit/lisp/', 'tests/dsh/integration/lisp/'].some(prefix => file.startsWith(prefix))))
+    const routedWorkers = 'tests/dsh/integration/native-worker-routing.test.ts'
+    assert.ok(lisp.args.slice(1).every((file: string) => file === routedWorkers || file === 'tests/dsh/e2e/coding-workflow-native.test.ts' || ['tests/dsh/unit/lisp/', 'tests/dsh/integration/lisp/'].some(prefix => file.startsWith(prefix))))
+    assert.ok(lisp.args.includes(routedWorkers), 'Lisp jobs require persistent child worker routing')
     assert.ok(lisp.args.includes('tests/dsh/e2e/coding-workflow-native.test.ts'), 'Lisp jobs require the real coding session');
     assert.ok(lisp.args.includes('tests/dsh/integration/lisp/current-executor.test.ts'), 'latest official executor and fresh-turn regression remains required in Lisp lanes');
     for (const browser of ['browser-approval', 'browser-shortcuts', 'browser-coding']) {

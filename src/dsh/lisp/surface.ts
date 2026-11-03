@@ -130,10 +130,11 @@ export const ToolInput = z.object({ operationId: identifier.optional(), code: z.
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
   const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
+  const pluginTools = ctx.get('tools', false) as Tools | undefined
   const agents = root.get('agents', false) as { get(id: string): Agent | undefined;isOwnedBy?(id:string,parent:Agent):boolean } | undefined
   const sessions = root.get('sessions', false) as { get(id: string): Session | undefined } | undefined
   const commands = ctx.get('commands', false) as { register(definition: DshNativeCommandDefinition): () => void } | undefined
-  if (!tools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
+  if (!tools || !pluginTools || !agents || !sessions || !commands) fail('HOST_CAPABILITY_MISSING', 'Lisp には DSH のツール・セッション・コマンドサービスが必要です。')
   const dispatchHostTool = await createLispHostDispatch(ctx, tools)
   const questions = ctx.get('userQuestions', false) as DshUserQuestions | undefined
   const approvalPolicy = mountApprovalPolicy(ctx, config.approvalMode, (agentId, expected) => {
@@ -360,7 +361,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   // Publish restrictable descriptors before child creation. Only an admitted
   // session's local implementations can execute; the persistent guard also
   // rejects these unbound descriptors. Native allow/deny masks remain visible.
-  if (config.enabled) for (const name of LISP_TOOLS) disposers.push(tools.register({
+  // Registrations belong to this activation, not the host root's lifetime.
+  // The independent host fence above still denies effects after plugin unload.
+  if (config.enabled) for (const name of LISP_TOOLS) disposers.push(pluginTools.register({
     name, description: description(name), modelFacing: true, parameters: lispToolSchema(name),
     output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
     execute: async () => failure(new LispError('LISP_DISABLED', 'This session has no admitted Lisp worker.')),

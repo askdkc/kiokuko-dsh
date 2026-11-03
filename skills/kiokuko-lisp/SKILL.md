@@ -87,17 +87,14 @@ approval never authorizes writes; only host changes receipts establish APPLIED/U
 ## Evidence, recovery and adapters
 
 Workers persist by default; configured idle suspension never interrupts turns/evaluations/approvals/jobs.
-Routed child work sessions own persistent Lisp workers with separate heaps and scratch.
-Reuse definitions across steps in the same generation. The router receives results through
-native child delivery; never borrow its task lease or another session's result refs.
-Startup failure stops child admission. Child disposal stops only its own runtime.
-Project effects still cross the owning session's host permissions and tool restrictions.
-The host master shares startup/capacity across children and detects their exit. Clean host
-restarts and stopped idle children auto-start on the next admitted request when journals
-are settled; status does not start them. Do not ask the user to recover a clean restart.
-Fault replacements are bounded to two per owner per minute. WORKER_RESUMED ran no code:
-rebuild state, never effects. Explicit cancellation, uncertain effects, unconfirmed
-termination and the restart limit require inspection/recovery.
+Routed children keep separate persistent heaps/scratch; reuse definitions per generation.
+Return results via native delivery; never borrow parent authority or foreign refs.
+Failed startup blocks admission; disposal stops only that child. Effects retain session
+permissions/tool restrictions. The host owns startup, capacity and exit. With settled
+journals, clean restart/idle exit auto-starts on next admission, never status; no manual
+recovery prompt. Fault replacements: 2/owner/minute. WORKER_RESUMED ran no code:
+rebuild state, never effects. Cancellation, unknown effects, unconfirmed stop or restart
+limit require inspection/recovery.
 Results: 16 KiB, no source echoes/duplicates. Page journaled evidence, never rerun/fetch
 all history. Fix missing paths with native reads; input errors need no recovery. Report
 observed errors/recovery; missing results never prove deletion/restoration.
