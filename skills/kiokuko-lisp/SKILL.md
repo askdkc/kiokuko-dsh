@@ -87,6 +87,11 @@ approval never authorizes writes; only host changes receipts establish APPLIED/U
 ## Evidence, recovery and adapters
 
 Workers persist by default; configured idle suspension never interrupts turns/evaluations/approvals/jobs.
+Routed child work sessions own persistent Lisp workers with separate heaps and scratch.
+Reuse definitions across steps in the same generation. The router receives results through
+native child delivery; never borrow its task lease or another session's result refs.
+Startup failure stops child admission. Child disposal stops only its own runtime.
+Project effects still cross the owning session's host permissions and tool restrictions.
 The host master shares startup/capacity across children and detects their exit. Clean host
 restarts and stopped idle children auto-start on the next admitted request when journals
 are settled; status does not start them. Do not ask the user to recover a clean restart.

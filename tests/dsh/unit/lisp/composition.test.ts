@@ -40,6 +40,41 @@ async function fixture(t:test.TestContext,mode:'development'|'protected'='protec
 }
 const definition={name:'add-one',description:'A reusable task function',source:'(lambda (input) (+ input 1))',inputSchema:{type:'integer'},outputSchema:{type:'integer'}}
 
+test('session workers retain separate runtimes, coalesce admission and restore their mode after host restart',async t=>{
+ const f=await fixture(t,'development'),a={...f.owner,sessionId:'a',agentId:'a'},b={...f.owner,sessionId:'b',agentId:'b'}
+ await f.manager.enable(f.owner)
+ await f.manager.enableTask(a)
+ const [first,repeated,second]=await Promise.all([f.manager.enableSessionWorker(a),f.manager.enableSessionWorker(a),f.manager.enableSessionWorker(b)]) as any[]
+ assert.equal(first.state,'READY');assert.equal(first.generation,repeated.generation);assert.notEqual(first.generation,second.generation)
+ assert.equal(await f.manager.isTaskMode(a),false,'Existing disposable child sessions are promoted without erasing their journal')
+ assert.equal(f.starts.length,3)
+ for(const worker of f.starts.slice(1)){assert.equal(worker.layout.workspace,undefined);assert.equal(worker.layout.protected,true)}
+ await f.manager.enableSessionWorker(a);assert.equal(f.starts.length,3)
+ await f.manager.disposeSession(a.sessionId)
+ assert.equal(f.stopped.has(f.starts.find(worker=>worker.generation===first.generation)!),true)
+ assert.equal(f.stopped.has(f.starts.find(worker=>worker.generation===second.generation)!),false);assert.equal(f.stopped.has(f.starts[0]!),false)
+ await f.restart()
+ const restored=await f.manager.prepare(a) as any
+ assert.equal(restored.state,'READY');assert.notEqual(restored.generation,first.generation)
+ assert.equal(f.starts.at(-1)!.layout.workspace,undefined,'Restored worker must not acquire the parent repository lease')
+})
+
+test('cancelled session-worker admission cannot start a process',async t=>{
+ const f=await fixture(t),abort=new AbortController();abort.abort()
+ await assert.rejects(f.manager.enableSessionWorker(f.owner,false,abort.signal),{name:'AbortError'})
+ assert.equal(f.starts.length,0)
+ assert.equal(f.manager.enabled.has(f.owner.sessionId),false)
+})
+
+test('failed session-worker startup retains its route and requires recovery without retrying on projection',async t=>{
+ const f=await fixture(t,'development');let attempts=0
+ t.mock.method(LispWorker.prototype,'start',async()=>{attempts++;throw new Error('worker startup failed')})
+ await assert.rejects(f.manager.enableSessionWorker(f.owner),/worker startup failed/)
+ assert.equal(await f.manager.isSessionWorker(f.owner),true)
+ assert.equal((await f.manager.enableSessionWorker(f.owner) as any).state,'RECOVERY_REQUIRED')
+ assert.equal(attempts,1,'Repeated prompt assembly cannot silently retry a failed worker')
+})
+
 test('host observation needs no task mode or coding workflow and preserves paths, owner receipts and replay',async t=>{
  const f=await fixture(t);await f.store.enable(f.owner);f.manager.enabled.set(f.owner.sessionId,f.owner.root);await writeFile(join(f.root,'input.json'),'[20,22]')
  const prepare=f.db.prepare.bind(f.db)

@@ -125,11 +125,25 @@ test('the actual aggregate CLI rejects missing jobs/reports, stale selection and
       });
       const success=Object.fromEntries(requiredJobs.map(id=>[id,{result:'success'}]));
       const run=needs=>spawnSync(process.execPath,[path.join(repo,'scripts/verify-ci-results.mjs'),'--ci-plan',selectedFile,evidence],{cwd:repo,env:{...process.env,NEEDS_JSON:JSON.stringify(needs)},encoding:'utf8'});
-      const observed=run(success);assert.equal(observed.status,0,observed.stderr);
-      for(const id of requiredJobs){const bad=structuredClone(success);delete bad[id];assert.equal(run(bad).status,1)}
-      for(const result of ['failure','cancelled','skipped',''])assert.equal(run({...success,checks:{result}}).status,1);
+      const observed=run(success);assert.equal(observed.status,0,observed.stderr);assert.equal(observed.stderr,'');
+      for(const id of requiredJobs){const bad=structuredClone(success);delete bad[id];const failed=run(bad);assert.equal(failed.status,1);assert.ok(failed.stderr.includes(`job ${id}: missing`),failed.stderr)}
+      for(const result of ['failure','cancelled','skipped','']){const failed=run({...success,checks:{result}});assert.equal(failed.status,1);assert.ok(failed.stderr.includes(`job checks: ${result||'unknown'}`),failed.stderr)}
+      const failedIndex=entries.findIndex(e=>e.report.partition==='lisp-linux-x64-native');
+      assert.ok(failedIndex>=0);
+      const failedFile=path.join(evidence,String(failedIndex),'result.json'),originalReport=readFileSync(failedFile);
+      const failedReport=structuredClone(entries[failedIndex].report);failedReport.status='failed';
+      const failedCheck=failedReport.checks.find(c=>c.id==='lisp-native-1');assert.ok(failedCheck);failedCheck.status='failed';failedCheck.exitCode=1;
+      failedCheck.reportFiles=['node.json'];
+      const nodeDirectory=path.join(evidence,String(failedIndex),failedCheck.id);mkdirSync(nodeDirectory);
+      writeFileSync(path.join(nodeDirectory,'node.json'),JSON.stringify({schema:'verification-node-v1',tests:[{type:'test:fail',file:'repository-ownership.test.ts',name:'supervisor loss retains live ownership'}]}));
+      writeFileSync(failedFile,JSON.stringify(failedReport));
+      const failed=run({...success,checks:{result:'failure'}});assert.equal(failed.status,1);
+      assert.match(failed.stderr,/lisp-linux-x64-native.*lisp-native-1.*failed.*exitCode=1/);
+      assert.ok(failed.stderr.includes(failedFile),failed.stderr);
+      assert.match(failed.stderr,/failed test: .*repository-ownership.test.ts.*supervisor loss retains live ownership/);
+      writeFileSync(failedFile,originalReport);
       const packed=entries.findIndex(e=>e.report.artifact),archive=path.join(evidence,String(packed),'tested.tgz');writeFileSync(archive,'corrupted');assert.equal(run(success).status,1);writeFileSync(archive,'test archive');
-      const saved=path.join(evidence,'0','result.json'),bytes=readFileSync(saved);rmSync(saved);assert.equal(run(success).status,1);writeFileSync(saved,bytes);
+      const saved=path.join(evidence,'0','result.json'),bytes=readFileSync(saved);rmSync(saved);const missing=run(success);assert.equal(missing.status,1);assert.ok(missing.stderr.includes(`lane ${entries[0].report.partition}: missing report`));writeFileSync(saved,bytes);
       const narrow=structuredClone(marker);narrow.bundleScope='representative';writeFileSync(path.join(folder,'selection.json'),JSON.stringify(narrow));assert.equal(run(success).status,1);writeFileSync(path.join(folder,'selection.json'),JSON.stringify(marker));
       // The saved-result status path reconstructs this exact selected lane.
       const localCore=entries.find(e=>e.report.platform===process.platform&&e.report.architecture===process.arch&&!e.report.artifact);assert.ok(localCore);

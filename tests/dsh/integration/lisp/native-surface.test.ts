@@ -90,7 +90,7 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
       if (scenario === 'scope-conflict') assert.match(result.text, /作業場所が変わっています/)
       const admitted = scenario === 'startup-failure'
       assert.equal((await call(agents[1])).isError, admitted, 'only an admitted session may lose ordinary tools')
-      assert.equal(Boolean(ctx.tools.get('lisp_status', agents[1])), admitted, 'rejection must not register Lisp tools')
+      assert.equal(Boolean(ctx.tools.executable('lisp_status', agents[1])), admitted, 'rejection must not admit executable Lisp tools')
       assert.equal(surface.manager.enabled.has('new'), admitted)
       if (admitted) assert.equal((await call(agents[1], 'lisp_status')).isError, false, 'startup failure retains diagnostic tools')
       assert.equal((await call(agents[0])).isError, true, 'another session cannot remove the persisted fence')

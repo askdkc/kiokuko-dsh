@@ -14,6 +14,45 @@ export function requiredJobsSucceeded(needs, selection) {
     (id === 'checks' ? selection.lanes.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped'));
 }
 const key = report => [report.profile, report.partition, report.platform, report.architecture].join('/');
+// Diagnostics precede the job gate: a failed matrix still publishes its report.
+// Keep validation below authoritative; diagnostics must never make a run pass.
+function reportCiFailures(needs, selection, directory) {
+  for (const id of requiredJobs) {
+    const expected = id === 'select' || (id === 'checks' ? selection.lanes.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped';
+    const actual = needs?.[id]?.result || (needs?.[id] ? 'unknown' : 'missing');
+    if (actual !== expected) console.error(`job ${id}: ${actual} (expected ${expected})`);
+  }
+  const reports = [];
+  for (const item of existsSync(directory) ? readdirSync(directory, { withFileTypes: true }) : []) {
+    if (!item.isDirectory()) continue;
+    const file = path.join(directory, item.name, 'result.json');
+    try { reports.push({ file, report: JSON.parse(readFileSync(file, 'utf8')) }); }
+    catch { console.error(`CI report missing or unreadable: ${file}`); }
+  }
+  for (const lane of selection.lanes) {
+    const entries = reports.filter(({ report }) => report && key(report) === key({ ...lane, profile: 'ci-selected', partition: lane.id }));
+    if (!entries.length) console.error(`lane ${lane.id}: missing report`);
+    for (const { file, report } of entries) {
+      if (report.status !== 'passed') console.error(`lane ${lane.id}: ${report.status}; report=${file}`);
+      for (const check of Array.isArray(report.checks) ? report.checks : []) {
+        if (['passed', 'scope-excluded', 'platform-excluded'].includes(check.status)) continue;
+        console.error(`lane ${lane.id}: check ${check.id}: ${check.status}; exitCode=${check.exitCode ?? 'unknown'}; report=${file}`);
+        // Node's structured reporter keeps test names without arbitrary stdout.
+        if (!/^[a-zA-Z0-9_-]+$/.test(check.id)) continue;
+        console.error(`check log: ${path.join(path.dirname(file), `${check.id}.log`)}`);
+        for (const name of Array.isArray(check.reportFiles) ? check.reportFiles : []) {
+          if (typeof name !== 'string' || name !== path.basename(name) || !name.endsWith('.json')) continue;
+          try {
+            const result = JSON.parse(readFileSync(path.join(path.dirname(file), check.id, name), 'utf8'));
+            if (result.schema !== 'verification-node-v1' || !Array.isArray(result.tests)) continue;
+            for (const test of result.tests.filter(test => test.type === 'test:fail'))
+              console.error(`failed test: ${JSON.stringify({ file: test.file, name: test.name })}`);
+          } catch { /* The report/log path above remains available for diagnosis. */ }
+        }
+      }
+    }
+  }
+}
 export function validateCiEvidence(contract, entries, state, selection) {
   if (!Array.isArray(entries) || !validateCiPlan(contract, selection, state?.selectionIdentity)) return false;
   const expected = selection.lanes.map(lane => ({ ...lane, ...lanePlan(contract, selection, lane.id) }));
@@ -42,7 +81,9 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
     assert.ok(flag === '--ci-plan' && selectedFile && evidenceDirectory && process.argv.length === 5,
       'Usage: verify-ci-results.mjs --ci-plan selected.json report-directory');
     const root = path.resolve(import.meta.dirname, '..'), selection = readCiPlan(root, selectedFile);
-    assert.ok(requiredJobsSucceeded(JSON.parse(process.env.NEEDS_JSON ?? 'null'), selection), 'A selected required job failed, was cancelled/skipped, or is missing');
+    const needs = JSON.parse(process.env.NEEDS_JSON ?? 'null'), directory = path.resolve(evidenceDirectory);
+    reportCiFailures(needs, selection, directory);
+    assert.ok(requiredJobsSucceeded(needs, selection), 'A selected required job failed, was cancelled/skipped, or is missing');
     if (selection.nativeTargets.length) {
       const folder = path.join(root, 'micro-judge'), manifest = JSON.parse(readFileSync(path.join(folder, 'manifest.json')));
       const marker = JSON.parse(readFileSync(path.join(folder, 'selection.json')));
@@ -52,7 +93,6 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
       const nativeSource = await nativeSourceDigest(root);
       for (const entry of manifest.artifacts) { await validateNativeArtifact(folder, entry, nativeSource); nativeSelection(selection, entry); }
     }
-    const directory = path.resolve(evidenceDirectory);
     const entries = (existsSync(directory) ? readdirSync(directory, { withFileTypes: true }) : []).map(item => {
       assert.ok(item.isDirectory(), 'Unexpected CI evidence entry');
       const folder = path.join(directory, item.name), report = JSON.parse(readFileSync(path.join(folder, 'result.json')));

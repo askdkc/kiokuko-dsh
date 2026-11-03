@@ -10,6 +10,7 @@ import { LispConfig, LISP_TOOLS, type LispOwner } from '../../../../src/dsh/lisp
 import { LISP_CODING_SERVICE, type LispCodingService } from '../../../../src/dsh/lisp/coding-choice.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
+import { LISP_ASSEMBLY_SERVICE, type LispAssemblyService } from '../../../../src/dsh/lisp/request-surface.js'
 
 for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as const) test(`Lisp coding surface: ${outcome}`, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-coding-surface-')))
@@ -82,7 +83,11 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
         assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: input.signal })).kind, 'success')
         assert.equal(activated, 2, 'command and prompt share the activation path')
       } else {
-        assert.equal(definitions.size, 0)
+        assert.deepEqual([...definitions.keys()], [...LISP_TOOLS], 'Restrictable child descriptors are registered without enabling the declined session')
+        for (const definition of definitions.values()) assert.equal((await definition.execute({})).code, 'LISP_DISABLED')
+        const projected = await (ctx.get(LISP_ASSEMBLY_SERVICE) as LispAssemblyService).project(agent,
+          {sections:[],variables:{},tools:[...definitions.values()]} as any) as any
+        assert.deepEqual(projected.tools, [], 'Declined sessions never show the child descriptors to the model')
         assert.equal(db.prepare('SELECT enabled FROM dsh_lisp_sessions WHERE session_id=?').get<{ enabled: number }>('session')?.enabled, 0)
         await service.prepare({ ...input, turn: 2 })
         assert.equal(asked, 1)

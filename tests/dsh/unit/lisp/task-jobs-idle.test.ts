@@ -30,7 +30,7 @@ for (const synchronous of [false, true]) for (const change of ['none', 'jobs', '
     const db = new NodeSqliteAdapter(join(base, 'state.sqlite3'), new DatabaseSync(join(base, 'state.sqlite3')))
     migrateDatabase(db)
     const definitions = new Map<string, unknown>()
-    const tools = { guard: () => () => {}, schemas: () => [], get: () => undefined }
+    const tools = { register: () => () => {}, guard: () => () => {}, schemas: () => [], get: () => undefined }
     const agent = { id: 'agent', session: { id: 'session', header: { cwd: base } }, ctx: { get: () => tools } }
     let currentAgent = agent, currentSession = agent.session
     const services: Record<string, unknown> = { tools,

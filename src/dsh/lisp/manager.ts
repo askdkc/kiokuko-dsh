@@ -101,6 +101,7 @@ export class LispManager {
   #ownsSessions = false
   #artifactReserved = 0
   readonly #inflight = new Map<string, string>()
+  readonly #sessionWorkerAdmissions = new Map<string, Promise<unknown>>()
   constructor(readonly options: ManagerOptions) {
     this.#config = options.config
     this.taskAuthority = new LispTaskAuthority(options.store.database)
@@ -179,8 +180,47 @@ export class LispManager {
     signal?.throwIfAborted()
     const state = this.entry(owner)
     state.hostBusy = hostBusy
-    await this.startWorker(state)
+    await this.startWorker(state, signal)
     return this.status(owner)
+  }
+  /** A routed session keeps its own heap. Project effects still cross the host
+   * boundary; its scratch runtime never takes the standalone repository lease. */
+  enableSessionWorker(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
+    const key = JSON.stringify([owner.sessionId, owner.agentId, owner.root])
+    const pending = this.#sessionWorkerAdmissions.get(key)
+    if (pending) return pending
+    const admission = this.admitSessionWorker(owner, hostBusy, signal)
+      .finally(() => this.#sessionWorkerAdmissions.delete(key))
+    this.#sessionWorkerAdmissions.set(key, admission)
+    return admission
+  }
+  private async admitSessionWorker(owner: LispOwner, hostBusy: boolean, signal?: AbortSignal): Promise<unknown> {
+    await this.authorizeCodingTask(owner)
+    signal?.throwIfAborted()
+    if (!this.#config.enabled || this.#closed) fail('LISP_DISABLED', 'Lisp is unavailable for this worker session.')
+    if (await realpath(owner.root) !== owner.root) fail('SCOPE_CONFLICT', 'Worker workspace identity changed.')
+    if (!await this.isSessionWorker(owner)) {
+      if ([...this.#agents.values()].some(state => state.owner.sessionId === owner.sessionId
+        && (state.admission || state.active.size || state.worker && !state.worker.stopped))
+        || await this.#store.hasPending(owner.sessionId))
+        fail('WORKER_MODE_BUSY', 'Settle the current Lisp operations before admitting a session worker.')
+      await this.#store.enable(owner)
+      this.enabled.set(owner.sessionId, owner.root)
+      const epoch = (await this.#store.session(owner.sessionId))!.epoch
+      const modeOwner = { ...owner, agentId: '__session__' }, id = `session-worker-${epoch}`
+      await this.#store.reserve(modeOwner, id, 'session_worker', digest({ root: owner.root, epoch }), 'host', { root: owner.root, epoch })
+      await this.#store.transition(modeOwner, id, ['RUNNING'], 'SUCCEEDED', { mode: 'session-worker' })
+    }
+    signal?.throwIfAborted()
+    this.setAgentBusy(owner, hostBusy)
+    return this.prepare(owner, signal)
+  }
+  async isSessionWorker(owner: LispOwner): Promise<boolean> {
+    const session = await this.#store.session(owner.sessionId)
+    if (!session?.enabled || session.root_path !== owner.root) return false
+    const record = await this.#store.get({ ...owner, agentId: '__session__' }, `session-worker-${session.epoch}`)
+    return record?.kind === 'session_worker' && record.state === 'SUCCEEDED'
+      && record.digest === digest({ root: owner.root, epoch: session.epoch })
   }
   async enableTask(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
     await this.authorizeCodingTask(owner)
@@ -203,6 +243,7 @@ export class LispManager {
     return { ok: true, state: 'TASK_READY' }
   }
   async isTaskMode(owner: LispOwner): Promise<boolean> {
+    if (await this.isSessionWorker(owner)) return false
     const epoch = (await this.#store.session(owner.sessionId))?.epoch
     if (!epoch) return false
     const record = await this.#store.get({ ...owner, agentId: '__session__' }, `task-mode-${epoch}`)
@@ -351,7 +392,7 @@ export class LispManager {
       if(state.state==='EVALUATING'&&worker.healthy)state.state='READY'
     }
   }
-  private async startWorker(state: AgentState): Promise<LispWorker> {
+  private async startWorker(state: AgentState, signal?: AbortSignal): Promise<LispWorker> {
     await this.authorizeCodingTask(state.owner)
     if (state.admission) return state.admission
     if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のセッションが停止しています。')
@@ -359,12 +400,14 @@ export class LispManager {
     state.state = 'PREFLIGHT'
     state.compilation = { state: 'checking' }
     const abort = new AbortController(); state.active.add(abort)
+    const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
     const admission = (async () => {
       let worker: LispWorker | undefined
       try {
+        const sessionWorker = await this.isSessionWorker(state.owner)
         worker = await this.#supervisor.start(state, {
-          signal: abort.signal, workspace: state.owner.root, executionMode: this.#config.executionMode,
-          assertCurrent: () => { if (this.#closed || state.disposed || state.state !== 'PREFLIGHT' || abort.signal.aborted) fail('CANCELLED', '起動は取り消されています。') },
+          signal: combined, ...(!sessionWorker ? { workspace: state.owner.root } : {}), executionMode: this.#config.executionMode,
+          assertCurrent: () => { if (this.#closed || state.disposed || state.state !== 'PREFLIGHT' || combined.aborted) fail('CANCELLED', '起動は取り消されています。') },
           compilation: status => { state.compilation = status },
           assigned: child => { state.worker = child },
           failed: (child, error) => {
@@ -375,7 +418,7 @@ export class LispManager {
           hostCall: (method, args, context) => this.bridge(state, method, args, context),
           beforeJob: () => this.taskAuthority.bound(state.execution, async () => { await this.taskAuthority.authorizeEffect(state.owner, this.#config.executionMode === 'protected' ? 'protected' : 'direct') }),
           auditJob: (input, launch) => this.journalProtectedJob(state, input, launch),
-          inspect: (child, code) => this.journalRequest(state, child, 'eval', { inputs: [], code }, this.#config.startupTimeoutMs, abort.signal, false),
+          inspect: (child, code) => this.journalRequest(state, child, 'eval', { inputs: [], code }, this.#config.startupTimeoutMs, combined, false),
         })
         state.state = 'READY'; state.inputBytes = 0; delete state.error
         return worker
@@ -421,7 +464,7 @@ export class LispManager {
     try { await suspension } finally { delete state.suspension }
   }
   /** Admit a fresh generation only after the master has reconciled its old child and journals. */
-  async prepare(owner: LispOwner): Promise<unknown> {
+  async prepare(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
     await this.authorizeCodingTask(owner)
     const state = this.entry(owner)
     if (state.suspension) await state.suspension
@@ -447,7 +490,7 @@ export class LispManager {
         state.state = 'SUSPENDED'; delete state.error; delete state.worker
       }
     }
-    if (state.state === 'SUSPENDED') { await this.startWorker(state); state.resumed = true }
+    if (state.state === 'SUSPENDED') { await this.startWorker(state, signal); state.resumed = true }
     else if (state.admission) await state.admission
     return this.status(owner)
   }

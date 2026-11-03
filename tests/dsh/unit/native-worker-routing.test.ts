@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 import { NodeSqliteAdapter, type SqliteDatabase } from '../../../src/db/adapter.js'
 import { NativeWorkerRouting, type NativeWorkerOwner } from '../../../src/dsh/native-worker-routing.js'
+import { currentTaskAuthority, withTaskAuthority } from '../../../src/dsh/task-authority-context.js'
 
 const pair = { preset: 'gpt-6.1-sol-deepseek-v4.1-flash' as const, head: { provider: 'codex', model: 'gpt-6.1-sol', reasoningEffort: 'high' }, worker: { provider: 'deepseek', model: 'deepseek-flash' } }
 function fixture(header: { parentSession?: string; origin?: string; delegationDepth?: number } = {}) {
@@ -61,6 +62,20 @@ test('unchanged defaults preserve native start and explicit managed delegation',
       assert.equal(calls.at(-1), request)
     }
   } finally { router.dispose() }
+})
+test('native child scheduling drops the parent task lease without changing the parent continuation',async()=>{
+  const lease={taskId:'task',sessionId:'parent',repositoryRoot:'/repo',revision:1,generation:1}
+  let childAuthority:unknown='not-started'
+  const backend={startActivation:async()=>{await Promise.resolve();childAuthority=currentTaskAuthority();return{childId:'child'}}}
+  const routing=new NativeWorkerRouting({runtime:{withDatabase:async()=>{throw new Error('no selected pair')}},backend,
+    agents:undefined,sessions:undefined,resolveOwner:async()=>undefined,validate:async()=>{}})
+  try{
+    await withTaskAuthority(lease,async()=>{
+      await (backend.startActivation as (spec:any)=>Promise<unknown>)({provider:'spawn',delivery:'parent',request:{parent:{id:'parent'}},signal:new AbortController().signal})
+      assert.deepEqual(currentTaskAuthority(),lease,'Parent retains its own execution authority')
+    })
+    assert.equal(childAuthority,undefined,'Child resolves its own authority after scheduling')
+  }finally{routing.dispose()}
 })
 test('a main conversation branch retains its head route and delegates with its worker after reload', async t => {
   const f = fixture({ parentSession: 'previous-main-session' }); t.after(f.close)

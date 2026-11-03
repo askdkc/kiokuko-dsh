@@ -2,7 +2,7 @@ import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import { HEAD_WORKER_LABEL } from '../../../src/dsh/head-worker-configuration.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +13,8 @@ import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
+import { mountLispSurface } from '../../../src/dsh/lisp/surface.js'
+import { LispConfig } from '../../../src/dsh/lisp/contracts.js'
 
 isolateSkillHome()
 
@@ -36,10 +38,10 @@ function findPatchRows(value: unknown, id: string): Record<string, any>[] {
   const row = value as Record<string, any>
   return [...(row.id === id ? [row] : []), ...Object.values(row).flatMap(item => findPatchRows(item, id))]
 }
-async function waitBounded(promise: Promise<unknown>, failure: string): Promise<void> {
+async function waitBounded(promise: Promise<unknown>, failure: string, timeoutMs = 10_000): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), 10_000) })])
+    await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), timeoutMs) })])
   } finally { if (timer) clearTimeout(timer) }
 }
 function continuableIds(agent: any): string[] {
@@ -50,7 +52,8 @@ function continuableIds(agent: any): string[] {
     }) ?? [] : [])
 }
 
-for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'lisp', 'same-head', 'same-head-effort', 'revoked-child-tool'] as const) test(`selected head/worker pair runs native standard ${mode} without child intake`, {
+for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'lisp', 'same-head', 'same-head-effort', 'revoked-child-tool',
+  ...(process.env.KIOKUKO_REQUIRE_LISP_RUNTIME === '1' ? ['lisp-workers' as const] : [])] as const) test(`selected head/worker pair runs native standard ${mode} without child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
@@ -64,9 +67,14 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
   let adapter: ReturnType<typeof createDshHostAdapter> | undefined
   let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
   let parent: any
+  let lispSurface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
+  const workerSteps = new Map<string, number>(), workerGenerations = new Map<string, string>()
+  const workerValues = new Map<string, number>()
+  const workerErrors: string[] = []
+  const workerResults: unknown[] = []
   let releaseChildren: (() => void) | undefined
   let releaseSecondChild: (() => void) | undefined
-  const parallel = mode === 'parallel' || mode === 'parallel-staggered'
+  const parallel = mode === 'parallel' || mode === 'parallel-staggered' || mode === 'lisp-workers'
   try {
     await mkdir(repository)
     await mkdir(profileDir, { recursive: true })
@@ -121,10 +129,12 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     let firstSpliced!: () => void
     const firstNoticeSpliced = new Promise<void>(resolve => { firstSpliced = resolve })
     ctx.on('session/event', (nativeSession: any, event: any) => {
+      if (mode === 'lisp-workers' && nativeSession.id !== 'standard-parent' && event.type === 'tool/result') workerResults.push(event.data)
       if (nativeSession.id === 'standard-parent' && event.type === 'agent/inbox/spliced'
         && event.data?.inserted?.some((message: any) => message.source?.kind === 'subagent-settled')) firstSpliced()
     })
     ctx.on('subagent/start', (info: any) => { started.push({ ...info, header: ctx.sessions.get(info.id)?.header }) })
+    ctx.on('agent/error',(event:any)=>workerErrors.push(String(event.error)))
     ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
     let parentRequests = 0
     class ScriptedAdapter extends llm.LlmAdapter {
@@ -139,6 +149,28 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
           if (childRequest === 2) bothStarted()
           await childrenReleased
           if (mode === 'parallel-staggered' && childRequest === 2) await secondChildReleased
+        }
+        if (child && mode === 'lisp-workers') {
+          assert.ok(options.tools.some((tool:any)=>tool.name==='lisp_eval'),'Native worker receives Lisp execution')
+          const step=(workerSteps.get(options.sessionId)??0)+1;workerSteps.set(options.sessionId,step)
+          const value=workerValues.get(options.sessionId)??40*(workerValues.size+1);workerValues.set(options.sessionId,value)
+          let chunks:any[]
+          if(step===1) chunks=mock.toolCallResponse('worker-define','lisp_eval',{operationId:'worker-define',code:`(assert (not (boundp '*session-count*))) (defparameter *session-count* ${value})`})
+          else if(step===2){
+            const result=toolValue(options,'worker-define');assert.equal(result.ok,true,JSON.stringify(result));workerGenerations.set(options.sessionId,result.generation)
+            chunks=mock.toolCallResponse('worker-use','lisp_eval',{operationId:'worker-use',code:'(incf *session-count* 2)'})
+          }else if(step===3){
+            const result=toolValue(options,'worker-use');assert.equal(result.ok,true,JSON.stringify(result))
+            assert.equal(result.generation,workerGenerations.get(options.sessionId),'Worker heap persists across model steps')
+            assert.equal(result.value.json,value+2,'Sibling heaps remain private')
+            chunks=mock.toolCallResponse('worker-command','lisp_eval',{operationId:'worker-command',code:`(kioku.process:result-stdout (kioku.process:run "node" (list "-e" "process.stdout.write('worker-${value}')")))`})
+          }else{
+            const result=toolValue(options,'worker-command');assert.equal(result.ok,true,JSON.stringify(result))
+            assert.equal(result.value.json,`worker-${value}`,'Worker invokes its own admitted native command bridge')
+            chunks=mock.textResponse(`CHILD_COMPLETE:${value+2}`)
+          }
+          for(const chunk of chunks)yield chunk
+          return
         }
         const tool = (id: string, name: string, background: boolean) => mock.toolCallResponse(id, name,
           { description: 'Implement bounded change', prompt: `Implement ${id} bounded change.`, ...(background ? {} : { run_in_background: false }) })
@@ -179,11 +211,11 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     assert.ok(nativeQuestions)
     nativeQuestions.ask = async (request: any) => {
       assert.notEqual(request.agent?.session?.header?.origin, 'subagent', 'generic children must never receive startup or intake questions')
-      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, mode === 'lisp' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
+      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, mode === 'lisp' || mode === 'lisp-workers' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,
-        selected: [question.id === 'head-worker-worker' ? question.options.find((option: any) => option.label.includes('[worker]')).label : question.id === 'head-worker-head' ? question.options.find((option: any) => option.label.includes('[head]')).label : question.id.startsWith('coding-lisp-') ? mode === 'lisp' ? '使う' : '使わない' : question.id === 'execution-mode' ? `通常実行: ${HEAD_WORKER_LABEL}` : question.options?.[0]?.label ?? 'build'] })) }
+        selected: [question.id === 'head-worker-worker' ? question.options.find((option: any) => option.label.includes('[worker]')).label : question.id === 'head-worker-head' ? question.options.find((option: any) => option.label.includes('[head]')).label : question.id.startsWith('coding-lisp-') ? (mode === 'lisp' || mode === 'lisp-workers') ? '使う' : '使わない' : question.id === 'execution-mode' ? `通常実行: ${HEAD_WORKER_LABEL}` : question.options?.[0]?.label ?? 'build'] })) }
     }
     if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), selectTask: async (input: any, choice: string, answerRef: string) => { assert.equal(input.agent, parent.agent); assert.equal(choice, 'yes'); assert.match(answerRef, /^task-startup:/u) }, activate: async () => {} })
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
@@ -192,6 +224,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       modelRoutes: [{ provider: 'head', family: 'openai', connection: 'api', protocol: 'responses' }, { provider: 'worker', family: 'deepseek', connection: 'api', protocol: 'chat-completions' }],
     })
     composition = await mountDshComposition(ctx, adapter.host)
+    if(mode==='lisp-workers') lispSurface=await mountLispSurface(ctx,adapter.host.runtime!,LispConfig.parse({enabled:true,executionMode:'development',startupTimeoutMs:60000}))
     parent = await ctx.agents.create({ sessionId: session.SessionId('standard-parent'),
       agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: repository },
       setup: (agentCtx: any) => ctx.agentPresets.mount(agentCtx, 'standard').then(() => undefined) })
@@ -205,7 +238,8 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     parent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Implement a bounded change using a subagent.' }], source: { kind: 'user' } }))
     if (parallel) {
       try {
-        await waitBounded(childrenStarted, 'Two children did not start together')
+        await waitBounded(childrenStarted, 'Two children did not start together', mode === 'lisp-workers' ? 60_000 : 10_000)
+          .catch(error => { throw new Error(`${error.message}: ${JSON.stringify({ workerErrors, started, ended, events: parent.agent.session.snapshotEvents().filter((event:any)=>['tool/result','agent/error'].includes(event.type)).map((event:any)=>event.data) })}`) })
         assert.equal(ended.length, 0, 'both children must start before either finishes')
         await waitBounded(parent.agent.whenIdle(), 'Continuable launch did not return before child completion')
         const ids = continuableIds(parent.agent)
@@ -256,6 +290,25 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     assert.equal(started.length, parallel ? 2 : 1,
       JSON.stringify(parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/call' || event.type === 'tool/result').map((event: any) => event.data)))
     assert.equal(ended.length, started.length)
+    if(mode==='lisp-workers'){
+      assert.equal(workerSteps.size,2,JSON.stringify({ended,children:requests.filter(request=>request.sessionId!=='standard-parent').map(request=>({sessionId:request.sessionId,tools:request.tools?.map((tool:any)=>tool.name)}))}))
+      assert.deepEqual([...workerSteps.values()],[4,4],JSON.stringify({workerErrors,workerResults}))
+      assert.equal(new Set(workerGenerations.values()).size,2,'Each routed worker has a different Lisp generation')
+      for(const child of started){
+        // Native settlement notification can precede the awaited session
+        // disposal hook. Observe its finished state, not that transient fence.
+        await waitBounded((async()=>{
+          for(let attempt=0;attempt<400;attempt++){
+            try{
+              const state=await lispSurface!.manager.status({sessionId:child.id,agentId:child.id,root:realpathSync(repository)}) as any
+              if(state.state==='SUSPENDED'){assert.equal(state.generation,null);assert.equal(state.supervisorPid,null);return}
+            }catch(error){if((error as {code?:string}).code!=='HOST_STOPPED')throw error}
+            await new Promise(resolve=>setTimeout(resolve,20))
+          }
+          throw new Error('Worker runtime did not reach its disposed state')
+        })(),'Native child completion did not dispose its Lisp runtime')
+      }
+    }
     assert.equal(new Set(started.map(item => item.id)).size, started.length)
     await waitBounded((async()=>{
       for(let attempt=0;attempt<300;attempt++){
@@ -294,7 +347,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     composition?.stopIngress()
     let cleanupError: unknown
     for (const cleanup of [
-      () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
+      () => lispSurface?.dispose(), () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
       () => ctx?.fiber.dispose(), () => rm(temporary, { recursive: true, force: true }),
     ]) {
       try { await cleanup() } catch (error) { cleanupError ??= error }

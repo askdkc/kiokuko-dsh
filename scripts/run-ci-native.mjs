@@ -75,7 +75,7 @@ export function nativeCiPlan(suite, environment = process.env) {
   if(selectedOptional)env[{'code-provider':'KIOKUKO_REQUIRE_CODE_PROVIDER',p0:'KIOKUKO_REQUIRE_LISP_P0','packages-live':'KIOKUKO_PACKAGE_LIVE'}[suite]]='1'
   const directory = `tests/dsh/${suite.startsWith('e2e') ? 'e2e' : suite}`
   if (suite === 'lisp') env.KIOKUKO_REQUIRE_LISP_RUNTIME = '1'
-  const files = (selectedOptional?[selectedOptional.file]:suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
+  const files = (selectedOptional?[selectedOptional.file]:suite === 'queued-intent' ? ['tests/dsh/unit/decisions/akinator-classification.test.ts', 'tests/dsh/unit/decisions/akinator-scope.test.ts', 'tests/dsh/integration/queued-intent-native.test.ts'] : suite === 'lisp' ? [...testFiles('tests/dsh/unit/lisp'), ...testFiles('tests/dsh/integration/lisp'), 'tests/dsh/integration/native-worker-routing.test.ts', 'tests/dsh/e2e/coding-workflow-native.test.ts'] : testFiles(directory)).filter(file => {
     const repeated = file.endsWith('/repeated-memory-lifecycle.test.ts')
     return suite === 'e2e-core' ? !repeated : suite.startsWith('e2e-repeated') ? repeated : true
   })

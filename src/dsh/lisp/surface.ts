@@ -6,7 +6,7 @@ import { nativeStopReceipt } from './native-stop-receipt.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { rememberLispImplementation, isLispConversation, rootLispAdmission, withLispNativeCommand, isLispNativeCommand, isLispNativeCommandFence, type LispNativeCommands } from '../lisp-tool-identity.js'
+import { rememberLispImplementation, isLispConversation, rootLispAdmission, withRootLispAdmission, withLispNativeCommand, isLispNativeCommand, isLispNativeCommandFence, type LispNativeCommands } from '../lisp-tool-identity.js'
 import { assertProtocolRoute } from '../guardrail/service.js'
 import { isOwnedExecutionCall } from '../owned-execution.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -53,7 +53,7 @@ import { LISP_TOOLS, LispError, failure, fail, identifier, renderResult, type Li
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
-interface Tools { register(definition: any): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
+interface Tools { register(definition: any, options?: {when: () => boolean}): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
 interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean }
@@ -356,6 +356,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       && tools.get(active.name, active.agent)?.execute === active.pinned.execute && isOwnedExecutionCall(execution))
   }
   const disposers: (() => void)[] = []
+  // Native children compose their preset, not the parent's agent-local tools.
+  // Publish restrictable descriptors before child creation. Only an admitted
+  // session's local implementations can execute; the persistent guard also
+  // rejects these unbound descriptors. Native allow/deny masks remain visible.
+  if (config.enabled) for (const name of LISP_TOOLS) disposers.push(tools.register({
+    name, description: description(name), modelFacing: true, parameters: lispToolSchema(name),
+    output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
+    execute: async () => failure(new LispError('LISP_DISABLED', 'This session has no admitted Lisp worker.')),
+  }, {when: () => false}))
   if (semanticCompaction) for (const tool of ['lisp_eval', 'lisp_inspect']) disposers.push(semanticCompaction.registerProjector(tool, renderHistoryResult))
   try {
   const sessionBindings = new Map<string, { session: Session; abort: AbortController }>()
@@ -668,6 +677,33 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), manualOverride: (agent: LispCodingInput['agent']) => preparation.manualOverride(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
+  const workerRouter = (binding: ReturnType<typeof owner>) => {
+    const parentId = binding.agent.session.header.parentSession, parent = parentId ? agents.get(parentId) : undefined
+    return () => !!parent && agents.get(parent.id) === parent && sessions.get(parent.session.id) === parent.session
+      && agents.isOwnedBy?.(binding.agent.id, parent) === true && manager.enabled.get(parent.session.id) === binding.owner.root
+  }
+  const admitWorker = async (candidate: {id:string}, signal?: AbortSignal) => {
+    const binding = owner(candidate)
+    if (!config.enabled || !isNativeSubagent(binding.agent)) return
+    const liveParent = workerRouter(binding)
+    if (!liveParent() || !tools.schemas(binding.agent).some(tool => LISP_TOOLS.includes(tool.name as LispTool))) return
+    // The router shares the execution preference, never its process,
+    // heap or task lease. Each work session owns a persistent runtime.
+    hostFence?.protect(binding.owner.sessionId)
+    try {
+      const status = await manager.enableSessionWorker(binding.owner, binding.agent.status === 'running',
+        signal ? AbortSignal.any([binding.signal, signal]) : binding.signal) as {state:string}
+      owner(candidate)
+      if (!liveParent()) {
+        await manager.disable(binding.owner)
+        fail('SESSION_MISMATCH', 'Worker router ownership changed during startup.')
+      }
+      if (!['READY','EVALUATING'].includes(status.state)) fail('RECOVERY_REQUIRED', 'The session Lisp worker must be recovered before continuing.')
+    } finally {
+      if (!binding.signal.aborted && manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
+      else if (!manager.enabled.has(binding.owner.sessionId)) hostFence?.release(binding.owner.sessionId)
+    }
+  }
   const requestSurface: LispAssemblyService = {
     capabilities: LISP_TOOLS.map(name => ({ name, description: description(name) })),
     inventory: candidate => inventoryReaders.get(candidate.id)?.() ?? tools.schemas(candidate),
@@ -703,25 +739,18 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     },
     async project(candidate, assembly) {
       const binding = owner(candidate)
-      if(config.enabled&&!manager.enabled.has(binding.owner.sessionId)&&isNativeSubagent(binding.agent)){
-        const parentId=binding.agent.session.header.parentSession,parent=parentId?agents.get(parentId):undefined
-        const liveParent=()=>!!parent&&agents.get(parent.id)===parent&&sessions.get(parent.session.id)===parent.session
-          &&agents.isOwnedBy?.(binding.agent.id,parent)===true&&manager.enabled.get(parent.session.id)===binding.owner.root
-        if(liveParent()&&tools.schemas(binding.agent).some(tool=>LISP_TOOLS.includes(tool.name as LispTool))){
-          // Inherit the execution preference, never its task lease, process or
-          // heap. The existing task mode supplies protected scratch functions.
-          await manager.enableTask(binding.owner,binding.signal)
-          owner(candidate)
-          if(!liveParent())await manager.disable(binding.owner)
-        }
-      }
+      await admitWorker(candidate)
       const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
       if (workflow && (!development || workflow.protocol || !isLispConversation(candidate)) && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
         unregister(binding.agent)
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
         return { ...assembly, tools: surface.tools?.filter(tool => !LISP_TOOLS.includes(tool.name as LispTool)) ?? [] }
       }
-      if (!manager.enabled.has(binding.owner.sessionId)) return { ...assembly, sections: [...assembly.sections, { name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) }] }
+      if (!manager.enabled.has(binding.owner.sessionId)) {
+        const surface = assembly as typeof assembly & { tools?: { name: string }[] }
+        return { ...assembly, sections: [...assembly.sections, { name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) }],
+          ...(surface.tools ? {tools:surface.tools.filter(tool=>!LISP_TOOLS.includes(tool.name as LispTool))} : {}) }
+      }
       register(binding.agent)
       // Native DSH snapshots providers before its assembly waterfall. Admission
       // can activate Lisp inside that waterfall: refresh this request, not only
@@ -741,6 +770,36 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     },
   }
   disposers.push((ctx as any).provide(LISP_ASSEMBLY_SERVICE, requestSurface))
+  // Bind before DSH captures the first step's executable tool set. Prompt-only
+  // registration is too late: the model can see tools that cannot dispatch.
+  disposers.push((ctx as any).on('agent/created', async (event: {agent: Agent; signal?: AbortSignal}) => {
+    if (isNativeSubagent(event.agent)) await admitWorker(event.agent, event.signal)
+  }, {global:true}))
+  // Native children deliberately bypass parent intake. Give their exact root
+  // Lisp dispatch its own command capability after native guards/approvals;
+  // never lend the router's task lease or admit arbitrary nested tool calls.
+  disposers.push((ctx as any).on('tools/execute', async (execution: any, next: () => Promise<unknown>) => {
+    if (!development || execution.parent !== undefined || !execution.agent || !isNativeSubagent(execution.agent)
+      || !LISP_TOOLS.includes(execution.name)) return next()
+    const binding = owner(execution.agent), liveParent = workerRouter(binding)
+    const definition = fence!.definitions.get(`${binding.agent.id}:${execution.name}`) as {execute?:unknown} | undefined
+    if (!definition || tools.get(execution.name, binding.agent) !== definition || !await manager.isSessionWorker(binding.owner)) return next()
+    const execute = definition.execute, argumentsDigest = canonicalContentHash(execution.arguments)
+    const name = execution.name, callId = execution.callId, rootCallId = execution.rootCallId
+    const current = () => {
+      try {
+        const now = owner(execution.agent)
+        return execution.agent === binding.agent && execution.name === name && execution.callId === callId && execution.rootCallId === rootCallId
+          && !execution.signal?.aborted && !binding.signal.aborted && now.signal === binding.signal
+          && now.owner.root === binding.owner.root && liveParent() && execution.parent === undefined
+          && manager.enabled.get(binding.owner.sessionId) === binding.owner.root
+          && tools.get(execution.name, binding.agent) === definition && definition.execute === execute
+          && canonicalContentHash(execution.arguments) === argumentsDigest
+      } catch { return false }
+    }
+    if (!current()) fail('SESSION_MISMATCH', 'The worker Lisp dispatch is no longer current.')
+    return withRootLispAdmission(execution, current, next)
+  }, {global:true}))
   disposers.push(mountLispHttp(ctx, manager, (sessionId, recover) => {
     const agent = agents.get(sessionId)
     const binding = owner(agent)

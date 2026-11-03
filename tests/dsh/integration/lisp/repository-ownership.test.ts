@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fork, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdtemp, mkdir, realpath, readFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, readFile, readlink, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openConnection } from '../../../../src/db/connection.js'
@@ -37,6 +37,20 @@ async function stopped(pid:number){
   try{process.kill(pid,0);if(process.platform!=='linux')return false
     const stat=await readFile(`/proc/${pid}/stat`,'utf8');return /^[ZX] /.test(stat.slice(stat.lastIndexOf(')')+2))
   }catch(error){return ['ESRCH','ENOENT'].includes((error as NodeJS.ErrnoException).code??'')}
+}
+async function sbclPid(runtimePid:number):Promise<number>{
+  if(process.platform!=='linux')return runtimePid
+  // --info-fd identifies bwrap's namespace init, which reaps the SBCL child.
+  // Prove the owned child and namespace instead of treating init as SBCL itself.
+  assert.equal((await readFile(`/proc/${runtimePid}/comm`,'utf8')).trim(),'bwrap')
+  const children=(await readFile(`/proc/${runtimePid}/task/${runtimePid}/children`,'utf8')).trim().split(/\s+/).map(Number)
+  assert.equal(children.length,1,'one SBCL child belongs to this namespace init')
+  const pid=children[0]!
+  assert.equal((await readFile(`/proc/${pid}/comm`,'utf8')).trim(),'sbcl')
+  const namespace=await readlink(`/proc/${runtimePid}/ns/pid`)
+  assert.equal(await readlink(`/proc/${pid}/ns/pid`),namespace)
+  assert.notEqual(namespace,await readlink('/proc/self/ns/pid'))
+  return pid
 }
 
 test('repository ownership rejects a second session through an alias and a separate database',native,async t=>{
@@ -127,11 +141,14 @@ test('parallel actual repository workers keep separate PIDs/state through cancel
   assert.equal(sa.state,'READY');assert.equal(sb.state,'READY');assert.notEqual(sa.supervisorPid,sb.supervisorPid)
   assert.ok(Number.isInteger(sa.runtimePid)&&Number.isInteger(sb.runtimePid));assert.notEqual(sa.runtimePid,sb.runtimePid)
   assert.equal((await a.call('enable',f.owners[0])).runtimePid,sa.runtimePid,'normal reconnect keeps the owned worker')
-  if(process.platform==='linux'){for(const pid of [sa.runtimePid,sb.runtimePid])assert.match(await readFile(`/proc/${pid}/comm`,'utf8'),/sbcl/)}
+  const [sbclA,sbclB]=await Promise.all([sbclPid(sa.runtimePid),sbclPid(sb.runtimePid)])
+  assert.notEqual(sbclA,sbclB)
   await Promise.all([a.call('lisp_eval',f.owners[0],{operationId:'token',code:'(defparameter *repo-token* 11)'}),b.call('lisp_eval',f.owners[1],{operationId:'token',code:'(defparameter *repo-token* 22)'})])
   const running=a.call('lisp_eval',f.owners[0],{operationId:'cancel',code:'(sleep 30)'})
   await until(async()=>f.dbs[0]!.prepare("SELECT state FROM dsh_lisp_operations WHERE operation_id='cancel'").get()?.state==='RUNNING')
   await a.call('lisp_cancel',f.owners[0]);assert.equal((await running).ok,false)
+  await until(()=>stopped(sbclA))
+  assert.equal(await stopped(sbclB),false,'cancelling one namespace preserves the other SBCL')
   assert.equal((await b.call('lisp_eval',f.owners[1],{operationId:'after-cancel',code:'*repo-token*'})).value.printed,'(22)')
   await a.call('recover',f.owners[0]);const crashed=a.call('lisp_eval',f.owners[0],{operationId:'crash',code:'(sleep 30)'}).catch(()=>undefined)
   await until(async()=>f.dbs[0]!.prepare("SELECT state FROM dsh_lisp_operations WHERE operation_id='crash'").get()?.state==='RUNNING')
@@ -147,7 +164,7 @@ test('parallel actual repository workers keep separate PIDs/state through cancel
   assert.equal((await b.call('lisp_eval',f.owners[1],{operationId:'after-shutdown',code:'*repo-token*'})).value.printed,'(22)')
 })
 
-test('a killed supervisor leaves live-runtime evidence and never authorizes a duplicate',native,async t=>{
+test('supervisor loss allows replacement only after its owned runtime has stopped',native,async t=>{
   const f=await fixture(t),first=host(f.homes[0]!),replacement=host(f.homes[2]!),other=host(f.homes[1]!)
   let orphan:number|undefined
   t.after(async()=>{
@@ -157,8 +174,21 @@ test('a killed supervisor leaves live-runtime evidence and never authorizes a du
   await Promise.all([first.call('start'),other.call('start')])
   const [original,independent]=await Promise.all([first.call('enable',f.owners[0]),other.call('enable',f.owners[1])])
   orphan=original.runtimePid
+  const actualSbcl=await sbclPid(original.runtimePid)
   process.kill(original.supervisorPid,'SIGKILL')
   await until(async()=>(await first.call('lisp_status',f.owners[0])).state!=='READY')
+  if(process.platform==='linux'){
+    // Production --die-with-parent kills the namespace when its supervisor dies.
+    // Both init and SBCL must be gone before a replacement may own the repository.
+    await until(()=>stopped(orphan!));await until(()=>stopped(actualSbcl))
+    orphan=undefined
+    await first.dispose();await replacement.call('start')
+    assert.equal((await replacement.call('enable',f.owners[0])).state,'READY')
+    assert.equal((await replacement.call('lisp_eval',f.owners[0],{operationId:'after-supervisor-loss',code:'(+ 40 2)'})).value.printed,'(42)')
+    assert.equal((await other.call('lisp_status',f.owners[1])).runtimePid,independent.runtimePid)
+    return
+  }
+  assert.equal(await stopped(orphan!),false,'a surviving runtime must retain ownership')
   await assert.rejects(first.call('dispose'),{code:'STOP_UNCONFIRMED'})
   await replacement.call('start')
   await assert.rejects(replacement.call('enable',f.owners[0]),{code:'REPOSITORY_IN_USE'})

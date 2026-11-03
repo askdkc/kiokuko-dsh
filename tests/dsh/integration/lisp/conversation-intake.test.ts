@@ -58,7 +58,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    const workflow=sessionCodingWorkflow(db,session.id)
    const disabled=await commands.get('kioku-lisp').handler({rawInput:'disable',agent,signal:controller.signal})
    assert.equal(disabled.kind,'success',disabled.text)
-   assert.equal(ctx.tools.get('lisp_eval',agent),undefined)
+   assert.equal(ctx.tools.executable('lisp_eval',agent),undefined,'Disabled sessions cannot dispatch the inherited worker descriptor')
    const reenabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal:controller.signal})
    assert.equal(reenabled.kind,'success',reenabled.text)
    assert.deepEqual(sessionCodingWorkflow(db,session.id),workflow,'ordinary mode controls must not rewrite the unrelated Goal-less workflow')

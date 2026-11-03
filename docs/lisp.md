@@ -108,7 +108,22 @@ and uses bounded, per-child recovery following
 [OTP supervision](https://www.erlang.org/doc/system/sup_princ.html).
 It preserves the existing Kiokuko execution loop and DSH Agent/SessionEvent contracts.
 
-One canonical repository has one runtime owner and one persistent supervisor/SBCL,
+Routed child work sessions each own a persistent Lisp runtime, private heap,
+scratch directory and owner-bound result journal. The router supplies the task
+and receives the native child result; siblings do not inherit each other's
+variables, object references or task authority. Repeated model steps reuse the
+same worker generation. Completing/disposal of a child stops only its runtime.
+The session worker starts before the first child model request; startup failure
+prevents that request instead of silently selecting another execution route.
+Existing disposable child sessions are promoted on their next admitted request,
+and the saved session mode survives a host restart without replaying old code.
+
+These workers compute in private scratch without taking a repository-wide lease.
+Project reads, commands and changes still use the owning session's host adapters,
+native tool restrictions, permission checks and operation journal. Shared project
+files are not separate worktrees; callers must still coordinate conflicting edits.
+
+A standalone repository runtime has one owner and one persistent supervisor/SBCL,
 including across separate DSH databases and sessions. Git subdirectories and symlink
 aliases resolve to the same repository; separate worktrees retain their own root.
 The existing supervisor holds an OS-backed SQLite lease under the current user's

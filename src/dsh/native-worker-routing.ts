@@ -7,6 +7,7 @@ import { HeadWorkerConfigurationSchema, type HeadWorkerConfiguration } from './h
 import type { ModelBinding } from './model-configuration.js'
 import type { RoutableAgent } from './model-routing.js'
 import { isNativeSubagent } from './native-subagent.js'
+import { withoutInheritedTaskAuthority } from './task-authority-context.js'
 
 const OwnerSchema = z.object({ id: z.string().min(1), sessionId: z.string().min(1), selectionId: z.string().min(1), pair: HeadWorkerConfigurationSchema }).strict()
 export type NativeWorkerOwner = z.infer<typeof OwnerSchema>
@@ -41,10 +42,14 @@ export class NativeWorkerRouting {
       if (routing.stopped || spec.delivery !== 'parent' || !['spawn', 'fork'].includes(spec.provider)) return original.call(this, spec)
       const parent = spec.request?.parent as RoutableAgent | undefined
       if (!parent) return original.call(this, spec)
+      // Native child scheduling must resolve its own task authority. An async
+      // launch from a managed parent operation must not carry the parent's lease
+      // into the child's future turns (including stock DSH agent loops).
+      const start = (request: any) => withoutInheritedTaskAuthority(() => original.call(this, request))
       const owner = isNativeSubagent(parent)
         ? await routing.childOwner(parent, spec.signal)
         : await routing.owner(parent, spec.signal)
-      if (!owner) return original.call(this, spec)
+      if (!owner) return start(spec)
       await routing.options.validate(owner.pair, spec.signal)
       await routing.assertOwner(owner, spec.signal)
       routing.identity(parent)
@@ -55,7 +60,7 @@ export class NativeWorkerRouting {
       routing.admitting.add(childId)
       try {
         const { provider: _provider, model: _model, reasoningEffort: _effort, ...other } = spec.request.agentOptions ?? {}
-        const result = await original.call(this, { ...spec, childId, request: { ...spec.request, agentOptions: { ...other, ...owner.pair.worker } } })
+        const result = await start({ ...spec, childId, request: { ...spec.request, agentOptions: { ...other, ...owner.pair.worker } } })
         if (result.childId !== childId) throw new KiokukoError('INTEGRITY_ERROR', 'Native worker Session identity changed')
         await routing.options.runtime.withDatabase(db => db.prepare("UPDATE dsh_native_worker_routes SET state='active' WHERE child_session_id=? AND state='admitting'").run(childId))
         return result

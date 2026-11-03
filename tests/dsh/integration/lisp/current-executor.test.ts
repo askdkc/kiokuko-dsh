@@ -72,7 +72,10 @@ for (const mode of ['native', 'ptc'] as const) test(`current official ${mode} re
       assert.equal((await call()).isError, mode === 'ptc')
       const disabled = await command('disable')
       assert.notEqual(disabled.kind, 'error', disabled.text)
-      assert.equal(h.ctx.tools.get('lisp_status', h.agent), undefined)
+      assert.equal(h.ctx.tools.executable('lisp_status', h.agent), undefined)
+      const disabledTools = await h.ctx.tools.resolve({agent:h.agent,signal:new AbortController().signal})
+      try { assert.equal(h.ctx.tools.schemas(h.agent,disabledTools).some((tool:any)=>tool.name.startsWith('lisp_')),false) }
+      finally { disabledTools.dispose() }
       assert.equal((await call()).isError, mode === 'ptc')
     }
     surface.stop(); await surface.dispose(); surface = undefined
