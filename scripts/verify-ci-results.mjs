@@ -26,6 +26,17 @@ function reportCiFailures(needs, selection, directory) {
   for (const item of existsSync(directory) ? readdirSync(directory, { withFileTypes: true }) : []) {
     if (!item.isDirectory()) continue;
     const file = path.join(directory, item.name, 'result.json');
+    const setupFile = path.join(directory, item.name, 'setup/fixture-install.json');
+    if (existsSync(setupFile)) {
+      try {
+        const setup = JSON.parse(readFileSync(setupFile, 'utf8'));
+        if (setup.schema === 'ci-install-v1' && setup.status === 'failed') {
+          console.error(`CI setup failed: fixture-install; report=${setupFile}`);
+          for (const attempt of Array.isArray(setup.attempts) ? setup.attempts.slice(0, 2) : [])
+            console.error(`npm install: exitCode=${Number.isInteger(attempt.exitCode) ? attempt.exitCode : 'unknown'}; internalExit=${attempt.internalExit === true}; elapsedMs=${Number.isFinite(attempt.elapsedMs) ? attempt.elapsedMs : 'unknown'}`);
+        }
+      } catch { console.error(`CI setup report unreadable: ${setupFile}`); }
+    }
     try { reports.push({ file, report: JSON.parse(readFileSync(file, 'utf8')) }); }
     catch { console.error(`CI report missing or unreadable: ${file}`); }
   }

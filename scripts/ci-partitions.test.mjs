@@ -16,6 +16,46 @@ const selectionIdentity={commit:'commit',sourceDigest:'selection-source',contrac
 const full=createCiPlan(contract,{full:true},selectionIdentity);
 const plans=(selection=full)=>selection.lanes.map(lane=>({...lane,...lanePlan(contract,selection,lane.id)}));
 const state={sourceDigest:'source',contractDigest:'contract',commit:'commit',runtime:process.version,selectionIdentity};
+
+test('CI fixture install recovers one npm internal exit and retains setup failures without secrets', async () => {
+  const { parse } = await import('yaml');
+  const workflow = parse(readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
+  const step = workflow.jobs.checks.steps.find(step => step.name === 'Install locked CLI and terminal test support');
+  const depot = parse(readFileSync(path.join(root, '.depot/workflows/ci.yml'), 'utf8'));
+  for (const name of [step.name, 'Retain exact official DSH identity with verification evidence'])
+    assert.deepEqual(depot.jobs.checks.steps.find(step => step.name === name), workflow.jobs.checks.steps.find(step => step.name === name));
+  const temporary = mkdtempSync(path.join(tmpdir(), 'ci-install-contract-'));
+  try {
+    const bin = path.join(temporary, 'bin'); mkdirSync(bin);
+    writeFileSync(path.join(bin, 'npm'), `#!${process.execPath}
+const fs=require('node:fs'),p=process.env.CI_TEST_COUNT;
+const n=fs.existsSync(p)?Number(fs.readFileSync(p))+1:1;fs.writeFileSync(p,String(n));
+if(process.env.CI_TEST_MODE==='success'||process.env.CI_TEST_MODE==='recover'&&n===2)process.exit(0);
+console.error(process.env.CI_TEST_MODE==='ordinary'?'npm error code ERESOLVE':'npm error Exit handler never called!');
+console.error('Authorization: Bearer DO_NOT_PERSIST_CI_SECRET');process.exit(1);
+`, { mode: 0o755 });
+    for (const [mode, exit, attempts] of [['recover', 0, 2], ['persistent', 1, 2], ['ordinary', 1, 1], ['success', 0, 1]]) {
+      const directory = path.join(temporary, mode); mkdirSync(directory);
+      const count = path.join(directory, 'count');
+      const command = step.run.replaceAll('${{ runner.temp }}', directory);
+      const result = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', command], { cwd: root,
+        env: { ...process.env, PATH: bin + path.delimiter + process.env.PATH, CI_TEST_MODE: mode, CI_TEST_COUNT: count }, encoding: 'utf8' });
+      assert.equal(result.status, exit, `${mode}: ${result.stderr}`);
+      assert.equal(Number(readFileSync(count)), attempts, mode);
+      const report = JSON.parse(readFileSync(path.join(directory, 'ci-setup/fixture-install.json')));
+      assert.equal(report.status, exit === 0 ? 'passed' : 'failed');
+      assert.equal(report.attempts.length, attempts);
+      assert.ok(!JSON.stringify(report).includes('DO_NOT_PERSIST_CI_SECRET'));
+      const retain = workflow.jobs.checks.steps.find(step => step.name === 'Retain exact official DSH identity with verification evidence');
+      const retained = spawnSync('bash', ['-e', '-o', 'pipefail', '-c', retain.run
+        .replaceAll('${{ runner.temp }}', directory)
+        .replaceAll('tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json', path.join(directory, 'not-staged.json'))],
+      { cwd: root, encoding: 'utf8' });
+      assert.equal(retained.status, 0, retained.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(path.join(directory, 'verification/setup/fixture-install.json'))), report);
+    }
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
+});
 function goodEntries(identity=state,selection=full){return plans(selection).map(plan=>({report:{schema:'verification-result-v1',package:contract.package,
   commit:identity.commit,sourceDigest:identity.sourceDigest,contractDigest:identity.contractDigest,runtime:identity.runtime,
   selectionDigest:selection.digest,bundleScope:selection.bundleScope,
@@ -143,7 +183,12 @@ test('the actual aggregate CLI rejects missing jobs/reports, stale selection and
       assert.match(failed.stderr,/failed test: .*repository-ownership.test.ts.*supervisor loss retains live ownership/);
       writeFileSync(failedFile,originalReport);
       const packed=entries.findIndex(e=>e.report.artifact),archive=path.join(evidence,String(packed),'tested.tgz');writeFileSync(archive,'corrupted');assert.equal(run(success).status,1);writeFileSync(archive,'test archive');
-      const saved=path.join(evidence,'0','result.json'),bytes=readFileSync(saved);rmSync(saved);const missing=run(success);assert.equal(missing.status,1);assert.ok(missing.stderr.includes(`lane ${entries[0].report.partition}: missing report`));writeFileSync(saved,bytes);
+      const saved=path.join(evidence,'0','result.json'),bytes=readFileSync(saved);rmSync(saved);
+      const setupFolder=path.join(evidence,'0','setup');mkdirSync(setupFolder);
+      writeFileSync(path.join(setupFolder,'fixture-install.json'),JSON.stringify({schema:'ci-install-v1',status:'failed',attempts:[{exitCode:1,internalExit:true,elapsedMs:359000}]}));
+      const missing=run(success);assert.equal(missing.status,1);assert.ok(missing.stderr.includes(`lane ${entries[0].report.partition}: missing report`));
+      assert.match(missing.stderr,/CI setup failed: fixture-install/);assert.match(missing.stderr,/exitCode=1; internalExit=true; elapsedMs=359000/);
+      writeFileSync(saved,bytes);rmSync(setupFolder,{recursive:true});
       const narrow=structuredClone(marker);narrow.bundleScope='representative';writeFileSync(path.join(folder,'selection.json'),JSON.stringify(narrow));assert.equal(run(success).status,1);writeFileSync(path.join(folder,'selection.json'),JSON.stringify(marker));
       // The saved-result status path reconstructs this exact selected lane.
       const localCore=entries.find(e=>e.report.platform===process.platform&&e.report.architecture===process.arch&&!e.report.artifact);assert.ok(localCore);

@@ -330,7 +330,7 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   for(const job of [jobs.checks,jobs['micro-judge-native']]){assert.equal(job['continue-on-error'],undefined);assert.equal(job.strategy['fail-fast'],false)}
   assert.ok(jobs.checks.if.includes('always()'));assert.ok(jobs.checks.if.includes("needs.select.result == 'success'"));assert.ok(jobs.checks.if.includes("needs.micro-judge-native.result == 'success'"));
   assert.ok(jobs.checks.steps.some(s=>s.run?.includes('scripts/verify.mjs --ci-plan')&&s.run.includes('--lane')));
-  const prep=jobs.checks.steps.find(s=>s.run==='npm ci --prefix tests/fixtures/dsh-runtime');assert.ok(prep);assert.equal(prep.if,'matrix.fixture');
+  const prep=jobs.checks.steps.find(s=>s.run==='node scripts/ci-install.mjs tests/fixtures/dsh-runtime "${{ runner.temp }}/ci-setup/fixture-install.json"');assert.ok(prep);assert.equal(prep.if,'matrix.fixture');
   const install=jobs.checks.steps.find(s=>s.run==='npm ci');
   assert.equal(install.env.KIOKUKO_CI_DEFER_PREPARE,'1');
   assert.equal(jobs.checks.env?.KIOKUKO_CI_DEFER_PREPARE,undefined,'defer is scoped to dependency installation');

@@ -122,7 +122,7 @@ jobs:
           KIOKUKO_CI_DEFER_PREPARE: '1'
       - name: Install locked CLI and terminal test support
         if: matrix.fixture
-        run: npm ci --prefix tests/fixtures/dsh-runtime
+        run: node scripts/ci-install.mjs tests/fixtures/dsh-runtime "${{ runner.temp }}/ci-setup/fixture-install.json"
       - name: Check out the selected current official DSH revision
         if: matrix.fixture
         uses: actions/checkout@v6
@@ -170,7 +170,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p "${{ runner.temp }}/verification"
-          cp tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json "${{ runner.temp }}/verification/dsh-upstream.json"
+          if [[ -f tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json ]]; then
+            cp tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json "${{ runner.temp }}/verification/dsh-upstream.json"
+          fi
+          if [[ -d "${{ runner.temp }}/ci-setup" ]]; then
+            cp -R "${{ runner.temp }}/ci-setup" "${{ runner.temp }}/verification/setup"
+          fi
       - name: Retain selected verification evidence
         if: always()
         uses: actions/upload-artifact@v7
