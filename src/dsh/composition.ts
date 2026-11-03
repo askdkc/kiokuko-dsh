@@ -1,5 +1,5 @@
 import { mountSessionRecovery } from './session-recovery-surface.js'
-import { hasHumanInput } from './answer-review/contracts.js'
+import { hasRequestInput } from './request-input.js'
 import type { OnDemandIntake } from './on-demand-intake.js'
 import type { DshTaskWorkflow } from './task-state-host.js'
 import { mountTaskWorkflowSurface } from './task-state-surface.js'
@@ -166,7 +166,7 @@ function mountNativeIntakeGate(
       void deep!.kick(payload.agent).catch(() => {})
       return { kind: 'reject' }
     }
-    if (demand && (hasHumanInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
+    if (demand && (hasRequestInput(payload.messages) || demand.pending(payload.agent) || demand.continuing(payload.agent)) && await demand.capture(payload)) {
       const result = await next()
       if (result.kind !== 'enter') return result
       const previousReport = deep && payload.agent.session ? await deep.previousReport(payload.agent.session.id) : []

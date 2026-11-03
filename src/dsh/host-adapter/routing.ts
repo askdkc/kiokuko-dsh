@@ -11,7 +11,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { attachmentTypesFromMessages, nativeContextTokens } from '../model-auto/policy.js'
 import type { CompactionAgent } from '../semantic-compaction/contracts.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
-import { hasHumanInput, type ReviewAgent } from '../answer-review/contracts.js'
+import type { ReviewAgent } from '../answer-review/contracts.js'
+import { hasRequestInput } from '../request-input.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from '../execution-selection.js'
 import { ExecutionSelectionPending } from '../model-selection-ui.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../lisp/coding-choice.js'
@@ -242,11 +243,11 @@ export function createRouting({
         // must wait for the real turn/start and its claimed input.
         if (!assemblyClaims.has(agent) && agent.status === 'idle' && agent.inbox && agent.session && agents?.turnBoundaryOf) {
           const messages = [...agent.inbox.nextStep, ...agent.inbox.nextTurn.slice(0, 1)]
-          if (hasHumanInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
+          if (hasRequestInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
             turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, step: 0, signal })
         }
         const claim = assemblyClaims.get(agent)
-        if (claim && hasHumanInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal }).catch(error => {
+        if (claim && hasRequestInput(claim.messages) && await demand.capture({ agent, messages: claim.messages, turn: claim.turn, step: 0, signal }).catch(error => {
           // The claimed batch was consumed even when startup was cancelled.
           // It cannot be offered to a later native turn or maintenance pass.
           if (assemblyClaims.get(agent) === claim) assemblyClaims.delete(agent)

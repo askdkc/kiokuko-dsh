@@ -4,6 +4,7 @@ import { TaskStartup } from '../task-startup.js'
 import { nativeExecutionOwnership } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
+import { hasRequestInput } from '../request-input.js'
 import {
   MemoryRequestFence,
   MemorySnapshotStale,
@@ -1948,14 +1949,14 @@ export async function mountCore(
             if (!currentClaim && (agent as any).status === 'idle' && (agent as any).inbox && agents.turnBoundaryOf) {
               const inbox = (agent as any).inbox
               const messages = [...inbox.nextStep, ...inbox.nextTurn.slice(0, 1)]
-              if (hasHumanInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
+              if (hasRequestInput(messages)) await demand.prepareNativeCapabilities({ agent, messages,
                 turn: agents.turnBoundaryOf(agent.session).lastTurn + 1, step: 0, signal })
             }
             if (currentClaim) claims.delete(agent)
             if (
               demand &&
               currentClaim &&
-              hasHumanInput(currentClaim.messages) &&
+              hasRequestInput(currentClaim.messages) &&
               (await demand.capture({
                 agent,
                 messages: currentClaim.messages,
@@ -2277,7 +2278,7 @@ export async function mountCore(
               demand &&
               (hasHumanInput(payload.messages) ||
                 reviewMessages.length === 0) &&
-              (hasHumanInput(payload.messages) ||
+              (hasRequestInput(payload.messages) ||
                 demand.pending(payload.agent) ||
                 demand.continuing(payload.agent)) &&
               (await demand.capture(payload))

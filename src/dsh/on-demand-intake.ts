@@ -1,5 +1,6 @@
 import { isCodingWorkflowStatus } from './coding-workflow/host.js'
 import { symbols } from '@deepseek-ai/cordis'
+import { hasRequestInput, isRequestInput } from './request-input.js'
 import {
   requestInterpretationError,
   requestInterpretationRecovery,
@@ -206,7 +207,7 @@ interface Turn {
   readonly session: NonNullable<DemandAgent['session']>
   readonly nativeSignal: AbortSignal
   readonly task: string
-  readonly humanContents: ReadonlyMap<string, string>
+  readonly requestContents: ReadonlyMap<string, string>
   status: 'capturing' | 'answer' | 'preparing' | 'prepared' | 'closed' | 'stale'
   intent: AkinatorTaskClassification
   requestIntent?: RequestIntentDecision
@@ -243,8 +244,11 @@ function humanMessages(messages: readonly unknown[]): any[] {
   )
 }
 function humanTask(messages: readonly unknown[]): string {
-  return humanMessages(messages)
-    .flatMap((message) =>
+  return requestTask(humanMessages(messages))
+}
+function requestTask(messages: readonly unknown[]): string {
+  return messages.filter(isRequestInput)
+    .flatMap((message: any) =>
       typeof message.content === 'string'
         ? [message.content]
         : (message.content ?? [])
@@ -325,6 +329,7 @@ const NATIVE_EVIDENCE_READS = new Set([
   'job_list',
   'list_subagent_models',
   'todo_write',
+  'get_goal',
 ])
 const UNOWNED_NATIVE_TOOLS = new Set([
   'cordis_inspect_list',
@@ -342,6 +347,7 @@ const UNOWNED_NATIVE_TOOLS = new Set([
   'list_subagent_models',
   'todo_write',
   'skill',
+  'update_goal',
 ])
 function nativeEvidenceRead(execution: Execution): boolean {
   return NATIVE_EVIDENCE_READS.has(execution.name) ||
@@ -678,7 +684,7 @@ export class OnDemandIntake {
       signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
     }
     input.signal.throwIfAborted()
-    const task = humanTask(input.messages)
+    const task = requestTask(input.messages)
     if (!task) return
     // These are genuine queued-message references, used only for the advisory
     // Lisp choice. capture() later obtains the current source-bound context.
@@ -724,9 +730,9 @@ export class OnDemandIntake {
       if (previous.input.turn === input.turn) {
         if (previous.status === 'closed')
           throw new Error('On-demand turn is closed')
-        const fresh = humanMessages(input.messages).filter(
-          (message) =>
-            previous.humanContents.get(humanId(message)) !==
+        const fresh = input.messages.filter(isRequestInput).filter(
+          (message: any) =>
+            previous.requestContents.get(humanId(message)) !==
             canonicalContentHash(message),
         )
         if (!fresh.length) {
@@ -751,7 +757,7 @@ export class OnDemandIntake {
       }
       if (
         previous.input.turn !== input.turn &&
-        !humanMessages(input.messages).length &&
+        !hasRequestInput(input.messages) &&
         this.host.ready(input.agent)
       ) {
         // A host-driven next turn may carry no new human message. Leave its
@@ -778,7 +784,7 @@ export class OnDemandIntake {
         new Error('A newer native turn superseded this request'),
       )
     } else if (
-      !humanMessages(input.messages).length &&
+      !hasRequestInput(input.messages) &&
       this.host.ready(input.agent)
     ) {
       await this.host.validate(input)
@@ -796,11 +802,11 @@ export class OnDemandIntake {
         signal: AbortSignal.any([input.signal, controller.signal]),
         messages: Object.freeze(structuredClone([...input.messages])),
       },
-      task: humanTask(input.messages),
+      task: requestTask(input.messages),
       ...(this.isClarificationContinuation(input)
         ? {clarificationPending:true} : {}),
-      humanContents: new Map(
-        humanMessages(input.messages).map((message) => [
+      requestContents: new Map(
+        input.messages.filter(isRequestInput).map((message: any) => [
           humanId(message),
           canonicalContentHash(message),
         ]),
@@ -844,9 +850,9 @@ export class OnDemandIntake {
           input.agent,
           this.#tools?.get('exit_plan_mode', input.agent)?.execute,
         )
-      if (!humanMessages(input.messages).length)
+      if (!hasRequestInput(input.messages))
         throw new Error(
-          'Original human input is required before on-demand intake',
+          'Original human or native goal input is required before on-demand intake',
         )
       // Native authority is independent of optional memory, Skills and model
       // classification. Never manufacture an owned task merely to run Bash.
@@ -1633,7 +1639,7 @@ export class OnDemandIntake {
     const key = canonicalContentHash({
       context: context ?? null,
       task: state.task,
-      humanEvidence: [...state.humanContents],
+      requestEvidence: [...state.requestContents],
       question,
     })
     const previous = this.#clarifications.get(sessionId)
