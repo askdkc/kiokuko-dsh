@@ -15,6 +15,52 @@ export const CONNECTION_KINDS = [
   "custom",
 ] as const;
 export type InfronServiceTier = "standard" | "flex";
+/** Selectable thinking levels, least to greatest; the same vocabulary pi-ai dispatch uses. */
+export const REASONING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
+/**
+ * Declared thinking levels and the wire value each one sends.
+ *
+ * A string is a supported level and the exact value dispatch writes; `null`
+ * marks a level unsupported. `off` is the one exception: `null` there means
+ * "supported, send no parameter", and omitting the key means the level is
+ * unsupported. This mirrors the Harness profile `reasoningEfforts` contract, so
+ * a stored declaration reaches pi-ai without inventing a second vocabulary.
+ */
+export const ReasoningEffortsSchema = z
+  .object({
+    off: z.string().trim().min(1).max(64).nullable().optional(),
+    minimal: z.string().trim().min(1).max(64).nullable().optional(),
+    low: z.string().trim().min(1).max(64).nullable().optional(),
+    medium: z.string().trim().min(1).max(64).nullable().optional(),
+    high: z.string().trim().min(1).max(64).nullable().optional(),
+    xhigh: z.string().trim().min(1).max(64).nullable().optional(),
+    max: z.string().trim().min(1).max(64).nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      REASONING_LEVELS.some(
+        (level) => level !== "off" && typeof value[level] === "string",
+      ),
+    "Declare at least one thinking level beyond off",
+  );
+export type ReasoningEfforts = z.infer<typeof ReasoningEffortsSchema>;
+/** The thinking levels a fresh declaration offers: the OpenAI-style standard set. */
+export const DECLARED_REASONING_EFFORTS: ReasoningEfforts = {
+  off: null,
+  low: "low",
+  medium: "medium",
+  high: "high",
+};
 export const ManualModelSchema = z
   .object({
     id: z.string().trim().min(1).max(256),
@@ -23,8 +69,20 @@ export const ManualModelSchema = z
     maxTokens: z.number().int().positive(),
     reasoning: z.boolean().default(false),
     image: z.boolean().default(false),
+    // Absent when the capability is adopted from the catalog or undisclosed.
+    // An object is an explicit declaration and survives Refresh models; `false`
+    // is the explicit non-reasoning choice.
+    reasoningEfforts: z
+      .union([z.literal(false), ReasoningEffortsSchema])
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      typeof value.reasoningEfforts === "undefined" ||
+      (typeof value.reasoningEfforts === "object") === value.reasoning,
+    "reasoningEfforts must agree with the reasoning flag",
+  );
 export const ConnectionSchema = z
   .object({
     id: z.string().regex(/^kiokuko-[a-z0-9-]{1,64}$/),

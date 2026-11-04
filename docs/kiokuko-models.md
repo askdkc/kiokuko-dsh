@@ -89,6 +89,16 @@ capability, and manual registration remains the explicit way to set it. This
 enrichment never fails the refresh; discovery remains the request whose failure the
 refresh reports.
 
+The gateway listing publishes no reasoning capability, so **Refresh models** also
+adopts the thinking levels of ids the bundled Chat Completions catalog knows (for
+example `openai/gpt-6-luna`). Every registered model row has a **Thinking levels**
+checkbox: enabling it declares `off`, `low`, `medium`, `high`, which is how a model
+the catalog does not publish becomes selectable. A declaration outranks catalog
+adoption, so it survives the next refresh; the native model picker then offers the
+declared levels and sends the chosen one as `reasoning_effort` with the same
+request's service tier. A model with neither a catalog entry nor a declaration
+offers no levels until you enable them.
+
 ## Storage and permissions
 
 Non-secret connection settings live in `kiokuko-models.json` under the active profile

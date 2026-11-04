@@ -465,6 +465,116 @@ async function collect<T>(source: AsyncIterable<T>): Promise<T[]> {
   return rows;
 }
 
+test("Infron refresh adopts the shared catalog's thinking levels and keeps an explicit declaration", async (t) => {
+  const f = await fixture();
+  try {
+    const legacy = {
+      id: "synthetic/legacy-reasoner",
+      name: "Legacy reasoner",
+      contextWindow: 65536,
+      maxTokens: 8192,
+      reasoning: true,
+      image: false,
+    };
+    const c = ConnectionSchema.parse({
+      ...connection("http://127.0.0.1:1/v1"),
+      models: [legacy],
+    });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "synthetic-key");
+    f.discover(async () => [
+      { id: "openai/gpt-6-luna", name: "GPT-6 Luna", contextWindow: 1_050_000, maxTokens: 128_000 },
+      { id: "synthetic/unlisted-model", name: "Unlisted", contextWindow: 32768, maxTokens: 4096 },
+      { id: legacy.id, name: legacy.name, contextWindow: 65536, maxTokens: 8192 },
+    ]);
+    t.mock.method(globalThis, "fetch", async () => {
+      throw new Error("listing read is advisory");
+    });
+    await f.service.refresh(c.id);
+    const stored = (await f.service.list()).connections[0]!.models;
+    const luna = stored.find((m) => m.id === "openai/gpt-6-luna")!;
+    assert.equal(luna.reasoning, true);
+    assert.deepEqual(luna.reasoningEfforts, {
+      off: "none",
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "xhigh",
+      max: "max",
+    });
+    const unlisted = stored.find((m) => m.id === "synthetic/unlisted-model")!;
+    assert.equal(unlisted.reasoning, false);
+    assert.equal(unlisted.reasoningEfforts, undefined);
+    const kept = stored.find((m) => m.id === legacy.id)!;
+    assert.equal(kept.reasoning, true);
+    assert.equal(kept.reasoningEfforts, undefined, "a legacy boolean row stays readable and unchanged");
+  } finally {
+    await f.close();
+  }
+});
+
+test("a declared Infron thinking level reaches the request as reasoning_effort and keeps its service tier", async () => {
+  const bodies: any[] = [];
+  const server = createServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    bodies.push(JSON.parse(raw));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.end(
+      "data: " +
+        JSON.stringify({
+          id: "chat-1",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          provider: { service_tier: "standard" },
+          choices: [{ index: 0, delta: { role: "assistant", content: "Declared" }, finish_reason: null }],
+        }) +
+        "\n\ndata: " +
+        JSON.stringify({
+          id: "chat-1",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }) +
+        "\n\ndata: [DONE]\n\n",
+    );
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as any).port,
+    f = await fixture();
+  try {
+    const declared = {
+      ...model,
+      reasoning: true,
+      reasoningEfforts: { off: "none", low: "low", medium: "medium", high: "high" },
+    };
+    const c = ConnectionSchema.parse({
+      ...connection(`http://127.0.0.1:${port}/v1`),
+      models: [declared],
+    });
+    await f.service.save(c, 0);
+    await f.service.setKey(c.id, "declared-key");
+    const info = await f.adapter().resolveModel(c.id, model.id);
+    assert.deepEqual(info.reasoning?.efforts.map((effort) => effort.id), ["off", "low", "medium", "high"]);
+    const options = {
+      provider: c.id,
+      model: model.id,
+      messages: [createUserMessage({ content: [{ type: "text" as const, text: "hello" }], source: { kind: "user" as const } })],
+    };
+    await collect(f.adapter().stream({ ...options, reasoningEffort: "high" as any }));
+    assert.equal(bodies[0].reasoning_effort, "high");
+    assert.deepEqual(bodies[0].provider, { service_tier: "standard" });
+    await collect(f.adapter().stream({ ...options, reasoningEffort: "off" as any }));
+    assert.equal(bodies[1].reasoning_effort, "none", "off sends the declared value");
+    assert.deepEqual(bodies[1].provider, { service_tier: "standard" });
+  } finally {
+    await f.close();
+    server.closeAllConnections();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
 test("custom Responses and Messages send their actual protocol bodies and complete streamed output", async () => {
   const requests: Array<{path:string;body:any;headers:any}> = [];
   const server = createServer(async (req, res) => {

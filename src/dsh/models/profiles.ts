@@ -8,8 +8,10 @@ import {
 } from "./vendor/pi-ai.js";
 import {
   credentialKey,
+  REASONING_LEVELS,
   type Connection,
   type InfronServiceTier,
+  type ReasoningEfforts,
 } from "./contracts.js";
 import type { CredentialFile } from "./vendor/credentials.js";
 
@@ -165,6 +167,33 @@ export function sharedCredentialStore(
     },
   };
 }
+/**
+ * Translate a stored declaration into pi-ai's thinkingLevelMap.
+ *
+ * Unsupported levels are pinned to `null` because pi-ai treats an absent key as
+ * supported for off/minimal/low/medium/high. `off` is the exception: `null`
+ * there means "supported, send no parameter", and only a declared wire value is
+ * written.
+ * @param efforts - the stored declaration.
+ * @returns the map pi-ai dispatch reads.
+ */
+export function thinkingLevelMap(
+  efforts: ReasoningEfforts,
+): Record<string, string | null> {
+  const map: Record<string, string | null> = {};
+  for (const level of REASONING_LEVELS) {
+    const wire = efforts[level];
+    if (level === "off") {
+      // An omitted key means the level is unavailable; `null` means available
+      // with no parameter, and only a declared value is written.
+      if (wire === undefined) map.off = null;
+      else if (typeof wire === "string") map.off = wire;
+      continue;
+    }
+    map[level] = typeof wire === "string" ? wire : null;
+  }
+  return map;
+}
 /** Build owned immutable profiles from the adapter's exact catalog instance. */
 export function connectionProfile(
   connection: Connection,
@@ -206,6 +235,11 @@ export function connectionProfile(
             contextWindow: m.contextWindow,
             maxTokens: m.maxTokens,
             reasoning: m.reasoning,
+            // A stored declaration reaches pi-ai as the exact level map; an
+            // adopted boolean without a declaration keeps pi-ai's defaults.
+            ...(typeof m.reasoningEfforts === "object"
+              ? { thinkingLevelMap: thinkingLevelMap(m.reasoningEfforts) }
+              : {}),
             input: m.image ? ["text", "image"] : ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           }) as PiModel,

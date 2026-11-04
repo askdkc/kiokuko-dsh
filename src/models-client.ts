@@ -67,6 +67,13 @@ const MODEL_CONNECTION_DEFAULTS: Record<string, readonly string[]> = {
   ollama: ["Ollama", "http://localhost:11434/v1", "chat-completions"],
   custom: ["Custom connection", "http://localhost:8080/v1", "chat-completions"],
 };
+/** Declared thinking levels for a model whose catalog entry publishes none. */
+const STANDARD_REASONING_EFFORTS = {
+  off: null,
+  low: "low",
+  medium: "medium",
+  high: "high",
+} as const;
 /** Providers whose stored credential can also be an OAuth sign-in. */
 const OAUTH_KINDS = ["codex", "claude", "xai", "openai", "openrouter", "nous"];
 async function modelsApi(
@@ -206,6 +213,44 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
       saved.connections.find((c: any) => c.id === connection.id) ?? connection,
     );
   };
+  /**
+   * Declare thinking levels for one registered model. An explicit declaration
+   * outranks catalog adoption, so Refresh models keeps this choice.
+   */
+  const declareReasoning = (model: any, enabled: boolean) =>
+    run(async () => {
+      const models = connection.models.map((row: any) =>
+        row.id === model.id
+          ? enabled
+            ? {
+                ...row,
+                reasoning: true,
+                reasoningEfforts: { ...STANDARD_REASONING_EFFORTS },
+              }
+            : { ...row, reasoning: false, reasoningEfforts: false }
+          : row,
+      );
+      await modelsApi({
+        op: "save",
+        connection: {
+          id: connection.id,
+          kind: connection.kind,
+          name: connection.name,
+          baseURL: connection.baseURL,
+          protocol: connection.protocol,
+          serviceTier: connection.serviceTier,
+          models,
+        },
+        revision: (await load()).revision,
+      });
+      await reopen();
+      setNotice(
+        "Thinking levels " +
+          (enabled ? "enabled" : "disabled") +
+          " for " +
+          model.id,
+      );
+    });
   /**
    * The whole add-a-provider flow in one action: store the connection, store the
    * typed key, then ask the adapter which models it serves. A discovery that
@@ -822,7 +867,17 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                                       ...connection.models.filter(
                                         (m: any) => m.id !== manual.id,
                                       ),
-                                      { ...manual, name: manual.id },
+                                      {
+                                        ...manual,
+                                        name: manual.id,
+                                        ...(manual.reasoning
+                                          ? {
+                                              reasoningEfforts: {
+                                                ...STANDARD_REASONING_EFFORTS,
+                                              },
+                                            }
+                                          : { reasoningEfforts: false }),
+                                      },
                                     ]);
                                     setNotice(
                                       "Model added to draft. Save connection to register it.",
@@ -861,6 +916,34 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                           children: jsxs(Fragment, {
                             children: [
                               jsx("span", { children: m.name + " · " + m.id }),
+                              ...(connection.models?.some(
+                                (row: any) => row.id === m.id,
+                              )
+                                ? [
+                                    jsx("label", {
+                                      children: jsxs(Fragment, {
+                                        children: [
+                                          jsx("input", {
+                                            type: "checkbox",
+                                            checked:
+                                              connection.models.find(
+                                                (row: any) => row.id === m.id,
+                                              )?.reasoning === true,
+                                            "aria-label":
+                                              "Thinking levels for " + m.id,
+                                            disabled: busy,
+                                            onChange: (e: any) =>
+                                              void declareReasoning(
+                                                m,
+                                                e.target.checked,
+                                              ),
+                                          }),
+                                          "Thinking levels",
+                                        ],
+                                      }),
+                                    }),
+                                  ]
+                                : []),
                               button(
                                 "Use in current chat",
                                 () =>

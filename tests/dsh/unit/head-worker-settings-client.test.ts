@@ -8,6 +8,7 @@ import { KiokukoModelsService } from "../../../src/dsh/models/service.js";
 import { ModelsConfigStore } from "../../../src/dsh/models/config-store.js";
 import { CredentialFile } from "../../../src/dsh/models/vendor/credentials.js";
 import { modelsResponse } from "../../../src/dsh/models/surface.js";
+import { ConnectionSchema } from "../../../src/dsh/models/contracts.js";
 
 const first = {provider:"head-one",model:"gpt-6.1-sol"}, second = {provider:"head-two",model:"gpt-6.1-sol"}, worker={provider:"flash",model:"deepseek-flash"};
 const pair=(head=first)=>({preset:"gpt-6.1-sol-deepseek-v4.1-flash" as const,head,worker});
@@ -18,14 +19,14 @@ const nodes=(node:any):Node[]=>node&&typeof node==="object"?[...(Array.isArray(n
 /** Executes the real mounted settings component and HTTP handler with deterministic React hooks. */
 async function fixture() {
   const dir=await mkdtemp(join(tmpdir(),"pair-client-"));
-  let unavailable=false;
+  let unavailable=false, discovery:(()=>Promise<readonly any[]>)|undefined;
   const catalog={
     listProviders:()=>[{id:first.provider,name:"First Sol"},{id:second.provider,name:"Second Sol"},{id:worker.provider,name:"Flash",route:{provider:worker.provider,family:"deepseek" as const,connection:"api" as const,protocol:"chat-completions" as const}}],
     listModels:async(provider:string)=>unavailable&&provider===worker.provider?[]:[{provider,id:provider===worker.provider?worker.model:first.model,name:provider}],
     resolveCallConfig:async(binding:any)=>binding,
   };
   const store=new ModelsConfigStore(join(dir,"models.json"));
-  const service=new KiokukoModelsService({llm:{...catalog,registerAdapter:()=>{const stop=()=>{};stop.replace=()=>{};return stop;},discoverModels:async()=>[]},catalog,config:store,credentials:new CredentialFile(join(dir,"credentials.json")),now:()=>1_000,sessionCreatedAt:()=>500,assertCurrent:id=>assert.ok(["a","b"].includes(id))});
+  const service=new KiokukoModelsService({llm:{...catalog,registerAdapter:()=>{const stop=()=>{};stop.replace=()=>{};return stop;},discoverModels:async()=>discovery?[...await discovery()]:[]},catalog,config:store,credentials:new CredentialFile(join(dir,"credentials.json")),now:()=>1_000,sessionCreatedAt:()=>500,assertCurrent:id=>assert.ok(["a","b"].includes(id))});
   await service.start();
   const g=globalThis as any, names=["createSnapshotStore","jsx","jsxs","Fragment","useState","useRef","useEffect","fetch"], previous=Object.fromEntries(names.map(name=>[name,g[name]]));
   const values:any[]=[],effects:{deps:unknown[];cleanup?:()=>void}[]=[];
@@ -47,6 +48,7 @@ async function fixture() {
   render();
   return {service,store,requests,render,settle,find,text:()=>text(view),
     unavailable(value:boolean){unavailable=value;},hold(value:(url:string)=>Promise<void>){hold=value;},
+    discover(value:()=>Promise<readonly any[]>){discovery=value;},
     navigate(id:string){sessionId=id;render();},
     async close(){if(mounted){mounted=false;for(const effect of effects)effect?.cleanup?.();}for(const name of names){if(previous[name]===undefined)delete g[name];else g[name]=previous[name];}await service.close();await rm(dir,{recursive:true,force:true});},
   };
@@ -111,4 +113,28 @@ test("late settings reads cannot replace a newer chat scope or redirect a click 
     assert.equal(f.requests.filter(r=>r.body?.op==="head-worker").at(-1)?.body.sessionId,"b");
     assert.deepEqual((await f.store.read()).sessionHeadWorkers?.a,pair());
   }finally{release?.();await f.close();}
+});
+
+test("real settings component declares thinking levels for a registered model and keeps them across refresh",async()=>{
+  const f=await fixture();try{
+    await f.settle();
+    const model={id:"openai/gpt-6-luna",name:"GPT-6 Luna",contextWindow:1_050_000,maxTokens:128_000,reasoning:false,image:false};
+    const c=ConnectionSchema.parse({id:"kiokuko-infron",kind:"infron",name:"Infron",baseURL:"http://127.0.0.1:1/v1",protocol:"chat-completions",models:[model]});
+    await f.service.save(c,0);
+    await f.service.setKey(c.id,"synthetic-key");
+    click(f,"Reload");await f.settle();
+    click(f,"Infron · connected");await f.settle();
+    const box=()=>f.find("input","Thinking levels for "+model.id);
+    assert.equal(box().props.checked,false);
+    box().props.onChange({target:{checked:true}});await f.settle();
+    const declared=(await f.store.read()).connections[0]!.models[0]!;
+    assert.equal(declared.reasoning,true);
+    assert.deepEqual(declared.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high"});
+    assert.equal(box().props.checked,true,"the reloaded panel reflects the declaration");
+    f.discover(async()=>[{id:model.id,name:model.name,contextWindow:model.contextWindow,maxTokens:model.maxTokens}]);
+    click(f,"Refresh models");await f.settle();
+    const refreshed=(await f.store.read()).connections[0]!.models[0]!;
+    assert.equal(refreshed.reasoning,true);
+    assert.deepEqual(refreshed.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high"},"the declared levels survive refresh");
+  }finally{await f.close();}
 });

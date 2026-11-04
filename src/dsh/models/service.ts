@@ -16,9 +16,12 @@ import {
   ConnectionSchema,
   CONNECTION_DEFAULTS,
   credentialKey,
+  REASONING_LEVELS,
+  ReasoningEffortsSchema,
   type Connection,
   type InfronServiceTier,
   type ManualModel,
+  type ReasoningEfforts,
   type ModelsDocument,
   ManualModelSchema,
 } from "./contracts.js";
@@ -235,6 +238,42 @@ export interface ModelsServiceOptions {
   saveDefault?: (binding: { provider: string; model: string }) => Promise<void>;
 }
 
+/** A bundled catalog model's reasoning capability, in the stored vocabulary. */
+type CatalogReasoning = { reasoning: boolean; efforts?: ReasoningEfforts };
+/**
+ * Read one catalog model's reasoning declaration.
+ *
+ * The bundled catalog materializes a `thinkingLevelMap` for models that offer
+ * effort levels. This converts that map into the stored contract without
+ * losing which levels exist: no map, or a map with no selectable level beyond
+ * `off`, keeps only the bare capability.
+ * @param model - a model from the bundled chat-completions catalog, if any.
+ * @returns the capability, or undefined when the catalog has no such model.
+ */
+function catalogReasoning(model: unknown): CatalogReasoning | undefined {
+  if (!model || typeof model !== "object") return undefined;
+  const { reasoning, thinkingLevelMap } = model as {
+    reasoning?: unknown;
+    thinkingLevelMap?: Record<string, string | null | undefined>;
+  };
+  if (reasoning !== true) return { reasoning: false };
+  if (!thinkingLevelMap) return { reasoning: true };
+  const efforts: ReasoningEfforts = {};
+  for (const level of REASONING_LEVELS) {
+    const wire = thinkingLevelMap[level];
+    if (level === "off") {
+      // An absent key means available with no parameter; `null` means the level
+      // is unavailable; a string is the value to write.
+      if (typeof wire === "string") efforts.off = wire;
+      else if (wire !== null) efforts.off = null;
+      continue;
+    }
+    if (typeof wire === "string") efforts[level] = wire;
+    else if (wire === null) efforts[level] = null;
+  }
+  const parsed = ReasoningEffortsSchema.safeParse(efforts);
+  return parsed.success ? { reasoning: true, efforts: parsed.data } : { reasoning: true };
+}
 export class KiokukoModelsService {
   private document: ModelsDocument = {
     version: 1,
@@ -684,10 +723,35 @@ export class KiokukoModelsService {
     const shipped =
       adapterBuiltinProviders()
         .find((p) => p.id === credentialKey(c))
-        ?.getModels() ?? [];
+        ?.getModels() ?? [],
+      // The Infron gateway mirrors the canonical chat-completions model ids, and
+      // the bundled catalog is where those ids publish a reasoning capability.
+      reference =
+        c.kind === "infron"
+          ? adapterBuiltinProviders()
+              .find((p) => p.id === "openrouter")
+              ?.getModels() ?? []
+          : [];
     return discovered.flatMap((entry) => {
       const known = shipped.find((m) => m.id === entry.id),
         prior = c.models.find((m) => m.id === entry.id),
+        adopted = reference.length
+          ? catalogReasoning(reference.find((m) => m.id === entry.id))
+          : undefined,
+        // An explicit declaration outranks adoption and survives refresh.
+        declared = prior?.reasoningEfforts,
+        reasoning =
+          declared === false
+            ? false
+            : declared
+              ? true
+              : adopted?.reasoning ?? known?.reasoning ?? prior?.reasoning ?? false,
+        reasoningEfforts =
+          declared === false
+            ? false
+            : reasoning
+              ? declared ?? adopted?.efforts ?? prior?.reasoningEfforts
+              : undefined,
         contextWindow =
           entry.contextWindow ??
           known?.contextWindow ??
@@ -704,7 +768,12 @@ export class KiokukoModelsService {
               DEFAULT_MAX_TOKENS,
             contextWindow,
           ),
-          reasoning: known?.reasoning ?? prior?.reasoning ?? false,
+          reasoning,
+          ...(reasoningEfforts === false
+            ? { reasoningEfforts: false }
+            : reasoningEfforts !== undefined
+              ? { reasoningEfforts }
+              : {}),
           image: this.imageCapability(entry, known, prior, gatewayModalities),
         });
       return parsed.success ? [parsed.data] : [];
