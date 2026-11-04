@@ -28,6 +28,13 @@ export async function openSettings(page, { timeout = 30000 } = {}) {
   throw lastTimeout ?? new Error('Settings navigation timed out')
 }
 const memoryOfferHandlers = new WeakMap()
+async function submitMemoryDecline(decline, timeout) {
+  const card = decline.locator('xpath=ancestor::section[1]')
+  await decline.click({ timeout })
+  const confirm = card.getByRole('button', { name: '確定（Enter）', exact: true })
+  await confirm.click({ timeout })
+  await card.waitFor({ state: 'hidden', timeout })
+}
 export async function declineOptionalMemoryOffers(page) {
   const decline = page.getByRole('button', { name: /今回は保存しない/ })
   const state = { declined: 0 }
@@ -36,17 +43,10 @@ export async function declineOptionalMemoryOffers(page) {
       // Transient overlays or rerenders must not eat a whole action deadline
       // or kill the process; bounded attempts let the interception settle.
       for (let attempt = 0; attempt < 3; attempt++) {
-        try { await decline.click({ timeout: 8000 }) } catch (error) {
+        try { await submitMemoryDecline(decline, 8000) } catch (error) {
           if (error instanceof Error && error.message.includes('has been closed')) return
           if (attempt === 2) { handlerFailures.push(error instanceof Error ? error.message : String(error)); return }
           continue
-        }
-        // Submit only while the question control remains mounted; a global Enter
-        // can otherwise send a command that was already typed into the composer.
-        try { if (await decline.isVisible()) await decline.press('Enter', { timeout: 8000 }) } catch (error) {
-          if (error instanceof Error && error.message.includes('has been closed')) return
-          handlerFailures.push(error instanceof Error ? error.message : String(error))
-          return
         }
         state.declined++
         return
@@ -143,8 +143,7 @@ export async function declinePendingMemoryOffer(page, { timeout = 10_000 } = {})
       const decline = page.getByRole('button', { name: /今回は保存しない/ })
       if (!(await decline.isVisible().catch(() => false))) return
       try {
-        await decline.click({ timeout: Math.max(1, Math.min(5000, deadline - Date.now())) })
-        if (await decline.isVisible().catch(() => false)) await decline.press('Enter', { timeout: Math.max(1, Math.min(5000, deadline - Date.now())) })
+        await submitMemoryDecline(decline, Math.max(1, Math.min(5000, deadline - Date.now())))
       } catch (error) {
         if (error instanceof Error && error.message.includes('has been closed')) return
         throw error

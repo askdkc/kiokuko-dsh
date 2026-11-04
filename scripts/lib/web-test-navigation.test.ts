@@ -80,14 +80,13 @@ test('Settings navigation reconciles onboarding and account-menu state', { timeo
   for (const intercepted of [false, true]) await t.test(`explicit memory decline with auto-handler ${intercepted ? 'installed' : 'absent'}`, async () => {
     const page = await browser.newPage(); page.setDefaultTimeout(1000)
     try {
-      await page.setContent(`<section id="offer"><button id="decline">今回は保存しない</button></section>
+      await page.setContent(`<section id="offer" role="region" aria-label="Memory offer"><button id="decline">今回は保存しない</button><button id="confirm" disabled>確定（Enter）</button></section>
         <input aria-label="Composer" value="do not send"><button id="next">Next action</button>
         <script>
           window.declines = 0; window.submissions = 0;
-          document.querySelector('#decline').onclick = event => event.target.setAttribute('aria-pressed', 'true');
-          document.querySelector('#decline').onkeydown = event => {
-            if (event.key === 'Enter') { window.declines++; document.querySelector('#offer').hidden = true; event.preventDefault(); }
-          };
+          document.querySelector('#decline').onclick = event => { event.target.setAttribute('aria-pressed', 'true'); document.querySelector('#confirm').disabled = false; };
+          document.querySelector('#decline').onkeydown = event => { if (event.key === 'Enter') event.preventDefault(); };
+          document.querySelector('#confirm').onclick = () => { window.declines++; document.querySelector('#offer').hidden = true; document.querySelector('#confirm').disabled = true; };
           document.querySelector('input').onkeydown = event => { if (event.key === 'Enter') window.submissions++; };
         </script>`)
       const state = intercepted ? await declineOptionalMemoryOffers(page) : undefined
