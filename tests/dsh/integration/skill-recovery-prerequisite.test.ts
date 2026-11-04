@@ -20,7 +20,7 @@ import { LispTaskAuthority } from '../../../src/dsh/lisp/task-authority.js'
 test('skill replay fixture resumes its persisted Pending task before recovery authorization', async t => {
   const source = await readFile(new URL('../skill-delivery/skill-delivery.test.ts', import.meta.url), 'utf8')
   const parsed = ts.createSourceFile('skill-delivery.test.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  const workflowName = 'Lisp workflow reaches the next model request through native approval, evidence paging, plugin restart and exact replay'
+  const workflowName = 'Lisp workflow reaches the next model request through project changes, evidence paging, plugin restart and exact replay'
   const workflows: ts.ArrowFunction[] = []
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'test'

@@ -37,7 +37,7 @@ if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Erro
 const instructions = ['Fix `src/parser.ts` and add input validation.', 'Also fix empty-input handling and cover the regression; do not deploy.']
 
 for (const host of ['full-laya', 'full-jev', 'full-laya-abstain', 'full-laya-unavailable', 'core-off'] as const) for (const intakeMode of ['eager', 'on-demand'] as const) {
-  test(`queued ${host} ${intakeMode}: preserve every request and ask purpose only when decisions abstain`, { skip: !installed, timeout: 30000 }, async () => {
+  test(`queued ${host} ${intakeMode}: preserve every request without a redundant purpose question`, { skip: !installed, timeout: 30000 }, async () => {
     const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills, commands] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill', 'dsh-commands',
@@ -93,7 +93,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       handle = await ctx.agents.create({ sessionId: session.SessionId('queued-intake'), agentOptions: { provider: 'fixture', model: 'mock' }, meta: { cwd: root } })
       for (const text of instructions) handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text }] }))
       await handle.agent.whenIdle()
-      assert.deepEqual(errors, [], JSON.stringify(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message))); assert.equal(probes, instructions.length, JSON.stringify({ asked, results: handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message) })); assert.equal(asked.includes('taskType'), intakeMode === 'on-demand' && ['full-laya-abstain','full-laya-unavailable'].includes(host))
+      assert.deepEqual(errors, [], JSON.stringify(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message))); assert.equal(probes, instructions.length, JSON.stringify({ asked, results: handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message) })); assert.equal(asked.includes('taskType'), false, 'queued requests do not need a redundant task-type question')
       assert.deepEqual(asked.filter(id => id.startsWith('request-clarification-')), [], 'an earlier ordinary answer is not an unapproved plan')
       assert.deepEqual(asked.filter(id => id.startsWith('coding-lisp-')), [], 'read-only probes cannot ask before Goal/items/criteria exist')
       assert.ok(handle.agent.session.snapshotEvents().some((event: any) => event.type === 'assistant/message' && JSON.stringify(event.data).includes('QUEUED_NATIVE_RESULT')))

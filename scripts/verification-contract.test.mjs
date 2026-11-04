@@ -3,7 +3,7 @@ import './repair-catalog-selection.test.mjs'
 import './prepublish.test.mjs'
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, existsSync, rmSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -12,6 +12,17 @@ import { verificationPlan, validateNodeResult, evidenceCurrent } from './verific
 const check={id:'suite',argv:['node','test.mjs'],profiles:['main'],expected:'required assertions',dependsOn:[]};
 const contract={package:'fixture',profiles:['full','main'],checks:[check]};
 const result=(names=['required'])=>({schema:'verification-node-v1',complete:true,summaryCount:1,counts:{tests:names.length,passed:names.length,failed:0,cancelled:0,skipped:0,todo:0},tests:names.map(name=>({id:name,name,file:'test.mjs',type:'test:pass',skipped:false,todo:false})),suites:[]});
+test('build manifest is reproducible for identical distribution bytes',async()=>{
+ const root=mkdtempSync(path.join(tmpdir(),'build-manifest-'));
+ try{
+  mkdirSync(path.join(root,'scripts'));mkdirSync(path.join(root,'dist'));
+  cpSync(new URL('./build-runtime-manifest.mjs',import.meta.url),path.join(root,'scripts/build-runtime-manifest.mjs'));
+  writeFileSync(path.join(root,'package.json'),JSON.stringify({version:'1.2.3'}));writeFileSync(path.join(root,'dist/example.js'),'example');
+  const run=()=>{execFileSync(process.execPath,[path.join(root,'scripts/build-runtime-manifest.mjs')]);return readFileSync(path.join(root,'dist/build-info.json'),'utf8')};
+  const first=run();await new Promise(resolve=>setTimeout(resolve,20));
+  const second=run();assert.equal(second,first);assert.match(JSON.parse(first).buildId,/^[a-f0-9]{64}$/);
+ }finally{rmSync(root,{recursive:true,force:true})}
+});
 test('the DSH runtime fixture lockfile is portable to a clean checkout',()=>{
  const fixture=new URL('../tests/fixtures/dsh-runtime/',import.meta.url);
  const manifest=JSON.parse(readFileSync(new URL('package.json',fixture)));

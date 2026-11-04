@@ -130,30 +130,35 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   await command('/lisp-approval-fixture approval-status')
   assert.match((await poll(async()=> (await records()).find(r=>r.mode==='approval-status'))).result.text,/ask/)
   await command('/lisp-approval-fixture apply-default')
+  const defaultApplied=await poll(async()=> (await records()).find(r=>r.mode==='apply-default'))
+  assert.match(JSON.stringify(defaultApplied.result),/APPLIED/)
+  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'apply-default','project-local changes do not require extra approval')
+  // Protected verifier processes still require approval under the ask policy.
+  await command('/lisp-approval-fixture verify')
   await waitApproval()
-  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','default policy cannot write before consent')
   await page.keyboard.press('2'); await page.keyboard.press('Enter')
-  const defaultDenied=await poll(async()=> (await records()).find(r=>r.mode==='apply-default'))
+  const defaultDenied=await poll(async()=> (await records()).find(r=>r.mode==='verify'))
   assert.match(JSON.stringify(defaultDenied.result),/NOT_APPLIED/)
-  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'before','denial preserves existing bytes')
   // A later independent operation can explicitly enable profile auto-approval.
-  await command('/lisp-approval-fixture apply')
+  const enableCount=(await records()).length
+  await command('/lisp-approval-fixture verify')
   await waitApproval()
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth <= window.innerWidth),true,'approval fits narrow viewport')
   await page.keyboard.press('4')
   assert.equal(await page.getByRole('button',{name:/^4\. Auto-approve all Lisp actions/}).getAttribute('aria-pressed'),'true')
   await page.keyboard.press('Enter')
-  const applied=await poll(async () => (await records()).find(r => r.mode === 'apply'))
+  const approved=await poll(async()=>{const rows=await records();return rows.length>enableCount ? rows.at(-1) : undefined})
   const resultValue = result => JSON.parse(result.content.find(block=>block.type==='text').text)
-  const generation=resultValue(applied.result).generation
+  assert.match(JSON.stringify(approved.result),/SUCCEEDED/)
+  const generation=resultValue(approved.result).generation
   const autoStatusCount=(await records()).length
   await command('/lisp-approval-fixture approval-status')
   const reported=await poll(async()=>{const rows=await records();return rows.length>autoStatusCount ? rows.at(-1).result : undefined})
   assert.match(reported.text,/auto/)
-  assert.equal(await readFile(join(project,'change.txt'),'utf8'),'apply')
-  for (const mode of ['apply-again','verify','packages']) {
+  for (const mode of ['apply','apply-again','verify','packages']) {
+    const count=(await records()).length
     await command('/lisp-approval-fixture '+mode)
-    const result=(await poll(async () => (await records()).find(r=>r.mode===mode))).result
+    const result=(await poll(async()=>{const rows=await records();return rows.length>count ? rows.at(-1) : undefined})).result
     assert.ok(!result.isError,JSON.stringify(result))
     assert.equal(resultValue(result).generation,generation,'setting changes keep the current worker')
     assert.match(JSON.stringify(result),mode.startsWith('apply') ? /APPLIED/ : /SUCCEEDED/)
@@ -185,7 +190,7 @@ ctx.commands.register({name:'lisp-approval-fixture',description:'Approval accept
   const denied=await poll(async()=>{const rows=await records();return rows.length>deniedCount ? rows.at(-1) : undefined})
   assert.match(JSON.stringify(denied.result),/NOT_APPLIED/,'disabling auto-approval restores denial without execution')
   assert.ok(decisionFixture.calls.filter(call=>call.semantic).length>=6,'approval operations must pass independent semantic comparison and the actual detector')
-  console.log(JSON.stringify({result:'passed',runtime,checks:['ordinary chat has no Lisp approval selector','fresh profile asks by default','denial preserves bytes','explicit enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
+  console.log(JSON.stringify({result:'passed',runtime,checks:['ordinary chat has no Lisp approval selector','project-local changes need no extra approval','fresh profile asks for verifier','verifier denial','explicit enable and continue','file effect','multiple file changes','consecutive verifiers','cold restart and new chat','disable restores manual'],externalModelCalls:0}))
 
 } catch (e) { console.error(await readFile(receipts,'utf8').catch(()=>'')); console.error(logs.slice(-5000)); if (page) console.error((await page.locator('body').innerText().catch(() => '')).slice(-4000)); throw e }
 finally {

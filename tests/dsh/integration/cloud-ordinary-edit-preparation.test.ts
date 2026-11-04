@@ -106,10 +106,15 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
     assert.equal(prepared.isError, false, JSON.stringify(prepared))
     assert.equal(providerCalls, 1, 'candidate providerSent=false does not mean the independent provider was not called')
     assert.equal(assessments[0]?.semantic, verdict)
-    assert.equal(questions, verdict === 'contradicted' ? 1 : 0)
+    assert.equal(questions, 0, 'a host without native injection returns the question to the model')
     if (verdict === 'insufficient') assert.equal(assessments[0]?.outcome, 'advisory')
     assert.equal(prepared.value.prepared, verdict !== 'contradicted', JSON.stringify(prepared))
-    if (verdict === 'contradicted') { assert.equal(admissions, 0); assert.equal(nativeBodies, 0); return }
+    if (verdict === 'contradicted') {
+      assert.equal(prepared.value.status, 'awaiting_clarification')
+      assert.equal(prepared.value.nextAction, 'ask_user_once')
+      assert.ok(prepared.value.question)
+      assert.equal(admissions, 0); assert.equal(nativeBodies, 0); return
+    }
     assert.equal(admissions, 1)
     for (const name of ['write', 'kioku_write', 'edit']) {
       const content = `Short introduction via ${name}.\n`

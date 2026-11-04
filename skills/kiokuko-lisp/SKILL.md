@@ -16,7 +16,7 @@ Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. P
 
 Persistent: coding choice or /kioku-lisp enable. /kioku-lisp enable-task optionally selects disposable scratch evaluations. lisp_define, lisp_call and lisp_observe need no task-mode switch or Working task. Compose functions by exact dependency refs; reuse only your own protected worker, otherwise compute in private protected scratch with no repository mount or host RPC. Schemas never prove arbitrary Lisp safe. A child inherits only capabilities visible in its native scope, not the parent's task lease, heap, or result refs. Shared publication and real effects retain their approval and authority checks. ON selects Lisp computation/orchestration; direct Bash/zsh/PowerShell is rejected, even reads. Run Git/gh/builds/tests through kioku.process:run / start-job. Read/search/Skill and owned file tools remain available. Failure requires recovery or explicit /kioku-lisp disable; no silent shell fallback. Never spoof host-bound session/agent/directory/generation.
 
-Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Declare destructiveTargets for known command effects. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
+Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Declare destructiveTargets for known command effects. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
 
 Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts. All workers are OS-isolated; direct Lisp/FFI cannot access workspace files or inherited credentials. Generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
 
@@ -353,7 +353,7 @@ Project edits, verification, helper compilation/registration and ordinary Kioku 
 
 <!-- /kiokuko:documentation -->
 <!-- kiokuko:runtime approval-policy -->
-Routine development and helper registration are authorized. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Lisp failure retains the selected shell route. Report execution, verification and saving separately; retry saving without replaying effects.
+Routine development and helper registration are authorized. Lisp failure retains the selected shell route. Report execution, verification and saving separately; retry saving without replaying effects.
 <!-- /kiokuko:runtime -->
 
 

@@ -16,4 +16,4 @@ const { version: packageVersion } = JSON.parse(readFileSync(join(root, 'package.
 let sourceCommit = null
 try { sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() } catch { /* Registry build can omit Git. */ }
 const buildId = createHash('sha256').update(JSON.stringify({ packageVersion, files })).digest('hex')
-writeFileSync(join(dist, 'build-info.json'), JSON.stringify({ schema: 'kiokuko.build.v1', packageVersion, buildId, sourceCommit, builtAt: new Date().toISOString(), fileCount: files.length }, null, 2) + '\n')
+writeFileSync(join(dist, 'build-info.json'), JSON.stringify({ schema: 'kiokuko.build.v1', packageVersion, buildId, sourceCommit, fileCount: files.length }, null, 2) + '\n')

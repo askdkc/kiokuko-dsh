@@ -375,7 +375,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                         const inconclusive = preparationValue(
                           resultFor(request, 'inconclusive-plan'),
                         )
-                        assert.equal(inconclusive.prepared, false)
+                        assert.equal(inconclusive.prepared, false, 'inconclusive plan must not prepare')
                         assert.equal(inconclusive.status, 'awaiting_clarification')
                         assert.equal(
                           existsSync(join(root, 'src/parser.ts')),
@@ -387,6 +387,11 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           ).length,
                           1,
                         )
+                        if (presentation === 'ptc')
+                          return mock.toolCallResponse('unsafe-while-waiting', 'run_code', {
+                            description: 'Attempt execution during clarification',
+                            code: 'return 42',
+                          })
                         return toolCall(
                           'missing-scope-plan',
                           'prepare_requested_work',
@@ -400,6 +405,19 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                       },
                     ]
                   : []),
+                ...(legacy === 'assessment' && presentation === 'ptc'
+                  ? [(request: any) => {
+                      const blocked = nativeToolResults(request.messages).find(
+                        (result) => result.toolCallId === 'unsafe-while-waiting',
+                      )
+                      assert.ok(blocked)
+                      assert.equal(blocked.isError, true)
+                      assert.match(resultText(blocked), /Waiting for the answer/)
+                      return toolCall('missing-scope-plan', 'prepare_requested_work', {
+                        requestIntent: { ...repairedPreparation.requestIntent, changeScope: 'unknown' },
+                      })
+                    }]
+                  : []),
                 ...(legacy === 'assessment'
                   ? [
                       (request: any) => {
@@ -410,9 +428,9 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                             result.toolCallId === 'missing-scope-plan',
                         )
                         assert.ok(rejected)
-                        assert.equal(rejected.isError, false)
+                        assert.equal(rejected.isError, false, `missing scope must return a recoverable tool result: ${resultText(rejected)}`)
                         const interpretation = preparationValue(rejected)
-                        assert.equal(interpretation.prepared, false)
+                        assert.equal(interpretation.prepared, false, 'missing scope must not prepare')
                         assert.equal(
                           interpretation.status,
                           'request_interpretation_required',

@@ -37,7 +37,7 @@ test('crash-state journal between file receipts and parent commit remains inspec
       return transition.apply(this, args)
     })
     assert.equal((await manager.execute(owner, 'lisp_eval', request) as any).ok, true)
-    assert.ok(snapshotted); assert.equal(asks, 1)
+    assert.ok(snapshotted); assert.equal(asks, 0)
     const before = (await stat(join(root, 'a.txt'))).mtimeMs
     await manager.dispose()
     reopened = new NodeSqliteAdapter(crashPath, new DatabaseSync(crashPath))
@@ -61,7 +61,7 @@ test('crash-state journal between file receipts and parent commit remains inspec
     const replayAfter = await manager.execute(owner, 'lisp_eval', request) as any
     assert.equal(replayAfter.state, 'ABANDONED'); assert.equal(replayAfter.result.ok, false)
     assert.equal(replayAfter.result.changes.length, 2)
-    assert.equal(asks, 1); assert.equal((await stat(join(root, 'a.txt'))).mtimeMs, before)
+    assert.equal(asks, 0); assert.equal((await stat(join(root, 'a.txt'))).mtimeMs, before)
     assert.equal(await readFile(join(root, 'a.txt'), 'utf8'), 'new-a'); assert.equal(await readFile(join(root, 'b.txt'), 'utf8'), 'new-b')
   } finally { await manager.dispose(); reopened?.close(); db.close(); await rm(base, { recursive: true, force: true }) }
 })

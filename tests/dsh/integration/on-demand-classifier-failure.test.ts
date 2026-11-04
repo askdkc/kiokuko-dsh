@@ -23,7 +23,7 @@ const installed = existsSync(join(packages, '@deepseek-ai/dsh-tools/lib/index.js
 if (!installed && process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') throw new Error('Native runtime required for classifier failure tests')
 
 for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for (const web of [false, true]) {
-  test(`on-demand full native: ${fault} classifier with AgenticReplay recording permits ${web ? 'automatic web search' : 'an ordinary answer'} with decision-first purpose intake`, { skip: !installed, timeout: 30_000 }, async () => {
+  test(`on-demand full native: ${fault} classifier with AgenticReplay recording permits ${web ? 'automatic web search' : 'an ordinary answer'} without a task-type question`, { skip: !installed, timeout: 30_000 }, async () => {
     const load = (name: string) => import((['agent-loop','dsh-agent-loop'].includes(name) ? new URL("../helpers/kiokuko-driver.mjs",import.meta.url).href : pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href))
     const [cordis, llm, session, projection, prompt, tools, agents, loop, skills] = await Promise.all([
       'cordis', 'dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent', 'dsh-agent-loop', 'dsh-skill',
@@ -61,7 +61,7 @@ for (const fault of ['NONE', 'UNAVAILABLE', 'MALFORMED_RESPONSE'] as const) for 
       const task = web ? 'vmware toolsの最新の脆弱性でクリティカルレベルのものある？' : 'Why is the sky blue?'
       handle.agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
       await handle.agent.whenIdle()
-      assert.deepEqual(errors, []); assert.equal(questions, fault === 'NONE' ? 0 : 1); assert.ok(providerCalls > 0, 'Akinator consults decisions before asking the human')
+      assert.deepEqual(errors, []); assert.equal(questions, 0, 'ordinary conversation and search do not require a task-type question'); assert.ok(providerCalls > 0, 'the independent classifier is still consulted')
       assert.equal(observations.some(observation => observation.purpose === 'akinator'), true)
       assert.equal(provider.requests.length, web ? 2 : 1); assert.equal(webBodies, web ? 1 : 0)
       if (web) assert.ok(!handle.agent.session.snapshotEvents().some((event: any) => event.type === 'tool/result' && event.data.message.isError))

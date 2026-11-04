@@ -37,9 +37,9 @@ test('pathname write proposals preserve the worker and its scratch after rejecti
     assert.equal(written.ok, true, JSON.stringify(written))
     assert.equal(await readFile(join(root, 'solution.txt'), 'utf8'), 'saved solution')
     const deletion = await evaluate('delete-proposal', '(kioku.files:propose-delete #P"solution.txt")')
-    assert.equal(deletion.ok, false, 'deleting an existing file still requires consent')
-    assert.equal(deletion.changes[0].state, 'NOT_APPLIED')
-    assert.equal(await readFile(join(root, 'solution.txt'), 'utf8'), 'saved solution')
+    assert.equal(deletion.ok, true, 'project-local deletion needs no additional consent')
+    assert.equal(deletion.changes[0].state, 'APPLIED')
+    await assert.rejects(readFile(join(root, 'solution.txt'), 'utf8'), { code: 'ENOENT' })
     for (const [index, code] of [
       '(kioku.files:propose-write 42 "bad")',
       '(kioku.files:propose-write "bad.txt" #P"bad")',

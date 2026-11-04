@@ -81,12 +81,14 @@ test('a stale host-only lease survives native-style input reconstruction and can
 
 test('authority changes during native destructive approval prevent the file effect', async () => {
   const f = await fixture()
+  const outside = `${f.root}-outside.txt`
   try {
+    await writeFile(outside, 'original')
     f.confirm(async()=>{f.state('Pending'); return true})
-    const result = await f.execute('kioku_remove',{path:'source.txt'},'remove')
+    const result = await f.execute('kioku_remove',{path:outside},'remove')
     assert.equal(result.receipt.state,'unknown'); assert.match(result.error,/stale|stopped/)
-    assert.equal(await readFile(join(f.root,'source.txt'),'utf8'),'original')
-  } finally { await f.cleanup() }
+    assert.equal(await readFile(outside,'utf8'),'original')
+  } finally { await rm(outside,{force:true}); await f.cleanup() }
 })
 
 test('asynchronous completion preserves process observations but rejects stale verification commit', async () => {
@@ -333,8 +335,8 @@ test('owned cancellation before process admission records a confirmed stop and n
   const f=await fixture(),entered=deferred<void>(),release=deferred<boolean>()
   f.confirm(async()=>{entered.resolve();return release.promise})
   try{
-    const started=await f.execute('kioku_exec',{command:"node -e \"require('fs').writeFileSync('cancel-marker','wrong')\"",background:true,destructiveTargets:['cancel-marker']},'cancel-before-launch')
-    await entered.promise
+    const started=await f.execute('kioku_exec',{command:"node -e \"require('fs').writeFileSync('cancel-marker','wrong')\"",background:true,destructiveTargets:[`${f.root}-outside`]},'cancel-before-launch')
+    await Promise.race([entered.promise,delay(3000).then(()=>{throw new Error('Expected outside-project confirmation was not requested')})])
     const pending=await f.service.result(f.identity,{operationId:started.receipt.operationId,cancel:true}) as any
     assert.equal(pending.receipt.state,'started')
     release.resolve(true);await f.service.close()

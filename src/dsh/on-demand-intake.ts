@@ -1671,7 +1671,7 @@ export class OnDemandIntake {
           }
         : {}),
       permissions: 'unchanged_native_policy',
-      nextAction: this.host.questions ? 'wait_for_user' : 'ask_user_once',
+      nextAction: this.host.questions && state.input.agent.inject ? 'wait_for_user' : 'ask_user_once',
     }
     const pending = {
       agent: state.input.agent,
@@ -2705,7 +2705,8 @@ export class OnDemandIntake {
             // Only preparation may run, because it consumes that answer.
             if (
               this.awaitingClarification(state.input.agent) &&
-              execution.name !== TASK_PREPARE_TOOL
+              execution.name !== TASK_PREPARE_TOOL &&
+              !(execution.name === 'run_code' && preparationCarrier(execution.arguments))
             )
               return denied(
                 'Waiting for the answer to the clarification question; no work runs until the user replies.',

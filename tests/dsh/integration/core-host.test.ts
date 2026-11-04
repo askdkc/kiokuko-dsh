@@ -20,7 +20,6 @@ import { compileSkillBundle } from '../../../src/dsh/skill-compiler.js'
 import { pathToFileURL } from 'node:url'
 import { layaV1Reply, serveLaya } from '../helpers/laya.js'
 import type { DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
-import { createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { TASK_STARTUP_OPTIONS } from '../../../src/dsh/task-startup.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
@@ -129,11 +128,10 @@ async function ignorePreviousTask(f: Awaited<ReturnType<typeof fixture>>) {
   await observed
   assert.equal((await service.snapshot(f.agent)).task!.runStatus, previous.runStatus, 'Past failure outcome remains observable')
 }
-async function prepareNewRequest(f: Awaited<ReturnType<typeof fixture>>, messages: readonly any[]) {
-  const task = messages.map(message => message.content).join('\n')
-  const activeTask = (await (f.services.kiokukoTaskWorkflow as DshTaskWorkflow).snapshot(f.agent)).task!
-  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs(messages, task), activeTask })!
-  return f.execute(TASK_PREPARE_TOOL, { taskType: 'research', requestIntent: { relation: 'new', action: 'research', evidenceRefs: requestIntentReferenceIds(context) } })
+async function prepareNewRequest(f: Awaited<ReturnType<typeof fixture>>) {
+  const recovery = await f.execute(TASK_PREPARE_TOOL, { taskType: 'research' })
+  assert.equal(recovery.status, 'request_interpretation_required')
+  return f.execute(TASK_PREPARE_TOOL, { taskType: 'research', requestIntent: { relation: 'new', action: 'research', evidenceRefs: recovery.currentReferences } })
 }
 
 // Exercise legacy module-driven intake questions after explicit model demand. The module
@@ -313,7 +311,9 @@ test('core PTC mode exposes memory review only after requested work is prepared'
     assert.deepEqual(initial.tools.map((tool: any) => tool.name), ['run_code'])
     assert.equal(presentation, 'ptc', 'ordinary first assembly must not prepare execution')
     await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages: [message], turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [message] }))
-    const prepared = await f.execute('run_code', { description: 'Prepare requested work only', code: `return await tools.prepare_requested_work(${JSON.stringify({requestIntent:{relation:'new',action:'verify',evidenceRefs:requestIntentReferenceIds(createRequestIntentContext({task:'Run migration expectations review programs',messageRefs:requestIntentMessageRefs([message],'Run migration expectations review programs')})!)}})})` })
+    const recovery = await f.execute('run_code', { description: 'Read preparation references', code: 'return await tools.prepare_requested_work({"taskType":"review"})' })
+    assert.equal(recovery.value.result.status, 'request_interpretation_required')
+    const prepared = await f.execute('run_code', { description: 'Prepare requested work only', code: `return await tools.prepare_requested_work(${JSON.stringify({requestIntent:{relation:'new',action:'verify',evidenceRefs:recovery.value.result.currentReferences}})})` })
     assert.equal(prepared.isError, false)
     assert.equal(prepared.value.result.prepared, true)
     assert.equal(programs, 0, 'the preparation-only carrier must not execute a program')
@@ -490,7 +490,7 @@ test('native error and cancellation preserve distinct terminal outcomes', async 
       const turn = index + 1, messages = [{ role: 'user', content: 'Inspect the repository and report the result.' }]
       await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
       if (index === 0) await f.prepare('research')
-      else await prepareNewRequest(f, messages)
+      else await prepareNewRequest(f)
       await f.event({ type: 'turn/end', data: { turn, reason: { kind: reason } } })
       await f.listeners.get('agent/idle')!({ agent: f.agent })
       if (index === 0) await ignorePreviousTask(f)
@@ -575,7 +575,7 @@ test('max-tokens is an interrupted boundary and releases ownership before the ne
     assert.deepEqual(beforePreparation.prepare('SELECT status FROM ledger_runs').all().map(row => row.status), ['interrupted'], 'the fresh turn has not requested execution yet')
     beforePreparation.close()
     await ignorePreviousTask(f)
-    await prepareNewRequest(f, second)
+    await prepareNewRequest(f)
     const afterBoundary = openConnection(databasePath)
     assert.deepEqual(afterBoundary.prepare('SELECT status FROM ledger_runs ORDER BY started_at').all().map((row: any) => row.status), ['interrupted', 'active'])
     afterBoundary.close()

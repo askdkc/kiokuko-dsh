@@ -145,8 +145,16 @@ for (const native of [false, true]) for (const boundary of ['missing', 'working'
     baseRef: randomUUID(), resultRef: randomUUID(), readSet: [target], targets: { 'value.txt': target } })
   let questions = 0
   const manager = new LispManager({ store: f.store, dataRoot: join(f.base, 'runtime'), config: LispConfig.parse({ enabled: true, executionMode: 'protected' }),
-    questions: { ask: async request => { questions++; if (boundary === 'approval-revoked') wait(f); return approved.ask(request) } } })
+    questions: { ask: async request => { questions++; return approved.ask(request) } } })
   await manager.enableTask(f.owner)
+  if (boundary === 'approval-revoked') {
+    const transition = LispStore.prototype.transition
+    t.mock.method(LispStore.prototype, 'transition', async function (this: LispStore, ...args: Parameters<typeof f.store.transition>) {
+      const result = await transition.apply(this, args)
+      if (args[1] === candidate.candidateRef && args[3] === 'APPLYING') wait(f)
+      return result
+    })
+  }
   const result = await manager.execute(f.owner, 'lisp_apply', { operationId: 'apply', candidateRef: candidate.candidateRef }, undefined, native ? nativeCommands as any : undefined) as any
   assert.equal(result.ok, boundary === 'working', JSON.stringify(result))
   assert.equal(await readFile(join(f.root, 'value.txt'), 'utf8'), boundary === 'working' ? 'after' : 'before')

@@ -26,13 +26,15 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
   let commands = 0, approvals = 0
   const questions: DshUserQuestions = { ask: async request => {
     approvals++
-    const applying = request.questions[0]!.header !== 'Lisp · Package operation'
-    if (applying && mode === 'stale') await writeFile(join(root, 'package.json'), '{"name":"concurrent-change"}')
-    return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![applying && mode === 'decline' ? 0 : 1]!.label] }] }
+    assert.equal(request.questions[0]!.header, 'Lisp · Package operation')
+    return { answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![mode === 'decline' ? 0 : 1]!.label] }] }
   } }
   const adapter = createLispPackageAdapter(questions, undefined, async (_manager, args, directory) => {
     commands++
-    if (args[0] !== '--version') await writeFile(join(directory, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"node_modules/sprintf-js":{"version":"1.1.3"}}}')
+    if (args[0] !== '--version') {
+      await writeFile(join(directory, 'package-lock.json'), '{"lockfileVersion":3,"packages":{"node_modules/sprintf-js":{"version":"1.1.3"}}}')
+      if (mode === 'stale') await writeFile(join(root, 'package.json'), '{"name":"concurrent-change"}')
+    }
     return { code: 0, stdout: args[0] === '--version' ? '11.0.0' : '', stderr: '' }
   }, async owner => { await manager.taskAuthority.authorizeEffect(owner) })
   const manager = new LispManager({ store, config: LispConfig.parse({ executionMode: 'protected', enabled: true, startupTimeoutMs: 60000 }), dataRoot: join(base, 'data'), questions, packagesCall: adapter })
@@ -40,7 +42,7 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
   await manager.start(); await manager.enable(owner)
   const code = `(let ((v (make-hash-table :test 'equal))) (setf (gethash "sprintf-js" v) "1.1.3") (kioku.packages:update-lockfiles v))`
   const result = await manager.execute(owner, 'lisp_eval', { operationId: 'update', code }) as any
-  assert.equal(commands, 2); assert.equal(approvals, 2)
+  assert.equal(commands, mode === 'decline' ? 0 : 2); assert.equal(approvals, 1)
   const content = await readFile(join(root, 'package.json'), 'utf8')
   if (mode === 'apply') {
     assert.equal(result.ok, true, JSON.stringify(result))
@@ -48,10 +50,11 @@ for (const mode of ['apply', 'decline', 'stale'] as const) test(`protected publi
     assert.equal(JSON.parse(content).overrides['sprintf-js'], '1.1.3')
     assert.ok(result.changes.every((change: any) => change.backup))
   } else {
-    assert.equal(result.ok, false, JSON.stringify(result))
-    assert.ok(result.changes.every((change: any) => change.state === 'NOT_APPLIED'))
+    assert.match(JSON.stringify(result), mode === 'decline' ? /NOT_APPLIED/ : /A captured package file changed/)
+    assert.deepEqual(result.proposals, [], 'declined or stale generation must not produce file proposals')
+    if (mode === 'stale') assert.equal(result.ok, false)
     assert.equal(content, mode === 'decline' ? original : '{"name":"concurrent-change"}')
   }
   assert.equal((await manager.execute(owner, 'lisp_eval', { operationId: 'update', code }) as any).replay, true)
-  assert.equal(commands, 2); assert.equal(approvals, 2)
+  assert.equal(commands, mode === 'decline' ? 0 : 2); assert.equal(approvals, 1)
 })

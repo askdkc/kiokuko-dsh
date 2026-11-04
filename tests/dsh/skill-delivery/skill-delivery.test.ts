@@ -302,17 +302,17 @@ test('Lisp selected during initial admission executes shared functions without s
   } finally { await f.close() }
 })
 
-test('Lisp workflow reaches the next model request through native approval, evidence paging, plugin restart and exact replay', {
+test('Lisp workflow reaches the next model request through project changes, evidence paging, plugin restart and exact replay', {
   ...native, skip: !enabled || process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1', timeout: 180000,
 }, async () => {
-  let approvals = 0, observedDetail = ''
+  let approvals = 0
   const f = await fixture(false, 'compiled', { lisp: { executionMode: 'protected', enabled: true, approvalMode: 'ask', sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 } }, async request => {
     const q = request.questions[0]
     if (q.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp ON')
     if (q.id === 'taskType') return { answers: [{ id: q.id, selected: ['chat'] }] }
     if (q.id === 'execution-mode') return { answers: [{ id: q.id, selected: ['通常実行'] }] }
     assert.match(q.id, /^batch-/u); assert.equal(request.agent.id, 'skill-main')
-    approvals++; observedDetail = q.detail
+    approvals++
     return { answers: [{ id: q.id, selected: [q.intent.approve] }] }
   })
   const latestResult = (request: any) => {
@@ -339,8 +339,9 @@ test('Lisp workflow reaches the next model request through native approval, evid
       return f.mock.textResponse('適用と結果取得を確認しました。')
     })
     await f.turn('Save the requested notes in a.txt and b.txt using protected Lisp, inspect the output, and verify the recorded changes.')
-    assert.equal(approvals, 1); assert.match(observedDetail, /a\.txt/u); assert.match(observedDetail, /b\.txt/u)
-    assert.match(observedDetail, /-old-a\n\+new-a/u); assert.match(observedDetail, /-old-b\n\+new-b/u)
+    assert.equal(approvals, 0, 'project-local changes need no additional approval')
+    assert.equal(await readFile(join(f.dir, 'a.txt'), 'utf8'), 'new-a')
+    assert.equal(await readFile(join(f.dir, 'b.txt'), 'utf8'), 'new-b')
     const before = (await stat(join(f.dir, 'a.txt'))).mtimeMs
     await f.reload('compiled')
     const resumed = await f.ctx.commands.execute(f.agent, '/kioku-task resume', [], new AbortController().signal)
@@ -363,7 +364,7 @@ test('Lisp workflow reaches the next model request through native approval, evid
     })
     await f.turn('Inspect the recorded Lisp operations and verify their exact replay.')
     requireBody(f.model.requests[firstAfterRecovery], 'kiokuko-lisp')
-    assert.equal(approvals, 1); assert.equal((await stat(join(f.dir, 'a.txt'))).mtimeMs, before)
+    assert.equal(approvals, 0); assert.equal((await stat(join(f.dir, 'a.txt'))).mtimeMs, before)
     assert.equal(await readFile(join(f.dir, 'a.txt'), 'utf8'), 'new-a'); assert.equal(await readFile(join(f.dir, 'b.txt'), 'utf8'), 'new-b')
   } finally { await f.close() }
 })
@@ -415,7 +416,8 @@ for (const taskMode of [false, true]) for (const representation of ['compiled', 
       assert.equal(f.model.requests.length, firstRequest + 1, 'policy must reach a fresh model request')
       const delivered = textOf(f.model.requests.at(-1))
       assert.match(delivered, /Lisp execution mode: protected; approval mode: auto \(entire profile\)/)
-      assert.match(delivered, /Do not ask permission to submit, resubmit, run verification or apply changes/)
+      assert.match(delivered, /Changes within the working project directory.*need no extra user permission/)
+      assert.match(delivered, /Outside-project changes require concrete confirmation/)
     }
   } finally { await f.close() }
 })

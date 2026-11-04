@@ -118,7 +118,7 @@ test("late settings reads cannot replace a newer chat scope or redirect a click 
 test("real settings component declares thinking levels for a registered model and keeps them across refresh",async()=>{
   const f=await fixture();try{
     await f.settle();
-    const model={id:"openai/gpt-6-luna",name:"GPT-6 Luna",contextWindow:1_050_000,maxTokens:128_000,reasoning:false,image:false};
+    const model={id:"fixture/undeclared-model",name:"Undeclared model",contextWindow:1_050_000,maxTokens:128_000,reasoning:false,image:false};
     const c=ConnectionSchema.parse({id:"kiokuko-infron",kind:"infron",name:"Infron",baseURL:"http://127.0.0.1:1/v1",protocol:"chat-completions",models:[model]});
     await f.service.save(c,0);
     await f.service.setKey(c.id,"synthetic-key");
