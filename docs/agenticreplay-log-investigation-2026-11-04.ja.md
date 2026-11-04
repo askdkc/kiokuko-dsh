@@ -1,7 +1,9 @@
 # AgenticReplayログの不具合調査レポート
 
-調査日: 2026年11月4日（JST）  
-対象: `/Users/dkc/Sites/Src/kiokuko-dsh/.agenticreplay`  
+調査日: 2026年11月4日（JST）
+
+対象: `/Users/dkc/Sites/Src/kiokuko-dsh/.agenticreplay`
+
 ブランチ: `main` / HEAD: `e48af320d78f3c807502e0801eb65a579f73d42e`
 
 ## 結論

@@ -136,6 +136,16 @@ test('CI evidence requires each complete, fresh OS/lane and rejects altered arch
   ]){const bad=structuredClone(entries);mutation(bad[packed]);assert.equal(validateCiEvidence(contract,bad,state,full),false);}
 });
 
+test('the aggregate CLI reports failed selection before trying to read its absent plan',()=>{
+  const directory=mkdtempSync(path.join(tmpdir(),'missing-ci-plan-'));
+  try{
+    const needs={select:{result:'failure'},'micro-judge-native':{result:'skipped'},checks:{result:'skipped'}};
+    const run=()=>spawnSync(process.execPath,[path.join(root,'scripts/verify-ci-results.mjs'),'--ci-plan',path.join(directory,'selected.json'),directory],{cwd:root,env:{...process.env,NEEDS_JSON:JSON.stringify(needs)},encoding:'utf8'});
+    const failed=run();assert.equal(failed.status,1);assert.match(failed.stderr,/job select: failure \(expected success\)/);
+    needs.select.result='success';const missing=run();assert.equal(missing.status,1);assert.match(missing.stderr,/Selected CI plan artifact is missing/);
+  }finally{rmSync(directory,{recursive:true,force:true})}
+});
+
 test('the actual aggregate CLI rejects missing jobs/reports, stale selection and tarball corruption',async()=>{
   // Structural transport fixtures only; these headers do not claim native execution.
   const directory=mkdtempSync(path.join(tmpdir(),'ci-evidence-cli-')),repo=path.join(directory,'repo'),evidence=path.join(directory,'evidence');mkdirSync(repo);mkdirSync(evidence);

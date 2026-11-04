@@ -91,8 +91,12 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
     const [flag, selectedFile, evidenceDirectory] = process.argv.slice(2);
     assert.ok(flag === '--ci-plan' && selectedFile && evidenceDirectory && process.argv.length === 5,
       'Usage: verify-ci-results.mjs --ci-plan selected.json report-directory');
-    const root = path.resolve(import.meta.dirname, '..'), selection = readCiPlan(root, selectedFile);
     const needs = JSON.parse(process.env.NEEDS_JSON ?? 'null'), directory = path.resolve(evidenceDirectory);
+    if (!existsSync(selectedFile)) {
+      assert.equal(needs?.select?.result, 'success', `job select: ${needs?.select?.result || 'missing'} (expected success)`);
+      throw new Error(`Selected CI plan artifact is missing: ${selectedFile}`);
+    }
+    const root = path.resolve(import.meta.dirname, '..'), selection = readCiPlan(root, selectedFile);
     reportCiFailures(needs, selection, directory);
     assert.ok(requiredJobsSucceeded(needs, selection), 'A selected required job failed, was cancelled/skipped, or is missing');
     if (selection.nativeTargets.length) {
