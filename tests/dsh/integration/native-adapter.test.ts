@@ -54,7 +54,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
   const questionIds: string[] = []
   const selectionQuestions: string[] = []
   let skipTaskType = false
-  let executionCustom: string | undefined
   let soulModelInvocable = true
   const lispAgents = new Set<string>()
   const nativeSessions = new Map<string, ReturnType<typeof createNativeSession>>()
@@ -440,90 +439,23 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     const recoveredClose = await adapter.host.resolveSessionClose!(fallbackSession.id, fallbackSession)
     assert.deepEqual(recoveredClose, { runId: recoveredRun, status: 'cancelled', terminalTurn: 2, authority: recoveredClose!.authority });assert.equal(recoveredClose!.authority!.taskId,recoveredRun);assert.equal(recoveredClose!.authority!.sessionId,fallbackSession.id)
     await adapter.host.lifecycle!.closeTurn(recoveredClose!)
-    const discussionSession = createNativeSession('selection-discussion-session')
-    const discussionAgent = { id: 'selection-discussion-agent', session: discussionSession }
-    const questionsBeforeDiscussion = selectionQuestions.length
-    executionCustom = 'ただのチャット\n実装は頼んでいない'
-    const discussionEvent = await adapter.host.mapPreStep!({
-      agent: discussionAgent, turn: 1, step: 1, signal: event.signal,
-      messages: [{ id: 'discussion-original', role: 'user', content: [{ type: 'text', text: '実装の話をしているだけ' }], source: { kind: 'user' } }],
+    const selectionSession = createNativeSession('selection-ready-session')
+    const selectionAgent = { id: 'selection-ready-agent', session: selectionSession }
+    const questionsBeforeSelection = selectionQuestions.length
+    const selectionEvent = await adapter.host.mapPreStep!({
+      agent: selectionAgent, turn: 1, step: 1, signal: event.signal,
+      messages: [{ id: 'selection-original', role: 'user', content: [{ type: 'text', text: 'src/index.ts を実装。tests pass' }], source: { kind: 'user' } }],
     })
-    const discussionDecision = await adapter.host.intakeGate!.preStep(discussionEvent, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(discussionDecision.kind, 'enter')
-    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
-    assert.ok(JSON.stringify(discussionDecision.messages).includes('ただのチャット'))
-    assert.ok(JSON.stringify(discussionDecision.messages).includes('実装は頼んでいない'))
-    const discussionRun = adapter.host.resolveSessionRunId!(discussionSession)!
-    const discussionDb = openConnection(f.databasePath)
+    const selectionDecision = await adapter.host.intakeGate!.preStep(selectionEvent, async () => ({ kind: 'enter', messages: [] }))
+    assert.equal(selectionDecision.kind, 'enter')
+    assert.equal(selectionQuestions.length, questionsBeforeSelection, 'the execution-mode card no longer asks a question')
+    const selectionRun = adapter.host.resolveSessionRunId!(selectionSession)!
+    const selectionDb = openConnection(f.databasePath)
     try {
-      const value = JSON.parse(discussionDb.prepare('SELECT state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ state_json: string }>(discussionRun)!.state_json)
-      assert.equal(value.mode, 'pending')
-      assert.equal(value.status, 'selecting')
-      assert.equal(value.discussion.text, executionCustom)
-    } finally { discussionDb.close() }
-    assert.ok(guards.some(guard => guard({ agent: discussionAgent, name: 'shell' })?.includes('実行方式は未確定')))
-    commitContext(discussionSession, discussionDecision.messages)
-    const discussionStep = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 1, step: 2, signal: event.signal, messages: [] })
-    const repeatedDiscussion = await adapter.host.intakeGate!.preStep(discussionStep, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(repeatedDiscussion.kind, 'enter')
-    assert.equal(JSON.stringify(repeatedDiscussion.messages).includes('ただのチャット'), false, 'native history already carries the answer')
-    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
-    assert.equal(await adapter.host.resolveIdleClose!(discussionAgent.id, discussionSession.id, discussionSession, discussionAgent), undefined)
-    const followupDiscussion = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 2, step: 1, signal: event.signal,
-      messages: [{ role: 'user', content: [{ type: 'text', text: 'その話を続けよう' }], source: { kind: 'user' } }],
-    })
-    assert.equal(followupDiscussion.profileHints?.taskType, 'chat')
-    assert.equal((await adapter.host.intakeGate!.preStep(followupDiscussion, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-    assert.equal(selectionQuestions.length, questionsBeforeDiscussion + 1)
-    executionCustom = undefined
-    const resumeDiscussion = await adapter.host.mapPreStep!({ agent: discussionAgent, turn: 3, step: 1, signal: event.signal,
-      messages: [{ role: 'user', content: [{ type: 'text', text: '通常実行で続けて' }], source: { kind: 'user' } }],
-    })
-    const resumeDecision = await adapter.host.intakeGate!.preStep(resumeDiscussion, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(resumeDecision.kind, 'enter')
-    assert.ok(JSON.stringify(resumeDecision.messages).includes('制限は解除'))
-    assert.equal(adapter.host.resolveSessionRunId!(discussionSession), discussionRun)
-    assert.equal(guards.some(guard => guard({ agent: discussionAgent, name: 'shell' })?.includes('実行方式は未確定')), false)
-    const completedDiscussion = openConnection(f.databasePath)
-    try {
-      const value = JSON.parse(completedDiscussion.prepare('SELECT state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ state_json: string }>(discussionRun)!.state_json)
+      const value = JSON.parse(selectionDb.prepare('SELECT state_json FROM dsh_execution_selections WHERE run_id = ?').get<{ state_json: string }>(selectionRun)!.state_json)
       assert.equal(value.mode, 'normal')
       assert.equal(value.status, 'ready')
-      assert.equal(value.discussion, undefined)
-    } finally { completedDiscussion.close() }
-
-    const coldDiscussionSession = createNativeSession('cold-discussion-session')
-    const coldDiscussionDb = openConnection(f.databasePath)
-    let coldDiscussionRun: string
-    try {
-      const prepared = await prepareAgentTask(coldDiscussionDb, { requestId: 'cold-discussion-request', task: 'Fix this', cwd: f.root,
-        profileHints: { taskType: 'debug', target: 'src/index.ts', expected: 'Tests pass' },
-        capabilities: [...event.capabilities.skills, ...event.capabilities.tools], dshSessionId: coldDiscussionSession.id, executionSelection: true, skillDiscoveryMode: 'off',
-      })
-      coldDiscussionRun = prepared.run.runId
-      bindTaskRepository(coldDiscussionDb, { taskId: coldDiscussionRun, sessionId: coldDiscussionSession.id, repositoryRoot: realpathSync(f.root) })
-      const saved = readExecutionSelection(coldDiscussionDb, coldDiscussionRun)!
-      writeExecutionSelection(coldDiscussionDb, coldDiscussionRun, saved.revision, { ...saved.value,
-        discussion: { questionId: 'execution-mode', text: 'ただのチャット', turn: 1 },
-      })
-    } finally { coldDiscussionDb.close() }
-    const selectionsBeforeColdDiscussion = selectionQuestions.length
-    const coldDiscussionAgent = { id: 'cold-discussion-agent', session: coldDiscussionSession }
-    const coldDiscussionEvent = await adapter.host.mapPreStep!({ agent: coldDiscussionAgent, turn: 2, step: 1, signal: event.signal,
-      messages: [{ role: 'user', content: [{ type: 'text', text: '続けて' }], source: { kind: 'user' } }],
-    })
-    assert.ok(coldDiscussionEvent.requestIntentContext?.activeTask, 'the cold resume must locate the exact persisted task')
-    assert.equal(coldDiscussionEvent.requestIntent?.relation, 'unknown', 'disabled decision service cannot silently authorize a continuation')
-    const boundContinuation = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation',
-      evidenceRefs: requestIntentReferenceIds(coldDiscussionEvent.requestIntentContext) }, coldDiscussionEvent.requestIntentContext)
-    assert.ok(boundContinuation, 'the main-model continuation must bind current task and message evidence')
-    const coldPrepared = await adapter.host.intakeGate!.prepare({ ...coldDiscussionEvent, requestIntent: boundContinuation })
-    assert.equal(coldPrepared.prepared.run.runId, coldDiscussionRun)
-    const coldDiscussionDecision = await adapter.host.intakeGate!.preStep({ ...coldDiscussionEvent, requestIntent: boundContinuation }, async () => ({ kind: 'enter', messages: [] }))
-    assert.equal(coldDiscussionDecision.kind, 'enter')
-    assert.equal(adapter.host.resolveSessionRunId!(coldDiscussionSession), coldDiscussionRun)
-    assert.equal(selectionQuestions.length, selectionsBeforeColdDiscussion)
-    assert.ok(JSON.stringify(coldDiscussionDecision.messages).includes('ただのチャット'))
+    } finally { selectionDb.close() }
 
     const beforeChat = openConnection(f.databasePath)
     beforeChat.close()
@@ -769,7 +701,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       assert.equal(lispQuestions, 0, 'Lisp choice waits for the visible Goal proposal')
       assert.ok(registered.some(tool => tool.name === 'coding_workflow'))
       assert.equal((await adapter.host.intakeGate!.preStep(mapped, async () => ({ kind: 'enter', messages: [] }))).kind, 'enter')
-      assert.ok(selectionQuestions.slice(selectionsBeforeLisp).includes('execution-mode'), 'Execution mode is separate from the later task-bound Lisp choice')
+      assert.equal(selectionQuestions.length, selectionsBeforeLisp, 'the execution-mode card no longer asks a question')
       const db = openConnection(f.databasePath)
       try {
         const runId = adapter.host.resolveSessionRunId!(lispSession)!

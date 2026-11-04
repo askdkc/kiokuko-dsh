@@ -30,7 +30,7 @@ import {
 } from "./task-state-host.js";
 import { mountOwnedExecution } from "./owned-execution.js";
 import { mountPlanTransition } from "./plan-transition.js";
-import { classifyTaskForIntake } from "./decisions/workflows.js";
+import { classifyTaskForIntake, createStartupConversationGate } from "./decisions/workflows.js";
 import {
   classifyRequestIntent,
   requestIntentMessageRefs,
@@ -838,10 +838,17 @@ export function createDshHostAdapter(
     root: agent => answerCwd(agent as any),
     defaults: () => readStartupDefaults(ctx, StartupDefaultsConfig.parse(options.startupDefaults ?? {})),
     lisp: () => native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined });
+  const startupConversationGate = createStartupConversationGate(decisions);
   const demand =
     hasDemandTools && agents && sessions
       ? new OnDemandIntake(
           {
+            startupGate: (input, task) =>
+              startupConversationGate(
+                dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }),
+                task,
+                input.signal,
+              ),
             answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
               dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
               [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),

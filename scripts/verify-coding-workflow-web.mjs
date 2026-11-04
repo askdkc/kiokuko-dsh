@@ -110,11 +110,12 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   }
   const records=async()=>(await readFile(receipts,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
   const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click();if(mode==='seed'||mode==='pending')await answerTaskStartupForTest(page)}
-  const expectRecoveredGoal=async()=>{const mode=page.getByText('この作業をどう実行しますか？',{exact:true}),goal=page.locator('[data-coding-goal]');await mode.or(goal).first().waitFor();assert.equal(await mode.isVisible(),false,'existing pending coding Goal must not request a new execution mode')}
+  const executionMode=page.getByText('この作業をどう実行しますか？',{exact:true})
   await newSession();await command('seed');await poll(async()=>(await records()).find(r=>r.mode==='seed'))
   await page.setViewportSize({width:390,height:844});await command('complete')
   const goal=page.locator('[data-coding-goal]')
   await goal.waitFor();assert.match(await goal.innerText(),/CLI|parser command/);assert.match(await goal.innerText(),/確認/)
+  assert.equal(await executionMode.count(),0,'the Goal opens directly without an execution-mode card')
   assert.equal(await readFile(join(project,'src/parser.mjs'),'utf8').catch(()=>undefined),undefined,'no file before human choice')
   await page.keyboard.press('2');await page.keyboard.press('Enter')
   const completed=await poll(async()=>(await records()).find(r=>r.mode==='complete'))
@@ -138,18 +139,15 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   assert.equal(await conversation.getAttribute('data-conversation-session'),pendingSessionId,'browser reopens the cancelled native session after restart')
   assert.equal(await goal.count(),0,'host restart must not reopen cancelled implementation')
   await command('resume')
-  const executionMode=page.getByText('この作業をどう実行しますか？',{exact:true})
-  await executionMode.waitFor()
-  assert.equal(await goal.count(),0,'explicit continuation still requires a fresh native execution choice')
-  await page.keyboard.press('1');await page.keyboard.press('Enter')
   const resumed=await poll(async()=>(await records()).find(r=>r.mode==='resume'))
+  assert.equal(await executionMode.count(),0,'replacement admission proceeds without an execution-mode card')
   assert.notEqual(resumed.result.workflowId,pending.result.workflowId,'explicit request must not revive the cancelled workflow')
   assert.notEqual(resumed.result.choice.questionId,pending.result.choice.questionId,'replacement work has a fresh choice identity')
   assert.equal(resumed.result.state,'preparing');assert.equal(resumed.result.choice.state,'pending')
   assert.equal(resumed.result.items.length,0);assert.equal(resumed.result.assessment.verified,false)
   assert.equal(await readFile(join(project,'src/parser.mjs'),'utf8'),program,'cancel and replacement admission preserve the existing implementation')
   assert.equal(await goal.count(),0,'replacement admission must not start implementation or reopen the cancelled Goal')
-  console.log(JSON.stringify({result:'passed',runtime:JSON.parse(await readFile(join(packages,'@deepseek-ai/dsh/package.json'),'utf8')).version,package:packed.filename,checks:['Goal before effects','keyboard no','ordinary CLI artifact','current item and final evidence','close cancels normally','host restart does not reopen cancellation','explicit continuation requires a fresh native execution choice','replacement task has fresh identity and no effects'],externalModelCalls:0}))
+  console.log(JSON.stringify({result:'passed',runtime:JSON.parse(await readFile(join(packages,'@deepseek-ai/dsh/package.json'),'utf8')).version,package:packed.filename,checks:['Goal before effects','keyboard no','ordinary CLI artifact','current item and final evidence','close cancels normally','host restart does not reopen cancellation','admission proceeds without an execution-mode card','replacement task has fresh identity and no effects'],externalModelCalls:0}))
 } catch(error) {
   console.error(logs.slice(-4000));console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-1500));if(page)console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-2500));throw error
 } finally {

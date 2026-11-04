@@ -9,9 +9,11 @@ import { z } from 'zod'
 import { CODE_METHODS } from './code-intelligence-contracts.js'
 import { FRAME_BYTES, LispError, WorkerFrame, failure, type LispConfiguration, type WorkerResult } from './contracts.js'
 import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
+import { reportTestResult } from './test-report.js'
 
 const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum([...CODE_METHODS, 'run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages']), arguments: z.unknown() }).strict()
 const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
+const TestProgram = Program.extend({ testRunner: z.enum(['node', 'vitest']) })
 export interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
 interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
@@ -173,12 +175,16 @@ export class LispWorker {
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
       if (!this.#pending.allowRpc || !this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
+      const testRequest = rpc.method === 'run' && typeof rpc.arguments === 'object'
+        && rpc.arguments !== null && Object.hasOwn(rpc.arguments, 'testRunner') ? TestProgram.parse(rpc.arguments) : undefined
+      const { testRunner, ...command } = testRequest ?? {}
+      const args = testRequest ? command : rpc.arguments
       let value: unknown
       if ([...CODE_METHODS, 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
-        value = await this.hostCall(rpc.method, rpc.arguments, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal, rpcId:rpc.id })
+        value = await this.hostCall(rpc.method, args, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal, rpcId:rpc.id })
       } else if (rpc.method === 'run' || rpc.method === 'start-job') {
-        const input = Program.parse(rpc.arguments)
+        const input = Program.parse(args)
         if ([...this.jobs.values()].filter(j => !j.result && !j.error).length >= 4 || this.jobs.size >= 100) throw new Error('JOB_LIMIT')
         const id = randomUUID()
         this.#jobLaunches++
@@ -197,7 +203,7 @@ export class LispWorker {
         if (rpc.method === 'cancel-job') { job.child.kill('SIGTERM'); await job.done }
         value = job.result ?? { state: job.error ? 'FAILED' : 'RUNNING', error: job.error ?? null }
       }
-      if (this.#pending?.id === rpc.request) this.send({ id: rpc.id, ok: true, value })
+      if (this.#pending?.id === rpc.request) this.send({ id: rpc.id, ok: true, value: testRunner ? reportTestResult(testRunner, value) : value })
     } catch (error) {
       if (!this.#closed && !this.#fatal && this.#pending?.id === rpc.request) {
         const problem = failure(error)

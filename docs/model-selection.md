@@ -63,13 +63,11 @@ composition and repeated key events do not select or submit.
 
 ## Head/worker model pairs
 
-The native selection card offers the current DSH model (`通常実行`) or a fixed
-**GPT-6.1-Sol head + DeepSeek V4.1 Flash subagent** pair for the task. The pair is
-adopted only after live catalog validation of both exact model IDs; there is no
-automatic replacement. A pair is stored per logical run or per session and never
-rewrites an active task's resolved configuration. Agent-scoped assembly/request
-hooks freeze one selection per request and restore ordinary routing at
-completion.
+Tasks start in normal execution. In Web, open **Settings → Kiokuko Models** to
+choose a **GPT-6.1-Sol head + DeepSeek V4.1 Flash subagent** pair for the current
+chat or as the default for new chats. Saving the pair validates both exact model
+IDs against the live catalog. The host binds each request to its resolved
+selection and also supports pairs saved with earlier runs.
 
 OpenAI assignments follow the [OpenAI model guide](https://developers.openai.com/api/docs/models):
 **gpt-6.1-sol** as the head and **gpt-6.1-luna**/DeepSeek **V4.1 Flash** as the
@@ -85,12 +83,10 @@ rather than automatic fallback.
 
 Resolved configuration and the ordinary model are persisted per logical run.
 The configured execution owner binds run ownership to one `mode` and rejects
-conflicting ownership rather than allowing a second task lane. A persisted
-selection that no longer matches current policy degrades to an explicit reselect
-prompt instead of being silently reinterpreted.
+conflicting ownership. A pending legacy execution selection becomes ready in
+normal mode on admission.
 
-Native tests cover request model IDs, ordinary README completion, cancel/reload,
-input recovery, independent sessions, routing restoration and actual adapter
-transport. Recording adapters do not verify paid account access, subscription
-limits or successful live provider responses. Memory finalization and
-AgenticReplay behavior remain in place.
+Native tests cover request model IDs, ordinary README completion, task
+cancellation and reload, input recovery, independent sessions, routing
+restoration and adapter transport. Recording adapters do not verify paid
+account access, subscription limits or successful live provider responses.

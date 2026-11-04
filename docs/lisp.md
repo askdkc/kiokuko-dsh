@@ -404,13 +404,31 @@ composed operation stops before its next step. Use `run` when the function needs
 to inspect a nonzero exit and handle it explicitly. `result-ok?` is true only for
 exit code zero; missing or nonnumeric exit codes return false.
 
-For a scratch project, run tests without child-process isolation when supported:
+For selected tests, use the bundled `kioku.test` functions inside `lisp_eval`:
 
 ```lisp
-(kioku.process:run "node"
-  '("--test" "--experimental-test-isolation=none" "test/public.test.mjs")
-  :directory "extract/project")
+(kioku.test:node "test/example.test.ts" :tsx t)
+(kioku.test:vitest "test/example.spec.ts" :config-loader :native)
 ```
+
+Both accept one file or a list, a `:directory`, a `:name-pattern` regex and
+`:timeout-ms` for the subprocess. Use a Lisp evaluation timeout long enough to
+collect the result. Vitest uses the development project's installed
+`./node_modules/.bin/vitest` and its JSON reporter. Node uses TAP and can run in
+protected scratch with `:isolation :none`:
+
+```lisp
+(kioku.test:node "test/public.test.mjs" :directory "extract/project" :isolation :none)
+```
+
+These functions use the existing process permissions and cancellation. The
+result keeps the process `code` and includes `testStatus`, a count summary
+when the reporter is readable, and up to eight failures with available
+locations. A zero exit without observed passing cases yields `unknown`.
+For missing or truncated reports, check the returned diagnostic and inspect
+the saved `/value/json/stdout` or `/value/json/stderr` with `lisp_inspect`.
+The saved logs are bounded and `logsTruncated` indicates when capture was
+shortened. Project-specific commands remain available through `kioku.process:run`.
 
 The experimental flag spelling works with Node 22.8+ and remains accepted by
 Node 24/26. The shorter `--test-isolation` spelling requires Node 23.6+.

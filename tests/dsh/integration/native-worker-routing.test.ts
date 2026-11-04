@@ -1,5 +1,5 @@
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
-import { HEAD_WORKER_LABEL } from '../../../src/dsh/head-worker-configuration.js'
+import { HEAD_WORKER_PRESET } from '../../../src/dsh/head-worker-configuration.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
@@ -15,6 +15,7 @@ import { isolateSkillHome } from '../helpers/skill-home.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { mountLispSurface } from '../../../src/dsh/lisp/surface.js'
 import { LispConfig } from '../../../src/dsh/lisp/contracts.js'
+import { mountKiokukoModels } from '../../../src/dsh/models/surface.js'
 
 isolateSkillHome()
 
@@ -68,6 +69,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
   let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
   let parent: any
   let lispSurface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
+  let closeModels: (() => Promise<void>) | undefined
   const workerSteps = new Map<string, number>(), workerGenerations = new Map<string, string>()
   const workerValues = new Map<string, number>()
   const workerErrors: string[] = []
@@ -85,6 +87,10 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       ...appBoot.loadOverlayPatches('subagent-test', join(base, 'cordis.patch.yml')),
       ...appBoot.bundlePatchPaths(web, bundle).flatMap((file: string) => appBoot.loadOverlayPatches('subagent-test', file)),
     ]
+    const standard = findPatchRows(patches, 'preset-standard')[0]
+    const skillFilesystem = findPatchRows(standard?.config?.plugins, 'skill-filesystem')[0]
+    assert.ok(skillFilesystem)
+    skillFilesystem.config = { ...skillFilesystem.config, includeDefaultRoots: false, watch: false }
     for (const [id, provider, toolName] of [
       ['tool-subagent', 'spawn', 'subagent'], ['tool-subagent-fork', 'fork', 'subagent_fork'],
     ] as const) {
@@ -203,9 +209,6 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     // Keep every selectable/provider request inside the deterministic mock transport.
     const nativeProviders = ctx.llm.listProviders.bind(ctx.llm)
     ctx.llm.listProviders = () => nativeProviders().filter((provider: any) => ['mock', 'head', 'worker'].includes(provider.id))
-    const activationRequests: any[] = []
-    const startActivation = ctx.subagents.startActivation
-    ctx.subagents.startActivation = function(spec: any) { activationRequests.push(spec.request ?? spec); return startActivation.call(this, spec) }
     const questions: any[] = []
     const nativeQuestions = ctx.get('userQuestions', false)
     assert.ok(nativeQuestions)
@@ -213,11 +216,27 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       assert.notEqual(request.agent?.session?.header?.origin, 'subagent', 'generic children must never receive startup or intake questions')
       if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, mode === 'lisp' || mode === 'lisp-workers' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
       questions.push(request)
-      if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
-      return { answers: request.questions.map((question: any) => ({ id: question.id,
-        selected: [question.id === 'head-worker-worker' ? question.options.find((option: any) => option.label.includes('[worker]')).label : question.id === 'head-worker-head' ? question.options.find((option: any) => option.label.includes('[head]')).label : question.id.startsWith('coding-lisp-') ? (mode === 'lisp' || mode === 'lisp-workers') ? '使う' : '使わない' : question.id === 'execution-mode' ? `通常実行: ${HEAD_WORKER_LABEL}` : question.options?.[0]?.label ?? 'build'] })) }
+      return { answers: request.questions.map((question: any) => {
+        assert.doesNotMatch(question.id, /^(execution-mode$|head-worker-)/u)
+        const label = question.id.startsWith('coding-lisp-')
+          ? (mode === 'lisp' || mode === 'lisp-workers' ? '使う' : '使わない')
+          : question.options?.[0]?.label ?? 'build'
+        return { id: question.id, selected: [label] }
+      }) }
     }
     if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), selectTask: async (input: any, choice: string, answerRef: string) => { assert.equal(input.agent, parent.agent); assert.equal(choice, 'yes'); assert.match(answerRef, /^task-startup:/u) }, activate: async () => {} })
+    await writeFile(join(profileDir, 'kiokuko-models.json'), JSON.stringify({
+      version: 1, revision: 1, connections: [],
+      sessionHeadWorkers: {
+        'standard-parent': {
+          preset: HEAD_WORKER_PRESET,
+          head: { provider: 'head', model: 'gpt-6.1-sol' },
+          worker: { provider: 'worker', model: 'deepseek-flash' },
+        },
+      },
+      sessionHeadWorkerRevisions: { 'standard-parent': 1 },
+    }))
+    closeModels = await mountKiokukoModels(ctx)
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false }, typedDecisions: { mode: 'off' },
@@ -261,9 +280,11 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')
     assert.ok(preparation && !preparation.data.message.isError, 'parent must prepare through the real native tool registry before launching children')
     assert.equal(questions.some(request => request.agent?.session?.header?.origin === 'subagent'), false)
-    assert.ok(activationRequests.length > 0)
-    assert.ok(activationRequests.every(spec => spec.agentOptions.provider === 'worker' && spec.agentOptions.model === 'deepseek-flash'))
-    assert.ok(requests.filter(request => request.sessionId !== 'standard-parent').every(request => request.provider === 'worker' && request.model === 'deepseek-flash'))
+    const workerRequests = requests.filter(request => request.sessionId !== 'standard-parent')
+    assert.deepEqual(
+      [...new Set(workerRequests.map(request => `${request.provider}/${request.model}`))],
+      ['worker/deepseek-flash'],
+    )
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.model === 'gpt-6.1-sol'))
     assert.equal(parent.agent.options.provider, 'mock', 'head overlay must not mutate the original native model')
     if (mode === 'same-head-effort') assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.reasoningEffort === 'low'), 'same head effort updates must reach the parent provider')
@@ -348,7 +369,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     let cleanupError: unknown
     for (const cleanup of [
       () => lispSurface?.dispose(), () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
-      () => ctx?.fiber.dispose(), () => rm(temporary, { recursive: true, force: true }),
+      () => closeModels?.(), () => ctx?.fiber.dispose(), () => rm(temporary, { recursive: true, force: true }),
     ]) {
       try { await cleanup() } catch (error) { cleanupError ??= error }
     }

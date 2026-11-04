@@ -412,28 +412,41 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.deepEqual(counts, [0, 0, 0])
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questionHost.dispose(); await h.dispose() }
 })
-test('native code normal execution: cancel, plugin reload, original input recovery, write, verification and fresh next-task choice', {
+test('native code starts in normal mode without an execution card, including after plugin reload', {
   skip: !packageRoot && !sourceRoot, timeout: 30_000,
 }, async () => {
   const h = await harness()
   await writeFile(join(h.root, 'feature.mjs'), 'before\n')
-  let writes = 0, questionCount = 0, codingChoices = 0
+  await writeFile(join(h.root, 'feature.test.mjs'), `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+test('public feature entry returns 42', () => {
+  assert.equal(execFileSync(process.execPath, ['feature.mjs'], { encoding: 'utf8' }).trim(), '42');
+});`)
+  const command = 'node --test --test-reporter=tap feature.test.mjs'
+  let writes = 0, codingChoices = 0
   const edit = h.ctx.tools.register({ name: 'edit_feature', description: 'Apply the requested feature implementation.', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
-    execute: async () => { writes++; await writeFile(join(h.root, 'feature.mjs'), 'after\n'); assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'after\n'); return 'feature edit verified' },
+    execute: async () => { writes++; await writeFile(join(h.root, 'feature.mjs'), 'console.log(42)\n'); return 'feature edited' },
   })
   const model = new h.mock.MockAdapter([
-    interpretedPreparation(h.mock, 'prepare-cancelled', 'new', 'change', 'debug'),
-    (request: any) => {
-      assert.match(JSON.stringify(request.messages), /実行方式・モデル構成の選択待ち/)
-      return h.mock.textResponse('作業を保持しました。')
-    },
+    interpretedPreparation(h.mock, 'prepare-feature', 'new', 'change', 'debug'),
     h.mock.toolCallResponse('coding-status', 'coding_workflow', { action: 'status' }),
     (request: any) => h.mock.toolCallResponse('coding-propose', 'coding_workflow_apply', {
       action: 'propose', expectedRevision: toolValue(request, 'coding-status').revision, definition: fixtureDefinition('feature.mjs'),
     }),
     h.mock.toolCallResponse('edit-1', 'edit_feature', {}),
-    h.mock.textResponse('feature.mjsを書き込み、内容を検証しました。受け入れ条件の検証は残っています。'),
+    ...['regression', 'user-entry'].map(id => (request: any) => h.mock.toolCallResponse('bind-' + id, 'task_completion', {
+      action: 'bind', criterionId: `coding:${toolValue(request, 'coding-propose').workflowId}:${id}`,
+      method: { kind: 'native_command', command, cwd: '.', sourcePaths: ['feature.mjs', 'feature.test.mjs'], assertion: 'selected_tests_pass' },
+    })),
+    h.mock.toolCallResponse('item-check', 'kioku_exec', { command }),
+    h.mock.toolCallResponse('goal-check', 'kioku_exec', { command }),
+    h.mock.toolCallResponse('final-status', 'coding_workflow', { action: 'status' }),
+    (request: any) => {
+      assert.equal(toolValue(request, 'final-status').assessment.verified, true)
+      return h.mock.textResponse('feature.mjs の公開エントリが 42 を返すことを確認しました。')
+    },
     h.mock.textResponse('次の変更を準備しました。'),
   ])
   h.ctx.llm.registerAdapter(['ordinary'], model)
@@ -441,16 +454,17 @@ test('native code normal execution: cancel, plugin reload, original input recove
 if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision ON / Lisp OFF')
 
     const question = request.questions[0];
-    if (question.id.startsWith('coding-lisp-')) { codingChoices++; return { answers: [{ id: question.id, selected: ['使わない'] }] } }
-    assert.equal(question.id, 'execution-mode'); questionCount++
-    return { answers: [{ id: question.id, selected: [questionCount === 1 ? '取消・作業を保持' : '通常実行'] }] }
+    assert.match(question.id, /^coding-lisp-/u)
+    assert.equal(writes, 0, 'implementation waits for the task-specific Lisp choice')
+    codingChoices++
+    return { answers: [{ id: question.id, selected: ['使わない'] }] }
   } }) } }); await questions
   const decisions = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto' }), () => ({
     capabilities: { maxQuestions: 256, maxChoices: 256, maxBytes: 262144 },
-    evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'cancel-reload-fixture',
-      answers: semanticFixtureAnswers(batch, task => ['続けてください。','feature.mjsを実装してください。','別のfeature.mjsの変更も実装してください。'].includes(task) ? {action:'change',changeScope:'implementation'} : undefined) ?? batch.questions.map(question => {
+    evaluate: async batch => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'normal-mode-fixture',
+      answers: semanticFixtureAnswers(batch, task => ['feature.mjsを実装してください。','別のfeature.mjsの変更も実装してください。'].includes(task) ? {action:'change',changeScope:'implementation'} : undefined) ?? batch.questions.map(question => {
         const choiceId = ({ 'task-type': 'debug', 'request-action': 'change', 'request-change-scope': 'implementation', 'request-task-operation': 'none',
-          'request-relation': (batch.state as { currentUserMessage?: string }).currentUserMessage === '続けてください。' ? 'same_scope_continuation' : 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
+          'request-relation': 'new' } as Record<string, string>)[question.id] ?? (question.id.startsWith('request-proposal-') ? 'not_selected' : undefined)
         return choiceId ? { id: question.id, status: 'selected' as const, choiceId }
           : { id: question.id, status: 'abstained' as const, reason: 'insufficient' as const }
       }) }),
@@ -462,27 +476,22 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
   const agent = (await h.ctx.agents.create({sessionId:h.session.SessionId('normal-session'),agentOptions:{ provider: 'ordinary', model: 'mock' },meta:{ cwd: h.root }})).agent
   try {
     await turn(h, agent, 'feature.mjsを実装してください。')
-    assert.equal(model.requests.length, 2, JSON.stringify(agent.session.snapshotEvents().slice(-5)))
-    assert.equal(writes, 0)
-    assert.equal(questionCount, 1)
-    assert.equal(codingChoices, 0)
-    assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'before\n')
-    await composition.dispose(); await adapter.dispose()
-    adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
-    model.prepareNext('debug', 'prepare-recovered', interpretedPreparation(h.mock,'prepare-recovered','same_scope_continuation','change','debug'))
-    await turn(h, agent, '続けてください。')
-    await new Promise(resolve => setTimeout(resolve, 30))
     assert.equal(writes, 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type))))
-    assert.equal(questionCount, 2)
     assert.equal(codingChoices, 1)
-    assert.equal(model.requests.length, 7)
-    assert.ok(JSON.stringify(model.requests[3].messages).includes('feature.mjsを実装してください。'))
+    assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'console.log(42)\n')
+    assert.equal(model.requests.length, 10)
+    assert.equal(agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
+    assert.ok(JSON.stringify(model.requests[1].messages).includes('feature.mjsを実装してください。'))
     assert.equal(model.requests.every(r => r.provider === 'ordinary' && r.model === 'mock'), true)
     const counts = await adapter.host.runtime!.withDatabase(db => ['dsh_turn_receipts', 'dsh_continuation_outbox'].map(table => db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()?.n))
     assert.deepEqual(counts, [0, 0])
+    await composition.dispose(); await adapter.dispose()
+    adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
     model.prepareNext('debug', 'prepare-next-feature', interpretedPreparation(h.mock,'prepare-next-feature','new','change','debug'))
     await turn(h, agent, '別のfeature.mjsの変更も実装してください。')
-    assert.equal(questionCount, 3)
+    assert.equal(codingChoices, 1)
+    assert.equal(model.requests.length, 12)
+    assert.equal(agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }
 })
 test('pinned pi-ai wire adapter: Astra Responses, Go parent/child/auxiliary session headers, and no Ollama download', {

@@ -3,7 +3,7 @@ import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.
 import assert from 'node:assert/strict'
 import {createServer} from 'node:http'
 import test from 'node:test'
-import {mkdtemp,realpath,rm,readFile} from 'node:fs/promises'
+import {mkdir,mkdtemp,realpath,rm,readFile,symlink,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
@@ -127,6 +127,46 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   registered.execute=()=>{spoofed++;return 42}
   try { assert.equal((await execute('lisp_eval',{operationId:'spoof',code:'(+ 1 2)'})).isError,true);assert.equal(spoofed,0) } finally { registered.execute=original }
   if(mode==='unknown'){
+   const described=await execute('lisp_describe',{operationId:'test-api',symbol:'kioku.test'})
+   assert.deepEqual(described.value.value.symbols,['kioku.test:node','kioku.test:vitest'])
+   const bin=join(base,'node_modules','.bin')
+   await mkdir(bin,{recursive:true})
+   const installedVitest=process.env.KIOKUKO_TEST_VITEST_BIN
+   if(installedVitest) await symlink(installedVitest,join(bin,'vitest'))
+   else await writeFile(join(bin,'vitest'),`#!/usr/bin/env node
+const assert = require('node:assert/strict')
+assert.deepEqual(process.argv.slice(2), ['run','--reporter=json','--includeTaskLocation','--configLoader','native','fail.spec.mjs'])
+console.log('before the reporter')
+console.log(JSON.stringify({numTotalTests:1,numPassedTests:0,numFailedTests:1,numPendingTests:0,numTodoTests:0,success:false,testResults:[{name:'fail.spec.mjs',status:'failed',message:'',assertionResults:[{fullName:'fixture failure',status:'failed',failureMessages:['distinct failure'],location:{line:2,column:1}}]}]}))
+process.exitCode = 1
+`,{mode:0o700})
+   await writeFile(join(base,'fail.spec.mjs'),`import {test} from 'vitest'
+test('fixture failure', () => { throw new Error('distinct failure') })
+`)
+   if(installedVitest) await symlink(join(installedVitest,'..'),join(base,'node_modules','vitest'))
+   const code='(kioku.test:vitest "fail.spec.mjs" :config-loader :native)'
+   const beforeTests=bodies
+   const invalid=await execute('lisp_eval',{operationId:'invalid-test-file',code:'(kioku.test:vitest "--watch")'})
+   assert.equal(invalid.value.ok,false)
+   assert.match(invalid.value.value,/TEST_FILES_INVALID/u)
+   assert.equal(bodies,beforeTests)
+   verdict='rejected'
+   const denied=await execute('lisp_eval',{operationId:'denied-test',code})
+   assert.equal(denied.value.ok,false)
+   assert.equal(bodies,beforeTests)
+   verdict='allowed-once'
+   const failed=await execute('lisp_eval',{operationId:'focused-vitest',code})
+   assert.equal(failed.value.ok,true,JSON.stringify(failed))
+   assert.equal(failed.value.value.json.code,1)
+   assert.equal(failed.value.value.json.testStatus,'failed')
+   assert.equal(failed.value.value.json.summary.fail,1)
+   assert.equal(failed.value.value.json.failures[0].name,'fixture failure')
+   assert.equal(failed.value.value.json.failures[0].line,2)
+   assert.match(failed.value.value.json.failures[0].message,/distinct failure/u)
+   const saved=await execute('lisp_inspect',{operationId:'vitest-log',resultOperationId:'focused-vitest',section:'result',pointer:'/value/json/stdout'})
+   assert.match(saved.value.data,/"numFailedTests":1/u)
+   assert.equal((await execute('lisp_eval',{operationId:'focused-vitest',code})).value.replay,true)
+   assert.equal(bodies,beforeTests+1)
    const timeout=await execute('lisp_eval',{operationId:'conversation-timeout',code:'(loop)',timeoutMs:100})
    assert.equal(timeout.value.code,'TIMEOUT',JSON.stringify(timeout))
    intake.finish(session,1);session.append('turn/end',{turn:1,reason:{kind:'completed'}})

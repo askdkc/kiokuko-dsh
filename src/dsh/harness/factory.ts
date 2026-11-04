@@ -19,6 +19,7 @@ declare module '@deepseek-ai/dsh-session' {
 }
 declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'runtime-context': {kind:'runtime-context'} & ContextFormed; 'plugin:kiokuko-dsh': {kind:typeof KIOKUKO_DSH_SOURCE_KIND;form:'instructions'|'snapshot';sections?:readonly {name:string;text:string}[]} } }
 export interface HarnessOptions extends AgentOptions { maxSteps?: number }
+type ModelStepResult = 'continue' | 'completed' | 'max-tokens'
 
 /** Durable turn-failure facts under the current DSH contract: a caught
  * `LlmError` keeps its provider failure verbatim; anything else is flattened
@@ -190,7 +191,11 @@ export class KiokukoHarnessAgent implements Agent {
             if(first&&!decision.messages.length)break
           } finally {this.claimedInputs=[]}
           first=false;this.session.append('step/start',{turn:this.turn,step:this.step})
-          try { again=await this.modelStep(decision.messages,signal,assembly,modelSelection,toolSet) }
+          try {
+            const result=await this.modelStep(decision.messages,signal,assembly,modelSelection,toolSet)
+            if(result==='max-tokens')reason={kind:'max-tokens'}
+            again=result==='continue'
+          }
           finally { this.session.append('step/end',{turn:this.turn,step:this.step}) }
           if(!again&&!this.inbox.nextStep.length){await this.lifecycle.turnStopping({agent:this,turn:this.turn,signal});
             await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal});signal.throwIfAborted()}
@@ -211,7 +216,7 @@ export class KiokukoHarnessAgent implements Agent {
       if(blocked||signal.aborted&&!this.wake)break
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
   }
-  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<boolean> {
+  private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<ModelStepResult> {
     if(this.systemSeq===undefined){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage('')},{surfaceOp:'append'});this.systemSeq=event.seq;this.systemText=''}
     // Accepted input must survive even provider/prompt preparation failure.
     for(const message of messages)this.session.append('user/message',message,{surfaceOp:'append'})
@@ -222,7 +227,7 @@ export class KiokukoHarnessAgent implements Agent {
       this.audit('model','retry')
     }}
   }
-  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<boolean> {
+  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<ModelStepResult> {
     const proposed:LlmCallConfig={...modelSelection,...(this.options.maxTokens?{maxTokens:this.options.maxTokens}:{})}
     const config=await this.dispatch.waterfall('agent/request',{turn:this.turn,step:this.step,signal},async()=>proposed)
     this.attemptedProvider=config.provider;this.retryPolicy=undefined
@@ -252,14 +257,27 @@ export class KiokukoHarnessAgent implements Agent {
       }
       signal.throwIfAborted()
       const content=assembler.blocks(), stream=[...accumulator.snapshot()]
-      if(assembler.finish.kind==='error'||assembler.finish.kind==='aborted')throw new LlmError(memoryFailureDiagnostic(assembler.finish.failure).message,assembler.finish.failure.code,assembler.finish.failure)
+      const finish=assembler.finish
+      if(finish.kind==='error'||finish.kind==='aborted')throw new LlmError(memoryFailureDiagnostic(finish.failure).message,finish.failure.code,finish.failure)
+      const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
+      // Some providers put unfinished reasoning in text blocks even with a
+      // normal stop. Keep that stream in the attempt log, outside prompt history.
+      if(calls.length===0) {
+        const text=content.flatMap(block=>block.type==='text'?[block.text]:[]).join('').trimStart()
+        if(text.startsWith('<thinking>')&&!text.includes('</thinking>')) {
+          const message=finish.kind==='max-tokens'
+            ? 'The model reached its output limit before answering.'
+            : 'The model stopped before finishing its reasoning or returning an answer.'
+          throw new LlmError(message,'INCOMPLETE_ASSISTANT_RESPONSE')
+        }
+      }
       const event=content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:assembler.message({provider:prepared.config.provider,model:prepared.config.model,...(assembler.replayState?{replayState:assembler.replayState}:{})}),stream,...(assembler.usage?{usage:assembler.usage}:{})},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})
       settled=true;this.dispatch.emit('agent/assistant-stream',{frame:{type:'end',attemptId,revision,index:count,outcome:{kind:'committed',eventType:event.type as 'assistant/message'|'assistant/attempt',seq:event.seq}}})
       this.audit('model','result')
-      const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
+      if(finish.kind==='max-tokens')return 'max-tokens'
       let concludesTurn=false
       for(const call of calls)concludesTurn=await this.executeTool(call,signal,toolSet)||concludesTurn
-      return calls.length>0&&!concludesTurn
+      return calls.length>0&&!concludesTurn?'continue':'completed'
     } catch(error) {
       if(!settled){const content=assembler.interruptedBlocks(),stream=[...accumulator.snapshot()]
         const event=signal.aborted&&content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:createAssistantMessage({content,source:{provider:prepared.config.provider,model:prepared.config.model,...(assembler.replayState?{replayState:assembler.replayState}:{})}}),stream,interrupted:true},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})

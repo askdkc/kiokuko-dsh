@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { isTrivialConversation } from '../../../../src/akinator/domain.js'
-import { buildAkinatorClassificationBatch, classifyTaskForIntake } from '../../../../src/dsh/decisions/akinator-classification.js'
+import { buildAkinatorClassificationBatch, classifyTaskForIntake, createStartupConversationGate, suppressStartupDialogForConversation, WORK_REQUEST_GATE_PROBABILITY } from '../../../../src/dsh/decisions/akinator-classification.js'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
 import { DecisionError } from '../../../../src/dsh/decisions/contracts.js'
@@ -15,6 +15,65 @@ test('a whole-message greeting is conversation, not an implementation request', 
     assert.equal(isTrivialConversation(greeting), true, greeting)
   for (const work of ['hello! Please fix the failing parser.', 'こんにちは。バグを直してください', 'thanks; now deploy the server', 'Fix the parser', 'ok, which parser should I change?'])
     assert.equal(isTrivialConversation(work), false, work)
+})
+
+const typesafeConfiguration = () => TypedDecisionsConfig.parse({ provider: 'typesafe' })
+const noulService = (probability: number, calls = { count: 0 }) => new DecisionService(typesafeConfiguration(), () => ({
+  capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
+  evaluate: async batch => {
+    calls.count++
+    assert.equal(batch.questions[0]?.type, 'noul', JSON.stringify(batch))
+    assert.deepEqual(batch.state, { task: 'How have you been?' })
+    return { provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
+      answers: [{ id: 'work-request-gate', status: 'measured' as const, type: 'noul' as const, probability }] }
+  },
+}))
+
+test('the startup dialog gate suppresses only confidently conversational messages', async () => {
+  assert.equal(WORK_REQUEST_GATE_PROBABILITY, 0.2)
+  const low = noulService(0.05)
+  assert.equal(await suppressStartupDialogForConversation(low, 'gate-low', 'How have you been?', signal()), true)
+  const boundary = noulService(WORK_REQUEST_GATE_PROBABILITY)
+  assert.equal(await suppressStartupDialogForConversation(boundary, 'gate-boundary', 'How have you been?', signal()), false)
+  const ambiguous = noulService(0.5)
+  assert.equal(await suppressStartupDialogForConversation(ambiguous, 'gate-ambiguous', 'How have you been?', signal()), false)
+})
+
+test('the startup dialog gate shows the dialog whenever the provider cannot measure conversation', async () => {
+  assert.equal(await suppressStartupDialogForConversation(undefined, 'gate-absent', 'How have you been?', signal()), false)
+  const off = typesafeConfiguration(); off.mode = 'off'
+  const calls = { count: 0 }
+  const disabled = new DecisionService(off, () => ({ capabilities: { maxQuestions: 8, maxBytes: 262144 }, evaluate: async () => { calls.count++; throw new Error('off must not dispatch') } }))
+  assert.equal(await suppressStartupDialogForConversation(disabled, 'gate-off', 'How have you been?', signal()), false)
+  assert.equal(calls.count, 0)
+  const failing = new DecisionService(typesafeConfiguration(), () => ({ capabilities: { maxQuestions: 8, maxBytes: 262144 }, evaluate: async () => { throw new Error('provider outage') } }))
+  assert.equal(await suppressStartupDialogForConversation(failing, 'gate-error', 'How have you been?', signal()), false)
+  const abstaining = new DecisionService(typesafeConfiguration(), () => ({
+    capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
+    evaluate: async () => ({ provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
+      answers: [{ id: 'work-request-gate', status: 'abstained' as const, reason: 'uncertain' as const }] }),
+  }))
+  assert.equal(await suppressStartupDialogForConversation(abstaining, 'gate-abstain', 'How have you been?', signal()), false)
+})
+
+test('the startup dialog gate asks the provider once per message content', async () => {
+  const calls: string[] = []
+  const service = new DecisionService(typesafeConfiguration(), () => ({
+    capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
+    evaluate: async batch => {
+      const task = (batch.state as { task: string }).task
+      calls.push(task)
+      const probability = task === 'How have you been?' ? 0.05 : 0.9
+      return { provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
+        answers: [{ id: 'work-request-gate', status: 'measured' as const, type: 'noul' as const, probability }] }
+    },
+  }))
+  const gate = createStartupConversationGate(service)
+  assert.equal(await gate('gate-cache-1', 'How have you been?', signal()), true)
+  assert.equal(await gate('gate-cache-2', 'How have you been?', signal()), true)
+  assert.deepEqual(calls, ['How have you been?'], 'the same message content must not dispatch the provider twice')
+  assert.equal(await gate('gate-cache-3', 'Fix the parser', signal()), false, 'a different message is evaluated separately')
+  assert.deepEqual(calls, ['How have you been?', 'Fix the parser'])
 })
 for (const task of ['Fix the failing parser', '調査結果を要約して', 'このバグを直して']) test(`eligible current direct request is complete: ${task}`, () => {
   const batch = buildAkinatorClassificationBatch(task)!

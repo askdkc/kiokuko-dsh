@@ -169,6 +169,9 @@ interface Dependencies {
     requestIntentContext?: RequestIntentContext,
     clarificationFrom?: { turn: number; task: string },
   ) => Promise<void>
+  /** True only when the decision provider confidently measures the message as
+   * conversation. Absence, uncertainty and failure keep the startup dialog. */
+  readonly startupGate?: (input: DemandInput, task: string) => Promise<boolean>
   /** Exact idempotent request replay; never accepts a new turn as continuation. */
   readonly replay?: (input: DemandInput) => Promise<boolean>
   /** Finalize or preserve the prior native turn only after its matching boundary is observed. */
@@ -677,6 +680,14 @@ export class OnDemandIntake {
     })
   }
 
+  /** The execution choice is offered only for work: whole-message greetings are
+   * deterministic, and the decision provider may confidently measure remaining
+   * messages as conversation. Uncertainty or absence never suppresses it. */
+  private async startupSuppressed(input: DemandInput, task: string): Promise<boolean> {
+    if (isTrivialConversation(task)) return true
+    return (await this.host.startupGate?.(input, task)) === true
+  }
+
   /** Availability only: never capture a turn or publish execution intent before turn/start. */
   async prepareNativeCapabilities(input: DemandInput): Promise<void> {
     if (!this.host.prepareNativeCoding) return
@@ -688,8 +699,10 @@ export class OnDemandIntake {
     const task = requestTask(input.messages)
     if (!task) return
     // A whole-message greeting is conversation, not an implementation request;
-    // never open the decision/Lisp startup question for it.
-    if (isTrivialConversation(task)) return
+    // never open the decision/Lisp startup question for it. The decision
+    // provider may suppress remaining messages only by confidently measuring
+    // them as conversation; uncertainty keeps the dialog.
+    if (await this.startupSuppressed(input, task)) return
     // These are genuine queued-message references, used only for the advisory
     // Lisp choice. capture() later obtains the current source-bound context.
     const context = createRequestIntentContext({
@@ -877,7 +890,7 @@ export class OnDemandIntake {
         this.assertCurrent(state)
         // A whole-message greeting is conversation, not an implementation
         // request; the execution choice stays reserved for work requests.
-        if (!isTrivialConversation(state.task))
+        if (!(await this.startupSuppressed(state.input, state.task)))
           await this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input))
         this.assertCurrent(state)
         state.nativeUnowned = true
@@ -895,7 +908,7 @@ export class OnDemandIntake {
         await this.diagnose(state, { kind: 'resume' })
         return true
       }
-      if(this.host.prepareNativeCoding && !isTrivialConversation(state.task)){
+      if(this.host.prepareNativeCoding && !(await this.startupSuppressed(state.input,state.task))){
         const context=await this.host.requestContext?.(state.input,state.task)
           ?? createRequestIntentContext({task:state.task,messageRefs:requestIntentMessageRefs(state.input.messages,state.task)})
         this.assertCurrent(state)

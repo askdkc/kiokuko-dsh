@@ -81,7 +81,7 @@ import type { LispAssemblyService } from '../lisp/request-surface.js'
 import { SemanticCompactionConfig } from '../semantic-compaction/contracts.js'
 import { MemoryReuseConfig } from '../../memory/reuse.js'
 import { MemoryRetrievalConfig } from '../../memory/retrieval-contracts.js'
-import { classifyTaskForIntake } from '../decisions/workflows.js'
+import { classifyTaskForIntake, createStartupConversationGate } from '../decisions/workflows.js'
 import { TypedDecisionsConfig } from '../decisions/config.js'
 import {
   createDecisionService,
@@ -565,8 +565,15 @@ export async function mountCore(
   const taskStartup = new TaskStartup({ decisions, ...(questions ? { questions } : {}), root: () => root,
     defaults: () => readStartupDefaults(ctx, config.startupDefaults),
     lisp: () => get(LISP_CODING_SERVICE) as LispCodingService | undefined })
+  const startupConversationGate = createStartupConversationGate(decisions)
   const demand = new OnDemandIntake(
     {
+      startupGate: (input, task) =>
+        startupConversationGate(
+          dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }),
+          task,
+          input.signal,
+        ),
       answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
         dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
         [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),

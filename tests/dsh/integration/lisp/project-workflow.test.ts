@@ -92,6 +92,23 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     const tests = await evaluate('protected-tests', run)
     assert.equal(tests.ok, true, JSON.stringify(tests)); assert.equal(tests.value.json.code, 0, JSON.stringify(tests))
     assert.match(tests.value.json.stdout, /pass 1/u)
+    const focusedCode = '(kioku.test:node "test/public.test.mjs" :directory "project" :isolation :none)'
+    const focused = await evaluate('focused-node', focusedCode)
+    assert.equal(focused.ok, true, JSON.stringify(focused))
+    assert.equal(focused.value.json.code, 0)
+    assert.equal(focused.value.json.testStatus, 'passed')
+    assert.equal(focused.value.json.summary.pass, 1)
+    const failedTest = await evaluate('failed-node', [
+      put('project/failure/fail.test.mjs', 'import test from "node:test"; test("fixture failure", () => { throw new Error("distinct failure"); });'),
+      '(kioku.test:node "failure/fail.test.mjs" :directory "project" :isolation :none)',
+    ].join('\n'))
+    assert.equal(failedTest.ok, true, JSON.stringify(failedTest))
+    assert.equal(failedTest.value.json.code, 1)
+    assert.equal(failedTest.value.json.testStatus, 'failed')
+    assert.equal(failedTest.value.json.summary.fail, 1)
+    assert.equal(failedTest.value.json.failures[0].name, 'fixture failure')
+    assert.match(failedTest.value.json.failures[0].message, /distinct failure/u)
+    assert.equal((await evaluate('focused-node', focusedCode)).replay, true)
     const nonzero = await evaluate('nonzero', '(kioku.process:run "node" (list "-e" "process.exit(7)") :directory "project")')
     assert.equal(nonzero.value.json.code, 7, 'successful evaluation must retain the failed process exit code')
     for (const [index, directory] of ['../workspace', root].entries()) {

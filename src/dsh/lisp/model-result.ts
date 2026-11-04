@@ -137,8 +137,16 @@ export function renderResult(value: unknown): string {
     const { printed: _printed, ...unique } = rest.value
     rest.value = unique
   }
+  const testLogPointers: string[] = []
+  if (record(rest.value) && record(rest.value.json) &&
+    ['node', 'vitest'].includes(String(rest.value.json.runner)) && typeof rest.value.json.testStatus === 'string') {
+    const { stdout, stderr, ...report } = rest.value.json
+    if (stdout) testLogPointers.push('/value/json/stdout')
+    if (stderr) testLogPointers.push('/value/json/stderr')
+    rest.value = { ...rest.value, json: report }
+  }
   for (const [characters, items] of levels) {
-    const omitted: string[] = []
+    const omitted = [...testLogPointers]
     const data = boundedData(rest, characters, items, omitted, '') as RecordValue
     // Never truncate an individual outcome or its error reason: paginate whole items.
     const page = changes?.slice(0, items)
@@ -154,7 +162,7 @@ export function renderResult(value: unknown): string {
         : { detail: 'Use the returned pagination fields or the human diagnostics command; do not repeat execution.' }),
     } : {}) }
     const json = JSON.stringify(result)
-    if (Buffer.byteLength(json) <= RESULT_BYTES) return withDiagnostics(source, rest, core, result, json)
+    if (Buffer.byteLength(json) <= RESULT_BYTES) return testLogPointers.length ? json : withDiagnostics(source, rest, core, result, json)
   }
   // Exceptionally large control metadata is preferable to hiding a failure or identity.
   return JSON.stringify({ ...core, truncated: true, inspect: { tool: 'lisp_inspect', resultOperationId: core.operationId ?? null, section: 'result', offset: 0, limit: 2000 } })

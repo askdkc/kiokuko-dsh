@@ -3,6 +3,7 @@
 (defpackage :kioku.files (:use :cl) (:export :input :read-text :write-text :propose-write :propose-delete :scratch :search-text :diff-text :list-directory :head-lines :tail-lines :count-lines :glob-scratch :copy-scratch :delete-scratch :grep-scratch))
 (defpackage :kioku.objects (:use :cl) (:export :retain :inspect-ref :release :register-artifact))
 (defpackage :kioku.process (:use :cl) (:export :run :python :shell :start-job :job-status :cancel-job :result-code :result-stdout :result-stderr :result-ok? :split-lines :python-stdout :shell-stdout :run-lines :list-jobs :forget-job))
+(defpackage :kioku.test (:use :cl) (:export :node :vitest))
 (defpackage :kioku.environment (:use :cl) (:export :status))
 (defpackage :kioku.ci (:use :cl) (:export :list-runs :failed-log :verify))
 (defpackage :kioku.packages (:use :cl) (:export :metadata :audit :update-lockfiles))
@@ -223,6 +224,40 @@
     id))
 (defun job-status (id) (kioku.internal:rpc "job-status" (kioku.internal:object "id" id)))
 (defun cancel-job (id) (kioku.internal:rpc "cancel-job" (kioku.internal:object "id" id)))
+(in-package :kioku.test)
+(defun test-files (files)
+  (let ((paths (if (stringp files) (list files) files)))
+    (unless (and (listp paths) paths
+                 (let ((count (list-length paths))) (and count (<= count 100)))
+                 (every (lambda (path)
+                          (and (stringp path) (<= 1 (length path) 4096)
+                               (char/= (char path 0) #\-)
+                               (not (find (code-char 0) path))))
+                        paths))
+      (error "TEST_FILES_INVALID: supply one path or a list of up to 100 paths."))
+    paths))
+(defun run-tests (runner program arguments files name-pattern directory timeout-ms)
+  (unless (or (null name-pattern) (and (stringp name-pattern) (<= 1 (length name-pattern) 4096)
+                                      (not (find (code-char 0) name-pattern))))
+    (error "TEST_PATTERN_INVALID: supply a nonempty regular expression string."))
+  (kioku.internal:rpc "run"
+    (kioku.internal:object "program" program "testRunner" runner "directory" directory "timeoutMs" timeout-ms
+      "argv" (coerce (append arguments
+        (when name-pattern
+          (list (concatenate 'string (if (equal runner "node") "--test-name-pattern=" "--testNamePattern=") name-pattern)))
+        (test-files files)) 'vector))))
+(defun node (files &key (directory ".") (timeout-ms 120000) tsx name-pattern isolation)
+  "Run selected Node tests with TAP. FILES is a path or list. TSX loads the project's tsx. ISOLATION :NONE supports protected scratch. Inspect testStatus, summary, failures and code."
+  (run-tests "node" "node"
+    (append (when tsx '("--import" "tsx")) '("--test" "--test-reporter=tap")
+            (ecase isolation ((nil) nil) (:none '("--experimental-test-isolation=none"))))
+    files name-pattern directory timeout-ms))
+(defun vitest (files &key (directory ".") (timeout-ms 120000) config-loader name-pattern)
+  "Run selected tests with the project's installed Vitest and its JSON reporter. CONFIG-LOADER accepts :NATIVE, :RUNNER or :BUNDLE. Inspect testStatus, summary, failures and code."
+  (run-tests "vitest" "./node_modules/.bin/vitest"
+    (append '("run" "--reporter=json" "--includeTaskLocation")
+            (when config-loader (list "--configLoader" (ecase config-loader (:native "native") (:runner "runner") (:bundle "bundle")))))
+    files name-pattern directory timeout-ms))
 (in-package :kioku.ci)
 (defun list-runs (&key (limit 10))
   "List recent GitHub Actions runs for the bound workspace repository."
@@ -329,7 +364,7 @@ CHOICES contains 1-8 (restart-name description) pairs. No expression replay or a
   (kioku.internal:rpc "tool-call" (kioku.internal:object "name" name "args" arguments)))
 (defun describe-tools ()
   (mapcar (lambda (package) (cons package (sort (loop for symbol being the external-symbols of (find-package package) collect (symbol-name symbol)) #'string<)))
-          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY")))
+          '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.TEST" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY")))
 (defun task-functions ()
   "List functions and macros defined in this worker's KIOKU.USER package."
   (let ((package (find-package :kioku.user)))
@@ -343,7 +378,7 @@ CHOICES contains 1-8 (restart-name description) pairs. No expression replay or a
       (kioku.internal:object "package" "kioku.user" "generation" kioku.internal:*generation*
                             "symbols" (coerce (task-functions) 'vector))))
   (let ((package (find-package (string-upcase name))))
-    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
+    (when (and package (member (package-name package) '("KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.TEST" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
       (return-from describe-symbol
         (kioku.internal:object "package" (string-downcase (package-name package))
           "symbols" (coerce (sort (loop for symbol being the external-symbols of package
@@ -353,7 +388,7 @@ CHOICES contains 1-8 (restart-name description) pairs. No expression replay or a
         (multiple-value-bind (symbol end) (read-from-string name)
           (unless (and (symbolp symbol) (symbol-package symbol) (fboundp symbol)
                        (zerop (length (string-trim '(#\Space #\Tab #\Newline #\Return) (subseq name end))))
-                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
+                       (member (package-name (symbol-package symbol)) '("KIOKU.USER" "KIOKU.TOOLS" "KIOKU.PROCESS" "KIOKU.TEST" "KIOKU.FILES" "KIOKU.DATA" "KIOKU.OBJECTS" "KIOKU.ENVIRONMENT" "KIOKU.CI" "KIOKU.PACKAGES" "KIOKU.TYPESAFE" "KIOKU.DECISIONS" "KIOKU.RECOVERY" "KIOKU.CODE") :test #'equal))
             (error "UNKNOWN_SYMBOL"))
           (kioku.internal:object "symbol" name "arguments" (kioku.internal::printed (sb-introspect:function-lambda-list symbol)) "documentation" (or (documentation symbol 'function) "No function documentation."))))))
 

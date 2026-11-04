@@ -172,6 +172,76 @@ test('provider recovery uses the DSH request-error contract without duplicating 
   } finally {await f.close()}
 })
 
+for (const finish of ['max-tokens', 'stop'] as const) {
+  test(`harness retains unfinished thinking as a failed attempt after ${finish}`, async () => {
+    const f = await fixture(true)
+    try {
+      let first = true
+      let nextHistory: readonly unknown[] = []
+      const errors: string[] = []
+      f.ctx.on('agent/error', event => {
+        assert.ok(event.error instanceof Error)
+        errors.push(event.error.message)
+      })
+      f.ctx.on('llm/stream', async function* (options, next) {
+        if (!first) {
+          nextHistory = options.messages
+          yield* next()
+          return
+        }
+        first = false
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: '<thinking>repeated draft' } }
+        yield { type: 'finish', reason: { kind: finish } }
+      })
+      const { agent } = await f.ctx.agents.create({ sessionId: SessionId(`kiokuko-unfinished-${finish}`) })
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Work on this change.' }], source: { kind: 'user' } }))
+      await agent.whenIdle()
+      const events = agent.session.snapshotEvents()
+      assert.equal(events.filter(event => event.type === 'assistant/message').length, 0)
+      assert.equal(events.filter(event => event.type === 'assistant/attempt').length, 1)
+      const reason = events.filter(event => event.type === 'turn/end').at(-1)?.data.reason
+      assert.equal(reason?.kind, 'error')
+      assert.equal(reason.error.code, 'INCOMPLETE_ASSISTANT_RESPONSE')
+      assert.deepEqual(errors, [reason.error.message])
+      assert.equal(nextHistory.length, 0, 'the failed answer must not start another request by itself')
+
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Can we continue?' }], source: { kind: 'user' } }))
+      await agent.whenIdle()
+      assert.ok(!JSON.stringify(nextHistory).includes('repeated draft'))
+      assert.ok(JSON.stringify(nextHistory).includes('Work on this change.'))
+      assert.equal(agent.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
+    } finally { await f.close() }
+  })
+}
+
+test('harness records the output limit and never dispatches a tool from a capped response', async () => {
+  const f = await fixture(true)
+  try {
+    let calls = 0
+    f.ctx.tools.register({
+      name: 'limit_probe', description: 'Count executions.', parameters: { type: 'object' },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] },
+      execute: async () => { calls++; return 'executed' },
+    })
+    f.ctx.on('llm/stream', async function* () {
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Partial answer.' } }
+      yield { type: 'block-start', index: 1, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'capped-call' as any, name: 'limit_probe', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'max-tokens' } }
+    })
+    const { agent } = await f.ctx.agents.create({ sessionId: SessionId('kiokuko-output-limit') })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Try the tool.' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    const events = agent.session.snapshotEvents()
+    assert.equal(events.filter(event => event.type === 'turn/end').at(-1)?.data.reason.kind, 'max-tokens')
+    assert.equal(events.some(event => event.type === 'tool/call'), false)
+    assert.equal(calls, 0)
+    assert.deepEqual(agent.session.deriveMessages().at(-1)?.content, [{ type: 'text', text: 'Partial answer.' }])
+  } finally { await f.close() }
+})
+
 test('Kiokuko factory owns create, unpublished setup, queued turns and canonical session events without AgentLoop', async () => {
   const f = await fixture()
   try {
