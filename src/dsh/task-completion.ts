@@ -53,6 +53,10 @@ const relativePath = z
       !value.split(/[\\/]/u).includes("..") &&
       !/[\p{Cc}\p{Cf}]/u.test(value),
   );
+export const AppliedMemoriesSchema = z.array(z.object({
+  entryId: z.string().min(1).max(256),
+  revision: z.number().int().positive(),
+}).strict()).min(1).max(8);
 export const CompletionMethodSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -67,6 +71,7 @@ export const CompletionMethodSchema = z.discriminatedUnion("kind", [
         "artifact_matches",
       ]),
       protocol: ProtocolRecipeSchema.optional(),
+      appliedMemories: AppliedMemoriesSchema.optional(),
       expectedOutput: text.optional(),
       artifactPath: relativePath.optional(),
       artifactSha256: z
@@ -76,6 +81,13 @@ export const CompletionMethodSchema = z.discriminatedUnion("kind", [
     })
     .strict()
     .superRefine((value, ctx) => {
+      if (value.appliedMemories && (value.assertion === "exit_zero" ||
+        new Set(value.appliedMemories.map(item => item.entryId)).size !== value.appliedMemories.length))
+        ctx.addIssue({
+          code: "custom",
+          path: ["appliedMemories"],
+          message: "Memory reuse requires distinct entries and a test, output or artifact assertion",
+        });
       if (value.protocol && value.assertion !== "selected_tests_pass")
         ctx.addIssue({
           code: "custom",
@@ -489,7 +501,8 @@ export function beginTaskCompletionExecution(
     );
   });
   const coding = readCodingWorkflow(database, input.runId);
-  const assessment = coding
+  const hasReuse = matching.some(row => CompletionMethodSchema.parse(JSON.parse(row.method_json)).appliedMemories)
+  const assessment = coding || hasReuse
     ? assessTaskCompletion(database, input.runId)
     : undefined;
   const goalReady =
@@ -522,7 +535,8 @@ export function beginTaskCompletionExecution(
       : (matching.find(
           (row) => row.criterion_id === coding.protocol!.criterionId,
         ) ?? matching[0])
-    : matching[0];
+    : ((hasReuse ? matching.find(row => assessment!.criteria.some(criterion =>
+        criterion.criterionId === row.criterion_id && criterion.state !== "satisfied")) : undefined) ?? matching[0]);
   if (!current) return false;
   const method = CompletionMethodSchema.parse(JSON.parse(current.method_json));
   if (method.kind !== "native_command") return false;
@@ -653,6 +667,10 @@ export function finishTaskCompletionExecution(
       : method.assertion === "artifact_matches"
         ? artifactMatches(source.repositoryRoot, method)
         : true;
+  const result = input.result;
+  const observed = isHostExecutionResult(result);
+  const completeObservation = observed && result.value.processStarted === true
+    && result.value.processStopped === true && result.value.outputComplete === true;
   const outcome =
     sourceDigest !== row.source_digest ||
     (coding &&
@@ -666,8 +684,8 @@ export function finishTaskCompletionExecution(
           response?.value?.kind === "background" ||
           (Number.isSafeInteger(exit) && exit !== 0)
         ? "failed"
-        : ((coding || method.assertion === "output_matches") &&
-              !isHostExecutionResult(input.result)) ||
+        : ((coding || method.assertion === "output_matches") && !observed) ||
+            (method.appliedMemories && !completeObservation) ||
             !Number.isSafeInteger(exit) ||
             (method.assertion === "exit_zero" &&
               hasShellPipeline(method.command)) ||
@@ -987,6 +1005,49 @@ export function saveTaskCompletionReceipt(
     )
     .run(runId, JSON.stringify(assessment), new Date().toISOString());
   return assessment;
+}
+
+export interface MemoryReuseCheck {
+  state: "verified" | "needs_recheck";
+  runId: string;
+  criterionId: string;
+  description: string;
+  evidenceRef: string;
+}
+
+/** Start with actual passing receipts. Reassess the bound criterion against the current sources. */
+export function readMemoryReuseChecks(database: SqliteDatabase, input: {
+  workspace: string; sessionId: string; entryId: string; revision: number;
+}): MemoryReuseCheck[] {
+  const rows = database.prepare(`
+    SELECT r.run_id, b.criterion_id, e.call_id
+    FROM ledger_runs r
+    JOIN dsh_completion_receipts p ON p.run_id=r.run_id
+    JOIN dsh_completion_bindings b ON b.run_id=r.run_id AND b.approved=1
+    JOIN json_each(p.assessment_json,'$.criteria') AS c
+      ON json_extract(c.value,'$.criterionId')=b.criterion_id AND json_extract(c.value,'$.state') IN ('satisfied','stale')
+    JOIN dsh_completion_executions e ON e.run_id=r.run_id AND e.method_digest=b.method_digest
+      AND e.call_id=json_extract(c.value,'$.evidenceRef') AND e.outcome='passed' AND e.result_digest IS NOT NULL
+    WHERE r.workspace=? AND (r.status='completed' OR (r.status='active' AND r.dsh_session_id=?))
+      AND NOT EXISTS (SELECT 1 FROM memory_capture_exclusions x
+        WHERE x.workspace=r.workspace AND x.native_session_id=r.dsh_session_id)
+      AND EXISTS (SELECT 1 FROM json_each(b.method_json,'$.appliedMemories') m
+        WHERE json_extract(m.value,'$.entryId')=? AND json_extract(m.value,'$.revision')=?)
+    ORDER BY e.updated_at DESC, r.run_id, b.criterion_id LIMIT 8
+  `).all<{run_id:string; criterion_id:string; call_id:string}>(input.workspace, input.sessionId, input.entryId, input.revision);
+  const assessments = new Map<string, CompletionAssessment>();
+  return rows.flatMap(row => {
+    let assessment = assessments.get(row.run_id);
+    if (!assessment) {
+      assessment = assessTaskCompletion(database, row.run_id);
+      assessments.set(row.run_id, assessment);
+    }
+    const criterion = assessment.criteria.find(item => item.criterionId === row.criterion_id);
+    if (!criterion || criterion.evidenceRef !== row.call_id ||
+      (criterion.state !== "satisfied" && criterion.state !== "stale")) return [];
+    return [{ runId: row.run_id, criterionId: row.criterion_id, description: criterion.description,
+      state: criterion.state === "satisfied" ? "verified" : "needs_recheck", evidenceRef: row.call_id }];
+  });
 }
 
 export function taskCompletionBlocksClose(

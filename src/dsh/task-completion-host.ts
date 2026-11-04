@@ -5,7 +5,11 @@ import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { KiokukoError } from '../errors.js'
 import { foregroundNativeCommand } from './memory-application.js'
-import { assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, CompletionMethodSchema,
+import { observedMemoryInput } from './memory-sidebar.js'
+import { capturePolicy } from '../memory/capture-policy.js'
+import { readEntry } from '../memory/entries.js'
+import { isRetrievableEntry } from '../memory/hybrid-retrieval.js'
+import { AppliedMemoriesSchema, assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, CompletionMethodSchema,
   finishTaskCompletionExecution, readTaskCriterionBindingReplay, saveTaskCompletionReceipt, taskCompletionBindingGuide } from './task-completion.js'
 import { authorizeTaskLease, type TaskLease, type TaskAuthorityExecution } from './task-state.js'
 import { captureExecutionTaskLease } from './task-authority-context.js'
@@ -29,7 +33,7 @@ const input = z.discriminatedUnion('action', [
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
   method: z.object({ kind: z.literal('native_command'), command: z.string(),
     cwd: z.string(), sourcePaths: z.array(z.string()).min(1).max(32).describe('Required: at least one current repository-relative implementation/test path; include an asserted artifact.'),
-    protocol: ProtocolRecipeSchema.optional(),
+    protocol: ProtocolRecipeSchema.optional(), appliedMemories: AppliedMemoriesSchema.optional().describe('Optional exact entryId/revision pairs from status.deliveredMemories. Include only a memory whose use this check tests.'),
     assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).describe('Match the criterion evidence. selected_tests_pass needs complete Node TAP: node --test --test-reporter=tap <test files>. output_matches requires expectedOutput; artifact_matches requires artifactPath, artifactSha256, and artifact in sourcePaths. Coding never accepts exit_zero alone.').optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
 }).strict()
 
@@ -38,7 +42,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
   const pending = new WeakMap<object, { runId: string; callId: string; agent: object; sessionId: string; lease: TaskLease }>()
   const disposers: (() => void)[] = []
   disposers.push(ctx.tools.register({ name: 'task_completion', modelFacing: true,
-    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. Supply command, cwd, nonempty sourcePaths and assertion. Read status for criterion-specific requirements.',
+    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. Supply command, cwd, nonempty sourcePaths and assertion. Read status for criterion-specific requirements. To record memory reuse, optionally add method.appliedMemories from status.deliveredMemories only when the check tests its application.',
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
@@ -51,7 +55,15 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
       if(!validation.success)throw completionInputError(validation.error.issues.map(issue=>({field:issue.path.map(String).join('.')||'input',
         reason:issue.code==='custom'?issue.message:'Missing, invalid or unexpected field for this action/method'})))
       const parsed=validation.data
-      if (parsed.action === 'status') return host.runtime.withDatabase(db => ({...saveTaskCompletionReceipt(db, identity.runId),bindingGuide:taskCompletionBindingGuide(db,identity.runId)}))
+      const session = identity.agent?.session
+      const observed = session?.id === identity.sessionId ? observedMemoryInput(session) : undefined
+      if (parsed.action === 'status') return host.runtime.withDatabase(db => ({
+        ...saveTaskCompletionReceipt(db, identity.runId), bindingGuide: taskCompletionBindingGuide(db, identity.runId),
+        deliveredMemories: (observed?.items ?? []).map(({ entryId, revision }) => ({ entryId, revision })),
+      }))
+      const applied = parsed.method.appliedMemories
+      if (applied && !applied.every(item => observed?.items.some(entry => entry.entryId === item.entryId && entry.revision === item.revision)))
+        throw new KiokukoError('CONFLICT', 'Memory reuse requires the exact revision sent to the model for this request')
       const criterion = await host.runtime.withDatabase(db => {
         const criteria = assessTaskCompletion(db, identity.runId).criteria
         const exact = criteria.find(item => item.criterionId === parsed.criterionId)
@@ -69,8 +81,23 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
       const approved = await host.approve?.(identity, criterion, parsed.method, execution.signal) ?? false
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new KiokukoError('CONFLICT', 'Native task changed during completion review')
-      return host.runtime.withDatabase(db => bindTaskCriterion(db, { runId: identity.runId, callId: execution.callId,
-        criterionId: criterion.criterionId, method: parsed.method, approved })).catch(error=>{
+      return host.runtime.withDatabase(db => {
+        if (applied) {
+          const run = db.prepare('SELECT workspace, status FROM ledger_runs WHERE run_id=? AND dsh_session_id=?')
+            .get<{ workspace: string; status: string }>(identity.runId, identity.sessionId)
+          if (!run || run.status !== 'active' || observedMemoryInput(session) !== observed ||
+            capturePolicy(db, run.workspace, identity.sessionId).mode !== 'allowed')
+            throw new KiokukoError('CONFLICT', 'Memory reuse is unavailable for this task or the model input changed')
+          for (const item of applied) {
+            const selection = observed!.items.find(entry => entry.entryId === item.entryId)!
+            const entry = readEntry(db, { workspace: selection.workspace, entryId: item.entryId })
+            if (entry.revision !== item.revision || !isRetrievableEntry(db, entry))
+              throw new KiokukoError('CONFLICT', 'Applied memory changed or became unavailable')
+          }
+        }
+        return bindTaskCriterion(db, { runId: identity.runId, callId: execution.callId,
+          criterionId: criterion.criterionId, method: parsed.method, approved })
+      }).catch(error=>{
           if(error instanceof KiokukoError&&error.code==='VALIDATION_ERROR')throw completionInputError([{field:typeof error.details.field==='string'?error.details.field:'method',
             reason:error.message,...(typeof error.details.expected==='string'?{expected:error.details.expected}:{})}])
           throw error

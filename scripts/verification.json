@@ -657,6 +657,17 @@
       "packed": true
     },
     {
+      "id": "memory-sidebar-web",
+      "argv": ["node", "scripts/verify-memory-sidebar-web.mjs"],
+      "profiles": ["browser"],
+      "result": "script",
+      "requires": ["dsh-native"],
+      "expected": "packed DSH Web shows delivery, source excerpts, and current or stale reuse evidence",
+      "dependsOn": ["build"],
+      "completionEvidence": { "packedWeb": true, "nativeSidebar": true, "reuseFreshness": true },
+      "packed": true
+    },
+    {
       "id": "pack-check",
       "argv": [
         "node",

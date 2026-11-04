@@ -1,3 +1,4 @@
+import { noteScopedMemory } from '../memory-sidebar.js'
 import { createNativeToolSurface } from '../native-tool-surface.js'
 import type { ToolExposureContext } from '../tool-exposure-diagnostics.js'
 import { failureDiagnostic } from '../failure-diagnostic.js'
@@ -403,6 +404,7 @@ export function createRouting({
           }
           throw new MemorySnapshotStale()
         }
+        noteScopedMemory(request, allowed, item.prepared.context?.items ?? [])
       }
     }, next))
     routingDisposers.set(agent, () => { nativeToolSurface?.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })

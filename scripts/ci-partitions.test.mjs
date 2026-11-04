@@ -218,6 +218,11 @@ test('pnpm prerequisites provision full main and representative core lanes',()=>
   const representative=createCiPlan(contract,request('src/dsh/task-state.ts'),selectionIdentity);
   const ui=createCiPlan(contract,request('src/client.ts'),selectionIdentity);
   assert.equal(full.jobCount,21);assert.equal(representative.jobCount,5);assert.equal(ui.jobCount,6);
+  for (const selection of [full, ui]) {
+    const sidebar = lanePlan(contract, selection, 'browser').checks.find(check => check.id === 'memory-sidebar-web');
+    assert.equal(sidebar?.packed, true);
+    assert.deepEqual(sidebar?.completionEvidence, { packedWeb: true, nativeSidebar: true, reuseFreshness: true });
+  }
   for(const [selection,id,required] of [
     [full,'main-unit-evaluations',['publint']],
     [full,'main-integration',['ci-native-integration-1','ci-native-integration-2']],

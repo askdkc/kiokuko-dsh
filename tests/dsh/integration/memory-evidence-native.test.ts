@@ -10,6 +10,7 @@ import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { mountCore } from '../../../src/dsh/core/host.js'
 import { openConnection } from '../../../src/db/connection.js'
+import { canonicalContentHash } from '../../../src/serialization/validate.js'
 import { recordEntry } from '../../../src/memory/entries.js'
 import { nativeMock } from '../helpers/native-mock.js'
 import { createRun } from './evolution/fixture.js'
@@ -32,6 +33,18 @@ for (const mode of ['core', 'full'] as const) test(`native ${mode}: conversation
   try {
     await mkdir(join(root,'.git')) // Keep workspace identity independent of parent directories.
     for(const plugin of [llm,session,projection,prompt,tools,agents,skills,commands])fibers.push(await ctx.plugin(plugin.default,plugin===prompt?{persona:''}:undefined))
+    const routes = new Map<string, (request: Request) => Promise<Response>>()
+    fibers.push(await ctx.plugin({ name: 'memory-web-connection', apply(c:any) {
+      return c.provide('connection', { fetch: { register(route:any) {
+        routes.set(route.path, route.fetch)
+        return () => routes.delete(route.path)
+      } } })
+    } }))
+    const readMemory = async (sessionId = 'memory-core', init?: RequestInit) => {
+      const handler = routes.get('/api/kiokuko.memory-sidebar')
+      assert.ok(handler, 'the read-only Memory sidebar route must be registered')
+      return handler(new Request(`http://localhost/api/kiokuko.memory-sidebar?sessionId=${sessionId}`, init))
+    }
     await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
     fibers.push(await ctx.plugin(loop.default,{agents:[]}))
     fibers.push(await ctx.plugin({name:'core-memory-questions',apply(c:any){return c.provide('userQuestions',{async ask(request:any){
@@ -41,7 +54,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
     const config={repositoryRoot:root,databasePath,intakeMode:'eager' as const,answerReview:{mode:'off' as const},memoryIndexReasoning:{mode:'off' as const},typedDecisions:{mode:'off' as const}}
     if(mode==='core') handle=await implementation.mountCore(ctx,config)
     else {
-      const adapter=implementation.createDshHostAdapter(ctx,{...config,agenticReplay:{enabled:false}})
+      const adapter=implementation.createDshHostAdapter(ctx,{...config,agenticReplay:{enabled:false},toolExposure:{mode:'full'}})
       handle=await implementation.mountDshComposition(ctx,adapter.host)
     }
     const db=openConnection(databasePath),workspace=db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
@@ -100,11 +113,38 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
     const linked=recordEntry(raceDb,{workspace,kind:'fact',title:'CYCLELATE linked',body:'CYCLELATE linked evidence.',scope:{visibility:'project'}})
     for(const relation of ['supports','contradicts','derived_from','related_to']) raceDb.prepare('INSERT INTO entry_links VALUES(?,?,?,?,?)')
       .run(late.id,linked.id,relation,'2026-10-18T00:00:00.000Z','fixture')
+    const evidence = {version:1,sessionId:'source-session',sourceGeneration:'original',
+      claims:[{id:'original-claim',text:late.body,sources:[
+        {evidenceId:'original-user',kind:'native_user_message',role:'user_assertion',sessionId:'source-session',sourceGeneration:'original',sourceSeqs:[3],sourceHash:'a'.repeat(64),supportingText:'Original CYCLELATE user message.'},
+        {evidenceId:'original-tool',kind:'native_tool_result',role:'tool_observation',sessionId:'source-session',sourceGeneration:'original',sourceSeqs:[6],sourceHash:'b'.repeat(64),supportingText:'Original CYCLELATE tool result.'},
+      ]}]}
+    raceDb.prepare('INSERT INTO memory_revision_evidence VALUES (?,?,?,?,?)')
+      .run(late.id,late.revision,workspace,JSON.stringify(evidence),canonicalContentHash(evidence))
     raceDb.close()
     for (let i=0;i<3;i++) {
       await turn('CYCLELATE の内容を説明して。')
       assert.ok(JSON.stringify(requests.at(-1).messages).includes(late.body), 'fresh conversation memory must survive a previous execution owner')
     }
+    const sidebar = await readMemory()
+    assert.equal(sidebar.status,200)
+    assert.equal(sidebar.headers.get('cache-control'),'no-store')
+    const shownMemory = await sidebar.json()
+    assert.equal(shownMemory.state,'observed')
+    const displayed = shownMemory.items.find((item:any)=>item.id===late.id)
+    assert.ok(displayed?.reasons.includes('word_match'),JSON.stringify(shownMemory))
+    assert.deepEqual(displayed.sources.map((source:any)=>[source.kind,source.text]),[
+      ['native_user_message','Original CYCLELATE user message.'],
+      ['native_tool_result','Original CYCLELATE tool result.'],
+    ])
+    const providerIds = requests.at(-1).messages.flatMap((message:any) => message.source?.sections ?? [])
+      .filter((section:any) => section.name.startsWith('memory:memory:')).map((section:any) => section.name.slice('memory:memory:'.length))
+    assert.deepEqual(shownMemory.items.map((item:any)=>item.id).sort(), [...new Set(providerIds)].sort())
+    assert.equal(shownMemory.items.some((item:any)=>item.id===foreign.id),false)
+    await ctx.agents.create({sessionId:session.SessionId('other-memory-session'),agentOptions:{provider:'core-memory',model:'fixed'},meta:{cwd:root}})
+    assert.deepEqual(await (await readMemory('other-memory-session')).json(),{state:'unobserved'})
+    assert.equal((await readMemory('unknown-session')).status,404)
+    assert.equal((await readMemory('memory-core',{method:'POST'})).status,405)
+    assert.equal((await readMemory('memory-core',{headers:{'sec-fetch-site':'cross-site'}})).status,403)
     const deliveredRelations=requests.flatMap(r=>r.messages??[]).flatMap((m:any)=>m.content??[])
       .filter((block:any)=>typeof block.text==='string'&&block.text.startsWith('Stored relation data.'))
       .map((block:any)=>JSON.parse(block.text.slice(block.text.indexOf('{'))))
@@ -134,6 +174,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
       assert.equal(requests.slice(requestsBeforeRace).filter(r=>r.purpose!=='compaction').length,1,'only the rebuilt request reaches the provider')
       await turn()
       assert.ok(!JSON.stringify(requests.at(-1).messages).includes(late.body))
+      assert.doesNotMatch(JSON.stringify(await (await readMemory()).json()),/Original CYCLELATE|private memory assembled/)
     }finally{releaseFence()}
   }finally{await handle?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();await rm(root,{recursive:true,force:true})}
 })

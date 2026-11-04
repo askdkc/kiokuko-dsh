@@ -1,3 +1,4 @@
+import type { MemorySidebarView, SidebarMemory } from './dsh/memory-sidebar.js'
 import { mountRecoveryClient } from './recovery-client.js'
 import { mountModelsClient } from './models-client.js'
 interface SnapshotStore<T> {
@@ -1391,10 +1392,197 @@ function installReviewStyle(): () => void {
   return () => style.remove()
 }
 
+const MEMORY_NS = 'kiokuko-memory-sidebar'
+const MEMORY_TAB = 'kiokuko-dsh/memory'
+const MEMORY_KIND = 'kiokuko-memory'
+const memoryDictionaries: Record<string, Record<string, string>> = {
+  en: {
+    title: 'Memory', description: 'See which memories were sent for the latest request and inspect their sources.',
+    loading: 'Loading memories…', error: 'Could not load memories for this session.', retry: 'Retry',
+    unobserved: 'No model input has been observed for this request yet.',
+    empty: 'No available memories for this request.', reasons: 'Why it was selected', sources: 'Source excerpts',
+    noReasons: 'Selection reasons are unavailable.', noSources: 'No source excerpts are available.',
+    omitted: 'Some excerpts were shortened or withheld.', user: 'User message', tool: 'Tool result', references: 'Source references',
+    revision: 'Revision', reuse: 'Reuse checks', noReuse: 'No verified reuse for this revision in this project.',
+    verifiedReuse: 'Reuse check passed', staleReuse: 'Needs rechecking', task: 'Task', verification: 'Verification reference',
+    'reason.project_origin': 'From this project', 'reason.ecosystem_origin': 'From a compatible project',
+    'reason.global_origin': 'From shared memory', 'reason.exact_signal_match': 'Exact match with the request',
+    'reason.applicability_match': 'Applies to the current context', 'reason.applicability_unknown': 'Applicability is unknown',
+    'reason.lexical_match': 'Matching words in the request', 'reason.word_match': 'Matching words in the request',
+    'reason.substring_match': 'Matching phrase in the request', 'reason.literal_fallback_match': 'Matching text in the request',
+    'reason.cjk_window_match': 'Matching text in the request', 'reason.tag_match': 'Matching tag',
+    'reason.semantic_match': 'Similar meaning', 'reason.semantic_reuse_match': 'Found applicable by semantic review',
+    'reason.related_signal_match': 'Linked to another relevant memory', 'reason.verified': 'Marked verified',
+    'reason.candidate': 'Stored candidate', 'reason.unscoped_global_prior': 'Shared reference without a narrow scope',
+    'reason.approved_replay_term_match': 'Request terms matched an approved past experience in this project',
+    'reason.repository_learning': 'Part of the saved learning summary for this repository',
+    'reason.helpful_feedback': 'Previously marked helpful', 'reason.irrelevant_feedback': 'Previously marked irrelevant',
+    'reason.conflicting_feedback': 'Previously flagged as conflicting', 'reason.stale_feedback': 'Prior feedback is stale',
+  },
+  ja: {
+    title: '記憶', description: '直近の依頼でモデルに渡った記憶と、その根拠を確認します。',
+    loading: '記憶を読み込んでいます…', error: 'このセッションの記憶を読み込めませんでした。', retry: '再試行',
+    unobserved: 'この依頼のモデル入力はまだ確認できていません。',
+    empty: 'この依頼で表示できる記憶はありません。', reasons: '選ばれた理由', sources: '出典の抜粋',
+    noReasons: '選定理由は確認できません。', noSources: '表示できる出典の抜粋はありません。',
+    omitted: '一部の抜粋を短縮または省略しています。', user: 'ユーザーの発言', tool: 'ツール結果', references: '出典の参照先',
+    revision: '版', reuse: '再利用の検証', noReuse: 'このプロジェクトで、この版の再利用を検証した記録はありません。',
+    verifiedReuse: '再利用の検証に合格', staleReuse: '再確認が必要', task: 'タスク', verification: '検証結果の参照先',
+    'reason.project_origin': 'このプロジェクトの記憶', 'reason.ecosystem_origin': '互換性のあるプロジェクトの記憶',
+    'reason.global_origin': '共有の記憶', 'reason.exact_signal_match': '依頼の語句と完全に一致',
+    'reason.applicability_match': '今回の文脈が適用条件に一致', 'reason.applicability_unknown': '適用できるかは不明',
+    'reason.lexical_match': '依頼の語句と一致', 'reason.word_match': '依頼の語句と一致',
+    'reason.substring_match': '依頼の一部と一致', 'reason.literal_fallback_match': '依頼の文字列と一致',
+    'reason.cjk_window_match': '依頼の文字列と一致', 'reason.tag_match': 'タグが一致',
+    'reason.semantic_match': '意味が近い', 'reason.semantic_reuse_match': '意味判定で今回に適用可能と判定',
+    'reason.related_signal_match': '関連する記憶とのつながり', 'reason.verified': '検証済みの記憶',
+    'reason.candidate': '記憶の候補', 'reason.unscoped_global_prior': '適用範囲を限定していない共有の記憶',
+    'reason.approved_replay_term_match': '依頼の語句が、このプロジェクトで承認済みの過去の経験と一致',
+    'reason.repository_learning': 'このリポジトリで保存された学習の要約',
+    'reason.helpful_feedback': '以前に有用と判定', 'reason.irrelevant_feedback': '以前に無関係と判定',
+    'reason.conflicting_feedback': '以前に矛盾を指摘', 'reason.stale_feedback': '過去の評価が古くなっている',
+  },
+  zh: {
+    title: '记忆', description: '查看最近一次请求发送给模型的记忆及其来源。',
+    loading: '正在加载记忆…', error: '无法加载此会话的记忆。', retry: '重试',
+    unobserved: '尚未观测到此次请求的模型输入。', empty: '此次请求没有可显示的记忆。',
+    reasons: '选中原因', sources: '来源摘录', noReasons: '暂无选中原因。', noSources: '暂无可显示的来源摘录。',
+    omitted: '部分摘录已缩短或省略。', user: '用户消息', tool: '工具结果', references: '来源引用',
+    revision: '版本', reuse: '复用验证', noReuse: '此项目中暂无此版本的复用验证记录。',
+    verifiedReuse: '复用验证通过', staleReuse: '需要重新验证', task: '任务', verification: '验证结果引用',
+    'reason.approved_replay_term_match': '请求中的词语与该项目已批准的经历匹配',
+    'reason.repository_learning': '此仓库已保存的学习摘要',
+  },
+}
+
+function SidebarMemoryItem({ item, t }: { item: SidebarMemory; t: (key: string) => string }): unknown {
+  const reasons = [...new Set(item.reasons.map(code => {
+    const key = `reason.${code}`
+    const label = t(key)
+    return label === key ? memoryDictionaries.en![key] ?? code : label
+  }))]
+  return jsxs('details', { children: [
+    jsx('summary', { children: item.title }),
+    item.revision === undefined ? null : jsx('p', { children: `${t('revision')} ${item.revision}` }),
+    item.text ? jsx('p', { children: item.text }) : null,
+    jsx('h3', { children: t('reasons') }),
+    reasons.length ? jsx('ul', { children: reasons.map(reason => jsx('li', { children: reason }, reason)) })
+      : jsx('p', { children: t('noReasons') }),
+    jsx('h3', { children: t('sources') }),
+    ...item.sources.map((source, index) => jsxs('figure', { children: [
+      jsx('figcaption', { children: t(source.kind === 'native_user_message' ? 'user' : 'tool') }),
+      jsx('blockquote', { children: source.text }),
+      source.reference ? jsx('code', { children: source.reference }) : null,
+    ] }, index)),
+    !item.sources.length ? jsx('p', { children: t('noSources') }) : null,
+    item.sourcesOmitted ? jsx('p', { children: t('omitted') }) : null,
+    item.references.length ? jsxs(Fragment, { children: [
+      jsx('h3', { children: t('references') }),
+      jsx('ul', { children: item.references.map((ref, index) => jsx('li', { children: jsx('code', { children: ref }) }, index)) }),
+    ] }) : null,
+    item.reuse ? jsxs(Fragment, { children: [
+      jsx('h3', { children: t('reuse') }),
+      item.reuse.length ? jsx('ul', { children: item.reuse.map(check => jsxs('li', { children: [
+        jsx('strong', { children: t(check.state === 'verified' ? 'verifiedReuse' : 'staleReuse') }),
+        check.description ? jsx('p', { children: check.description }) : null,
+        jsx('p', { children: `${t('task')} ${check.runId}` }),
+        jsx('p', { children: `${t('verification')} ${check.evidenceRef}` }),
+      ] }, `${check.runId}:${check.criterionId}`)) }) : jsx('p', { children: t('noReuse') }),
+    ] }) : null,
+  ] })
+}
+
+function MemorySidebarSession({ sessionId, tab, t }: { sessionId: string; tab: { signal: AbortSignal; visible: boolean }; t: (key: string) => string }): unknown {
+  const [view, setView] = useState<MemorySidebarView | 'loading' | 'error'>('loading')
+  const [retry, setRetry] = useState(0)
+  useEffect(() => {
+    if (!tab.visible || tab.signal.aborted) return
+    const controller = new AbortController()
+    const signal = AbortSignal.any([tab.signal, controller.signal])
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let previous = ''
+    async function load() {
+      try {
+        const url = new URL('/api/kiokuko.memory-sidebar', hostBase())
+        url.searchParams.set('sessionId', sessionId)
+        const response = await fetch(url, { signal: AbortSignal.any([signal, AbortSignal.timeout(8000)]), cache: 'no-store' })
+        if (!response.ok) throw new Error('memory_unavailable')
+        const text = await response.text()
+        if (signal.aborted) return
+        if (text !== previous) {
+          const body = JSON.parse(text) as MemorySidebarView
+          if (body.state !== 'observed' && body.state !== 'unobserved') throw new Error('invalid_memory_response')
+          setView(body)
+          previous = text
+        }
+        timer = setTimeout(() => { void load() }, 2000)
+      } catch {
+        if (!signal.aborted) setView('error')
+      }
+    }
+    void load()
+    return () => { controller.abort(); clearTimeout(timer) }
+  }, [sessionId, tab.signal, tab.visible, retry])
+  const message = typeof view === 'string' ? view : view.state === 'unobserved' ? 'unobserved' : view.items.length ? null : 'empty'
+  return jsxs('section', { className: 'kiokuko-memory-sidebar', 'aria-label': t('title'), children: [
+    jsx('h2', { children: t('title') }),
+    jsx('p', { children: t('description') }),
+    message ? jsx('p', { role: view === 'error' ? 'alert' : 'status', children: t(message) }) : null,
+    view === 'error' ? jsx('button', { type: 'button', onClick: () => { setView('loading'); setRetry(retry + 1) }, children: t('retry') }) : null,
+    typeof view !== 'string' && view.state === 'observed' ? jsx('ul', {
+      className: 'kiokuko-memory-list',
+      children: view.items.map(item => jsx('li', { children: jsx(SidebarMemoryItem, { item, t }) }, item.id)),
+    }, view.requestId) : null,
+  ] })
+}
+
+function MemorySidebarTab(props: Record<string, unknown>): unknown {
+  const useTabInfo = props.useTabInfo as () => { tab: { signal: AbortSignal; visible: boolean } }
+  const { tab } = useTabInfo()
+  if (typeof props.sessionId !== 'string') return null
+  return jsx(MemorySidebarSession, { sessionId: props.sessionId, tab, t: props.t }, props.sessionId)
+}
+
+function mountMemorySidebarClient(ctx: DshClientContext): void {
+  ctx.effect(() => ctx.locale.register(MEMORY_NS, memoryDictionaries) as () => void, 'kiokuko-dsh: memory sidebar dictionaries')
+  ctx.inject?.(['sidebarRightTabs'], scope => {
+    const t = scope.locale.bind?.(MEMORY_NS) ?? ((key: string) => memoryDictionaries.en![key] ?? key)
+    scope.effect(() => {
+      const dispose = scope.sidebarRightTabs!.register({
+        id: MEMORY_TAB, kind: MEMORY_KIND, priority: 'extension', title: () => t('title'),
+        guide: [{ id: 'open', order: 35, title: () => t('title'), description: () => t('description') }],
+      })
+      return () => { void dispose() }
+    }, 'kiokuko-dsh: memory sidebar tab')
+    scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+      name: 'sidebar.right.pane.tab', key: MEMORY_TAB, locale: MEMORY_NS,
+    }, MemorySidebarTab)) as () => void, 'kiokuko-dsh: memory sidebar body')
+  })
+  ctx.effect(() => {
+    if (typeof document === 'undefined') return
+    const style = document.createElement('style')
+    style.textContent = `
+.kiokuko-memory-sidebar{box-sizing:border-box;height:100%;overflow:auto;padding:12px;color:var(--dsw-alias-label-primary,CanvasText);background:var(--dsw-alias-background-primary,Canvas);font:13px/1.5 var(--dsw-font-family,system-ui);overflow-wrap:anywhere}
+.kiokuko-memory-sidebar h2{font-size:17px;margin:0}
+.kiokuko-memory-sidebar h3{font-size:13px}
+.kiokuko-memory-list{padding:0;list-style:none}
+.kiokuko-memory-list details{border-block-start:1px solid var(--dsw-alias-border-l4,GrayText);padding:0 4px 4px}
+.kiokuko-memory-list summary{cursor:pointer;padding:10px 0;font-weight:600}
+.kiokuko-memory-list :focus-visible,.kiokuko-memory-sidebar button:focus-visible{outline:2px solid Highlight;outline-offset:1px}
+.kiokuko-memory-list figure{margin:8px 0 12px}
+.kiokuko-memory-list figcaption{font-weight:600}
+.kiokuko-memory-list blockquote{white-space:pre-wrap;margin:4px 0;padding-inline-start:8px;border-inline-start:2px solid var(--dsw-alias-border-l4,GrayText)}
+.kiokuko-memory-sidebar button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l4,GrayText);border-radius:6px;padding:6px 10px;min-height:36px;cursor:pointer}`
+    document.head.append(style)
+    return () => style.remove()
+  }, 'kiokuko-dsh: memory sidebar style')
+}
+
 /** Register Kiokuko's streaming Session-export browser surface. */
 export function apply(ctx: DshClientContext): void {
   mountModelsClient(ctx)
   mountRecoveryClient(ctx)
+  mountMemorySidebarClient(ctx)
   const installApprovals = (scope: DshClientContext, approvalScope: LispApprovalScope, modern: boolean) => {
     scope.slots.inject('settings.general.item', () => scope.slots.register({ name: 'settings.general.item', id: 'kiokuko-lisp-approval', locale: LOCALE_NAMESPACE,
       inject: () => ({ approvalScope, modern }),

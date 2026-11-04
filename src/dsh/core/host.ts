@@ -1,3 +1,4 @@
+import { noteScopedMemory } from '../memory-sidebar.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
 import { TaskStartup } from '../task-startup.js'
@@ -2225,6 +2226,7 @@ export async function mountCore(
                   current.memoryRebuildAttempts++
                   throw new MemorySnapshotStale()
                 }
+                noteScopedMemory(request, allowed, current.task.context?.items ?? [])
               }
             }, next),
         )

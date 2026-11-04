@@ -1,3 +1,4 @@
+import { noteScopedMemory } from './memory-sidebar.js'
 import { MemorySnapshotStale } from './memory-request-fence.js'
 import { retainedEvents } from './context-projection.js'
 import type { TaskType } from '../akinator/types.js'
@@ -165,7 +166,10 @@ export class DshAnswerContext {
     let { allowed, retired } = await this.current(input, identity)
     const changed = () => filterRequestMemory(request.messages!, allowed).length !== request.messages!.length
       || JSON.stringify(filterExplainedMemory(request.messages!, retired)) !== JSON.stringify(request.messages)
-    if (!changed()) return
+    if (!changed()) {
+      noteScopedMemory(request, allowed, this.#contexts.get(agent.session!.id)?.context?.items ?? [])
+      return
+    }
     pruneDshMemorySurface(agent.session!, allowed)
     pruneExplainedMemorySurface(agent.session!, retired)
     const state = this.#contexts.get(agent.session!.id)!

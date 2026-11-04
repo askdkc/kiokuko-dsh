@@ -11,12 +11,13 @@ import {
   readRelationDelivery,
 } from "../memory/relation-delivery.js";
 import { projectMemoryEntry, renderMemoryFields } from "./memory-projection.js";
-import { serializeModelMemoryContext } from "./model-memory.js";
+import { renderModelMemory, serializeModelMemoryContext } from "./model-memory.js";
 
 /** Approved replay uses its existing indexed entry identity, never a fabricated proposal ID. */
 export function serializeApprovedReplayContext(
   db: SqliteDatabase,
   replay: readonly ReplayMemoryProposal[],
+  observeSelection?: (items: readonly { workspace: string; entryId: string; revision: number }[]) => void,
 ): string {
   const items: Array<{
     workspace: string;
@@ -123,5 +124,7 @@ export function serializeApprovedReplayContext(
   const relationDelivery = legacy
     ? legacyRelationDelivery(options)
     : readRelationDelivery(db, items, options);
-  return serializeModelMemoryContext({ items, relationDelivery, ...limits });
+  const text = serializeModelMemoryContext({ items, relationDelivery, ...limits });
+  if (observeSelection) observeSelection(items.filter(item => renderModelMemory(item) !== null));
+  return text;
 }

@@ -47,6 +47,7 @@ import type { DshCoreRuntime } from "./core-runtime.js";
 import type { DshPreStepDecision } from "./intake-gate.js";
 import type { DshUserQuestions } from "./user-interaction.js";
 import { KIOKUKO_DSH_SOURCE_KIND } from "./plugin-source.js";
+import { mountMemorySidebar, noteReplayMemory } from "./memory-sidebar.js";
 import { CODING_READ_ONLY } from "./coding-workflow/intent.js";
 
 type Event = { type: string; seq: number; data: any };
@@ -175,6 +176,7 @@ export class DshLifecycleMemory {
       return shared;
     }
     this.repositoryLearning = new DshRepositoryLearning(host, runtime, root);
+    this.disposers.push(mountMemorySidebar(host, runtime));
     const configured = host.get(REPLAY_REFLECTOR_SERVICE, false);
     if (
       configured &&
@@ -552,11 +554,12 @@ export class DshLifecycleMemory {
             state.lastProjection = key;
             const replay = context.replay;
             let body: string | undefined;
+            const selected: { workspace: string; entryId: string; revision: number }[] = [];
             try {
               body = await Promise.race([
                 this.runtime.withDatabase((db) =>
                   withOptionalMemoryAccess(db, () =>
-                    serializeApprovedReplayContext(db, replay),
+                    serializeApprovedReplayContext(db, replay, items => selected.push(...items)),
                   ),
                 ),
                 new Promise<undefined>((resolve) => {
@@ -572,12 +575,14 @@ export class DshLifecycleMemory {
               !this.owned(agent)
             )
               return clean;
+            const messageId = randomUUID();
+            noteReplayMemory(agent.session, messageId, body, selected);
             return {
               ...clean,
               messages: [
                 ...clean.messages,
                 {
-                  id: randomUUID(),
+                  id: messageId,
                   role: "user" as const,
                   content: [
                     {
