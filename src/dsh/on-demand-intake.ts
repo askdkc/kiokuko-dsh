@@ -2697,6 +2697,16 @@ export class OnDemandIntake {
                 ? denied('Native tool policy cancelled this call')
                 : decision
             }
+            // A pending question is a waiting state, never an execution grant:
+            // no tool may continue the previous request before the user answers.
+            // Only preparation may run, because it consumes that answer.
+            if (
+              this.awaitingClarification(state.input.agent) &&
+              execution.name !== TASK_PREPARE_TOOL
+            )
+              return denied(
+                'Waiting for the answer to the clarification question; no work runs until the user replies.',
+              )
             // Evidence gathering does not decide the request's action or scope.
             // In particular, an inherited owner must not turn a read into an
             // immutable research preparation before the main model can interpret it.
