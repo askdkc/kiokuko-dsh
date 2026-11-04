@@ -217,3 +217,33 @@ test('fresh recovery cannot acknowledge a target replaced during model preparati
     assert.equal(f.source.session.snapshotEvents().some(event => pluginRecordOf(event)?.type === 'plugin:kiokuko-dsh/session-recovery'), false)
   } finally { await f.service.dispose() }
 })
+
+test('a session stopped by a provider rejection reports its cause and still offers start-fresh', async () => {
+  const f = fixture()
+  try {
+    const failed = f.make('recovery-failed')
+    failed.session.append('turn/start', { turn: 1 })
+    failed.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Make the whale draggable' }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    failed.session.append('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'PROVIDER_ERROR', status: 400, message: 'OpenCode request failed: HTTP 400: This model does not support image input' } } })
+    const status = await f.service.inspect('recovery-failed')
+    assert.deepEqual(status.lastFailure, { code: 'PROVIDER_ERROR', status: 400, message: 'OpenCode request failed: HTTP 400: This model does not support image input' })
+    assert.equal(status.interrupted, true)
+    assert.equal(status.canRestart, true)
+    assert.ok(status.warnings.some(warning => /HTTP 400/u.test(warning) && /空の会話/u.test(warning)), 'the recorded rejection must route the user to a safe path')
+  } finally { await f.service.dispose() }
+})
+
+test('a recorded turn failure is bounded and never echoes credential material', async () => {
+  const f = fixture()
+  try {
+    const failed = f.make('recovery-secret')
+    failed.session.append('turn/start', { turn: 1 })
+    failed.session.append('turn/end', { turn: 1, reason: { kind: 'error', error: { code: 'PROVIDER_ERROR', message: 'rejected api key sk-live-abcdef1234567890 and Authorization: Bearer abc.def.ghi' } } })
+    const status = await f.service.inspect('recovery-secret')
+    assert.equal(status.lastFailure?.code, 'PROVIDER_ERROR')
+    assert.match(status.lastFailure!.message, /rejected api key/u)
+    assert.doesNotMatch(status.lastFailure!.message, /sk-live-abcdef1234567890|abc\.def\.ghi/u)
+    assert.ok(status.lastFailure!.message.length <= 300)
+    assert.equal(status.canContinue, true, 'an unexplained failure stays continuable')
+  } finally { await f.service.dispose() }
+})

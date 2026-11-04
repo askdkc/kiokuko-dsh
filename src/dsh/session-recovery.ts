@@ -1,5 +1,6 @@
 import { isAbsolute } from 'node:path'
 import { createHash } from 'node:crypto'
+import { scrubAgenticReplayText } from './agenticreplay-security.js'
 
 type Event = { type: string; seq: number; data: any }
 type Selection = { provider: string; model: string; reasoningEffort?: string }
@@ -9,6 +10,7 @@ export interface RecoveryHost { get(name: string, strict?: boolean): any }
 export interface RecoveryStatus {
   sessionId: string; seq: number; interrupted: boolean; busy: boolean; canContinue: boolean; canRestart: boolean
   model: Selection | null; modelAvailable: boolean; originalRequest: string; attachments: number
+  lastFailure?: { code: string; status?: number; message: string }
   unknownCalls: { id: string; name: string }[]; warnings: string[]; lastRestart?: { sessionId: string; draft: string }
 }
 export interface RecoveryInput { sessionId: string; action: 'continue' | 'new'; operationId: string; expectedSeq: number }
@@ -41,6 +43,28 @@ function recordedSelection(events: readonly Event[]): Selection | undefined {
   }
   return pending ?? used
 }
+/** Keep the recorded turn failure as a bounded, redacted fact instead of
+ * trusting a raw error object or losing the cause behind a generic message. */
+function recordedFailure(reason: unknown): { code: string; status?: number; message: string } | undefined {
+  const value = reason !== null && typeof reason === 'object' ? reason as Record<string, unknown> : undefined
+  const error = value?.kind === 'error' && value.error !== null && typeof value.error === 'object' ? value.error as Record<string, unknown> : undefined
+  if (!error) return undefined
+  const code = typeof error.code === 'string' && error.code.trim() !== '' ? error.code.trim().slice(0, 64) : 'UNKNOWN'
+  const status = typeof error.status === 'number' && Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? error.status : undefined
+  const raw = typeof error.message === 'string' ? error.message : ''
+  const message = scrubAgenticReplayText(raw).replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim().slice(0, 300)
+  return { code, ...(status === undefined ? {} : { status }), message: message === '' ? '原因は記録されていません' : message }
+}
+
+/** A recorded request rejection repeats for the same history and model, so
+ * point at the two paths that can actually make progress. */
+function failureWarning(failure: { code: string; status?: number; message: string }): string {
+  const detail = `HTTP ${failure.status}: ${failure.message}`
+  if (failure.status !== undefined && failure.status >= 400 && failure.status < 500 && failure.status !== 408 && failure.status !== 429)
+    return `前回のターンはプロバイダに拒否されました（${detail}）。同じ履歴のまま同じモデルで続行すると同じ失敗が再発します。モデルを変えて続行するか、「空の会話でやり直す」で新しい会話を始めてください。`
+  return `前回のターンは失敗しました（${failure.code}${failure.status === undefined ? '' : ` / HTTP ${failure.status}`}: ${failure.message}）。同じ履歴で再び失敗する場合は「空の会話でやり直す」を選んでください。`
+}
+
 function targetId(source: string, operation: string): string {
   const hash = createHash('sha256').update(source).update('\0').update(operation).digest('hex')
   return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`
@@ -86,6 +110,7 @@ export class SessionRecovery {
       if (event.type === 'tool/result' && event.data.error?.code !== 'TOOL_OUTCOME_UNKNOWN') calls.delete(`${event.data.turn}:${event.data.message?.toolCallId}`)
     }
     const reason = lastEnd?.data?.reason?.kind
+    const lastFailure = reason === 'error' ? recordedFailure(lastEnd?.data?.reason) : undefined
     const interrupted = calls.size > 0 || !!lastStart && (!lastEnd || lastStart.seq > lastEnd.seq || ['interrupted', 'error', 'cancelled'].includes(reason))
     const model = agent?.model?.current() ?? recordedSelection(events) ?? null
     const providers = this.host.get('llm', false)?.listProviders?.() ?? []
@@ -96,13 +121,14 @@ export class SessionRecovery {
     const hasDirectory = typeof session.header.cwd === 'string' && isAbsolute(session.header.cwd)
     const request = requestOf(events)
     const warnings = interrupted ? [CAUTION] : []
+    if (lastFailure) warnings.push(failureWarning(lastFailure))
     if (!hasDirectory) warnings.push('元の作業場所が不明です。通常の新規会話から作業場所を選択してください。')
     if (request.text.length > 131072) warnings.push('元の依頼が長いため自動転記できません。必要な部分を元の会話からコピーしてください。')
     if (!modelAvailable) warnings.push('保存されたモデル接続が利用できません。接続を復旧するかモデルを選び直してください。新規会話は作成できます。')
     if (request.attachments) warnings.push('新しい会話では、元の添付ファイルを再添付してください。')
     const restarted = [...events].reverse().find(event => event.type === RECORD && event.data?.action === 'new' && event.data?.version === 1 && event.data?.sourceSessionId === id && typeof event.data.operationId === 'string' && event.data.targetSessionId === targetId(id, event.data.operationId))?.data
     const lastRestart = restarted && (this.agent(restarted.targetSessionId) || await this.host.get('sessionPersistence', false)?.stat?.(restarted.targetSessionId)) ? { sessionId: restarted.targetSessionId, draft: this.draft(requestOf(events.filter(event => event.seq <= restarted.expectedSeq)).text) } : undefined
-    return { sessionId: id, seq: events.at(-1)?.seq ?? -1, interrupted, busy, canContinue: root && interrupted && !busy && modelAvailable, canRestart: root && !busy && hasDirectory && !!(this.host.get('sessionController', false)?.create || this.host.get('agents', false)?.create), model, modelAvailable, originalRequest: request.text.length > 131072 ? '' : request.text, ...(lastRestart ? { lastRestart } : {}), attachments: request.attachments, unknownCalls: [...calls.values()], warnings }
+    return { sessionId: id, seq: events.at(-1)?.seq ?? -1, interrupted, busy, canContinue: root && interrupted && !busy && modelAvailable, canRestart: root && !busy && hasDirectory && !!(this.host.get('sessionController', false)?.create || this.host.get('agents', false)?.create), model, modelAvailable, ...(lastFailure ? { lastFailure } : {}), originalRequest: request.text.length > 131072 ? '' : request.text, ...(lastRestart ? { lastRestart } : {}), attachments: request.attachments, unknownCalls: [...calls.values()], warnings }
   }
   private draft(text: string): string { return text.length > 131072 ? '' : `${text}\n\n【中断後のやり直し】\n${CAUTION}` }
   private async activate(id: string): Promise<Agent> {

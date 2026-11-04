@@ -10,6 +10,24 @@ import { abortable } from './abortable.js'
 import { randomUUID } from 'node:crypto'
 import { parseTree, type Node as JsonNode, type ParseError } from 'jsonc-parser'
 import { record, mergeMetadata } from './opencode-replay.js'
+import { scrubAgenticReplayText } from '../../agenticreplay-security.js'
+
+const MAX_REJECTION_REASON_CHARS = 300
+
+/** Keep the provider's own explanation for a rejected request without copying
+ * a raw body: bounded, single-line and credential-redacted. */
+function rejectionReasonText(value: Record<string, unknown> | undefined): string | undefined {
+  const body = typeof value?.responseBody === 'string' ? value.responseBody : undefined
+  const parsed = body === undefined ? undefined : ((): Record<string, unknown> | undefined => { try { return record(JSON.parse(body)) } catch { return undefined } })()
+  const data = record(value?.data) ?? parsed
+  const failure = record(data?.error)
+  const raw = typeof failure?.message === 'string' && failure.message.trim() !== '' ? failure.message
+    : typeof data?.message === 'string' && data.message.trim() !== '' ? data.message
+    : typeof data?.detail === 'string' && data.detail.trim() !== '' ? data.detail : body
+  if (typeof raw !== 'string') return undefined
+  const text = scrubAgenticReplayText(raw).replace(/[\p{Cc}\p{Cf}]/gu, ' ').replace(/\s+/gu, ' ').trim()
+  return text === '' ? undefined : text.slice(0, MAX_REJECTION_REASON_CHARS)
+}
 
 /** Exact decimal normalization: no floating-point rounding, including huge exponents. */
 function canonicalJsonNumber(token: string): string {
@@ -191,7 +209,8 @@ export class OpenCodeAdapter extends LlmAdapter {
       const retry = typeof retryHeader === 'string' ? Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryHeader) - Date.now() : undefined
       const requestId = responseHeaders?.['x-request-id'] ?? responseHeaders?.['request-id']
       if (status !== undefined && status >= 200 && status < 300) throw new LlmError(`OpenCode response stream failed after HTTP ${status}`, 'PROTOCOL_ERROR', {status, ...(typeof requestId === 'string' && requestId.trim() ? {requestId: requestId as NonNullable<NonNullable<ConstructorParameters<typeof LlmError>[2]>['requestId']>} : {})})
-      throw new LlmError(`OpenCode request failed${status ? `: HTTP ${status}` : ''}`, status === 401 || status === 403 ? 'AUTH' : status === 429 ? 'RATE_LIMIT' : status && status >= 500 ? 'SERVER' : status ? 'PROVIDER_ERROR' : 'TRANSPORT', { ...(status !== undefined ? {status} : {}), ...(retry !== undefined && retry > 0 ? { providerRetryAfterMs: retry } : {}), ...(typeof requestId === 'string' && requestId.trim() ? { requestId: requestId as NonNullable<NonNullable<ConstructorParameters<typeof LlmError>[2]>['requestId']> } : {}) })
+      const rejection = status !== undefined && (status < 200 || status >= 300) ? rejectionReasonText(raw) : undefined
+      throw new LlmError(`OpenCode request failed${status ? `: HTTP ${status}` : ''}${rejection ? `: ${rejection}` : ''}`, status === 401 || status === 403 ? 'AUTH' : status === 429 ? 'RATE_LIMIT' : status && status >= 500 ? 'SERVER' : status ? 'PROVIDER_ERROR' : 'TRANSPORT', { ...(status !== undefined ? {status} : {}), ...(retry !== undefined && retry > 0 ? { providerRetryAfterMs: retry } : {}), ...(typeof requestId === 'string' && requestId.trim() ? { requestId: requestId as NonNullable<NonNullable<ConstructorParameters<typeof LlmError>[2]>['requestId']> } : {}) })
     } finally { clearTimeout(timer); abort.abort(); if (reader) { void reader.cancel().catch(() => undefined); reader.releaseLock() } }
   }
 }

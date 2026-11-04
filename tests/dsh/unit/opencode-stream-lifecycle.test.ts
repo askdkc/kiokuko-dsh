@@ -31,14 +31,22 @@ const finish: Part = { type: 'finish', usage: { inputTokens: { total: 0, noCache
 const start = (id = 'a', toolName = 'read'): Part => ({ type: 'tool-input-start', id, toolName });
 const delta = (value = '{}', id = 'a'): Part => ({ type: 'tool-input-delta', id, delta: value });
 const final = (input = '{}', toolCallId = 'a', toolName = 'read'): Part => ({ type: 'tool-call', toolCallId, toolName, input });
-async function consume(parts: Part[]) {
+function adapterWith(fetcher: typeof fetch) {
   const model = { id: 'fixture', name: 'Fixture', protocol: 'chat' as const, contextWindow: 1024, maxTokens: 128, inputModalities: ['text' as const], toolCall: true, reasoning: false, temperature: false, efforts: [] };
-  const adapter = new OpenCodeAdapter({ catalogs: new Map([['opencode', { models: () => [model], status: () => ({ excluded: [] }) }]]) as unknown as ConstructorParameters<typeof Adapter>[0]['catalogs'],
+  return new OpenCodeAdapter({ catalogs: new Map([['opencode', { models: () => [model], status: () => ({ excluded: [] }) }]]) as unknown as ConstructorParameters<typeof Adapter>[0]['catalogs'],
     store: { read: async () => ({ type: 'api_key', key: 'synthetic-only' }) } as unknown as ConstructorParameters<typeof Adapter>[0]['store'],
-    fetcher: (async () => ({ stream: new ReadableStream<Part>({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } }) })) as unknown as typeof fetch });
+    fetcher });
+}
+async function drain(adapter: InstanceType<typeof Adapter>) {
   const assembler = new BlockAssembler(); const chunks: StreamChunk[] = []; let error: unknown;
   try { for await (const chunk of adapter.stream({ provider: 'opencode', model: 'fixture', messages: [] })) { chunks.push(chunk); assembler.push(chunk); } } catch (caught) { error = caught; }
   return { assembler, chunks, error };
+}
+async function consume(parts: Part[]) {
+  return drain(adapterWith((async () => ({ stream: new ReadableStream<Part>({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close(); } }) })) as unknown as typeof fetch));
+}
+async function reject(error: unknown) {
+  return drain(adapterWith((async () => { throw error }) as unknown as typeof fetch));
 }
 const malformed: Record<string, Part[]> = {
   'provider-executed delta-only tool': [{ type: 'tool-input-start', id: 'a', toolName: 'read', providerExecuted: true }, delta()],
@@ -134,4 +142,29 @@ test('HTTP 200 stream failure is a protocol failure, retains safe correlation an
   assert.match(result.error.message,/stream.*HTTP 200/u)
   assert.doesNotMatch(result.error.message,/PRIVATE_PROVIDER_BODY|request failed/u)
   assert.equal(result.chunks.some(chunk=>chunk.type==='finish'),false)
+})
+
+test('a rejected request keeps the provider reason instead of only the HTTP status', async () => {
+  const error=Object.assign(new Error('AI_APICallError'),{statusCode:400,responseBody:'{"error":{"message":"This model does not support image input"}}',responseHeaders:{'x-request-id':'fixture-request'}})
+  const result=await reject(error)
+  assert.ok(result.error instanceof LlmError)
+  assert.equal(result.error.code,'PROVIDER_ERROR')
+  assert.equal(result.error.failure.status,400)
+  assert.equal(result.error.failure.requestId,'fixture-request')
+  assert.equal(result.error.message,'OpenCode request failed: HTTP 400: This model does not support image input')
+})
+
+test('a rejected request without a provider body reports only the HTTP status', async () => {
+  const error=Object.assign(new Error('AI_APICallError'),{statusCode:400,responseHeaders:{}})
+  const result=await reject(error)
+  assert.ok(result.error instanceof LlmError)
+  assert.equal(result.error.message,'OpenCode request failed: HTTP 400')
+})
+
+test('a provider rejection reason never echoes credential material', async () => {
+  const error=Object.assign(new Error('AI_APICallError'),{statusCode:400,responseBody:'{"error":{"message":"bad api key sk-live-abcdef1234567890 and Authorization: Bearer abc.def.ghi"}}'})
+  const result=await reject(error)
+  assert.ok(result.error instanceof LlmError)
+  assert.match(result.error.message,/bad api key/u)
+  assert.doesNotMatch(result.error.message,/sk-live-abcdef1234567890|abc\.def\.ghi/u)
 })
