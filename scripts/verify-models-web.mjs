@@ -537,12 +537,30 @@ try {
     }),
   );
 } catch (error) {
-  if (page) {
-    console.error(await page.locator("body").ariaSnapshot());
-    await page.screenshot({ path: join(base, "failure.png") });
-  }
+  // Report the original failure and the host log before touching the page again:
+  // a pending memory-offer locator handler can block an accessibility snapshot for
+  // the full default timeout and would then replace the real cause with its own.
   console.error(logs.slice(-7000).replace(/token=[^\s]+/g, "token=[redacted]"));
   console.error("Evidence", base);
+  if (page) {
+    page.setDefaultTimeout(5_000);
+    try {
+      console.error(await page.locator("body").ariaSnapshot());
+    } catch (snapshotError) {
+      console.error(
+        "Accessibility snapshot unavailable:",
+        snapshotError instanceof Error ? snapshotError.message : String(snapshotError),
+      );
+    }
+    try {
+      await page.screenshot({ path: join(base, "failure.png") });
+    } catch (screenshotError) {
+      console.error(
+        "Failure screenshot unavailable:",
+        screenshotError instanceof Error ? screenshotError.message : String(screenshotError),
+      );
+    }
+  }
   throw error;
 } finally {
   rateLimitResponse.resolve();
