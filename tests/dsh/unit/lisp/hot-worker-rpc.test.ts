@@ -16,6 +16,7 @@ test('resident task RPC denial is request-local and cannot inherit persistent ho
 import {createInterface} from 'node:readline';
 const send=value=>writeSync(3,JSON.stringify(value)+'\\n');let pending;
 send({version:1,type:'ready'});
+writeSync(4,JSON.stringify({type:'runtime',pid:process.pid,identity:null})+'\\n');
 createInterface({input:createReadStream('',{fd:3,autoClose:false})}).on('line',line=>{
  const f=JSON.parse(line);if(f.method){pending=f.id;send({version:1,type:'rpc',id:'rpc',request:pending,method:f.code,arguments:{}})}
  else send({version:1,type:'result',id:pending,ok:true,value:f,proposals:[]});

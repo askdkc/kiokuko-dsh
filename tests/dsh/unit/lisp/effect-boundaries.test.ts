@@ -136,6 +136,7 @@ for (const boundary of ['missing', 'launch'] as const) test(`protected worker ${
 import { createInterface } from 'node:readline';
 const send = value => writeSync(3, JSON.stringify(value) + '\\n');
 let pending;
+writeSync(4, JSON.stringify({ type: 'runtime', pid: process.pid, identity: null }) + '\\n');
 send({ version: 1, type: 'ready' });
 createInterface({ input: createReadStream('', { fd: 3, autoClose: false }) }).on('line', line => {
   const frame = JSON.parse(line);

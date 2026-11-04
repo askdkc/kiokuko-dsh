@@ -244,7 +244,9 @@ test('protected Lisp project: Node startup, scratch cwd, exact approved npm test
     }
     const sameRepository = { ...owner, agentId: 'same-repo-agent', sessionId: 'same-repo-session' }
     workingLispTask(db, sameRepository)
-    await assert.rejects(manager.enable(sameRepository), { code: 'REPOSITORY_IN_USE' })
+    await manager.enable(sameRepository)
+    const sameRepositoryTools = await manager.execute(sameRepository, 'lisp_describe', { operationId: 'same-repo-task-tools', symbol: 'kioku.user' }) as any
+    assert.deepEqual(sameRepositoryTools.value.symbols, [], 'another chat in the same repository has its own definitions')
     const other = { ...owner, root: join(base, 'other-workspace'), agentId: 'other-agent', sessionId: 'other-session' }
     await mkdir(other.root); workingLispTask(db, other)
     await manager.enable(other)

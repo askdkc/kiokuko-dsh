@@ -8,7 +8,6 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { processIdentity, sameProcess } from '../../../../lisp/process-identity.mjs'
-import { claimRepository } from '../../../../lisp/repository-owner.mjs'
 import { sandboxLaunch } from '../../../../src/dsh/lisp/sandbox.js'
 
 // Real processes model bwrap's monitor/setup/init ownership boundary. This is
@@ -19,7 +18,7 @@ async function until(check: () => boolean, message: string, ms = 2500) {
   const deadline = Date.now() + ms
   while (!check()) { assert.ok(Date.now() < deadline, message); await delay(10) }
 }
-async function fixture(reportDelay: number, options: { terminationLookupError?: 'once' | 'persistent'; parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; repository?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
+async function fixture(reportDelay: number, options: { terminationLookupError?: 'once' | 'persistent'; parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; runtimeReport?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'namespace-supervisor-'))
   // Use the running test runtime: system Python cold-start is unrelated to
   // namespace supervision and can consume the entire phase-entry budget on CI.
@@ -49,7 +48,7 @@ writeSync(1,'reported\\n');
 ${options.exitAfterReport ? 'process.exit(0);' : ''}
 const [code,signal]=await childExit;process.exit(signal?128:code??70);
 `)
-  const launch = { command: process.execPath, args: [script], env: {}, cwd: base, protocol: false, namespaceInfo: true, ...(options.repository ? { repositoryRoot: base } : {}) }
+  const launch = { command: process.execPath, args: [script], env: {}, cwd: base, protocol: false, namespaceInfo: true, runtimeReport: options.runtimeReport }
   // Fixture EOF remains independent of production Stop. The owned session
   // below also bounds teardown before an inheritor can cooperate with EOF.
   // The fixture anchor is unref'ed and inherits no streams: it must neither
@@ -272,7 +271,7 @@ for (const mode of ['missing', 'malformed', 'identity lookup error', 'closed dia
 }
 
 for (const mode of ['once', 'persistent'] as const) test(`namespace termination observation ${mode}: only a confirmed stop releases ownership`, { timeout: 10000 }, async () => {
-  const f = await fixture(0.05, { repository: true, terminationLookupError: mode })
+  const f = await fixture(0.05, { runtimeReport: true, terminationLookupError: mode })
   await f.run(async () => {
     const pid = await f.started(), identity = processIdentity(pid)
     assert.ok(identity)
@@ -362,14 +361,13 @@ test('a foreign PID report never authorizes signalling an unrelated process', { 
   } finally { sentinel.kill('SIGKILL'); await exited }
 })
 
-test('repository ownership follows the actual namespace runtime across supervisor loss', { timeout: 10000 }, async () => {
-  const f = await fixture(0.05, { repository: true })
+test('the runtime report identifies the actual namespace child', { timeout: 10000 }, async () => {
+  const f = await fixture(0.05, { runtimeReport: true })
   await f.run(async () => {
     const pid = await f.started()
     await until(() => f.control.includes('\n'), 'runtime ownership was not reported')
     assert.equal(JSON.parse(f.control).pid, pid, 'the monitor PID is not the namespace runtime identity')
-    f.host.kill('SIGKILL'); await f.exited
-    assert.throws(() => claimRepository(f.base), /REPOSITORY_IN_USE/, 'an orphaned live runtime cannot donate repository ownership')
+    assert.equal(JSON.parse(f.control).identity, processIdentity(pid))
   })
 })
 

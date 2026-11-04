@@ -2,33 +2,24 @@
 // pipe. It stays outside the worker sandbox so arbitrary Lisp cannot disable it.
 import { spawn, execFileSync } from 'node:child_process'
 import { openSync, closeSync, writeSync, readFileSync } from 'node:fs'
-import { claimRepository } from './repository-owner.mjs'
 import { processIdentity, sameProcess } from './process-identity.mjs'
 const launch = JSON.parse(process.argv[2])
-let repositoryLease
-if (launch.repositoryRoot) {
-  try { repositoryLease = claimRepository(launch.repositoryRoot) }
-  catch(error) {
-    writeSync(4, JSON.stringify({ type: 'error', code: error.message === 'REPOSITORY_IN_USE' ? 'REPOSITORY_IN_USE' : 'REPOSITORY_LOCK_FAILED' })+'\n')
-    process.exit(73)
-  }
-}
 let child, closing = false, terminationSent = false
 let namespace, terminal, finishTimer, ownershipError = false
-// Pending promises and SQLite leases do not keep Node alive after stdin EOF
-// and monitor exit. Keep unconfirmed ownership visible to the host watchdog.
+// Keep unconfirmed ownership visible to the host watchdog after stdin EOF
+// and monitor exit.
 const namespaceLifetime = launch.namespaceInfo ? setInterval(() => {}, 60000) : undefined
 const unconfirmed = message => {
   if (!ownershipError) console.error(`LISP_STOP_UNCONFIRMED: ${message}`)
   ownershipError = true
 }
-const reportRuntime = pid => {
-  if (!repositoryLease) return
+const reportRuntime = (pid, identity) => {
+  if (!launch.runtimeReport) return
   try {
-    const identity = repositoryLease.recordRuntime(pid)
-    writeSync(4, JSON.stringify({ type: 'runtime', pid, identity })+'\n')
+    const birth = identity === undefined ? processIdentity(pid) ?? null : identity
+    writeSync(4, JSON.stringify({ type: 'runtime', pid, identity: birth })+'\n')
   } catch {
-    try { writeSync(4, JSON.stringify({ type: 'error', code: 'REPOSITORY_LOCK_FAILED' })+'\n') } finally { stop() }
+    try { writeSync(4, JSON.stringify({ type: 'error', code: 'RUNTIME_IDENTITY_FAILED' })+'\n') } finally { stop() }
   }
 }
 const parentPid = pid => process.platform === 'linux'
@@ -50,7 +41,6 @@ const finish = () => {
   }
   clearTimeout(finishTimer)
   clearInterval(namespaceLifetime)
-  repositoryLease?.close()
   process.exit(terminal.signal ? 128 : terminal.code ?? 70)
 }
 const kill = () => {
@@ -120,8 +110,7 @@ if (launch.namespaceInfo) {
         }
       }
       namespace = { pid, identity }
-      // A dead bwrap monitor cannot donate a still-live namespace runtime.
-      reportRuntime(pid)
+      reportRuntime(pid, identity ?? null)
       if (closing) kill()
       finish()
     } catch { unconfirmed('invalid or unowned sandbox child report') }

@@ -118,20 +118,17 @@ prevents that request instead of silently selecting another execution route.
 Existing disposable child sessions are promoted on their next admitted request,
 and the saved session mode survives a host restart without replaying old code.
 
-These workers compute in private scratch without taking a repository-wide lease.
+These workers compute in private scratch.
 Project reads, commands and changes still use the owning session's host adapters,
 native tool restrictions, permission checks and operation journal. Shared project
 files are not separate worktrees; callers must still coordinate conflicting edits.
 
-A standalone repository runtime has one owner and one persistent supervisor/SBCL,
-including across separate DSH databases and sessions. Git subdirectories and symlink
-aliases resolve to the same repository; separate worktrees retain their own root.
-The existing supervisor holds an OS-backed SQLite lease under the current user's
-private `/tmp/kiokuko-lisp-owners-<uid>` directory. A duplicate returns
-`REPOSITORY_IN_USE`; it never disconnects or kills the existing owner. A crash leaves
-runtime birth-identity evidence, so PID reuse is not mistaken for a live owner and
-a still-live orphan cannot silently donate its lease. Unsupported/unknown process
-identity remains conservative. No daemon, Rust wrapper, OS service or credential is added.
+Both development and protected sessions can keep independent Lisp runtimes in
+the same repository, including across separate DSH databases. The canonical
+repository root is status metadata. Each session retains its own heap, scratch
+space and journal. The supervisor reports the PID and birth identity of its
+own runtime, and the host checks that runtime before confirming its stop.
+Existing repository lock files from older versions are ignored.
 
 Multiple host processes can share the same Kiokuko database and Lisp data directory.
 Each session has one host owner; other sessions and projects run independently,

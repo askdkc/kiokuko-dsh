@@ -13,7 +13,7 @@ import { LispStore } from '../../../../src/dsh/lisp/store.js'
 
 const native={skip:process.env.KIOKUKO_REQUIRE_LISP_RUNTIME!=='1'?'requires actual SBCL':false,timeout:120000}
 function host(base:string,config:Record<string,unknown>={}) {
-  const child=fork(new URL('../../helpers/lisp-host-process.ts',import.meta.url),[base,JSON.stringify(config)],{execArgv:['--import','tsx'],stdio:['ignore','ignore','pipe','ipc']})
+  const child=fork(new URL('../../helpers/lisp-host-process.ts',import.meta.url),[base,JSON.stringify({executionMode:'protected',...config})],{execArgv:['--import','tsx'],stdio:['ignore','ignore','pipe','ipc']})
   let sequence=0,stderr='';child.stderr!.on('data',data=>{stderr+=data.toString().slice(0,2000)})
   const pending=new Map<number,{resolve:(v:any)=>void;reject:(e:Error)=>void}>(),exited=once(child,'exit')
   child.on('message',({id,value,error}:any)=>{const p=pending.get(id);pending.delete(id);if(error)p?.reject(Object.assign(new Error(error.message),{code:error.code}));else p?.resolve(value)})
@@ -53,7 +53,7 @@ async function sbclPid(runtimePid:number):Promise<number>{
   return pid
 }
 
-test('repository ownership rejects a second session through an alias and a separate database',native,async t=>{
+test('protected chats in separate databases start under the same canonical repository',native,async t=>{
   const f=await fixture(t),first=host(f.homes[0]!),competitor=host(f.homes[2]!)
   t.after(async()=>{await first.dispose();await competitor.dispose();await f.close()})
   const alias=join(f.base,'alias-a');await symlink(f.roots[0]!,alias)
@@ -63,10 +63,14 @@ test('repository ownership rejects a second session through an alias and a separ
   workingLispTask(f.dbs[2]!,other,'another-session')
   await Promise.all([first.call('start'),competitor.call('start')]);await first.call('enable',f.owners[0])
   const before=await first.call('lisp_status',f.owners[0])
-  await assert.rejects(competitor.call('enable',other),{code:'REPOSITORY_IN_USE'})
+  const nested = await competitor.call('enable', other)
   const aliasOwner={root:await realpath(alias),sessionId:'alias-session',agentId:'alias-agent'}
   workingLispTask(f.dbs[2]!,aliasOwner,'alias-session')
-  await assert.rejects(competitor.call('enable',aliasOwner),{code:'REPOSITORY_IN_USE'})
+  const viaAlias = await competitor.call('enable', aliasOwner)
+  assert.deepEqual([nested,viaAlias].map(status=>status.repositoryRoot),[before.repositoryRoot,before.repositoryRoot])
+  assert.equal(new Set([before.runtimePid,nested.runtimePid,viaAlias.runtimePid]).size,3)
+  assert.equal((await competitor.call('lisp_eval',other,{operationId:'still-alive',code:'(+ 8 9)'})).value.printed,'(17)')
+  await competitor.dispose()
   assert.equal((await first.call('lisp_status',f.owners[0])).supervisorPid,before.supervisorPid)
   assert.equal((await first.call('lisp_eval',f.owners[0],{operationId:'still-alive',code:'(+ 40 2)'})).value.printed,'(42)')
   assert.equal(await realpath(alias),f.roots[0])
@@ -122,16 +126,18 @@ test('persistent hot install reuses only its owner and preserves PID, heap, repl
   assert.equal(result.ok,true);assert.equal(result.value.printed,'(42)')
 })
 
-test('simultaneous repository admission elects exactly one runtime across databases',native,async t=>{
+test('simultaneous same-repository admission gives each chat an independent runtime and journal',native,async t=>{
   const f=await fixture(t),hosts=[host(f.homes[0]!),host(f.homes[2]!)]
   t.after(async()=>{await Promise.all(hosts.map(h=>h.dispose()));await f.close()})
+  const owners = [f.owners[0]!, {...f.owners[0]!,sessionId:'concurrent-chat'}]
+  workingLispTask(f.dbs[2]!,owners[1]!)
   await Promise.all(hosts.map(h=>h.call('start')))
-  const results=await Promise.allSettled(hosts.map(h=>h.call('enable',f.owners[0])))
-  assert.equal(results.filter(r=>r.status==='fulfilled').length,1)
-  const failure=results.find(r=>r.status==='rejected') as PromiseRejectedResult
-  assert.equal(failure.reason.code,'REPOSITORY_IN_USE')
-  const winner=hosts[results.findIndex(r=>r.status==='fulfilled')]!
-  assert.equal((await winner.call('lisp_eval',f.owners[0],{operationId:'race-winner',code:'(+ 40 2)'})).value.printed,'(42)')
+  const [first,second] = await Promise.all(hosts.map((h,i)=>h.call('enable',owners[i])))
+  assert.equal(first.state,'READY')
+  assert.equal(second.state,'READY')
+  assert.notEqual(first.runtimePid,second.runtimePid)
+  const results = await Promise.all(hosts.map((h,i)=>h.call('lisp_eval',owners[i],{operationId:'same-id',code:`(+ 40 ${i})`})))
+  assert.deepEqual(results.map(result=>result.value.printed),['(40)','(41)'])
 })
 
 test('parallel actual repository workers keep separate PIDs/state through cancellation, shutdown and crash recovery',native,async t=>{
@@ -164,7 +170,7 @@ test('parallel actual repository workers keep separate PIDs/state through cancel
   assert.equal((await b.call('lisp_eval',f.owners[1],{operationId:'after-shutdown',code:'*repo-token*'})).value.printed,'(22)')
 })
 
-test('supervisor loss allows replacement only after its owned runtime has stopped',native,async t=>{
+test('supervisor loss fences its own live orphan but does not block another chat',native,async t=>{
   const f=await fixture(t),first=host(f.homes[0]!),replacement=host(f.homes[2]!),other=host(f.homes[1]!)
   let orphan:number|undefined
   t.after(async()=>{
@@ -190,14 +196,18 @@ test('supervisor loss allows replacement only after its owned runtime has stoppe
   }
   assert.equal(await stopped(orphan!),false,'a surviving runtime must retain ownership')
   await assert.rejects(first.call('dispose'),{code:'STOP_UNCONFIRMED'})
+  const otherChat = {...f.owners[0]!,sessionId:'chat-during-orphan'}
+  workingLispTask(f.dbs[2]!,otherChat)
   await replacement.call('start')
-  await assert.rejects(replacement.call('enable',f.owners[0]),{code:'REPOSITORY_IN_USE'})
+  assert.equal((await replacement.call('enable',otherChat)).state,'READY')
+  assert.equal((await replacement.call('lisp_eval',otherChat,{operationId:'unblocked-chat',code:'(+ 40 2)'})).value.printed,'(42)')
+  assert.equal(await stopped(orphan!),false,'another chat does not terminate the old runtime')
   assert.equal((await other.call('lisp_status',f.owners[1])).runtimePid,independent.runtimePid)
   process.kill(orphan!,'SIGKILL')
   await until(()=>stopped(orphan!))
   orphan=undefined
   await first.dispose()
-  assert.equal((await replacement.call('recover',f.owners[0])).state,'READY')
+  assert.equal((await replacement.call('enable',f.owners[0])).state,'READY')
 })
 
 test('busy and cancelled resident hot calls keep another repository alive',native,async t=>{

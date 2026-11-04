@@ -57,27 +57,34 @@ export class LispWorker {
     launch.env.KIOKU_EXECUTION_MODE = this.config.executionMode
     // stop() can run while executable/sandbox preparation is awaiting I/O.
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
-    const ready = new Promise<void>((resolve, reject) => { this.#ready = resolve; this.#startupReject = reject })
     this.repositoryRoot = this.layout.workspace ? detectRepositoryRoot({cwd:this.layout.workspace,allowDirectory:true}).root : null
-    let ownershipReady!:()=>void
-    const ownership=this.repositoryRoot?new Promise<void>(resolve=>{ownershipReady=resolve}):Promise.resolve()
-    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: true, repositoryRoot:this.repositoryRoot })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] })
-    let control = '',reported=false
-    ;(child.stdio[4] as Duplex).on('data',(chunk:Buffer)=>{
-      if(reported)return
+    let lispReady = false
+    let resolveStartup!: () => void
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveStartup = resolve
+      this.#startupReject = reject
+      this.#ready = () => {
+        lispReady = true
+        if (this.runtimePid !== null) resolve()
+      }
+    })
+    const child = this.#child = spawn(process.execPath, [join(this.layout.library, 'supervisor.mjs'), JSON.stringify({
+      ...launch, env: undefined, protocol: true, runtimeReport: true,
+    })], { cwd: launch.cwd, env: launch.env, stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe'] })
+    let control = ''
+    const identityFailure = () => this.break(new LispError('RUNTIME_IDENTITY_FAILED', 'Lisp のプロセスを確認できません。'))
+    ;(child.stdio[4] as Duplex).on('data', (chunk: Buffer) => {
+      if (this.runtimePid !== null) return
       control+=chunk.toString()
-      if(control.length>1024){this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
+      if (control.length > 1024) return identityFailure()
       const end=control.indexOf('\n');if(end<0)return
       let value:unknown
-      try{value=JSON.parse(control.slice(0,end))}catch{this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
-      const parsed=z.discriminatedUnion('type',[
-        z.object({type:z.literal('runtime'),pid:z.number().int().positive(),identity:z.string().regex(/^[a-f0-9]{64}$/).nullable()}).strict(),
-        z.object({type:z.literal('error'),code:z.enum(['REPOSITORY_IN_USE','REPOSITORY_LOCK_FAILED'])}).strict(),
-      ]).safeParse(value)
-      if(!parsed.success){this.break(new LispError('REPOSITORY_LOCK_FAILED','Invalid supervisor ownership report'));return}
-      reported=true
-      if(parsed.data.type==='runtime'){this.runtimePid=parsed.data.pid;this.runtimeIdentity=parsed.data.identity??undefined;ownershipReady()}
-      else this.break(new LispError(parsed.data.code,'このリポジトリの Lisp owner を確認してください。別リポジトリは停止しません。'))
+      try { value = JSON.parse(control.slice(0, end)) } catch { return identityFailure() }
+      const parsed = z.object({type:z.literal('runtime'),pid:z.number().int().positive(),identity:z.string().regex(/^[a-f0-9]{64}$/).nullable()}).strict().safeParse(value)
+      if (!parsed.success) return identityFailure()
+      this.runtimePid = parsed.data.pid
+      this.runtimeIdentity = parsed.data.identity ?? undefined
+      if (lispReady) resolveStartup()
     })
     this.#exit = new Promise(resolve => {
       child.once('error', error => { this.#stopped = true; this.break(error); resolve() })
@@ -97,8 +104,8 @@ export class LispWorker {
       if (this.#bytes > this.config.maxOutputBytes) this.break(new LispError('OUTPUT_LIMIT', 'Lisp の出力量が上限を超えました。'))
     })
     const timer = setTimeout(() => this.break(new LispError('STARTUP_TIMEOUT', 'Lisp の起動が時間内に完了しませんでした。')), this.config.startupTimeoutMs)
-    try { await Promise.all([ready,ownership]) } catch (error) { await this.stop(); if(error instanceof LispError&&['REPOSITORY_IN_USE','REPOSITORY_LOCK_FAILED'].includes(error.code))throw error;throw new LispError('STARTUP_FAILED', `${failure(error).message}\n${diagnostics}`) }
-    finally { clearTimeout(timer); this.#startupReject = undefined }
+    try { await ready } catch (error) { await this.stop(); throw new LispError('STARTUP_FAILED', `${failure(error).message}\n${diagnostics}`) }
+    finally { clearTimeout(timer); this.#startupReject = undefined; this.#ready = undefined }
   }
   private break(error: Error): void {
     const first = !this.#fatal && !this.#closed
