@@ -11,7 +11,7 @@ export const COMPLETION_BINDING_GUIDE={
 } as const
 const corrections:Record<string,string>={
   action:'Use status to read current criteria, or bind to propose a check.',
-  criterionId:'Copy the exact current criterionId from task_completion status.',
+  criterionId:'Copy the exact current criterionId from task_completion status. A local coding Goal criterionId is accepted only within the current workflow; foreign or stale namespaces are never rewritten.',
   'method.kind':'Use native_command for the current approved route.',
   'method.command':'Supply the exact authorized foreground command matching the intended check procedure; bind does not execute it.',
   'method.cwd':'Supply an existing working directory inside the current repository; use . for its root.',

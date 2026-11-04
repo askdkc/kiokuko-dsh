@@ -87,7 +87,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           : plugin === prompt ? { persona: '' } : undefined
         fibers.push(await ctx.plugin(plugin.default, config))
       }
-      await mountNativeExecutor(ctx, process.env.KIOKUKO_DSH_PACKAGE_ROOT!, fibers)
+      await mountNativeExecutor(ctx, packages, fibers)
     fibers.push(await ctx.plugin(loop.default, { agents: [] }))
       ctx.on('agent/error', (event: any) => errors.push(event.error))
       const native = nativeMock(llm), responses: any[] = [], model = new native.MockAdapter(responses)
@@ -145,7 +145,8 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           assertUnchanged()
           oldRefs = bound.requiredReferences
           return native.toolCallResponse('clarify-preparation', 'prepare_requested_work', { taskType: 'writing' })
-        }, (request: any) => {
+        })
+      if (!answeredScenario) responses.push((request: any) => {
           const prepared = resultFor(request, 'clarify-preparation')
           assert.equal(prepared.isError, false, resultText(prepared))
           const value = JSON.parse(resultText(prepared))
@@ -170,6 +171,13 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           return native.textResponse('Waiting for clarification before making any changes.')
         })
       if (answeredScenario) responses.push((request: any) => {
+        const prepared = resultFor(request, 'clarify-preparation')
+        assert.equal(prepared.isError, false, resultText(prepared))
+        const value = JSON.parse(resultText(prepared))
+        assert.equal(value.status, 'clarification_answer_queued')
+        assert.equal(value.answer, undefined)
+        assert.equal(agent.inbox.nextTurn.length, 0, 'the foreground answer is not a next-turn command')
+        assert.equal(agent.inbox.nextStep.length, 0, 'the answer is consumed before model generation')
         const bound = boundIntent(request)
         assert.equal(bound.decision.relation, 'same_scope_continuation')
         assert.equal(bound.decision.action, 'change')
@@ -194,6 +202,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         assert.equal(await readFile(join(dir, 'PLAN.md'), 'utf8'), updatedContent)
         assertUnchanged()
         assert.equal(database(db => db.prepare('SELECT run_id FROM dsh_owned_operations').get()!.run_id), working!.runId)
+        checked = true
         return native.textResponse('The clarified document update was completed in the same task.')
       })
       agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: firstRequest }] }))

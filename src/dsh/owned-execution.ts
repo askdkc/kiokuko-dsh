@@ -10,7 +10,6 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readFile, open, rename, mkdir, rm, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
-import { tmpdir } from 'node:os'
 import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { canonicalContentHash } from '../serialization/validate.js'
@@ -60,6 +59,15 @@ export interface OwnedHost {
 const hash = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 const within = (root: string, target: string) => { const relative = path.relative(root, target); return relative === '' || !relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative) }
 const safeText = (text: string) => findSecret(text) ? '[redacted secret-bearing text]' : text
+/** Resolve existing ancestors too, so new paths cannot hide a symlink exit. */
+async function canonicalTarget(target: string): Promise<string> {
+  try { return await realpath(target) } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    const parent = path.dirname(target)
+    if (parent === target) throw error
+    return path.join(await canonicalTarget(parent), path.basename(target))
+  }
+}
 const ownedCalls = new WeakSet<object>()
 export const isOwnedExecutionCall = (execution: object) => ownedCalls.has(execution)
 /** Known effect surfaces. Composite Lisp/PTC programs guard their inner calls;
@@ -389,13 +397,7 @@ export class OwnedExecutionService {
     let effectAttempted = false
     try {
     const target = path.resolve(identity.repositoryRoot,input.path)
-    // Resolve the parent as well as existing target to identify symlink exits.
-    let actual: string
-    try { actual = await realpath(target) } catch(error) {
-      if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error
-      let parent=path.dirname(target),suffix=path.basename(target)
-      for(;;){try{actual=path.join(await realpath(parent),suffix);break}catch(cause){if((cause as NodeJS.ErrnoException).code!=='ENOENT')throw cause;suffix=path.join(path.basename(parent),suffix);parent=path.dirname(parent)}}
-    }
+    const actual = await canonicalTarget(target)
     const before = await this.snapshot(actual)
     receipt.targets = [{path:actual,before,after:before}]
     await this.persist(receipt,this.#operations.get(receipt.operationId)!.digest)
@@ -408,9 +410,7 @@ export class OwnedExecutionService {
       }
       return {content,hash:observedHash}
     }
-    const disposable = await this.disposable(identity,actual)
-    const database=before!==null && (/\.(?:db|sqlite3?)(?:-(?:wal|shm|journal))?$/iu.test(actual) || (await readFile(actual)).subarray(0,16).equals(Buffer.from('SQLite format 3\0')))
-    if (!disposable && (!within(identity.repositoryRoot,actual) || name === 'kioku_remove' || database)) await this.approve(identity,`Operation: ${name}\nTarget: ${actual}\nCurrent SHA256: ${before}`,signal)
+    if (!within(identity.repositoryRoot,actual)) await this.approve(identity,`Operation: ${name}\nTarget: ${actual}\nCurrent SHA256: ${before}`,signal)
     signal.throwIfAborted()
     if (await this.snapshot(actual) !== before) throw new Error('File changed during operation approval')
     const protocol = await this.host.runtime.withDatabase(db => reserveProtocolFile(db,lease!,receipt.operationId,name,actual,this.#operations.get(receipt.operationId)!.digest))
@@ -461,30 +461,26 @@ export class OwnedExecutionService {
       throw error
     }
   }
-  private async disposable(identity:ExecutionIdentity,target:string):Promise<boolean> {
-    if(within(identity.repositoryRoot,target))return /^(?:dist|build|target|node_modules)(?:[/\\]|$)/u.test(path.relative(identity.repositoryRoot,target))
-    return within(await realpath(tmpdir()),target)
-  }
   private async command(identity:ExecutionIdentity,receipt:ExecutionReceipt,input:z.infer<typeof commandInput>,signal:AbortSignal,lease:TaskLease):Promise<unknown> {
     let launchAttempted = false
     try {
     receipt.cwd = await realpath(path.resolve(identity.repositoryRoot,input.cwd ?? '.'))
     receipt.command = safeText(input.command); receipt.commandDigest = hash(input.command)
     await this.persist(receipt,this.#operations.get(receipt.operationId)!.digest)
-    // Known destructive intent gets a concrete review. Unknown arbitrary code
-    // is executed without pretending that static analysis can prove its effects.
+    // Review known effects outside the project, not local deletion/replacement.
+    // This recognizer is not a sandbox or an exhaustive analysis of arbitrary code.
+    const localTargets = async (targets: readonly string[]) => (await Promise.all(targets.map(async target =>
+      within(identity.repositoryRoot, await canonicalTarget(path.resolve(receipt.cwd,target)))))).every(Boolean)
     const argv=shellArguments(input.command)
     const removals=argv&&path.basename(argv[0]??'')==='rm'?argv.slice(1).filter(arg=>arg!=='--'&&!arg.startsWith('-')):undefined
-    const disposableRemoval=removals?.length&& (await Promise.all(removals.map(async target=>{
-      const absolute=path.resolve(receipt.cwd,target)
-      try{return this.disposable(identity,await realpath(absolute))}catch{return false}
-    }))).every(Boolean)
-    let durableSql=!!(argv&&['sqlite3','psql','mysql'].includes(path.basename(argv[0]??''))&&/\b(?:insert|update|delete|replace|drop|alter|truncate|create)\b/iu.test(argv.slice(1).join(' ')))
-    if(durableSql&&path.basename(argv![0]!)==='sqlite3'&&argv![1]&&!argv![1]!.startsWith('-')){
-      const database=path.resolve(receipt.cwd,argv![1]!)
-      durableSql=argv![1]!==':memory:'&&await this.snapshot(database)!==null&&!await this.disposable(identity,database)
-    }
-    if (input.destructiveTargets?.length || durableSql || removals?.length&&!disposableRemoval || !disposableRemoval && /(?:^|[;&|]\s*)(?:rm\s|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f)|(?:drop\s+(?:table|database)|truncate\s+table)\b)/iu.test(input.command))
+    const localRemoval=!!removals?.length && await localTargets(removals)
+    const declaredOutside=!!input.destructiveTargets?.length && !await localTargets(input.destructiveTargets)
+    let externalSql=!!(argv&&['sqlite3','psql','mysql'].includes(path.basename(argv[0]??''))&&/\b(?:insert|update|delete|replace|drop|alter|truncate|create)\b/iu.test(argv.slice(1).join(' ')))
+    if(externalSql&&path.basename(argv![0]!)==='sqlite3'&&argv![1]&&!argv![1]!.startsWith('-'))
+      externalSql=argv![1]!==':memory:'&&!await localTargets([argv![1]!])
+    const localGit=argv&&path.basename(argv[0]??'')==='git'&&['reset','clean'].includes(argv[1]??'')&&within(identity.repositoryRoot,receipt.cwd)
+    const unknownDestructive=!localRemoval&&!localGit&&/(?:^|[;&|]\s*)(?:rm\s|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f)|(?:drop\s+(?:table|database)|truncate\s+table)\b)/iu.test(input.command)
+    if (declaredOutside || externalSql || removals?.length&&!localRemoval || unknownDestructive)
       await this.approve(identity,`Command: ${safeText(input.command)}\nCwd: ${receipt.cwd}\nTargets: ${input.destructiveTargets?.join(', ') ?? 'see command'}`,signal)
     const protocol = await this.host.runtime.withDatabase(db => reserveProtocolTest(db,lease,receipt.operationId,input.command,receipt.cwd))
     const managed = currentManagedOperation()
@@ -617,7 +613,7 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
     const execute = async(args:unknown,execution:NativeExecution)=>JSON.parse(JSON.stringify(await service.execute(name,args,execution)))
     implementations.add(execute)
     disposers.push(ctx.tools.register({name,modelFacing:true,
-    description:name==='kioku_exec'?'Execute bash/zsh with the normal user environment and child processes. Project development is authorized. Declare destructiveTargets for source/data deletion or durable DB mutation. Background results must be collected with kioku_result. Host receipts are observations, not model verdicts.':name==='kioku_result'?'Read or cancel an owned process by operationId. Never re-executes the command; final receipts distinguish process, verification and persistence status.':`Kiokuko owned ${name.slice(6)}. Project reads/writes/edits require no extra approval. Source/data deletion and external writes require a concrete confirmation. expectedHash checks concurrent changes.`,
+    description:name==='kioku_exec'?'Execute bash/zsh with the normal user environment and child processes. Project development is authorized. Declare destructiveTargets for known file effects; project-local changes need no extra approval, outside-project effects require confirmation. Background results must be collected with kioku_result. Host receipts are observations, not model verdicts.':name==='kioku_result'?'Read or cancel an owned process by operationId. Never re-executes the command; final receipts distinguish process, verification and persistence status.':`Kiokuko owned ${name.slice(6)}. Project reads/writes/edits require no extra approval. Project-local deletion/replacement needs no extra approval. Outside-project writes require concrete confirmation. expectedHash checks concurrent changes.`,
     parameters:JSON.parse(JSON.stringify(z.toJSONSchema(name==='kioku_exec'?commandInput:name==='kioku_result'?resultInput:fileInput))),
     output:{schema:{},render:(_:unknown,value:unknown)=>[{type:'text',text:JSON.stringify(value)}]},execute}))
   }

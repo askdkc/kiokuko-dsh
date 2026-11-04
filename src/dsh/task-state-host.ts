@@ -287,7 +287,7 @@ export class DshTaskWorkflow {
     let evaluation = evaluateProfile(intake.profile, intake.questionCount);
     while (evaluation.status === 'needs_answer' && evaluation.question) {
       const question = evaluation.question;
-      const automatic = await answerAkinatorQuestion(this.options.decisions, operationId, request, question, signal);
+      const automatic = await answerAkinatorQuestion(this.options.decisions, operationId, request, question, signal, [], owner.repositoryRoot);
       if (automatic.status !== 'answered' && !this.options.questions) break;
       const value = automatic.status === 'answered' ? automatic.value
         : await createDshIntakeAnswerer(this.options.questions!).ask(question, signal, agent);

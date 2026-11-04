@@ -306,7 +306,26 @@ test('startup quarantines incomplete legacy success without guessing an unlinked
   assert.equal(await readFile(join(f.root, 'a.txt'), 'utf8'), 'written')
 })
 
-test('batch approval applies once, skips unchanged files and supports shared new parents', async t => {
+test('project-local replacement and deletion apply without approval in ask mode', async t => {
+  const f = await fixture(t); let asks = 0
+  await writeFile(join(f.root, 'replace.txt'), 'old')
+  await writeFile(join(f.root, 'delete.txt'), 'remove')
+  const batch = new LispProposalBatch({ authorizeEffect: async () => {}, store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
+    questions: { ask: async request => { asks++; return { answers: [{ id: request.questions[0].id, selected: [request.questions[0].options![0]!.label] }] } } } })
+  const changes = await batch.apply(f.owner, 'local', 'g', [
+    { operation: 'write', path: 'replace.txt', content: 'new' }, { operation: 'delete', path: 'delete.txt' },
+  ], new AbortController().signal)
+  assert.deepEqual(changes.map(c => c.state), ['APPLIED', 'APPLIED'])
+  assert.equal(asks, 0)
+  assert.equal(await readFile(join(f.root, 'replace.txt'), 'utf8'), 'new')
+  await assert.rejects(readFile(join(f.root, 'delete.txt')), { code: 'ENOENT' })
+  assert.equal(await readFile(changes[0]!.backup!, 'utf8'), 'old')
+  assert.equal(await readFile(changes[1]!.backup!, 'utf8'), 'remove')
+  const rejected = await batch.apply(f.owner, 'escape', 'g', [{ operation: 'write', path: '../outside.txt', content: 'no' }], new AbortController().signal)
+  assert.equal(rejected[0]!.state, 'NOT_APPLIED'); assert.equal(rejected[0]!.code, 'PROTECTED_PATH')
+})
+
+test('batch skips approval and unchanged files, and supports shared new parents', async t => {
   const f = await fixture(t); let asks = 0
   await writeFile(join(f.root, 'old.txt'), 'old'); await writeFile(join(f.root, 'same.txt'), 'same')
   const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
@@ -315,25 +334,26 @@ test('batch approval applies once, skips unchanged files and supports shared new
     { operation: 'write', path: 'old.txt', content: 'new' }, { operation: 'write', path: 'same.txt', content: 'same' },
     { operation: 'write', path: 'new/dir/a.txt', content: 'a' }, { operation: 'write', path: 'new/dir/b.txt', content: 'b' },
   ], new AbortController().signal)
-  assert.equal(asks, 1); assert.equal(changes.filter(c => c.state === 'APPLIED').length, 3)
+  assert.equal(asks, 0); assert.equal(changes.filter(c => c.state === 'APPLIED').length, 3)
   assert.equal(changes.find(c => c.path === 'same.txt')?.state, 'UNCHANGED')
   assert.equal(await readFile(join(f.root, 'new/dir/b.txt'), 'utf8'), 'b')
   assert.equal(await readFile(changes.find(c => c.path === 'old.txt')!.backup!, 'utf8'), 'old')
 })
 
-test('duplicate targets, refusal and approval-time changes produce no writes', async t => {
-  for (const scenario of ['duplicate', 'deny', 'mutate'] as const) {
-    const f = await fixture(t); let asks = 0
+test('duplicate targets and concurrent target changes produce no writes', async t => {
+  for (const scenario of ['duplicate', 'mutate'] as const) {
+    const f = await fixture(t)
     await writeFile(join(f.root, 'a.txt'), 'old'); await writeFile(join(f.root, 'b.txt'), 'old')
-    const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
-      questions: { ask: async request => {
-        asks++; if (scenario === 'mutate') await writeFile(join(f.root, 'b.txt'), 'external')
-        return scenario === 'deny' ? { answers: [{ id: request.questions[0].id, selected: [request.questions[0].options![0]!.label] }] } : allowed.ask(request)
-      } } })
+    const reserve = f.store.reserve.bind(f.store); let captured = 0
+    f.store.reserve = async (...args) => {
+      const result = await reserve(...args)
+      if (scenario === 'mutate' && ++captured === 2) await writeFile(join(f.root, 'b.txt'), 'external')
+      return result
+    }
+    const batch = new LispProposalBatch({ authorizeEffect: async () => {}, store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
     const changes = await batch.apply(f.owner, 'eval', 'g', ['a.txt', scenario === 'duplicate' ? 'a.txt' : 'b.txt'].map(path => ({ operation: 'write', path, content: 'new' })), new AbortController().signal)
     assert.ok(changes.every(c => c.state === 'NOT_APPLIED')); assert.equal(await readFile(join(f.root, 'a.txt'), 'utf8'), 'old')
-    assert.equal(asks, scenario === 'duplicate' ? 0 : 1)
-    if (scenario === 'deny') assert.ok(changes.every(c => c.reason === 'declined'))
+    if (scenario === 'mutate') assert.equal(await readFile(join(f.root, 'b.txt'), 'utf8'), 'external')
   }
 })
 
@@ -374,11 +394,10 @@ test('model status pagination never skips omitted records or truncates their ide
   assert.equal(result.operations[0].agent, operations[0]!.agent)
 })
 
-test('approval is bound to copied proposal content and changing scripts invalidates verifier consent', async t => {
+test('proposals copy their input and changing scripts invalidates verifier consent', async t => {
   const f = await fixture(t); await writeFile(join(f.root, 'a'), 'old')
   const request = { operation: 'write' as const, path: 'a', content: 'approved' }
-  const batch = new LispProposalBatch({ authorizeEffect: async () => {},  store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false,
-    questions: { ask: async q => { request.content = 'unapproved'; return allowed.ask(q) } } })
+  const batch = new LispProposalBatch({ authorizeEffect: async () => { request.content = 'later mutation' }, store: f.store, backupRoot: join(f.base, 'backups'), protectedRoots: () => [], stopped: () => false })
   assert.equal((await batch.apply(f.owner, 'eval', 'g', [request], new AbortController().signal))[0]!.state, 'APPLIED')
   assert.equal(await readFile(join(f.root, 'a'), 'utf8'), 'approved')
   const path = join(f.root, 'package.json'); await writeFile(path, JSON.stringify({ scripts: { test: 'old' } })); let runs = 0

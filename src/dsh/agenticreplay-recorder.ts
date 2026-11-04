@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
+import { failureDiagnostic } from './failure-diagnostic.js'
 import { runtimeEvidence } from './runtime-evidence.js'
+import { loadedPluginEvidence } from './plugin-evidence.js'
 import { redactionSafeWriter } from './agenticreplay-writer.js'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -154,7 +156,7 @@ export class DshAgenticReplayRecorder {
     this.#traces.set(binding.sessionId, trace)
     trace.tail = this.#initialize(trace)
     this.#enqueue(trace, { type: 'run.start', actor: 'harness', payload: { ...AGENTICREPLAY_CAPTURE, reasoning: this.config.capture.reasoning,
-      content: this.config.capture.content, runtime: runtimeEvidence() } })
+      content: this.config.capture.content, runtime: { ...runtimeEvidence(), ...loadedPluginEvidence } } })
     return trace
   }
   async #initialize(trace: ActiveTrace) {
@@ -220,7 +222,7 @@ export class DshAgenticReplayRecorder {
     })
   }
   start(binding: DshAgenticReplayBinding): void { this.#admit(binding, true) }
-  /** Metadata only; the host calls this only under the exact session recording choice. */
+  /** Bounded lifecycle facts; diagnostic prose follows this session's capture policy. */
   harnessAction(binding:DshAgenticReplayBinding,event:{seq:number;data:unknown}):void {
     const data=record(event.data)
     if(!Number.isSafeInteger(event.seq)||event.seq<0||!Number.isSafeInteger(data.turn)||!Number.isSafeInteger(data.step)
@@ -229,6 +231,7 @@ export class DshAgenticReplayRecorder {
     this.#safe(trace,()=>{this.#enqueue(trace,{type:'note',actor:'harness',turn:data.turn,attrs:{
       format:'kiokuko.harness.action.v1',session_id:label(binding.sessionId),native_seq:event.seq,
       action:label(data.action),phase:label(data.phase),step:data.step,
+      ...(data.diagnostic === undefined ? {} : { diagnostic: failureDiagnostic(data.diagnostic, this.config.capture.content) }),
       ...(typeof data.parentSession==='string'?{parent_session:label(data.parentSession)}:{}),
       ...(typeof data.callId==='string'?{call_id:label(data.callId)}:{})}});this.#link(trace,binding)})
   }
@@ -288,10 +291,10 @@ export class DshAgenticReplayRecorder {
             const c = record(chunk)
             if (c.type === 'finish') {
               finish = label(record(c.reason).kind)
-              const code = record(record(c.reason).failure).code
-              if (finish === 'error' && ['DSH_MEMORY_SNAPSHOT_STALE', 'DSH_MEMORY_REBUILD_EXHAUSTED'].includes(code)) {
-                finishFailureCode = code
-                self.#enqueue(trace!, { type: 'error', actor: 'harness', attrs: { code, modelCallId: id } }, ref)
+              if (finish === 'error' || finish === 'aborted') {
+                const diagnostic = failureDiagnostic(record(c.reason).failure, self.config.capture.content)
+                finishFailureCode = String(diagnostic.code)
+                self.#enqueue(trace!, { type: 'error', actor: 'model', attrs: { code: finishFailureCode, modelCallId: id, phase: 'finish', diagnostic } }, ref)
               }
               return
             }
@@ -346,7 +349,11 @@ export class DshAgenticReplayRecorder {
         }
       } catch (error) {
         failure = true
-        if (trace) self.#safe(trace, () => { self.#enqueue(trace!, { type: 'error', actor: 'model', attrs: { code: 'upstream_exception', modelCallId: id } }, ref) })
+        if (trace) self.#safe(trace, () => {
+          const diagnostic = failureDiagnostic(error, self.config.capture.content)
+          finishFailureCode = String(diagnostic.code)
+          self.#enqueue(trace!, { type: 'error', actor: 'model', attrs: { code: 'upstream_exception', modelCallId: id, phase: 'stream', diagnostic } }, ref)
+        })
         throw error
       } finally {
         if (trace) {
@@ -473,12 +480,15 @@ export class DshAgenticReplayRecorder {
     this.#settle(trace)
   }
   stopAccepting(): void { this.#accepting = false; for (const t of this.#traces.values()) t.accepting = false }
-  nativeFailure(binding: DshAgenticReplayBinding | undefined): void {
+  nativeFailure(binding: DshAgenticReplayBinding | undefined, error?: unknown, position?: { turn?: number; step?: number }): void {
     try {
       if (!binding) return
       const trace = this.#admit(binding)
-      if (trace) this.#safe(trace, () => this.#enqueue(trace, { type: 'error', actor: 'harness', turn: binding.turn, attrs: {
+      if (trace) this.#safe(trace, () => this.#enqueue(trace, { type: 'error', actor: 'harness', turn: Number.isSafeInteger(position?.turn) ? position!.turn : binding.turn, attrs: {
         code: 'native_turn_failed', phase: 'agent', httpCapture: false,
+        session_id: label(binding.sessionId),
+        ...(Number.isSafeInteger(position?.step) ? { step: position!.step } : {}),
+        diagnostic: failureDiagnostic(error, this.config.capture.content),
       } }))
     } catch { this.diagnostics.unattributed++ }
   }

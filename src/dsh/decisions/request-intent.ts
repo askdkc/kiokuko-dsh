@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import path from 'node:path'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import type { TaskType } from '../../akinator/types.js'
 import { DecisionError, type DecisionBatch } from './contracts.js'
@@ -84,6 +85,8 @@ export const RequestIntentContextSchema = z
   .object({
     /** Exact current user request. No transcript or other session is accepted. */
     task: z.string().min(1).max(16_384),
+    /** Canonical directory supplied by the live host, never model-authored. */
+    workspaceDirectory: z.string().min(1).max(4096).refine(path.isAbsolute).optional(),
     messageRefs: z.array(messageReference).min(1).max(16),
     activeGoal: activeGoal.optional(),
     /** SQLite task identity and revision, independent of an implementation-only Goal. */
@@ -128,6 +131,7 @@ export { requestIntentMessageRefs } from './message-refs.js'
 
 export function createRequestIntentContext(input: {
   readonly task: string
+  readonly workspaceDirectory?: string | undefined
   readonly messageRefs: RequestIntentContext['messageRefs']
   readonly activeGoal?: RequestIntentContext['activeGoal']
   readonly activeTask?: RequestIntentContext['activeTask']
@@ -137,6 +141,7 @@ export function createRequestIntentContext(input: {
   const { unresolved: _unresolved, ...activeTask } = input.activeTask ?? {}
   const parsed = RequestIntentContextSchema.safeParse({
     task: input.task,
+    ...(input.workspaceDirectory === undefined ? {} : { workspaceDirectory: input.workspaceDirectory }),
     messageRefs: input.messageRefs,
     ...(input.activeGoal === undefined ? {} : { activeGoal: input.activeGoal }),
     ...(input.activeTask === undefined ? {} : { activeTask }),
@@ -172,6 +177,7 @@ export type RequestIntentSubmission = z.infer<
 
 export interface RequestIntentEvidence {
   readonly requestDigest: string
+  readonly workspaceDigest?: string
   readonly messageRefs: readonly {
     readonly id: string
     readonly digest: string
@@ -289,12 +295,13 @@ export function buildRequestIntentBatch(
     purpose: 'request-intent',
     state: {
       currentUserMessage: parsed.data.task,
+      ...(parsed.data.workspaceDirectory ? { workspaceDirectory: parsed.data.workspaceDirectory } : {}),
       currentMessageRefs: parsed.data.messageRefs,
       activeGoal: parsed.data.activeGoal ?? null,
       activeTask: parsed.data.activeTask ?? null,
       referencedProposalCandidates: parsed.data.proposals,
       boundary:
-        'Use only this exact current request and the supplied active Goal/proposal candidates. Never use another chat, infer a free-text target, or grant execution permission.',
+        'Use this exact request, the host-bound workspace directory and the supplied active Goal/proposal candidates. References to this repository/workspace refer to that directory. Inspect the workspace to locate the named feature; do not ask the human to repeat a known workspace or explicit requested outcome. The directory alone does not resolve an unspecified file, recipient or destructive operation. Never use another chat or grant execution permission.',
     },
     questions: [
       {
@@ -373,6 +380,7 @@ export function requestIntentReferenceIds(
   const refs = context.messageRefs.map(
     (item) => `message:${canonicalContentHash(item)}`,
   )
+  if (context.workspaceDirectory) refs.push(`workspace:${canonicalContentHash(context.workspaceDirectory)}`)
   if (context.activeGoal) {
     refs.push(`run:${canonicalContentHash(context.activeGoal.runId)}`)
     if (context.activeGoal.workflowRevision !== undefined)
@@ -417,6 +425,7 @@ function evidenceFor(
   const active = context.activeGoal
   return {
     requestDigest: canonicalContentHash(context.task),
+    ...(context.workspaceDirectory ? { workspaceDigest: canonicalContentHash(context.workspaceDirectory) } : {}),
     messageRefs: context.messageRefs.map((item) => ({ ...item })),
     ...(active
       ? {
@@ -588,7 +597,8 @@ export function rebindRequestIntentDecision(
     !value.evidence ||
     !Array.isArray(value.evidence.messageRefs) ||
     !Array.isArray(value.evidence.proposalRefs) ||
-    value.evidence.requestDigest !== canonicalContentHash(context.task)
+    value.evidence.requestDigest !== canonicalContentHash(context.task) ||
+    value.evidence.workspaceDigest !== (context.workspaceDirectory ? canonicalContentHash(context.workspaceDirectory) : undefined)
   )
     return undefined
   const refs = requestIntentReferenceIds(context)

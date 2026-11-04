@@ -115,7 +115,7 @@
       ]
     },
     "permissions": {
-      "summary": "Kiokuko-owned local development execution, candidate memory and host receipts; normal user environment, PATH commands and child processes. Concrete confirmation for source/data deletion and durable user database changes.",
+      "summary": "Kiokuko-owned local development execution, candidate memory and host receipts; normal user environment, PATH commands and child processes. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation.",
       "readPaths": [
         "Configured Kiokuko SQLite database and embedding assets",
         "Registered project roots and their repository metadata",
@@ -177,7 +177,7 @@
   },
   "scripts": {
     "clean:dist": "node --input-type=module --eval \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true });\"",
-    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-model-transports.mjs && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs && node scripts/guardrail-artifacts.mjs --verify-bundled --quiet && node scripts/verify-micro-judge.mjs",
+    "build": "npm run clean:dist && tsc -p tsconfig.build.json && node scripts/build-model-transports.mjs && node scripts/compile-skill-prompts.mjs && node scripts/build-dsh-client.mjs && node scripts/build-history-codecs.mjs && node scripts/build-plugin-entry.mjs && node scripts/guardrail-artifacts.mjs --verify-bundled --quiet && node scripts/verify-micro-judge.mjs && node scripts/build-runtime-manifest.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node scripts/run-tests.mjs tests/dsh",
     "test:harness": "node --import tsx scripts/run-harness-evaluation.mjs",

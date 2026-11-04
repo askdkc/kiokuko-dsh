@@ -11,6 +11,7 @@ const MAX_LISTING_BYTES = 4 * 1024 * 1024
 interface ListingEntry {
   id?: unknown
   input_modalities?: unknown
+  architecture?: unknown
 }
 
 /** The standard listing reply this gateway serves. */
@@ -20,8 +21,16 @@ interface ListingReply {
 
 /** Distinct non-empty modality names of one listing row, or `undefined`. */
 function modalities(entry: ListingEntry): readonly string[] | undefined {
-  if (!Array.isArray(entry.input_modalities)) return undefined
-  const names = entry.input_modalities.filter(
+  // Infron uses the top-level field; Hermes/Nous uses OpenRouter's
+  // architecture field. Keep an explicit top-level declaration authoritative.
+  const architecture = entry.architecture
+  const input = entry.input_modalities ?? (
+    architecture !== null && typeof architecture === 'object' && !Array.isArray(architecture)
+      ? (architecture as Record<string, unknown>).input_modalities
+      : undefined
+  )
+  if (!Array.isArray(input)) return undefined
+  const names = input.filter(
     (value): value is string => typeof value === 'string' && value.length > 0,
   )
   return names.length ? [...new Set(names)] : undefined
@@ -33,10 +42,10 @@ async function discard(response: Response): Promise<void> {
 }
 
 /**
- * Read the input modalities Infron's model listing publishes per model.
+ * Read input modalities from Infron and Hermes/Nous model listings.
  *
  * The installed adapter's discovery reports ids, names and capacities for
- * endpoints it ships no catalog entry for, so an image-capable Infron model
+ * endpoints it ships no catalog entry for, so an image-capable gateway model
  * otherwise adopts as text-only and rejects every later image request. This
  * second bounded read of the protocol's own listing supplies the missing
  * modality fact for the ids the connection refresh adopts.

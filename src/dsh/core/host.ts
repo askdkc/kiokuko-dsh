@@ -508,6 +508,7 @@ export async function mountCore(
     ].slice(0, 8)
     return createRequestIntentContext({
       task,
+      workspaceDirectory: root,
       messageRefs,
       ...(facts.activeGoal ? { activeGoal: facts.activeGoal } : {}),
       ...(facts.activeTask ? { activeTask: facts.activeTask } : {}),
@@ -567,7 +568,7 @@ export async function mountCore(
     {
       answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
         dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
-        [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string')),
+        [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),
       diagnostic: createIntakeDiagnosticSink(runtime),
       recovery: runtime.auxiliaryRecovery,
       assess: (input, context, decision, recoveryAttempt, userConfirmed) =>

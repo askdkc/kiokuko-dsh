@@ -13,7 +13,7 @@ import { modelsResponse, mountKiokukoModels } from "../../../src/dsh/models/surf
 import { ConnectionSchema, CONNECTION_DEFAULTS, CONNECTION_KINDS, credentialKey } from "../../../src/dsh/models/contracts.js";
 import { connectionProfile, requestMaxTokens } from "../../../src/dsh/models/profiles.js";
 
-async function fixture() {
+async function fixture(attachments?: () => Pick<import("@deepseek-ai/dsh-attachment").AttachmentStore, "readImageRequest">) {
   const dir = await mkdtemp(join(tmpdir(), "models-test-")),
     store = new CredentialFile(join(dir, "credentials.json"));
   let adapter: LlmAdapter | undefined,
@@ -52,6 +52,7 @@ async function fixture() {
     llm,
     config,
     credentials: store,
+    ...(attachments ? { attachments } : {}),
     selectCurrent: async (id, binding) => {
       selected.push({ id, binding });
     },
@@ -465,7 +466,46 @@ async function collect<T>(source: AsyncIterable<T>): Promise<T[]> {
   return rows;
 }
 
-test("Infron refresh adopts the shared catalog's thinking levels and keeps an explicit declaration", async (t) => {
+for (const kind of ["infron", "nous"] as const) {
+  test(`${kind} saved gateway models expose exact thinking levels without refresh and preserve overrides`, async (t) => {
+    const f = await fixture();
+    try {
+      const c = ConnectionSchema.parse({
+        ...connection(CONNECTION_DEFAULTS[kind][1], kind, `kiokuko-${kind}`),
+        models: [
+          { ...model, id: "deepseek/deepseek-v4.1-flash" },
+          { ...model, id: "z-ai/glm-5.3-flash" },
+          { ...model, id: "openai/gpt-6-luna", reasoningEfforts: false },
+          { ...model, id: "synthetic/unlisted" },
+          { ...model, id: "synthetic/declared", reasoning: true, reasoningEfforts: { high: "custom-high" } },
+        ],
+      });
+      // Simulate a config written before reasoning adoption existed.
+      await f.config.write({ version: 1, revision: 1, connections: [c] }, 0);
+      await f.service.close();
+      const restored = new KiokukoModelsService({ llm: f.llm, config: f.config, credentials: f.store });
+      t.after(() => restored.close());
+      t.mock.method(globalThis, "fetch", async () => { throw new Error("startup must stay offline"); });
+      await restored.start();
+      await restored.setKey(c.id, "synthetic-key");
+      const models = await restored.models(c.id) as import("@deepseek-ai/dsh-llm").LlmResolvedModelInfo[];
+      assert.deepEqual(models.find(m => m.id === c.models[0]!.id)?.reasoning?.efforts.map(e => e.id), ["off", "low", "high", "max"]);
+      assert.deepEqual(models.find(m => m.id === c.models[1]!.id)?.reasoning?.efforts.map(e => e.id), ["low", "high", "max"]);
+      assert.equal(models.find(m => m.id === c.models[2]!.id)?.reasoning, undefined);
+      assert.equal(models.find(m => m.id === c.models[3]!.id)?.reasoning, undefined);
+      assert.deepEqual(models.find(m => m.id === c.models[4]!.id)?.reasoning?.efforts.map(e => e.id), ["high"]);
+      const before = await f.config.read();
+      assert.equal(before.connections[0]!.models[0]!.reasoning, false, "startup does not silently rewrite the config");
+      const listed = (await restored.list()).connections[0]!;
+      assert.equal(listed.models[0]!.reasoning, true, "settings and native picker agree");
+      assert.equal(c.models[0]!.reasoning, false, "caller input stays untouched");
+      await restored.save({ ...c, name: "Renamed gateway" }, 1);
+      assert.ok((await restored.models(c.id) as import("@deepseek-ai/dsh-llm").LlmResolvedModelInfo[])[0]!.reasoning, "saving legacy rows retains adoption");
+    } finally { await f.close(); }
+  });
+}
+
+for (const kind of ["infron", "nous"] as const) test(`${kind} refresh adopts the shared catalog's thinking levels and keeps an explicit declaration`, async (t) => {
   const f = await fixture();
   try {
     const legacy = {
@@ -477,7 +517,7 @@ test("Infron refresh adopts the shared catalog's thinking levels and keeps an ex
       image: false,
     };
     const c = ConnectionSchema.parse({
-      ...connection("http://127.0.0.1:1/v1"),
+      ...connection("http://127.0.0.1:1/v1", kind),
       models: [legacy],
     });
     await f.service.save(c, 0);
@@ -514,66 +554,66 @@ test("Infron refresh adopts the shared catalog's thinking levels and keeps an ex
   }
 });
 
-test("a declared Infron thinking level reaches the request as reasoning_effort and keeps its service tier", async () => {
-  const bodies: any[] = [];
-  const server = createServer(async (req, res) => {
-    let raw = "";
-    for await (const chunk of req) raw += chunk;
-    bodies.push(JSON.parse(raw));
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    res.end(
-      "data: " +
-        JSON.stringify({
-          id: "chat-1",
-          object: "chat.completion.chunk",
-          created: 1,
-          model: model.id,
-          provider: { service_tier: "standard" },
-          choices: [{ index: 0, delta: { role: "assistant", content: "Declared" }, finish_reason: null }],
-        }) +
-        "\n\ndata: " +
-        JSON.stringify({
-          id: "chat-1",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        }) +
-        "\n\ndata: [DONE]\n\n",
-    );
-  });
-  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const port = (server.address() as any).port,
-    f = await fixture();
-  try {
-    const declared = {
-      ...model,
-      reasoning: true,
-      reasoningEfforts: { off: "none", low: "low", medium: "medium", high: "high" },
-    };
-    const c = ConnectionSchema.parse({
-      ...connection(`http://127.0.0.1:${port}/v1`),
-      models: [declared],
+for (const kind of ["infron", "nous"] as const) {
+  test(`${kind} model selection exposes thinking levels and dispatches the selected effort`, async () => {
+    const bodies: any[] = [];
+    const server = createServer(async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      bodies.push(JSON.parse(raw));
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(
+        "data: " +
+          JSON.stringify({
+            id: "chat-1",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            provider: { service_tier: "standard" },
+            choices: [{ index: 0, delta: { role: "assistant", content: "Declared" }, finish_reason: null }],
+          }) +
+          "\n\ndata: " +
+          JSON.stringify({
+            id: "chat-1",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }) +
+          "\n\ndata: [DONE]\n\n",
+      );
     });
-    await f.service.save(c, 0);
-    await f.service.setKey(c.id, "declared-key");
-    const info = await f.adapter().resolveModel(c.id, model.id);
-    assert.deepEqual(info.reasoning?.efforts.map((effort) => effort.id), ["off", "low", "medium", "high"]);
-    const options = {
-      provider: c.id,
-      model: model.id,
-      messages: [createUserMessage({ content: [{ type: "text" as const, text: "hello" }], source: { kind: "user" as const } })],
-    };
-    await collect(f.adapter().stream({ ...options, reasoningEffort: "high" as any }));
-    assert.equal(bodies[0].reasoning_effort, "high");
-    assert.deepEqual(bodies[0].provider, { service_tier: "standard" });
-    await collect(f.adapter().stream({ ...options, reasoningEffort: "off" as any }));
-    assert.equal(bodies[1].reasoning_effort, "none", "off sends the declared value");
-    assert.deepEqual(bodies[1].provider, { service_tier: "standard" });
-  } finally {
-    await f.close();
-    server.closeAllConnections();
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-});
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as any).port,
+      f = await fixture();
+    try {
+      const c = ConnectionSchema.parse({
+        ...connection(`http://127.0.0.1:${port}/v1`),
+        kind,
+        id: `kiokuko-${kind}-transport`,
+        models: [{ ...model, id: "deepseek/deepseek-v4.1-flash" }],
+      });
+      await f.service.save(c, 0);
+      await f.service.setKey(c.id, "synthetic-key");
+      const info = (await f.adapter().listModels(c.id))[0]! as import("@deepseek-ai/dsh-llm").LlmResolvedModelInfo;
+      assert.deepEqual(info.reasoning?.efforts.map((effort) => effort.id), ["off", "low", "high", "max"]);
+      const options = {
+        provider: c.id,
+        model: info.id,
+        messages: [createUserMessage({ content: [{ type: "text" as const, text: "hello" }], source: { kind: "user" as const } })],
+      };
+      await collect(f.adapter().stream({ ...options, reasoningEffort: "high" as any }));
+      assert.deepEqual(bodies[0].reasoning, { effort: "high" });
+      assert.equal(bodies[0].reasoning_effort, undefined);
+      if (kind === "infron") assert.deepEqual(bodies[0].provider, { service_tier: "standard" });
+      await collect(f.adapter().stream({ ...options, reasoningEffort: "off" as any }));
+      assert.deepEqual(bodies[1].reasoning, { effort: "none" }, "off sends the catalog's declared wire value");
+      if (kind === "infron") assert.deepEqual(bodies[1].provider, { service_tier: "standard" });
+    } finally {
+      await f.close();
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+}
 
 test("custom Responses and Messages send their actual protocol bodies and complete streamed output", async () => {
   const requests: Array<{path:string;body:any;headers:any}> = [];
@@ -823,6 +863,83 @@ test("discovery adopts an id-only listing with the adapter defaults and keeps di
     await f.close();
   }
 });
+
+for (const kind of ["infron", "nous"] as const) {
+  for (const shape of ["top-level", "architecture"] as const) {
+    test(`${kind} ${shape} image listing reaches selection and actual image transport`, async () => {
+      const bodies: any[] = [];
+      const disclose = (input: string[]) => shape === "top-level"
+        ? { input_modalities: input }
+        : { architecture: { input_modalities: input } };
+      const server = createServer(async (req, res) => {
+        if (req.url === "/v1/models") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ data: [
+            { id: "z-ai/glm-5.3-flash", ...disclose(["text", "image", "video"]) },
+            { id: "plain-model", ...disclose(["text"]) },
+            { id: "video-only", ...disclose(["text", "video"]) },
+          ] }));
+          return;
+        }
+        assert.equal(req.url, "/v1/chat/completions");
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end('data: {"id":"media-fixture","choices":[{"index":0,"delta":{"content":"received"},"finish_reason":null}]}\n\ndata: {"id":"media-fixture","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
+      });
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aG9sAAAAASUVORK5CYII=", "base64");
+      const image: import("@deepseek-ai/dsh-attachment").ImageAttachmentRef = {
+        attachmentId: "a".repeat(64) as import("@deepseek-ai/dsh-attachment").AttachmentId,
+        mediaType: "image/png", bytes: png.length, width: 1, height: 1,
+      };
+      let reads = 0;
+      const f = await fixture(() => ({ async readImageRequest(ref, target) {
+        reads++;
+        assert.deepEqual(ref, image);
+        assert.deepEqual(target, { width: 1, height: 1, maxBytes: 1048576 });
+        return { attachment: ref, variantId: "b".repeat(64) as any, data: png,
+          mediaType: "image/png", bytes: png.length, width: 1, height: 1,
+          depth: "uchar", space: "srgb", hasAlpha: true };
+      } }));
+      try {
+        const c = ConnectionSchema.parse({ ...connection(`http://127.0.0.1:${(server.address() as any).port}/v1`),
+          kind, id: `kiokuko-${kind}-media`, models: [] });
+        await f.service.save(c, 0);
+        await f.service.setKey(c.id, "synthetic-key");
+        f.discover(async () => [{ id: "z-ai/glm-5.3-flash" }, { id: "plain-model" }, { id: "video-only" }]);
+        await f.service.refresh(c.id);
+        const available = await f.service.models(c.id);
+        assert.deepEqual(available.map(m => [m.id, m.inputModalities]), [
+          ["z-ai/glm-5.3-flash", ["text", "image"]], ["plain-model", ["text"]], ["video-only", ["text"]],
+        ], "gateway video disclosure must not advertise unsupported native video input");
+        await f.service.select(c.id, "z-ai/glm-5.3-flash", "current", "media-session");
+        assert.deepEqual(f.selected, [{ id: "media-session", binding: { provider: c.id, model: "z-ai/glm-5.3-flash" } }]);
+        const options = { provider: c.id, model: "z-ai/glm-5.3-flash", messages: [createUserMessage({
+          content: [{ type: "text", text: "Describe this image" }, { type: "image", attachment: image }],
+          source: { kind: "user" },
+        })] };
+        const result = await collect(f.adapter().stream(options));
+        assert.ok(result.some(chunk => chunk.type === "finish"));
+        assert.equal(reads, 1);
+        assert.equal(bodies.length, 1);
+        assert.equal(bodies[0].model, "z-ai/glm-5.3-flash");
+        const parts = bodies[0].messages.flatMap((m: any) => Array.isArray(m.content) ? m.content : []);
+        assert.deepEqual(parts.filter((part: any) => part.type === "image_url").map((part: any) => part.image_url.url),
+          [`data:image/png;base64,${png.toString("base64")}`]);
+        await assert.rejects(collect(f.adapter().stream({ ...options, model: "plain-model" })),
+          (error: any) => error.code === "UNSUPPORTED_CONTENT");
+        assert.equal(reads, 1, "text-only rejection precedes attachment reads");
+        assert.equal(bodies.length, 1, "text-only rejection sends no network request");
+      } finally {
+        await f.close();
+        server.closeAllConnections();
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    });
+  }
+}
 
 test("an Infron refresh stores image capability the gateway listing publishes", async () => {
   const requests: Array<{ url: string | undefined; authorization: string | string[] | undefined }> = [];

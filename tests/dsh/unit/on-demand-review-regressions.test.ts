@@ -58,6 +58,55 @@ const [cordis, nativeTools, nativeScope] = nativeAvailable
   ? await Promise.all([load('cordis'), load('dsh-tools'), load('dsh-scope')])
   : [undefined, undefined, undefined]
 const signal = () => new AbortController().signal
+test('clarification replies are admitted once in the same turn without entering the next instruction queue', async t => {
+  const task = 'Update src/parser.ts; clarify whether the change is documentation or implementation.'
+  const message = human('inline-question-source', task)
+  let intent = activeIntent([message], task, 'same_scope_continuation', 'change', 'unknown')
+  let asks = 0
+  const injected: any[] = []
+  const f = await fixture(t, {
+    interpret: async () => intent,
+    questions: { async ask(request) {
+      asks++
+      return { answers: [{ id: request.questions[0].id, selected: [], custom: 'Change the implementation in src/parser.ts; preserve the public API.' }] }
+    } },
+  })
+  ;(f.agent as any).followup = () => assert.fail('a synchronous question answer is not a new instruction')
+  ;(f.agent as any).inject = (message: any) => injected.push(message)
+  await f.capture([message])
+  const answered = await f.execute(TASK_PREPARE_TOOL, { taskType: 'debug' })
+  assert.equal(answered.value.status, 'clarification_answer_queued')
+  assert.equal(injected.length, 1)
+  assert.equal('answer' in answered.value, false, 'the model must not process a second copy before native admission')
+  await f.execute(TASK_PREPARE_TOOL, { taskType: 'debug' })
+  assert.equal(injected.length, 1)
+  const messages = [message, injected[0]]
+  intent = activeIntent(messages, task + '\n' + injected[0].content[0].text, 'same_scope_continuation', 'change', 'implementation')
+  await f.capture(messages, 1)
+  const prepared = await f.execute(TASK_PREPARE_TOOL, { requestIntent: {
+    relation: 'same_scope_continuation', action: 'change', changeScope: 'implementation',
+    evidenceRefs: requestIntentReferenceIds(intent.context),
+  } })
+  assert.equal(prepared.isError, false, JSON.stringify(prepared))
+  assert.equal(prepared.value.prepared, true)
+  assert.equal(asks, 1)
+  assert.equal(f.admissions.length, 1)
+  assert.equal(f.admissions[0]!.turn, 1)
+  assert.deepEqual(f.admissions[0]!.messages[0], message)
+  await f.capture(messages, 1)
+  assert.equal(asks, 1)
+})
+
+test('an auxiliary abstention does not ask users to repeat a concrete request', async t => {
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    answerIntake: async () => ({ status: 'ask' }),
+    questions: { ask: async () => assert.fail('the main model can inspect the current workspace and request') },
+  })
+  await f.capture([human('concrete-request', 'Fix the question response loop in this workspace and verify that each answer is consumed once.')])
+  assert.equal(f.admissions.length, 0)
+})
+
 test('ordinary native requests reach Akinator when the action target is missing', async t => {
   const asked: string[] = []
   const f = await fixture(t, {
@@ -2043,7 +2092,7 @@ test('clarification deduplicates semantic retries and never turns dismissal into
       },
     },
   })
-  ;(f.agent as any).followup = () => {
+  ;(f.agent as any).inject = () => {
     followups++
   }
   await f.capture([message])
@@ -2131,7 +2180,7 @@ test('Stop during clarification revalidation cannot enqueue a late human followu
       },
     },
   })
-  ;(f.agent as any).followup = () => {
+  ;(f.agent as any).inject = () => {
     followups++
   }
   await f.capture([message])
@@ -2162,7 +2211,7 @@ test('clarification without a context never reuses another human request questio
       },
     },
   })
-  ;(f.agent as any).followup = () => {
+  ;(f.agent as any).inject = () => {
     throw new Error('Dismissal must not enqueue')
   }
   await f.capture([human('first-unknown-target', 'Delete that.')])
@@ -2222,7 +2271,7 @@ test('a Pending task asks for an explicit transition without starting or duplica
       },
     },
   })
-  ;(f.agent as any).followup = () => {
+  ;(f.agent as any).inject = () => {
     throw new Error('An unanswered question is not a transition')
   }
   await f.capture([message])
@@ -2273,7 +2322,7 @@ for (const outcome of ['clarify'] as const)
         },
       },
     })
-    ;(f.agent as any).followup = () => assert.fail('Dismissal is not an answer')
+    ;(f.agent as any).inject = () => assert.fail('Dismissal is not an answer')
     await f.capture([message])
     const args = {
       requestIntent: {
@@ -2345,7 +2394,7 @@ test('accepted native clarification creates a fresh source revision and preserve
       },
     },
   })
-  ;(f.agent as any).followup = (m: any) => followups.push(m)
+  ;(f.agent as any).inject = (m: any) => followups.push(m)
   await f.capture([message])
   const args = {
     requestIntent: {
@@ -2410,7 +2459,7 @@ test('a foreign question answer cannot become a source revision', async (t) => {
       },
     },
   })
-  ;(f.agent as any).followup = () => followups++
+  ;(f.agent as any).inject = () => followups++
   await f.capture([message])
   const r = await f.execute(TASK_PREPARE_TOOL, {
     requestIntent: {
@@ -2643,7 +2692,7 @@ test('an observed same-scope clarification answer is returned with fresh evidenc
       },
     },
   })
-  ;(f.agent as any).followup = (m: any) => followups.push(m)
+  ;(f.agent as any).inject = (m: any) => followups.push(m)
   const args = () => ({
     requestIntent: {
       relation: 'same_scope_continuation',
@@ -3200,7 +3249,7 @@ test('plan handoff keeps the same host context while accepting a native clarific
       },
     },
   } as Partial<Dependencies>)
-  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  ;(f.agent as any).inject = (message: any) => followups.push(message)
   await f.capture([message])
   const result = await f.execute(TASK_PREPARE_TOOL, {
     requestIntent: {
@@ -3292,7 +3341,7 @@ test('a rejected candidate after an answered clarification reports the conflict 
       },
     },
   })
-  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  ;(f.agent as any).inject = (message: any) => followups.push(message)
   const args = () => ({
     requestIntent: {
       relation: 'same_scope_continuation',
@@ -3430,7 +3479,7 @@ test('question transport failure is explicit and retryable, without a pending cl
       },
     },
   })
-  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  ;(f.agent as any).inject = (message: any) => followups.push(message)
   await f.capture([message])
   const result = await f.execute(TASK_PREPARE_TOOL, {
     requestIntent: {
@@ -3480,7 +3529,7 @@ test('legacy taskType returns the current interpretation contract to the model w
       },
     },
   })
-  ;(f.agent as any).followup = () => assert.fail('No fabricated native answer')
+  ;(f.agent as any).inject = () => assert.fail('No fabricated native answer')
   await f.capture([message])
   const pending = await f.execute(TASK_PREPARE_TOOL, { taskType: 'build' })
   assert.equal(pending.isError, false)
@@ -3569,7 +3618,7 @@ test('multinguin recurrence: inconclusive assessment asks once; dismissal does n
       },
     },
   })
-  ;(f.agent as any).followup = () =>
+  ;(f.agent as any).inject = () =>
     assert.fail('An internal inference failure must not queue a human answer')
   await f.capture([message])
   const args = {
@@ -3638,7 +3687,7 @@ test('a missing main-model artifact scope requires model interpretation, not an 
       },
     },
   })
-  ;(f.agent as any).followup = () =>
+  ;(f.agent as any).inject = () =>
     assert.fail('Missing classifier fields must not become human input')
   await f.capture([message])
   const requestIntent = {
@@ -3732,7 +3781,7 @@ test('an answer action never becomes a clarification question about the target',
       },
     },
   })
-  ;(f.agent as any).followup = (message: any) => followups.push(message)
+  ;(f.agent as any).inject = (message: any) => followups.push(message)
   let intent = activeIntent(messages, task, 'new', 'answer')
   await f.capture(messages)
   const result = await f.execute(TASK_PREPARE_TOOL, {

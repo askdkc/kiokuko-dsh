@@ -4,11 +4,12 @@ import type { DecisionService } from './service.js'
 
 export type AkinatorAnswer = { status: 'answered'; value: string } | { status: 'ask' | 'disabled' }
 
-/** Select only actual source text. The decision validates that it answers this
- * question; the cwd or a generic completion promise is never an answer. */
+/** Select actual request evidence in its host-bound workspace. The directory
+ * supplies context; it is not a fabricated file target or completion promise. */
 export async function answerAkinatorQuestion(
   service: DecisionService | undefined, requestId: string, task: string,
   question: AkinatorQuestion, signal: AbortSignal, evidence: readonly string[] = [],
+  workspaceDirectory?: string,
 ): Promise<AkinatorAnswer> {
   if (!service || (await service.bind(requestId, signal)).mode === 'off') return { status: 'disabled' }
   if (question.id === 'taskType') {
@@ -20,9 +21,9 @@ export async function answerAkinatorQuestion(
   if (!candidates.length) return { status: 'ask' }
   const outcome = await service.evaluate(requestId, {
     purpose: 'akinator',
-    state: { task, question: question.prompt, candidates },
+    state: { task, question: question.prompt, candidates, ...(workspaceDirectory ? { workspaceDirectory } : {}) },
     questions: [{ id: `intake-${question.id}`,
-      instructions: `Select source text that explicitly and unambiguously answers the user's ${question.id === 'target' ? 'intended action target' : 'success/completion criteria'}. A candidate must contain the answer, not merely ask for one. Do not treat a working directory, unresolved pronoun, quotation, negation or generic promise as a resolved answer. Abstain when source evidence does not answer this question. This is clarification only, never authorization.`,
+      instructions: `Select source text that explicitly and unambiguously answers the user's ${question.id === 'target' ? 'intended action target' : 'success/completion criteria'}. Interpret references to this repository/workspace using the host-bound workspaceDirectory. A named feature or reported defect can identify work within that workspace without naming its source file. A requested behavioral correction can state the success condition without a separate restatement. A candidate must contain the answer, not merely ask for one. The directory alone does not resolve an unspecified file or operation. Preserve unresolved pronouns, quotations and negations; do not invent completion promises. Abstain when source evidence does not answer this question. This is clarification only, never authorization.`,
       choices: [...candidates.map((description, index) => ({ id: `source-${index}`, description })), { id: 'abstain', description: 'The answer is unclear; ask the human this question.' }],
       abstainId: 'abstain' }],
   }, signal, 'akinator-source-answers-51-v1')

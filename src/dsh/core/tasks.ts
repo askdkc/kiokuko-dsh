@@ -261,7 +261,7 @@ export class CoreTasks {
         while (state.status === 'needs_answer' && state.question) {
           const question = state.question
           const automatic = question.id !== 'taskType'
-            ? await answerAkinatorQuestion(this.decisions, input.requestId, input.task, question, input.signal)
+            ? await answerAkinatorQuestion(this.decisions, input.requestId, input.task, question, input.signal, [], cwd)
             : { status: 'ask' as const }
           if (automatic.status !== 'answered' && !this.answerer) break
           const value = automatic.status === 'answered' ? automatic.value

@@ -315,7 +315,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         && isCodingWorkflowTool(tools.get(execution.name, agent))) return undefined
       const registered = persistent.definitions.get(`${agent.id}:${execution.name}`)
       if (registered && tools.get(execution.name, agent)?.execute === (registered as { execute: unknown }).execute) return undefined
-      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行い、削除・既存ファイルの置換には利用者の確認が必要です。'
+      return 'Lisp 保護中は Lisp ツールと DSH の読み取り・検索・スキル読み込み・質問・計画提出を使えます。変更は Lisp 経由で行ってください。作業プロジェクト内の削除・既存ファイルの置換に追加の利用者確認は不要です。プロジェクト外の変更には確認が必要です。'
     }
     const prepare = async (agent: Agent): Promise<boolean> => {
       const scope = scopeSession(agent, persistent)
@@ -387,10 +387,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     return { agent, owner: { sessionId: identifier.parse(agent.session.id), agentId: identifier.parse(agent.id), root: realpathSync(agent.session.header.cwd) }, signal: binding.abort.signal }
   }
   ownerForOwned=(binding:LispOwner)=>owner(agents.get(binding.agentId))
-  const approvalText = () => `Lisp execution mode: ${config.executionMode}; approval mode: ${approvalPolicy.mode()} (entire profile). ` + (!development
-    ? 'Explicit protected compatibility mode uses its existing sandbox and approval policy. Native development tools remain independently available. '+(approvalPolicy.mode()==='auto'?'Do not ask permission to submit, resubmit, run verification or apply changes already covered by auto policy.':'') : approvalPolicy.mode() === 'auto'
-    ? 'Routine Lisp/project development is authorized. Source/data deletion and durable user DB mutation still require concrete confirmation. Cancellation, refusal and unknown outcomes remain authoritative.'
-    : 'Routine Lisp/project development and verification are authorized without a dialog. Source/data deletion and durable user DB mutation require concrete confirmation. Native permissions remain unchanged; the selected Lisp execution route still applies.')
+  const approvalText = () => `Lisp execution mode: ${config.executionMode}; approval mode: ${approvalPolicy.mode()} (entire profile). `
+    + 'Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Native permissions, protected paths, cancellation and unknown outcomes remain authoritative. '
+    + (development ? 'The selected Lisp execution route still applies.' : 'Protected compatibility mode retains its sandbox and non-file approval policy.')
   const guide = skillPrompts ? await skillPrompts.require('kiokuko-lisp') : await readFile(fileURLToPath(new URL('../../../skills/kiokuko-lisp/SKILL.md', import.meta.url)), 'utf8')
   // Native DSH assembles prompts BEFORE agent/pre-step. Register a live provider
   // now so activation, restored sessions and the next step see the current mode.

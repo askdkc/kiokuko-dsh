@@ -1,0 +1,47 @@
+--- a/packages/boot/plugin-manager/src/operations.ts
++++ b/packages/boot/plugin-manager/src/operations.ts
+@@ -148,6 +148,16 @@
+   }
+ }
+ 
++/** Explicit latest for one installed local package means its registry release.
++ * Keep registry, Git, missing packages and all other pnpm forms unchanged.
++ */
++export function latestRegistryUpdate(args: readonly string[], dependencies: Readonly<Record<string, string>>): readonly string[] {
++  if (!['update', 'up', 'upgrade'].includes(args[0] ?? '') || args.length !== 3 || !args.includes('--latest')) return args
++  const name = args[1] === '--latest' ? args[2] : args[1]
++  if (!name || !/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name) || !/^(?:file:|link:)/.test(dependencies[name] ?? '')) return args
++  return ['add', `${name}@latest`]
++}
++
+ /** Install commands that take the packages to install as positionals. */
+ const INSTALL_COMMANDS = new Set(['add', 'install', 'i'])
+ 
+@@ -313,6 +323,7 @@
+   }
+   const before = readProfileManifest('dsh', dir)
+   const savedFiles = ['package.json', 'pnpm-lock.yaml'].map(name => ({ path: join(dir, name), text: optionalFile(join(dir, name)) }))
++  args = latestRegistryUpdate(args, before.dependencies ?? {})
+   const beforeDependencies = directDependencies(before)
+   const installedBefore = new Map(Object.keys(beforeDependencies).map(name => [name, optionalFile(join(dir, 'node_modules', name, 'package.json'))]))
+   let output = Buffer.alloc(0)
+--- /dev/null
++++ b/packages/boot/plugin-manager/tests/latest-local-update.spec.ts
+@@ -0,0 +1,17 @@
++import { expect, it } from 'vitest'
++import { latestRegistryUpdate } from '../src/operations.ts'
++
++it('explicit latest replaces a local profile package with its registry release', () => {
++  for (const source of ['file:/tmp/kiokuko-dsh-old.tgz', 'link:../../../checkout']) {
++    expect(latestRegistryUpdate(['update', 'kiokuko-dsh', '--latest'], { 'kiokuko-dsh': source })).toEqual(['add', 'kiokuko-dsh@latest'])
++  }
++})
++it('preserves registry updates, missing packages and non-latest or Git-pinned intent', () => {
++  for (const source of [undefined, '^0.2.44', 'git+https://example.invalid/pkg#fixed']) {
++    const args = ['update', 'kiokuko-dsh', '--latest']
++    expect(latestRegistryUpdate(args, source ? { 'kiokuko-dsh': source } : {})).toBe(args)
++  }
++  for (const args of [['update', 'kiokuko-dsh'], ['update', '--latest'], ['update', 'kiokuko-dsh', '--latest', '--recursive']]) {
++    expect(latestRegistryUpdate(args, { 'kiokuko-dsh': 'file:old.tgz' })).toBe(args)
++  }
++})

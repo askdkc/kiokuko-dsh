@@ -21,6 +21,7 @@ const cache = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-cache-'))
 const work = await mkdtemp(join(tmpdir(), 'kiokuko-pack-check-'))
 
 const requiredFiles = [
+  'dist/build-info.json',
   'guardrail/manifest.json',
   'guardrail/protocols/coding-routine.lisp',
   'guardrail/node-runner.mjs',

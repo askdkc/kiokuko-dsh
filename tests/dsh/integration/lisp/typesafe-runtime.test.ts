@@ -62,14 +62,15 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     const uncertain = await evaluate('insufficient', code, { inputs: ['candidate.txt'] }); assert.equal(uncertain.value.json, 'original')
     decision = 'propose'
     const proposed = await evaluate('propose', code, { inputs: ['candidate.txt'] })
-    assert.equal(proposed.changes[0].state, 'NOT_APPLIED'); assert.equal(approvals, 1); assert.equal(await readFile(join(root, 'candidate.txt'), 'utf8'), 'original')
+    assert.equal(proposed.changes[0].state, 'APPLIED'); assert.equal(approvals, 0); assert.equal(await readFile(join(root, 'candidate.txt'), 'utf8'), 'changed')
+    await writeFile(join(root, 'candidate.txt'), 'original')
     const answer = await evaluate('answer', request); assert.equal(answer.value.json.model, 'fixture-model'); assert.equal(answer.value.json.usage.input_tokens, 30)
     mode = 'auth'
     const caught = await evaluate('caught', `(handler-case ${request} (kioku.typesafe:service-error (e) (kioku.typesafe:error-code e)))`)
     assert.equal(caught.ok, true); assert.equal(caught.value.json, 'TYPESAFE_AUTH')
     const uncaught = await evaluate('uncaught', `(kioku.files:propose-write "candidate.txt" "must not apply") ${request}`)
     assert.equal(uncaught.ok, false); assert.match(uncaught.value, /TYPESAFE_AUTH/); assert.deepEqual(uncaught.proposals, [])
-    assert.equal(approvals, 1); assert.equal((await evaluate('usable', '(+ 20 22)')).value.json, 42)
+    assert.equal(approvals, 0); assert.equal((await evaluate('usable', '(+ 20 22)')).value.json, 42)
     const tooLarge = await evaluate('oversized', '(handler-case (kioku.typesafe:evaluate (make-string 1100000 :initial-element #\\x) (make-hash-table)) (kioku.typesafe:service-error (e) (kioku.typesafe:error-code e)))')
     assert.equal(tooLarge.value.json, 'TYPESAFE_REQUEST_TOO_LARGE')
     assert.equal((await evaluate('no-worker-key', '(uiop:getenv "TYPESAFE_API_KEY")')).value.json, null)
@@ -104,8 +105,8 @@ test('protected Lisp consumes TypeSafe decisions, catches API errors, preserves 
     decision = 'inspect'
     assert.match((await evaluate('change-inspect', '(consider-change "requirement" "original" "changed" "candidate.txt" 0.8 0.2)')).value.json, /Inspect/)
     decision = 'propose'
-    assert.equal((await evaluate('change-propose', '(consider-change "requirement" "original" "changed" "candidate.txt" 0.8 0.2)')).changes[0].state, 'NOT_APPLIED')
-    assert.equal(approvals, 2)
+    assert.equal((await evaluate('change-propose', '(consider-change "requirement" "original" "changed" "candidate.txt" 0.8 0.2)')).changes[0].state, 'APPLIED')
+    assert.equal(approvals, 0)
     mode = 'hang'; began = () => {}
     const serviceTimeout = await evaluate('service-timeout', request.slice(0, -1) + ' :timeout-ms 20)')
     assert.equal(serviceTimeout.ok, false); assert.match(serviceTimeout.value, /TYPESAFE_TIMEOUT/); assert.equal(requestSignal!.aborted, true)

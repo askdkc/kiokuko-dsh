@@ -225,7 +225,7 @@ export class DshIntakeGate {
         if (event.signal.aborted) break
         if (this.akinatorMemory.mode === 'off' || this.akinatorMemory.mode === 'shadow') delete prepared.intake.memoryHints
         const automatic = prepared.intake.question && prepared.intake.question.id !== 'taskType'
-          ? await answerAkinatorQuestion(this.decisions, requestId, grounded.task, prepared.intake.question, event.signal, grounded.evidence)
+          ? await answerAkinatorQuestion(this.decisions, requestId, grounded.task, prepared.intake.question, event.signal, grounded.evidence, grounded.cwd)
           : { status: 'ask' as const }
         if ((this.#answerer === undefined && automatic.status !== 'answered') || prepared.intake.question === null) {
           const result = { admitted: false, prepared, catalog: event.capabilities }

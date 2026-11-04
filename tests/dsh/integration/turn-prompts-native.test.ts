@@ -42,11 +42,15 @@ test('ordinary native chat asks mode once, clarifies a vague request, and offers
   } finally { await f.close() }
 })
 
-for (const probability of [.509, .51]) test(`native Akinator asks humans only below 51 percent (${probability})`, { timeout: 20000 }, async () => {
+for (const probability of [.509, .51]) test(`native Akinator leaves a concrete request with the main model even on abstention (${probability})`, { timeout: 20000 }, async () => {
   const asked: string[] = [], decided: string[] = []
+  const intakeWorkspaces: unknown[] = []
   const decisions = new DecisionService(TypedDecisionsConfig.parse({ provider: 'openai' }), config =>
     new OpenAIDecisionProvider(config.openai, async () => 'fixture-key', async (_url, init) => {
       const body = JSON.parse(String(init?.body))
+      if (body.questions.some((q: any) => q.name.startsWith('intake-'))) {
+        intakeWorkspaces.push(body.input[0].content.find((part: any) => part.type === 'input_json').data.state.workspaceDirectory)
+      }
       return Response.json({ model: 'gpt-6-luna', answers: body.questions.map((q: any) => {
         decided.push(q.name)
         const choice = q.name === 'task-type' ? 'debug' : 'source-0'
@@ -69,10 +73,17 @@ for (const probability of [.509, .51]) test(`native Akinator asks humans only be
     f.responses.push(async function* (request: any) {
       assert.match(JSON.stringify(request.messages), /Akinator answers/)
       assert.match(JSON.stringify(request.messages), /src\/parser.ts/)
+      const guidance = request.messages.flatMap((message: any) => message.source?.sections ?? [])
+        .find((section: any) => section.name === 'on-demand-intake')?.text
+      assert.ok(guidance)
+      const context = JSON.parse(guidance.split('advisory only):\n')[1].split('\n')[0])
+      assert.equal(context.workspaceDirectory, f.dir, 'the live session workspace reaches the main model')
       yield* f.mock.textResponse('Understood.')
     })
     await f.turn('Fix src/parser.ts so empty input returns an empty result.')
-    assert.deepEqual(asked, probability < .51 ? ['target'] : [])
-    for (const id of ['task-type', 'intake-target', 'intake-expected']) assert.ok(decided.includes(id), id)
+    assert.deepEqual(asked, [], 'provider uncertainty must not require the human to repeat the target')
+    assert.ok(intakeWorkspaces.length > 0)
+    assert.ok(intakeWorkspaces.every(cwd => cwd === f.dir), 'the source-answer provider receives the same live workspace')
+    for (const id of ['task-type', 'intake-target', ...(probability >= .51 ? ['intake-expected'] : [])]) assert.ok(decided.includes(id), id)
   } finally { await f.close() }
 })

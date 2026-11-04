@@ -33,7 +33,7 @@ test('KDSH-COMPLETION-INPUT-GUIDANCE-001: actual native errors name missing fiel
   let approvals=0,sequence=0
   const dispose=mountTaskCompletion({tools:ctx.tools,on:ctx.on.bind(ctx)},{runtime:{withDatabase:async(fn:any)=>fn(db)} as any,
     resolve:execution=>execution.agent===agent?{...identity,agent}:undefined,approve:async()=>{approvals++;return true}})
-  const call=(args:unknown)=>executeNativeTool(ctx, packages, {name:'task_completion',callId:`guidance-${++sequence}`,arguments:args,agent,signal:new AbortController().signal})
+  const call=(args:unknown,callId=`guidance-${++sequence}`)=>executeNativeTool(ctx, packages, {name:'task_completion',callId,arguments:args,agent,signal:new AbortController().signal})
   const diagnostics=(result:any)=>{assert.equal(result.isError,true);assert.equal(result.value,undefined,'native failure never carries a successful value');const message=result.content.map((part:any)=>part.text??'').join('');assert.match(message,/TASK_COMPLETION_INPUT_INVALID/u);assert.doesNotMatch(message,/DO_NOT_ECHO/u);const recovery=JSON.parse(message.slice(message.indexOf('\nRecovery: ')+11));assert.equal(recovery.code,'TASK_COMPLETION_INPUT_INVALID');assert.equal(recovery.verified,false);return recovery}
   try{
     const status=await call({action:'status'});assert.equal(status.isError,false)
@@ -45,8 +45,15 @@ test('KDSH-COMPLETION-INPUT-GUIDANCE-001: actual native errors name missing fiel
     assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_completion_bindings').get()!.n,0)
     const wrong=diagnostics(await call({action:'bind',criterionId,method:{...method,sourcePaths:['src/check.mjs'],assertion:'selected_tests_pass'}}))
     assert.ok(wrong.issues.some((issue:any)=>issue.field==='method.assertion'&&issue.expected==='output_matches'))
-    const bound=await call({action:'bind',criterionId,method:{...method,sourcePaths:['src/check.mjs']}})
+    const stale=diagnostics(await call({action:'bind',criterionId:`coding:foreign:${definition.criteria[0]!.criterionId}`,method:{...method,sourcePaths:['src/check.mjs']}}))
+    assert.ok(stale.issues.some((issue:any)=>issue.field==='criterionId'))
+    const bound=await call({action:'bind',criterionId:definition.criteria[0]!.criterionId,method:{...method,sourcePaths:['src/check.mjs']}},'canonical-bind')
     assert.equal(bound.isError,false);assert.equal(bound.value.approved,true)
+    assert.equal(bound.value.criterionId,criterionId,'workflow-local IDs resolve only within the current workflow')
+    const approvalCount=approvals
+    const replay=await call({action:'bind',criterionId,method:{...method,sourcePaths:['src/check.mjs']}},'canonical-bind')
+    assert.equal(replay.isError,false);assert.deepEqual(replay.value,bound.value)
+    assert.equal(approvals,approvalCount,'canonical and local IDs replay one binding without another approval')
     const after=await call({action:'status'});assert.equal(after.value.verified,false,'binding alone never verifies the criterion')
     assert.equal(after.value.criteria[0].state,'unknown')
     assert.ok(after.value.bindingGuide.native_command.requiredFields.includes('sourcePaths'))

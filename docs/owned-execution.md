@@ -9,9 +9,10 @@ scope still apply.
 
 Ordinary project reads, edits, builds, tests, PATH commands and investigation
 needed for development require no additional confirmation. Bash/zsh inherit
-the user's environment and may start child processes. Source/data deletion and
-existing durable user database mutation require confirmation of concrete
-targets. Generated artifacts and temporary/disposable data do not. Declare
+the user's environment and may start child processes. Working-project changes,
+including source/data deletion, replacement and project DB updates, need no extra
+confirmation. Canonical targets outside the project, including symlink escapes,
+require concrete approval even in temporary directories. Declare
 `destructiveTargets` for destructive commands: arbitrary shell/Lisp/FFI code
 cannot be completely classified in advance. An unknown side effect does not
 justify refusing execution or treating its result as verification.

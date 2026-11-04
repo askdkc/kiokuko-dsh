@@ -43,9 +43,9 @@ const boundIntent = (request: any) => {
   return JSON.parse(text.split('advisory only):\n')[1]!.split('\n')[0]!)
 }
 
-for (const scenario of ['answered', 'dismissed', 'foreign-answer'] as const) {
-  const answered = scenario === 'answered'
-  test(`public adapter semantic clarification: ${answered ? 'answer resumes same work' : scenario === 'foreign-answer' ? 'foreign question answer cannot resume work' : 'dismissal retains settled idle work'}`,
+for (const scenario of ['answered', 'answered-queued', 'dismissed', 'foreign-answer'] as const) {
+  const answered = scenario.startsWith('answered'), queued = scenario === 'answered-queued'
+  test(`public adapter semantic clarification: ${answered ? `answer resumes same work${queued ? ' before queued input' : ''}` : scenario === 'foreign-answer' ? 'foreign question answer cannot resume work' : 'dismissal retains settled idle work'}`,
     { skip: !available, timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
     const providerModule = await import(packageRoot
       ? pathToFileURL(join(packageRoot, 'dist/dsh/decisions/laya-v1.js')).href : '../../../src/dsh/decisions/laya-v1.js')
@@ -88,6 +88,7 @@ for (const scenario of ['answered', 'dismissed', 'foreign-answer'] as const) {
     })
     let fixture: Awaited<ReturnType<typeof nativeSkillFixture>> | undefined
     const asked: any[] = []
+    let queuedId: string | undefined
     try {
       const f = fixture = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}),
         extra: { lisp: { enabled: false }, typedDecisions: { provider: 'laya-coreml',
@@ -102,6 +103,11 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
             selected: [question.id === 'taskType' ? 'research' : question.id === 'target' ? 'PLAN.md'
               : question.id === 'expected' ? 'A concise explanation' : '通常実行'] }] }
           asked.push(request)
+          if (queued) {
+            const message = fixture!.llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: firstRequest }] })
+            queuedId = message.id
+            fixture!.agent.followup(message)
+          }
           assert.equal(request.agent, fixture!.agent)
           assert.equal(request.questions.length, 1); assert.match(question.question, /文章|コード|設定/)
           return { answers: [{ id: scenario === 'foreign-answer' ? 'request-clarification-another-task' : question.id, selected: [], ...(answered || scenario === 'foreign-answer' ? { custom: answer } : {}) }] }
@@ -134,7 +140,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           assert.equal(bound.decision.action, 'change'); assert.equal(bound.activeTask.taskId, working!.taskId)
           unchanged()
           return f.mock.toolCallResponse('ask-before-change', 'prepare_requested_work', { taskType: 'writing' })
-        }, async (request: any) => {
+        })
+      if (!answered) f.responses.push(async (request: any) => {
           const prepared = resultFor(request, 'ask-before-change')
           assert.equal(prepared.isError, false, resultText(prepared))
           const value = JSON.parse(resultText(prepared))
@@ -151,6 +158,12 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           return f.mock.textResponse('Waiting for the exact requested clarification.')
         })
       if (answered) f.responses.push((request: any) => {
+        const prepared = JSON.parse(resultText(resultFor(request, 'ask-before-change')))
+        assert.equal(prepared.prepared, false)
+        assert.equal(prepared.status, 'clarification_answer_queued')
+        assert.equal(prepared.answer, undefined, 'the tool result must not expose a second copy of the answer')
+        assert.deepEqual(f.agent.inbox.nextTurn.map((message: any) => message.id), queued ? [queuedId] : [], 'a foreground question answer must not be replayed as a next-turn command')
+        assert.equal(f.agent.inbox.nextStep.length, 0, 'the reply is consumed before the next model request')
         const bound = boundIntent(request)
         assert.equal(bound.decision.relation, 'same_scope_continuation'); assert.equal(bound.decision.action, 'change')
         assert.equal(bound.activeTask.taskId, working!.taskId)
@@ -177,7 +190,19 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         unchanged(); wrote = true
         return f.mock.textResponse('The clarified document edit is complete.')
       })
+      if (queued) f.responses.push(() => {
+        assert.equal(wrote, true, 'the answer is handled before unrelated queued input')
+        assert.ok(f.agent.session.snapshotEvents().some((event: any) => event.type === 'user/message' && event.data.id === queuedId))
+        return f.mock.textResponse('The separate queued request is handled once.')
+      })
       await f.turn(firstRequest)
+      if (answered) {
+        const events = f.agent.session.snapshotEvents()
+        assert.equal(events.filter((event: any) => event.type === 'turn/start').length, queued ? 3 : 2, 'the answer must not open an extra turn')
+        assert.equal(events.filter((event: any) => event.type === 'user/message' && event.data.source?.kind === 'user' && JSON.stringify(event.data.content).includes(answer)).length, 1)
+        assert.equal(f.agent.inbox.nextTurn.length, 0)
+        assert.equal(f.agent.inbox.nextStep.length, 0)
+      }
       assert.ok(idleCalls > 0, 'actual public adapter receives native idle notifications')
       // Observe the real native listeners and worker queues to completion;
       // no synthetic idle event or substituted resolver establishes this result.

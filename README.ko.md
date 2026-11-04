@@ -83,17 +83,21 @@ AgenticReplay 기능은 자동으로 설정되며 **수동 설정이 필요 없�
 
 ## 업데이트
 
+로컬 tarball이나 `file:`로 설치한 버전은 `update --latest`가 성공해도 이전 버전으로 남을 수 있습니다. DSH를 종료하고 각 프로필에서 기존 패키지를 삭제한 뒤 `kiokuko-dsh@latest`를 추가하세요.
+
 DSH를 종료한 뒤 Web 버전을 업데이트하고 다시 시작합니다.
 
 ```bash
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
 pnpm dsh web
 ```
 
 DSH를 종료한 뒤 CLI 버전을 업데이트하고 다시 시작합니다.
 
 ```bash
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 pnpm dsh --profile dsh-cli
 ```
 
@@ -105,7 +109,10 @@ pnpm dsh --profile dsh-cli
 ```bash
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 ```
 
 이 설정은 전역으로 저장되며 이후 pnpm 설치와 업데이트에서도 공개 후 대기 기간 검사를

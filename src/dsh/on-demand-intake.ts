@@ -107,7 +107,8 @@ export interface DemandAgent {
   readonly ctx?: unknown
   readonly id: string
   cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void
-  followup?(message: any): unknown
+  /** Admit a foreground question reply at the next step without scheduling a new turn. */
+  inject?(message: any): unknown
   readonly session?: {
     readonly id: string
     snapshotEvents?(): readonly DshLogEvent[]
@@ -1080,7 +1081,9 @@ export class OnDemandIntake {
     while (evaluation.status === 'needs_answer' && evaluation.question) {
       const automatic = await this.host.answerIntake?.(state.input, state.task, evaluation.question, state.requestIntentContext)
       this.assertCurrent(state)
-      if ((!automatic || automatic.status === 'disabled') && !missingScope) return
+      // An auxiliary abstention is not a missing user requirement. The main
+      // model can inspect the current workspace and the original request.
+      if (automatic?.status !== 'answered' && !missingScope) break
       // With decisions explicitly OFF, preserve ordinary conversation behavior;
       // unresolved action references still receive concrete clarification.
       if ((!automatic || automatic.status === 'disabled') && evaluation.question.id === 'taskType') {
@@ -1217,7 +1220,7 @@ export class OnDemandIntake {
       this.#clarificationContexts.get(input.agent) ?? new Map())
     for (const message of messages) {
       const receipt = this.#nativeConfirmations.get(input.agent)?.get(humanId(message))
-      if (receipt && receipt.session === input.agent.session && receipt.originalTurn < input.turn &&
+      if (receipt && receipt.session === input.agent.session && receipt.originalTurn <= input.turn &&
         receipt.contentDigest === canonicalContentHash(humanTask([message])) &&
         receipt.sourcesDigest === canonicalContentHash(clarification.sources))
         return {turn:receipt.originalTurn,task:receipt.originalTask}
@@ -1691,7 +1694,7 @@ export class OnDemandIntake {
             ? 'scope_unknown'
             : 'clarification_required',
     })
-    if (!this.host.questions || !state.input.agent.followup) return result
+    if (!this.host.questions || !state.input.agent.inject) return result
     const operation = (async () => {
       try {
         const response = await abortable(
@@ -1812,7 +1815,7 @@ export class OnDemandIntake {
         }
         replies.set(answerMessageId, reply.context)
         this.#clarificationContexts.set(state.input.agent, replies)
-        state.input.agent.followup!({
+        state.input.agent.inject!({
           id: answerMessageId,
           role: 'user',
           source: { kind: 'user' },
@@ -1829,11 +1832,10 @@ export class OnDemandIntake {
           questionId: answerQuestionId,
           question: answerQuestion,
           status: 'clarification_answer_queued',
-          answer: value,
           answerRef: answerMessageId,
           nextAction: 'await_queued_answer_capture',
           detail:
-            'The answer is already queued as native user input. Do not ask it again or reuse old references. Continue only after the host captures the queued answer and supplies its current references.',
+            'The answer will be captured as native user input before the next model step in this turn. Do not ask it again, process a second copy, or reuse old references; use the refreshed host context.',
         }
         return pending.result
       } catch (error) {
@@ -2067,6 +2069,7 @@ export class OnDemandIntake {
           {
             references: requestIntentReferenceIds(context),
             requiredReferences: requestIntentRequiredReferenceIds(context),
+            workspaceDirectory: context.workspaceDirectory ?? null,
             activeGoal: context.activeGoal ?? null,
             activeTask: context.activeTask ?? null,
             proposals: context.proposals.map(

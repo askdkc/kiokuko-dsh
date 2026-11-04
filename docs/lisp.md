@@ -1,4 +1,4 @@
-For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. Enabled Lisp owns computation and shell orchestration; read/search and owned file tools remain available. Routine development is authorized and destructive changes retain concrete review.
+For configured semantic routing, use [provider-independent decisions](typed-decisions.md) and `kioku.decisions`. Enabled Lisp owns computation and shell orchestration; read/search and owned file tools remain available. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation.
 
 # Common Lisp tools
 
@@ -176,7 +176,7 @@ reload does not silently restore the direct shell route; recover Lisp or explici
 use `/kioku-lisp disable`.
 Existing DSH `read`, `glob`, `grep` and `skill` tools remain available under native
 session permissions, so project files and applicable Skills can be inspected.
-File changes can use owned native tools or Lisp proposals. Ordinary writes/edits do not request approval; destructive source/data deletion retains a concrete review. For a coding task with a saved yes, recover Lisp or explicitly choose another task route before continuing implementation.
+File changes can use owned native tools or Lisp proposals. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. For a coding task with a saved yes, recover Lisp or explicitly choose another task route before continuing implementation.
 The protected agent uses native tool presentation even in a PTC deployment.
 
 `sbclPath` can point to an explicit installed SBCL launcher. Its runtime files must
@@ -227,10 +227,10 @@ not the complete worker startup or the speed of an individual Lisp computation.
   absolute paths are refused. The original attachment store stays inaccessible to
   Lisp and its subprocesses. Limits: 64 MiB per file, 256 MiB per worker generation.
 - Lisp/FFI runs inside OS isolation without workspace access or inherited credentials. Project file changes and external Python/shell commands cross the host tool boundary, which checks operation permissions and records the result.
-- Project proposals freeze targets, preserve backups and reject duplicate targets. Writes/edits are authorized; source/data deletion requires concrete confirmation. Generated/temp/disposable artifacts are routine development.
-- Refusal, skip, timeout, cancelled confirmation or unavailable UI means no change.
-  File identities/content are checked again after approval. Links, directories,
-  database files/sidecars, common credential paths and plugin/state data are refused.
+- Project proposals freeze targets, preserve backups and reject duplicate targets. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Generated/temp/disposable artifacts are routine development.
+- Where approval is required, refusal, skip, timeout, cancellation or unavailable UI means no change.
+  File identities/content are rechecked before effects. Protected compatibility mode refuses links,
+  directories, database files/sidecars, common credential paths and plugin/state data.
 - Backups are independent copies, never hard links. Their global reservation limit
   is 1 GiB in this implementation; reaching it stops changes without pruning data.
 - The host journal distinguishes success, failure, no change, in progress and
@@ -498,7 +498,7 @@ Native `ask_user_question` and `exit_plan_mode` remain available in both Lisp mo
 <!-- kiokuko:runtime approval-policy -->
 ## Development approval policy
 
-The legacy lisp.approvalMode ask/auto configuration and profile commands remain readable. Both authorize routine project edits, tests, helper registration and Kioku saving. Neither disables concrete confirmation for source/data deletion or durable user database mutation. A worker failure leaves normal tools available. Refusal, cancellation, changed targets and unknown outcomes cannot authorize effects.
+The legacy lisp.approvalMode ask/auto configuration and profile commands remain readable. Both authorize routine project edits, tests, helper registration and Kioku saving. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. A worker failure leaves normal tools available. Refusal, cancellation, changed targets and unknown outcomes cannot authorize effects.
 
 Use kioku_read/write/edit/remove/exec/result for observed work. Host receipts distinguish actual process outcome, source-bound verification and saving status. Lisp/model passed fields are advisory. Saving can be retried without repeating development effects; after restart an interrupted process remains unknown. See [owned execution](owned-execution.md).
 <!-- /kiokuko:runtime -->

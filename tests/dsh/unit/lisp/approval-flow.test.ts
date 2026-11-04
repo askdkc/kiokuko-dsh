@@ -43,7 +43,8 @@ test('one profile policy covers successive file, verifier and registry effects w
   questions.approvalPolicy!.validate = () => writeFileSync(join(root, 'package.json'), JSON.stringify({scripts:{typecheck:'changed'}}))
   assert.equal((await ci(owner, {kind:'verify',target:'typecheck'}, signal) as any).state, 'NOT_APPLIED')
   assert.equal(commands,2)
-  questions.approvalPolicy!.validate = () => writeFileSync(join(root,'a.txt'),'concurrent edit')
+  let fileChecks = 0
+  batch.options.authorizeEffect = async () => { if (++fileChecks === 2) await writeFile(join(root,'a.txt'),'concurrent edit') }
   const stale = await batch.apply(owner,'stale','generation',[{operation:'write',path:'a.txt',content:'must not overwrite'}],signal)
   assert.notEqual(stale[0]!.state,'APPLIED'); assert.equal(await readFile(join(root,'a.txt'),'utf8'),'concurrent edit')
   questions.approvalPolicy!.validate = () => {}

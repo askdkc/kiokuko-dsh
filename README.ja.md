@@ -68,17 +68,21 @@ GitHub・ローカルからの導入は [プラグインガイド](docs/dsh-plug
 
 ## 更新
 
+ローカルtarballや `file:` で導入した版は、`update --latest` が成功しても古い版のまま残る場合があります。DSH を停止し、各プロファイルから古いパッケージを削除してから `kiokuko-dsh@latest` を追加してください。
+
 DSH を停止してから、Web版を更新して再起動します。
 
 ```bash
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
 pnpm dsh web
 ```
 
 DSH を停止してから、CLI版を更新して再起動します。
 
 ```bash
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 pnpm dsh --profile dsh-cli
 ```
 
@@ -90,8 +94,10 @@ pnpm dsh --profile dsh-cli
 ```bash
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 ```
 
 この設定はグローバルに保存され、以後の pnpm のインストール・更新でも公開後の

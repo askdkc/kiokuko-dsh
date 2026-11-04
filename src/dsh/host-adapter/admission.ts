@@ -721,6 +721,16 @@ export function createAdmission({
           event.task,
         )
       const cacheKey = `${event.sessionId}\u0000${event.turn}`
+      // Native inject/clarification can add human input within the same turn.
+      // Retire only the superseded request cache; the source-bound intent and
+      // current task lease above remain mandatory, and the run is retained.
+      if (prior?.turn === event.turn && !prior.closed && !prior.failed && prior.task !== event.task
+        && hasHumanInput(event.nativeMessages ?? []) && continuesCodingScope(event)
+        && event.requestIntent && event.requestIntentContext?.task === event.task
+        && rebindRequestIntentDecision(event.requestIntent, event.requestIntentContext)) {
+        continuedTurns.delete(cacheKey)
+        resumedTurns.delete(cacheKey)
+      }
       const fingerprint = canonicalContentHash({
         sessionId: event.sessionId,
         agentId: event.agent.id,
@@ -962,8 +972,13 @@ export function createAdmission({
             prepared,
             catalog: event.capabilities,
           })
-          if (selected.admitted)
+          if (selected.admitted) {
+            continuedTurns.set(cacheKey, { fingerprint, result: selected,
+              ...(event.profileHints === undefined ? {} : { profileHints: event.profileHints }),
+              ...(event.nativeAgent === undefined ? {} : { nativeAgent: event.nativeAgent }),
+              ...(event.nativeSession === undefined ? {} : { nativeSession: event.nativeSession }) })
             await bindAndRecord(event, selected, generation)
+          }
           return selected
         }
         // Model routing prepares before native pre-step. Reuse that exact
@@ -1746,6 +1761,7 @@ export function createAdmission({
     ].slice(0, 8)
     return createRequestIntentContext({
       task,
+      workspaceDirectory: realpathSync(cwd),
       messageRefs,
       ...(activeGoal ? { activeGoal } : {}),
       ...(activeTask ? { activeTask } : {}),

@@ -1,4 +1,6 @@
 import { SemanticCompactionCoordinator } from "./semantic-compaction/coordinator.js";
+import { loadedPluginEvidence } from './plugin-evidence.js';
+import { runtimeEvidence } from './runtime-evidence.js';
 import { realpathSync } from "node:fs";
 import { createDecisionService } from "./decisions/host.js";
 import { startupRecoveryMessage } from "./startup-recovery.js";
@@ -106,7 +108,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
   const tuiProfile = profileName === "dsh-cli" || profileName === "dsh-tui";
   const skillPrompts = new DshSkillPrompts(resolvedConfig.skillPrompts);
 
-  console.info("[kiokuko-dsh] [info] plugin loaded");
+  console.info(`[kiokuko-dsh] [info] plugin loaded ${JSON.stringify({ ...runtimeEvidence(), ...loadedPluginEvidence, profile: profileName ?? null, pid: process.pid })}`);
   await ctx.effect(async () => {
     await setupDshOnLoad();
     let host = ctx.get(KIOKUKO_DSH_HOST_SERVICE, false) as

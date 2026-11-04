@@ -61,8 +61,8 @@ test('oversized model requests keep bounded metadata and a correlated response',
   } finally { await f.dispose() }
 })
 
-test('native failure and memory finish failure stay observable without private exception text', async () => {
-  const f = await agenticReplayFixture()
+test('metadata capture keeps native and memory failures without private exception text', async () => {
+  const f = await agenticReplayFixture({ capture: { content: 'metadata' } })
   try {
     const values = response().map((value: any) => value.type === 'finish' ? { ...value,
       reason: { kind: 'error', failure: { code: 'DSH_MEMORY_REBUILD_EXHAUSTED', message: 'PRIVATE-EXCEPTION-TEXT' } } } : value)
@@ -654,6 +654,8 @@ test('run.start records observed runtime evidence rather than a fixed verified r
     const payload = events.find(event => event.type === 'run.start')!.payload as any;
     assert.equal(Object.hasOwn(payload, 'verifiedDshVersion'), false);
     assert.equal(payload.runtime.nodeVersion, process.version);
+    assert.equal(payload.runtime.pluginVersion, JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8')).version);
+    assert.equal(payload.runtime.loadedFrom, 'source');
     assert.equal(payload.runtime.dshVersion, null, 'the test runner does not expose a DSH launcher version');
   } finally { await f.dispose() }
 });

@@ -57,6 +57,9 @@ try {
   for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', system:body, messages:[{role:'user',content:[{type:'text',text:body}]}] }, async function* () {
     yield { type: 'text-delta', index: 0, text: body }; yield { type: 'finish', reason: { kind: 'stop' } };
   })) {}
+  for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', messages: [] }, async function* () {
+    yield { type: 'finish', reason: { kind: 'error', failure: { code: 'RATE_LIMITED', status: 429, requestId: 'consumer-request-1', message: 'Capacity exceeded; authorization FAKEONLY_DUMMY_CREDENTIAL' } } };
+  })) {}
   await recorder.shutdown();
   const status = recorder.status(binding.sessionId); assert.equal(status.trace.state, 'completed');
   assert.equal(await readFile(join(root, '.gitignore'), 'utf8'), '.agenticreplay/\\n');
@@ -69,6 +72,13 @@ try {
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.agenticreplay_version, installed.version);
   const reader = await TraceReader.open(dir); const events = await reader.events();
+  const failure = events.find(e => e.type === 'error' && e.attrs?.diagnostic?.requestId === 'consumer-request-1');
+  assert.equal(failure?.attrs?.diagnostic?.status, 429);
+  assert.equal(failure?.attrs?.diagnostic?.code, 'RATE_LIMITED');
+  const loaded = events.find(e => e.type === 'run.start').payload.runtime;
+  const packaged = JSON.parse(await readFile(new URL('./build-info.json', import.meta.resolve('kiokuko-dsh')), 'utf8'));
+  assert.equal(loaded.loadedFrom, 'distribution'); assert.equal(loaded.buildId, packaged.buildId);
+  assert.match(loaded.buildId, /^[a-f0-9]{64}$/u); assert.equal(loaded.pluginVersion, packaged.packageVersion);
   for(const type of ['model.request','model.response'])assert.ok(events.some(e=>e.type===type));
   const files=[];
   async function inspectFiles(path){for(const entry of await readdir(path,{withFileTypes:true})){const target=join(path,entry.name);if(entry.isDirectory())await inspectFiles(target);else files.push(await readFile(target,'utf8'));}}

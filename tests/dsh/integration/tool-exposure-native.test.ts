@@ -387,6 +387,19 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
       assert.equal(descriptionFor(toolFor(leanBody, 'fixture_external')), 'Fixture-owned tool description must stay intact.')
       assert.ok(diagnostics.join(' | ').includes('unownedSurfaceReductionCount'))
       assert.ok(diagnostics.join(' | ').includes('registration_provenance_unavailable'))
+      const projected = diagnostics.filter(line => line.startsWith('[kiokuko-dsh] toolExposure projection '))
+        .map(line => JSON.parse(line.slice(line.indexOf('{'))))
+      assert.ok(projected.length > 0)
+      for (const entry of projected) {
+        assert.equal(entry.context.sessionId, leanAgent.session.id)
+        assert.equal(entry.context.agentId, leanAgent.id)
+        assert.equal(typeof entry.context.runId, 'string')
+        assert.equal(typeof entry.context.turn, 'number')
+        assert.equal(typeof entry.context.nativeSeq, 'number')
+        assert.equal(typeof entry.diagnosticId, 'string')
+        assert.equal(typeof entry.runtime.pluginVersion, 'string')
+        assert.equal(Number.isNaN(Date.parse(entry.timestamp)), false)
+      }
       assert.deepEqual(registry.schemas(), registeredSchemas, 'assembly projection must not mutate registered tool schemas')
       assert.equal(toolCalls.length, 1, JSON.stringify(leanAgent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result').map((event: any) => event.data.message)))
       assert.deepEqual(toolCalls[0], { message: 'payload-1' })
@@ -481,7 +494,10 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
             assert.equal(requests.length, before + 2)
             assert.deepEqual(requests[before + 1]!.body.tools, fullBody.tools, 'ownership collisions must retain the entire full surface')
           }
-          assert.equal(warnings.filter(line => line.includes(`surface unchanged: ${mode}:ownership_unknown`)).length, 1, 'each adapter must warn once with the actual requested mode')
+          const collisions = warnings.filter(line => line.includes(`surface unchanged: ${mode}:ownership_unknown`))
+            .map(line => JSON.parse(line.slice(line.indexOf('{'))))
+          assert.equal(collisions.length, 2, 'each affected session must retain its own diagnostic')
+          assert.equal(new Set(collisions.map(entry => entry.context.sessionId)).size, 2)
           assert.ok(warnings.every(line => !/model_route_unavailable|unsupported_route/.test(line)))
         } finally { registry.get = originalGet; console.warn = previousWarn }
       }

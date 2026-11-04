@@ -94,11 +94,11 @@ for (const branch of ['native', 'owned'] as const) test(`proposal ${branch}: mis
   assert.equal(calls, 0); assert.deepEqual(await readdir(f.root), [])
 })
 
-test('proposal task revocation during approval preserves every target', async t => {
-  const f = await fixture(t); let valid = true
+test('proposal task revocation before application preserves every target', async t => {
+  const f = await fixture(t); let checks = 0
   await writeFile(join(f.root, 'target'), 'original')
   const batch = new LispProposalBatch({ store: f.store, backupRoot: f.backups, protectedRoots: () => [], stopped: () => false,
-    authorizeEffect: async () => { if (!valid) denied() }, questions: { ask: async request => { valid = false; return allow.ask(request) } } })
+    authorizeEffect: async () => { if (++checks === 2) denied() } })
   const result = await batch.apply(f.owner, 'eval', 'generation', [{ operation: 'write', path: 'target', content: 'new' }], signal)
   assert.equal(result[0]!.code, 'TASK_STALE'); assert.equal(result[0]!.state, 'NOT_APPLIED')
   assert.equal(await readFile(join(f.root, 'target'), 'utf8'), 'original')

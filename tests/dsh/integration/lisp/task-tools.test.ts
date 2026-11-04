@@ -96,7 +96,7 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
     assert.equal(compared.changes[0].same, true)
     assert.equal((await manager.execute(owner, 'lisp_apply', { operationId: 'wrong-verification', candidateRef: otherCandidate.candidateRef, verificationRef: verified.operationId }) as any).code, 'VERIFICATION_MISMATCH')
     const applied = await manager.execute(owner, 'lisp_apply', { operationId: 'applied', candidateRef: staged.candidateRef, verificationRef: verified.operationId }) as any
-    assert.equal(applied.ok, true, JSON.stringify(applied)); assert.equal(approvalCount, 2)
+    assert.equal(applied.ok, true, JSON.stringify(applied)); assert.equal(approvalCount, 1)
     assert.deepEqual(JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')), { entries: ['a', 'z'] })
     assert.equal((await manager.execute(owner, 'lisp_apply', { operationId: 'again', candidateRef: staged.candidateRef }) as any).code, 'CANDIDATE_ALREADY_USED')
     const newer = await manager.execute(owner, 'lisp_observe', { operationId: 'observe-new', paths: ['manifest.json'], format: 'json' }) as any
@@ -107,7 +107,7 @@ test('AI task tools survive worker and host restarts, compose by exact ref, and 
     const staleApply = await manager.execute(owner, 'lisp_apply', { operationId: 'stale-apply', candidateRef: staleCandidate.candidateRef }) as any
     assert.equal(staleApply.ok, false); assert.equal(staleApply.changes[0].code, 'BASE_CHANGED')
     assert.deepEqual(JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')), { entries: ['external'] })
-    assert.equal(approvalCount, 2)
+    assert.equal(approvalCount, 1)
     const second = await manager.execute(owner, 'lisp_call', { operationId: 'second', toolRef: composite.toolRef, inputRef: first.resultRef }) as any
     assert.equal(second.ok, true, JSON.stringify(second)); assert.deepEqual(second.value, ['a', 'z'])
     const otherOwner = { ...owner, agentId: 'other-agent' }

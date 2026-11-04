@@ -1,4 +1,5 @@
 import { projectModelBinding } from '../model-auto/policy.js'
+import { failureDiagnostic } from '../failure-diagnostic.js'
 import { humanInput } from '../../memory/review/evidence.js'
 import { hasHumanInput } from '../answer-review/contracts.js'
 import { type ReviewNativeSession } from '../auto-memory-review.js'
@@ -108,7 +109,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
   const errorDisposer = onNativeEvent(ctx, 'agent/error', (event: { agent: { id: string; session?: { id: string }; sessionId?: string }; error?: unknown }) => {
     if (event.agent.session?.id) answerReview.cancel(event.agent.session.id)
     const item = currentForAgentEvent(event.agent.id, event.agent.session?.id ?? event.agent.sessionId, undefined, event.agent.session, event.agent)
-    if (item !== undefined) item.failed = true
+    if (item !== undefined) { item.failed = true; item.failureDiagnostic = failureDiagnostic(event.error, 'redacted') }
   })
   const sessionEventDisposer = onNativeEvent(ctx, 'session/event', (session: { id: string }, event: { type?: unknown; seq?: unknown; data?: unknown }) => {
     const item = currentSession(session.id)

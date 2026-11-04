@@ -253,15 +253,19 @@ test('telemetry attempt IDs stay outside serialized request interpretations',asy
 })
 
 test('resume links the accepted answer to a fresh same-session source attempt and rejects foreign or stale lineage',t=>{
-  const f=fixture(t),old=diagnosticId(),fresh=diagnosticId(),foreign=diagnosticId(),stale=diagnosticId()
-  for(const [decisionId,sessionId,turn]of [[old,'native-session',1],[fresh,'native-session',2],[foreign,'foreign-session',2],[stale,'native-session',1]] as const)
-    createDiagnosticAttempt(f.db,decisionId,{origin:'intake',purpose:'request-intent',requestRef:hash(`${sessionId}:${turn}`),sessionId,turn,inputDigest:hash(decisionId),policyRef:hash('policy'),referenceDigests:[hash('native-answer')]})
+  const f=fixture(t),old=diagnosticId(),fresh=diagnosticId(),foreign=diagnosticId(),stale=diagnosticId(),sameTurn=diagnosticId(),wrongAnswer=diagnosticId()
+  for(const [decisionId,sessionId,turn]of [[old,'native-session',2],[fresh,'native-session',3],[foreign,'foreign-session',3],[stale,'native-session',1],[sameTurn,'native-session',2],[wrongAnswer,'native-session',2]] as const)
+    createDiagnosticAttempt(f.db,decisionId,{origin:'intake',purpose:'request-intent',requestRef:hash(`${sessionId}:${turn}`),sessionId,turn,inputDigest:hash(decisionId),policyRef:hash('policy'),referenceDigests:[hash(decisionId===wrongAnswer?'another-answer':'native-answer')]})
   const q=event(old,'question'),a=event(old,'answer')
   appendDiagnosticEvent(f.db,old,q,question)
   appendDiagnosticEvent(f.db,old,a,{kind:'answer',status:'queued',reason:'answer_queued',parentEventId:q,referenceDigest:hash('native-answer')})
   const resume={kind:'resume' as const,status:'observed' as const,reason:'resume_observed' as const,parentEventId:a,targetSessionId:'native-session'}
   assert.throws(()=>appendDiagnosticEvent(f.db,old,event(old,'foreign'),{...resume,nextDecisionId:foreign}))
   assert.throws(()=>appendDiagnosticEvent(f.db,old,event(old,'stale'),{...resume,nextDecisionId:stale}))
+  assert.throws(()=>appendDiagnosticEvent(f.db,old,event(old,'wrong-answer'),{...resume,nextDecisionId:wrongAnswer}))
+  assert.throws(()=>appendDiagnosticEvent(f.db,old,event(old,'self'),{...resume,nextDecisionId:old}))
+  appendDiagnosticEvent(f.db,old,event(old,'same-turn'),{...resume,nextDecisionId:sameTurn})
+  assert.equal(readDecisionDiagnostics(f.db,'native-session',old).attempts[0]!.events.at(-1)!.nextDecisionId,sameTurn)
   appendDiagnosticEvent(f.db,old,event(old,'resume'),{...resume,nextDecisionId:fresh})
   assert.equal(readDecisionDiagnostics(f.db,'native-session',old).attempts[0]!.events.at(-1)!.nextDecisionId,fresh)
 })

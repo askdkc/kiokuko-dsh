@@ -223,6 +223,8 @@ test('native clarification reuses its exact original startup binding, not the la
     asks++;return {answers:[{id:q.questions[0].id,selected:[asks===1?TASK_STARTUP_OPTIONS[1]:TASK_STARTUP_OPTIONS[0]]}]}
   }}})
   await startup.prepare(request(1,'Edit README.md'))
+  await startup.prepare({...request(1,'Same-turn native confirmation answer'),clarificationFrom:{turn:1,task:'Edit README.md'}})
+  assert.equal(asks,1,'the foreground answer must retain the original startup choice in the same turn')
   await startup.prepare(request(2,'An unrelated Lisp task'))
   assert.equal(f.counts().enabled,false);assert.equal(asks,1)
   await startup.prepare({...request(3,'Native confirmation answer'),clarificationFrom:{turn:1,task:'Edit README.md'}})

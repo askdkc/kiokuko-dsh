@@ -67,17 +67,21 @@ Recordings keep `capture.content: redacted` by default. To minimize body storage
 
 ## Update
 
+A local tarball or `file:` dependency can remain pinned even when `update --latest` succeeds. Stop DSH, remove the old package from each profile, then install `kiokuko-dsh@latest`.
+
 Stop DSH, then update and restart the Web profile:
 
 ```bash
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
 pnpm dsh web
 ```
 
 Stop DSH, then update and restart the CLI profile:
 
 ```bash
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 pnpm dsh --profile dsh-cli
 ```
 
@@ -89,8 +93,10 @@ then update:
 ```bash
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 ```
 
 This setting persists globally and disables the release-age check for future pnpm

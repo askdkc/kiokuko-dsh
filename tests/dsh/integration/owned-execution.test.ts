@@ -3,7 +3,7 @@ import { bindHistoricalMemory } from '../helpers/historical-memory.js'
 import { resolveProjectWorkspace } from '../../../src/memory/workspaces.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
@@ -143,16 +143,65 @@ test('asynchronous result collection and storage retry never replay process effe
   }finally{await f.cleanup()}
 })
 
-test('Plan, generation, cancellation and explicit destructive review remain separate from ordinary writes',async()=>{
+test('project-local deletion, replacement and declared command targets need no approval',async()=>{
+  const f=await fixture()
+  try{
+    for(const name of ['source.txt','project.sqlite3']){
+      await writeFile(join(f.root,name),'original')
+      const replaced=await f.execute('kioku_write',{path:name,content:'replacement'},'replace-'+name)
+      assert.equal(replaced.applied,true)
+      assert.equal(await readFile(join(f.root,name),'utf8'),'replacement')
+      const removed=await f.execute('kioku_remove',{path:name},'remove-'+name)
+      assert.equal(removed.applied,true)
+      await assert.rejects(readFile(join(f.root,name)),{code:'ENOENT'})
+    }
+    for(const declared of [false,true]){
+      await writeFile(join(f.root,'src/remove.txt'),'source')
+      const result=await f.execute('kioku_exec',{command:'rm -- remove.txt',cwd:'src',...(declared?{destructiveTargets:['remove.txt']}:{})},'rm-'+declared)
+      assert.equal(result.exitCode,0,JSON.stringify(result))
+      await assert.rejects(readFile(join(f.root,'src/remove.txt')),{code:'ENOENT'})
+    }
+    assert.equal(f.approvals(),0)
+  }finally{await f.cleanup()}
+})
+
+test('external files, sibling-prefix paths and symlink escapes retain approval without effects',async()=>{
+  const f=await fixture(),outside=f.root+'-outside'
+  await mkdir(outside)
+  try{
+    await writeFile(join(outside,'keep.txt'),'keep')
+    await symlink(outside,join(f.root,'escape'))
+    const paths=[join(outside,'keep.txt'),'escape/keep.txt','escape/missing/new.txt']
+    for(const [index,path] of paths.entries()){
+      const result=await f.execute('kioku_write',{path,content:'forbidden'},'external-'+index)
+      assert.notEqual(result.applied,true)
+      assert.match(result.receipt.error,/not approved/i)
+    }
+    for(const [index,args] of [
+      {command:`rm -- '${join(outside,'keep.txt')}'`},
+      {command:'rm -- escape/keep.txt'},
+      {command:'true',destructiveTargets:['escape/missing/new.txt']},
+      {command:'true',cwd:outside,destructiveTargets:['keep.txt']},
+    ].entries()){
+      const result=await f.execute('kioku_exec',args,'external-command-'+index)
+      assert.notEqual(result.receipt.processStarted,true)
+    }
+    assert.equal(f.approvals(),7)
+    assert.equal(await readFile(join(outside,'keep.txt'),'utf8'),'keep')
+    await assert.rejects(readFile(join(outside,'missing/new.txt')),{code:'ENOENT'})
+  }finally{await f.cleanup();await rm(outside,{recursive:true,force:true})}
+})
+
+test('Plan, generation and cancellation remain separate from project-local writes',async()=>{
   const f=await fixture()
   try{
     f.setPlan(true)
     await assert.rejects(f.execute('kioku_write',{path:'src/check.test.mjs',content:'x'},'plan'),/Plan/)
     assert.ok(await f.execute('kioku_read',{path:'src/check.test.mjs'},'read-plan'))
     f.setPlan(false)
-    const denied=await f.execute('kioku_remove',{path:'src/check.test.mjs'},'delete')
-    assert.equal(denied.receipt.state,'unknown');assert.equal(f.approvals(),1)
-    assert.ok((await readFile(join(f.root,'src/check.test.mjs'),'utf8')).includes('actual process'))
+    const removed=await f.execute('kioku_remove',{path:'src/check.test.mjs'},'delete')
+    assert.equal(removed.applied,true);assert.equal(f.approvals(),0)
+    await assert.rejects(readFile(join(f.root,'src/check.test.mjs')),{code:'ENOENT'})
     assert.equal(implementationRequested([{role:'user',source:{kind:'user'},content:'PLEASE IMPLEMENT THIS PLAN:'}]),true)
     assert.equal(implementationRequested([{role:'user',source:{kind:'plugin'},content:'Implement this plan'}]),false)
     assert.equal(implementationRequested([{role:'user',content:'> Implement this plan'}]),false)

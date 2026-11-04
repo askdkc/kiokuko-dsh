@@ -137,15 +137,10 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal(await readFile(protectedFile, 'utf8'), 'private')
     await writeFile(join(root, 'delete.txt'), 'preserve')
     const code = '(kioku.files:propose-delete "delete.txt")'
-    for (const decision of ['deny', 'skip', 'throw'] as const) {
-      approval = decision
-      const result = await evaluate(decision, code)
-      assert.equal(result.changes[0].state, 'NOT_APPLIED')
-      assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')
-    }
+    const beforeLocalDelete = questions
     approval = 'allow'
     const deleted = await evaluate('approved', code)
-    assert.equal(deleted.changes[0].state, 'APPLIED')
+    assert.equal(deleted.changes[0].state, 'APPLIED'); assert.equal(questions, beforeLocalDelete)
     assert.equal(await readFile(deleted.changes[0].backup, 'utf8'), 'preserve')
     await assert.rejects(readFile(join(root, 'delete.txt')), { code: 'ENOENT' })
     const before = questions; assert.equal((await evaluate('approved', code)).replay, true); assert.equal(questions, before)
@@ -179,13 +174,10 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     assert.equal((await stat(bundlePath)).mtimeMs, bundleInfo.mtimeMs)
     const stale = await manager.execute(owner, 'lisp_inspect', {operationId:'stale-ref',ref:data.value.ref}) as any
     assert.equal(stale.ok, false); assert.match(stale.value, /STALE_REFERENCE/)
-    approval = 'pending'
-    const waiting = evaluate('late-approval', code)
-    while (!answerLate) await new Promise(resolve => setTimeout(resolve, 10))
+    const waiting = evaluate('cancel-evaluation', '(sleep 30)')
+    while ((await manager.status(owner) as any).state !== 'EVALUATING') await new Promise(resolve => setTimeout(resolve, 10))
     await manager.execute(owner, 'lisp_cancel', {})
-    const cancelledProposal = await waiting
-    answerLate!({ answers: [{ id: pendingQuestion.id, selected: [pendingQuestion.options[1].label] }] })
-    assert.equal(cancelledProposal.changes[0].state, 'NOT_APPLIED')
+    assert.equal((await waiting).ok, false)
     assert.equal(await readFile(join(root, 'delete.txt'), 'utf8'), 'preserve')
     approval = 'deny'; await manager.recover(owner)
     const transition = LispStore.prototype.transition

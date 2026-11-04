@@ -235,6 +235,11 @@ export function connectionProfile(
             contextWindow: m.contextWindow,
             maxTokens: m.maxTokens,
             reasoning: m.reasoning,
+            // Both gateways use the OpenRouter-shaped reasoning object, not
+            // OpenAI's top-level reasoning_effort (owned IDs defeat autodetection).
+            ...(connection.kind === "infron" || connection.kind === "nous"
+              ? { compat: { thinkingFormat: "openrouter" } }
+              : {}),
             // A stored declaration reaches pi-ai as the exact level map; an
             // adopted boolean without a declaration keeps pi-ai's defaults.
             ...(typeof m.reasoningEfforts === "object"

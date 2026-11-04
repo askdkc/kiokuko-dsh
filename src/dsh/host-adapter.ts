@@ -1,3 +1,4 @@
+import { createToolExposureDiagnostics } from './tool-exposure-diagnostics.js';
 import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
 import { TaskStartup } from "./task-startup.js";
@@ -464,41 +465,9 @@ export function createDshHostAdapter(
     options.akinatorMemory ?? {},
   );
   let toolExposureConfig = ToolExposureConfig.parse(options.toolExposure ?? {});
-  const reportedToolExposureFallbacks = new Set<string>();
-  const reportedToolExposureProjections = new Set<string>();
-  const reportToolExposureFallback = (fallback: string): void => {
-    fallback = `${toolExposureConfig.mode}:${fallback}`;
-    if (
-      toolExposureConfig.mode === "full" ||
-      reportedToolExposureFallbacks.has(fallback)
-    )
-      return;
-    reportedToolExposureFallbacks.add(fallback);
-    console.warn(
-      `[kiokuko-dsh] [warn] toolExposure left the native surface unchanged: ${fallback}`,
-    );
-  };
-  const reportToolExposureProjection = (
-    mode: "lean" | "minimal",
-    reason: string,
-    metrics: ToolExposureMetrics,
-  ): void => {
-    if (
-      toolExposureConfig.mode !== "lean" &&
-      toolExposureConfig.mode !== "auto"
-    )
-      return;
-    const diagnostic = {
-      requestedMode: toolExposureConfig.mode,
-      mode,
-      reason,
-      ...metrics,
-    };
-    const key = JSON.stringify(diagnostic);
-    if (reportedToolExposureProjections.has(key)) return;
-    reportedToolExposureProjections.add(key);
-    console.info(`[kiokuko-dsh] toolExposure projection ${key}`);
-  };
+  const toolExposureDiagnostics = createToolExposureDiagnostics(() => toolExposureConfig);
+  const reportToolExposureFallback = toolExposureDiagnostics.fallback;
+  const reportToolExposureProjection = toolExposureDiagnostics.projection;
   const efficiencyConfig = EfficiencyConfig.parse(options.efficiency ?? {});
   const continuityConfig = ContinuityConfig.parse(options.continuity ?? {});
   const evolutionConfig = MemoryEvolutionConfig.parse(
@@ -875,7 +844,7 @@ export function createDshHostAdapter(
           {
             answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
               dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
-              [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string')),
+              [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),
             diagnostic: createIntakeDiagnosticSink(runtime),
             recovery: runtime.auxiliaryRecovery,
             assess: (input, context, decision, recoveryAttempt, userConfirmed) =>

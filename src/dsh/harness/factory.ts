@@ -203,7 +203,10 @@ export class KiokukoHarnessAgent implements Agent {
         const failure=turnFailureDiagnostic(error)
         reason=signal.aborted?{kind:'aborted',reason:signal.reason as AgentCancelCause}:{kind:'error',error:failure}
         this.audit('turn',signal.aborted?'cancel':'error',undefined,signal.aborted?undefined:failure)
-        if(!signal.aborted)this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:new Error(memoryFailureDiagnostic(error).message)})
+        if(!signal.aborted){
+          const message=memoryFailureDiagnostic(error).message
+          this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:new LlmError(message,failure.code,failure)})
+        }
       } finally { this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result') }
       if(blocked||signal.aborted&&!this.wake)break
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))

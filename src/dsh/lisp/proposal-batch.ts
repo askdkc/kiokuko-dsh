@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
 import type { DshUserQuestions } from '../user-interaction.js'
-import { confirm, type ApprovalQuestions } from './approval.js'
 import { digest, fail, failure, LispError, type LispOwner, type ProposalInput } from './contracts.js'
-import { applyChange, backupUsage, checkedBytes, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents, type FileSnapshot } from './files.js'
+import { applyChange, backupUsage, freezeChange, restoreBytes, sameFile, snapshot, type FrozenChange, type CreatedParents, type FileSnapshot } from './files.js'
 import type { LispStore } from './store.js'
 import { isManagedAdmissionDenied } from '../managed-operation-runner.js'
 
@@ -13,20 +12,7 @@ export interface ChangeOutcome {
 }
 const contentHash = (text: string) => createHash('sha256').update(text).digest('hex')
 
-/** A single replacement hunk, with common surrounding lines removed, not an LLM summary. */
-function changeDiff(before: string, after: string): string {
-  const a = before.split('\n'), b = after.split('\n')
-  let start = 0, end = 0
-  while (start < a.length && start < b.length && a[start] === b[start]) start++
-  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++
-  const lines = [...a.slice(start, a.length - end).map(line => `-${line}`), ...b.slice(start, b.length - end).map(line => `+${line}`)]
-  let fenceLength = 3
-  for (const line of lines) for (const match of line.matchAll(/`+/gu)) fenceLength = Math.max(fenceLength, match[0].length + 1)
-  const fence = '`'.repeat(fenceLength)
-  return `${fence}diff\n@@ -${start + 1},${a.length - end - start} +${start + 1},${b.length - end - start} @@\n${lines.join('\n')}\n${fence}`
-}
-
-/** One frozen batch, one consent, independent durable outcomes and backups. */
+/** Project-confined changes retain frozen targets, durable outcomes and backups. */
 export class LispProposalBatch {
   readonly #targets = new Set<string>()
   #backupReserved = 0
@@ -70,7 +56,6 @@ export class LispProposalBatch {
     const { store, backupRoot } = this.options, roots = this.options.protectedRoots()
     const changes: FrozenChange[] = [], reserved = new Map<string, string>(), outcomes: ChangeOutcome[] = []
     let backupReservation = 0
-    let approvalSource: 'manual' | 'profile' | undefined
     const id = (c: FrozenChange) => `proposal-${c.id}`
     const record = async (c: FrozenChange, outcome: ChangeOutcome) => {
       await store.transition(owner, id(c), [reserved.get(id(c))!], outcome.state, { evalId, ...outcome })
@@ -106,29 +91,8 @@ export class LispProposalBatch {
       backupReservation = active.reduce((sum, c) => sum + (c.before.size ?? 0), 0)
       this.#backupReserved += backupReservation
       if (await backupUsage(backupRoot) + this.#backupReserved > 1024 ** 3) fail('BACKUP_LIMIT', 'バックアップが 1 GiB に達するため変更を適用していません。')
-      if ((this.options.questions as ApprovalQuestions|undefined)?.executionMode==='development'
-        ? active.some(c => c.request.operation === 'delete' && !/^(?:dist|build|target|node_modules)(?:[/\\]|$)/u.test(c.request.path))
-        : active.some(c=>c.before.exists||c.request.operation==='delete'||c.restoration)) {
-        const details = []
-        for (const c of active) {
-          await store.transition(owner, id(c), ['RUNNING'], 'AWAITING_APPROVAL', { evalId }); reserved.set(id(c), 'AWAITING_APPROVAL')
-          const before = c.before.exists ? (await checkedBytes(c.before)).toString('utf8') : ''
-          const after = c.restoration ? (await restoreBytes(c.restoration)).toString('utf8') : c.request.operation === 'write' ? c.request.content : ''
-          details.push(`対象: ${c.request.path}\n操作: ${c.restoration ? '復元' : c.request.operation}\n元内容 SHA-256: ${c.before.hash ?? '(新規)'}\n変更後 SHA-256: ${contentHash(after)}\nバックアップ: ${c.backup ?? '(不要)'}\n${changeDiff(before, after)}`)
-        }
-        const label = `${active.length}件の変更を許可`
-        const approval = await confirm(this.options.questions, owner, {
-          id: `batch-${digest({ evalId, changes: active })}`, header: 'Lisp · 変更をまとめて確認',
-          question: `${active.length}件の確定した変更を適用しますか？`,
-          detail: `${details.join('\n\n')}\n\n途中で競合・取消が起きた場合、残りの適用を止めます。適用済みの変更とバックアップは保持します。`,
-          options: [{ label: '許可しない' }, { label }], intent: { kind: 'plan-review', approve: label },
-        }, signal, 300000, true)
-        if (!approval.approved) {
-          for (const c of active) await record(c, { id: id(c), path: c.request.path, state: 'NOT_APPLIED', reason: approval.reason, ...(approval.message ? { message: approval.message } : {}) })
-          return outcomes
-        }
-        approvalSource = approval.source ?? 'manual'
-      }
+      // freezeChange has already confined every target to the project and
+      // rejected protected paths/links. Local changes need no extra approval.
       // Validate the entire frozen batch before the first filesystem effect.
       if (expected) for (const before of expected.readSet) {
         const relative = before.path.slice(owner.root.length + 1)
@@ -141,7 +105,7 @@ export class LispProposalBatch {
         await beforeEffect()
         await store.transition(owner, id(c), [reserved.get(id(c))!], 'APPLYING', { evalId }); reserved.set(id(c), 'APPLYING')
         await applyChange(owner, c, roots, createdParents, beforeEffect)
-        await record(c, { id: id(c), path: c.request.path, state: 'APPLIED', backup: c.backup, ...(approvalSource ? { approval: approvalSource } : {}) })
+        await record(c, { id: id(c), path: c.request.path, state: 'APPLIED', backup: c.backup, approval: 'profile' })
       }
       return outcomes
     } catch (error) {

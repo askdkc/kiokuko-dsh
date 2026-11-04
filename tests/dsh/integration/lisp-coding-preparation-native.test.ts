@@ -24,12 +24,12 @@ for(const explicit of [false,true])test(`ordinary implementation offers Lisp bef
  }finally{await f.close()}
 })
 test('a configured request-intent decision arms the early Lisp offer for conversational implementation wording',{timeout:120000},async()=>{
- let asked=0,requestIntentBatches=0
+ let asked=0;const requestIntentStates:any[]=[]
  const decisions=new DecisionService(TypedDecisionsConfig.parse({provider:'typesafe'}),()=> ({
   capabilities:{maxQuestions:256,maxChoices:256,maxBytes:262144},
   async evaluate(batch:any){
    if(batch.purpose==='request-intent'){
-    requestIntentBatches++
+    requestIntentStates.push(batch.state)
     assert.match((batch.state as any).currentUserMessage,/improve this/u)
     return {provider:'fixture',requestedModel:'fixture',policyVersion:'request-intent-task-state-v3',
      answers:batch.questions.map((q:any)=>q.id==='request-relation'?{id:q.id,status:'selected',choiceId:'new'}
@@ -41,7 +41,16 @@ test('a configured request-intent decision arms the early Lisp offer for convers
   }
  }) as any)
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),explicit:true,mode:'compiled',decisions,extra:{...extra,typedDecisions:{provider:'typesafe'}},nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision ON / Lisp OFF')}if(['taskType','target','expected'].includes(q.questions[0].id))return{answers:[{id:q.questions[0].id,selected:q.questions[0].id==='taskType'?['実装・変更']:[],custom:q.questions[0].id==='taskType'?'':'the current source improvement'}]};throw new Error('unexpected question')}})
- try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1);assert.equal(requestIntentBatches,1)}finally{await f.close()}
+ try{f.responses.push(f.mock.textResponse('Prepared ordinary coding.'));await f.turn('Okay okay, improve this source base. AI Memory and coding skills are efficient and handle what user intention should be. What do you do to make that happen with this source bases?');assert.equal(asked,1)
+  // The pre-turn availability check has queued-message evidence only. The
+  // actual turn adds the host-bound workspace and must classify that new input.
+  assert.equal(requestIntentStates.length,2)
+  const [availability,current]=requestIntentStates
+  assert.equal(availability.workspaceDirectory,undefined)
+  assert.equal(current.workspaceDirectory,f.dir)
+  const {workspaceDirectory,...sameRequest}=current
+  assert.deepEqual(sameRequest,availability)
+ }finally{await f.close()}
 })
 test('manual ON routes implementation through Lisp without a mandatory prototype; optional inspection and OFF work',{timeout:120000},async()=>{
  let asked=0;const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),mode:'compiled',extra,startupChoices:['decision OFF / Lisp ON','decision OFF / Lisp OFF'],nativeAnswer:async q=>{asked++;return{answers:[{id:q.questions[0].id,selected:['使わない']}]}}}),fibers:any[]=[]

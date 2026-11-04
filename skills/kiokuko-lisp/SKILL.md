@@ -16,7 +16,7 @@ Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. P
 
 Persistent: coding choice or /kioku-lisp enable. /kioku-lisp enable-task optionally selects disposable scratch evaluations. lisp_define, lisp_call and lisp_observe need no task-mode switch or Working task. Compose functions by exact dependency refs; reuse only your own protected worker, otherwise compute in private protected scratch with no repository mount or host RPC. Schemas never prove arbitrary Lisp safe. A child inherits only capabilities visible in its native scope, not the parent's task lease, heap, or result refs. Shared publication and real effects retain their approval and authority checks. ON selects Lisp computation/orchestration; direct Bash/zsh/PowerShell is rejected, even reads. Run Git/gh/builds/tests through kioku.process:run / start-job. Read/search/Skill and owned file tools remain available. Failure requires recovery or explicit /kioku-lisp disable; no silent shell fallback. Never spoof host-bound session/agent/directory/generation.
 
-Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Source/data deletion and durable user DB mutation require concrete review; declare destructiveTargets. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
+Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Declare destructiveTargets for known command effects. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
 
 Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts. All workers are OS-isolated; direct Lisp/FFI cannot access workspace files or inherited credentials. Generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
 
@@ -60,10 +60,10 @@ identity/size/digest and read-only copies; other absolute paths fail. Limits: 64
 256 MiB/generation. `kioku.files:input`: read; `kioku.files:scratch`: write/unzip. Reimport
 applied files for comparison; export only when authorized. `kioku.files:propose-write`:
 relative paths, successful evaluation, durable recording.
-Development mode: ordinary replacement is authorized; deletion of source/data requires concrete confirmation. Protected compatibility mode retains its frozen-target profile policy. Duplicate targets fail;
+Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Protected compatibility mode retains frozen targets and its protected-path restrictions. Duplicate targets fail;
 unchanged writes do nothing. Refusal/skip/UI failure/cancellation never authorizes.
 Trust APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN receipts; partial failure stops later writes.
-Never retry unknown effects. Use owned tools for ordinary project files and confirmed durable DB changes; protected compatibility mode refuses its protected paths/databases/links and recursive deletion. Independent backups never auto-prune. RUNNING lasts until
+Never retry unknown effects. Use owned tools for working-project files and project DB updates; protected compatibility mode refuses its protected paths/databases/links and recursive deletion. Independent backups never auto-prune. RUNNING lasts until
 receipts save; restart repairs finalization without reapplying effects.
 
 ## Programs, verification and packages
@@ -185,7 +185,7 @@ Native tool schemas remain authoritative for exact arguments.
   captured bytes in private scratch and runs an approved host verifier. Observe
   all required files, including `package.json`; missing dependencies/scripts
   fail or return NOT_APPLIED. `testStatus:unknown` is not a passing test.
-- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` uses owned execution in development mode and concrete approval for destructive changes; it rechecks the read set and frozen targets, and accepts only a successful
+- `lisp_apply`: `{operationId, candidateRef, verificationRef?}` uses owned execution in development mode without extra approval for local changes; it rechecks the read set and frozen targets, and accepts only a successful
   verification receipt for the same candidate. Without one, it reports `not-run`.
 - `lisp_compare`: `{operationId, leftRef, rightRef}` compares saved bases and
   operation/content hashes without executing either candidate.
@@ -349,11 +349,11 @@ shortlist order for selection; source and test for diagnosis. Define `obj` first
 <!-- kiokuko:documentation approval-help -->
 ## Development approval policy
 
-Project edits, verification, helper compilation/registration and ordinary Kioku storage are authorized. Source/data deletion and durable user DB mutations need a concrete review, regardless of the legacy lisp.approvalMode ask/auto value. Old profile settings still load. Do not request conversational permission before a required host review. Refusal, cancellation, stale targets and uncertain outcomes remain authoritative; never replay effects.
+Project edits, verification, helper compilation/registration and ordinary Kioku storage are authorized. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Legacy lisp.approvalMode ask/auto does not add confirmation for local files. Old profile settings still load. Do not request conversational permission before a required host review. Refusal, cancellation, stale targets and uncertain outcomes remain authoritative; never replay effects.
 
 <!-- /kiokuko:documentation -->
 <!-- kiokuko:runtime approval-policy -->
-Routine development and helper registration are authorized. Concrete destructive review remains required. Lisp failure retains the selected shell route. Report execution, verification and saving separately; retry saving without replaying effects.
+Routine development and helper registration are authorized. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Lisp failure retains the selected shell route. Report execution, verification and saving separately; retry saving without replaying effects.
 <!-- /kiokuko:runtime -->
 
 

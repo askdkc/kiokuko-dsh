@@ -97,7 +97,7 @@ test('idle timeout releases workers despite status polling, while active turns a
   } finally { await f.close() }
 })
 
-test('evaluation, approval, background jobs and uncertain journal entries are never evicted', native, async () => {
+test('evaluation, background jobs and uncertain journal entries are never evicted', native, async () => {
   let decline: (() => void) | undefined
   const f = await fixture(300000, { ask: request => new Promise(resolve => {
     decline = () => resolve({ answers: [{ id: request.questions[0]!.id, selected: [request.questions[0]!.options![0]!.label] }] })
@@ -128,12 +128,9 @@ test('evaluation, approval, background jobs and uncertain journal entries are ne
     await f.manager.disposeSession(second.sessionId)
     await f.manager.prepare(first)
     await writeFile(join(f.root, 'keep.txt'), 'keep')
-    const approval = f.manager.execute(first, 'lisp_eval', { operationId: 'approval', code: '(kioku.files:propose-delete "keep.txt")' })
-    await until(async () => decline !== undefined)
-    await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
-    assert.equal((await status(f.manager, first)).state, 'EVALUATING')
-    decline!(); await approval
-    assert.equal(await readFile(join(f.root, 'keep.txt'), 'utf8'), 'keep')
+    const removed = await f.manager.execute(first, 'lisp_eval', { operationId: 'local-delete', code: '(kioku.files:propose-delete "keep.txt")' }) as any
+    assert.equal(removed.changes[0].state, 'APPLIED'); assert.equal(decline, undefined)
+    await assert.rejects(readFile(join(f.root, 'keep.txt')), { code: 'ENOENT' })
   } finally { decline?.(); await f.close() }
 })
 

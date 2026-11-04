@@ -74,7 +74,7 @@ export class TaskStartup {
       // Only the intake's native-answer path supplies this exact original key.
       // Reuse its immutable mode binding, not the latest unrelated session task.
       const from = input.clarificationFrom
-      const prior = from && Number.isSafeInteger(from.turn) && from.turn >= 1 && from.turn < input.turn
+      const prior = from && Number.isSafeInteger(from.turn) && from.turn >= 1 && from.turn <= input.turn
         ? await decisions.readStartup(`${prefix}${String(from.turn).padStart(16, '0')}:${canonicalContentHash(from.task)}`)
         : undefined
       const config = await decisions.readStartup(requestId) ?? prior ?? configured

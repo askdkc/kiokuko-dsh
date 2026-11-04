@@ -119,7 +119,7 @@ export function appendDiagnosticEvent(db: SqliteDatabase, decisionId: string, ev
       const answer=value.parentEventId&&db.prepare("SELECT reference_digest FROM dsh_diagnostic_events WHERE event_id=? AND decision_id=? AND kind='answer'").get(value.parentEventId,decisionId)
       if(value.kind!=='resume'||!next||!answer||value.nextDecisionId===decisionId)throw new DiagnosticConflict('causal_conflict')
       const resumed=DiagnosticAttempt.parse(JSON.parse(String(next.document_json)))
-      if(resumed.sessionId!==owner.sessionId||resumed.sessionId!==value.targetSessionId||resumed.turn===undefined||owner.turn===undefined||resumed.turn<=owner.turn
+      if(resumed.sessionId!==owner.sessionId||resumed.sessionId!==value.targetSessionId||resumed.turn===undefined||owner.turn===undefined||resumed.turn<owner.turn
         ||!resumed.referenceDigests.includes(String(answer.reference_digest)))throw new DiagnosticConflict('causal_conflict')
     }
     if(value.resultRef && (owner.requestRef!==canonicalContentHash(value.resultRef.requestId) || owner.inputDigest!==value.resultRef.inputDigest)) throw new DiagnosticConflict('causal_conflict')
@@ -318,7 +318,7 @@ export function createIntakeDiagnosticSink(runtime: DiagnosticRuntime) {
           const document=db.prepare('SELECT document_json FROM dsh_diagnostic_attempts WHERE decision_id=?').get(String(parent.decision_id))!
           const previous=DiagnosticAttempt.parse(JSON.parse(String(document.document_json)))
           const binding=previous.binding ? captureDiagnosticBinding(db,previous.binding.runId,sessionId) : undefined
-          appendDiagnosticEvent(db,String(parent.decision_id),diagnosticEventId(String(parent.decision_id),['resume',sessionId,input.turn]),{kind:'resume',status:'observed',reason:'resume_observed',parentEventId:String(parent.event_id),targetSessionId:sessionId,nextDecisionId:owner.id,...(binding?{binding}:{})})
+          appendDiagnosticEvent(db,String(parent.decision_id),diagnosticEventId(String(parent.decision_id),['resume',sessionId,input.turn,parent.event_id]),{kind:'resume',status:'observed',reason:'resume_observed',parentEventId:String(parent.event_id),targetSessionId:sessionId,nextDecisionId:owner.id,...(binding?{binding}:{})})
         }
       }
     })

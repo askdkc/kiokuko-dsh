@@ -35,6 +35,7 @@ export interface TurnRecord {
   memoryInput?: string
   memoryRebuildAttempts: number
   failed: boolean
+  failureDiagnostic?: Record<string, unknown>
   closed: boolean
 }
 

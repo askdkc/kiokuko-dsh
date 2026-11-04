@@ -1,4 +1,5 @@
 import { completionInputError } from './task-completion-guidance.js'
+import { readCodingWorkflow } from './coding-workflow/store.js'
 import { ProtocolRecipeSchema } from './guardrail/contracts.js'
 import * as z from 'zod/v4'
 import type { DshCoreRuntime } from './core-runtime.js'
@@ -51,17 +52,25 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
         reason:issue.code==='custom'?issue.message:'Missing, invalid or unexpected field for this action/method'})))
       const parsed=validation.data
       if (parsed.action === 'status') return host.runtime.withDatabase(db => ({...saveTaskCompletionReceipt(db, identity.runId),bindingGuide:taskCompletionBindingGuide(db,identity.runId)}))
+      const criterion = await host.runtime.withDatabase(db => {
+        const criteria = assessTaskCompletion(db, identity.runId).criteria
+        const exact = criteria.find(item => item.criterionId === parsed.criterionId)
+        if (exact) return exact
+        const workflow = readCodingWorkflow(db, identity.runId)
+        // A local Goal criterion ID is unambiguous only in this active workflow.
+        // Never strip a supplied namespace: that could accept a stale/foreign ID.
+        if (!workflow?.definition?.criteria.some(item => item.criterionId === parsed.criterionId)) return undefined
+        return criteria.find(item => item.criterionId === `coding:${workflow.workflowId}:${parsed.criterionId}`)
+      })
+      if (!criterion) throw completionInputError([{ field: 'criterionId', reason: 'Completion criterion is absent or stale; read current status.' }])
       const replay = await host.runtime.withDatabase(db => readTaskCriterionBindingReplay(db, identity.runId,
-        execution.callId, parsed.criterionId, parsed.method))
+        execution.callId, criterion.criterionId, parsed.method))
       if (replay) return replay
-      const criterion = await host.runtime.withDatabase(db => assessTaskCompletion(db, identity.runId).criteria
-        .find(item => item.criterionId === parsed.criterionId))
-      if (!criterion) throw new KiokukoError('CONFLICT', 'Completion criterion is absent or stale')
       const approved = await host.approve?.(identity, criterion, parsed.method, execution.signal) ?? false
       execution.signal.throwIfAborted()
       if (host.resolve(execution)?.runId !== identity.runId) throw new KiokukoError('CONFLICT', 'Native task changed during completion review')
       return host.runtime.withDatabase(db => bindTaskCriterion(db, { runId: identity.runId, callId: execution.callId,
-        criterionId: parsed.criterionId, method: parsed.method, approved })).catch(error=>{
+        criterionId: criterion.criterionId, method: parsed.method, approved })).catch(error=>{
           if(error instanceof KiokukoError&&error.code==='VALIDATION_ERROR')throw completionInputError([{field:typeof error.details.field==='string'?error.details.field:'method',
             reason:error.message,...(typeof error.details.expected==='string'?{expected:error.details.expected}:{})}])
           throw error

@@ -1,4 +1,6 @@
 import { createNativeToolSurface } from '../native-tool-surface.js'
+import type { ToolExposureContext } from '../tool-exposure-diagnostics.js'
+import { failureDiagnostic } from '../failure-diagnostic.js'
 import type { NativeWorkerRouting } from '../native-worker-routing.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
@@ -54,8 +56,8 @@ interface RoutingDependencies {
   readonly isGenericNativeChild: (agent: RoutableAgent) => boolean
   readonly getSkillPrompts: () => DshSkillPrompts
   readonly getToolExposureConfig: () => ToolExposureConfig
-  readonly reportToolExposureFallback: (reason: string) => void
-  readonly reportToolExposureProjection: (mode: 'lean' | 'minimal', reason: string, metrics: ToolExposureMetrics) => void
+  readonly reportToolExposureFallback: (reason: string, context: ToolExposureContext) => void
+  readonly reportToolExposureProjection: (mode: 'lean' | 'minimal', reason: string, metrics: ToolExposureMetrics, context: ToolExposureContext) => void
   readonly modelCatalog: NativeModelCatalog | undefined
   readonly getSelection: (runId: string) => StoredExecutionSelection | undefined
   readonly setSelection: (runId: string, selection: StoredExecutionSelection) => void
@@ -124,6 +126,18 @@ export function createRouting({
     })
     let autoRoute: { runId: string; sessionId: string; binding: import('../model-configuration.js').ModelBinding } | undefined
     let minimalSurface = false
+    const diagnosticContext = (error?: unknown): ToolExposureContext => {
+      const session = agent.session, item = session ? currentSession(session.id) : undefined
+      const position = agent as unknown as { turn?: number; step?: number }
+      return { agentId: agent.id, sessionId: session?.id ?? null, runId: item?.runId ?? null, turn: item?.turn ?? null,
+        nativeTurn: Number.isSafeInteger(position.turn) ? position.turn! : null, step: Number.isSafeInteger(position.step) ? position.step! : null,
+        nativeSeq: (session as { seq?: number } | undefined)?.seq ?? null, prepareGeneration: item?.prepareGeneration ?? null,
+        closed: item?.closed ?? null, failed: item?.failed ?? null, taskType: item?.prepared.intake.profile.taskType ?? null,
+        intakeStatus: item?.prepared.intake.status ?? null, selectionStatus: item ? getSelection(item.runId)?.value.status ?? null : null,
+        policyKnown: !!item && !!getPolicyState(item.runId),
+        policyPhase: item ? getPolicyState(item.runId)?.phase ?? null : null, selectionMode: item ? getSelection(item.runId)?.value.mode ?? null : null,
+        ...(error === undefined ? item?.failureDiagnostic ? { failure: item.failureDiagnostic } : {} : { failure: failureDiagnostic(error, 'redacted') }) }
+    }
     const projectToolSurface = (assembly: import('../japanese-output-skill.js').PromptAssembly & { tools?: unknown }): any => {
       minimalSurface = false
       const exposureMode = getToolExposureConfig().mode
@@ -221,12 +235,12 @@ export function createRouting({
                     : section) } : {}),
                 })
                 if (effectiveMode === 'minimal' && projection.reason === 'projected') minimalSurface = true
-                if (effectiveMode === 'lean' || effectiveMode === 'minimal') reportToolExposureProjection(effectiveMode, `${decisionReason}:${prepared.intake.profile.taskType}:${projection.reason}`, projection.metrics)
+                if (effectiveMode === 'lean' || effectiveMode === 'minimal') reportToolExposureProjection(effectiveMode, `${decisionReason}:${prepared.intake.profile.taskType}:${projection.reason}`, projection.metrics, diagnosticContext())
               }
             }
           }
         }
-        if (fallback !== undefined) reportToolExposureFallback(fallback)
+        if (fallback !== undefined) reportToolExposureFallback(fallback, diagnosticContext())
       }
       return assembly
     }
@@ -264,7 +278,7 @@ export function createRouting({
       const current = agent.session ? currentSession(agent.session.id) : undefined
       const turn = claim?.turn ?? current?.turn
       if (turn === undefined) {
-        reportToolExposureFallback('pre_step_missing_turn')
+        reportToolExposureFallback('pre_step_missing_turn', diagnosticContext())
         return await nativeWorkers.head(agent, signal)
       }
       const messages = claim?.messages ?? []
@@ -278,12 +292,12 @@ export function createRouting({
         const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
         admitted = await prepareTurn(event)
       } catch (error) {
-        if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending') }
+        if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending', diagnosticContext()) }
         else {
           const existing = agent.session ? currentSession(agent.session.id) : undefined
           if (existing && hasSelection(existing.runId)) throw error
           const failure = error instanceof KiokukoError ? error.code.toLowerCase() : error instanceof Error ? error.name.toLowerCase() : 'unknown'
-          reportToolExposureFallback(`pre_step_${failure}`)
+          reportToolExposureFallback(`pre_step_${failure}`, diagnosticContext(error))
 
           // Optional intake enrichment retains its existing degraded behavior.
         }

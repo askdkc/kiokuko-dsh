@@ -34,7 +34,7 @@ export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity
   let state = await getAkinatorStateService(db, { workspace: input.workspace, sessionId: link.sessionId })
   while (state.status === 'needs_answer' && state.question) {
     const question = state.question
-    const automatic = await answerAkinatorQuestion(input.decisions, input.requestId ?? input.taskId, state.session.task, question, input.signal)
+    const automatic = await answerAkinatorQuestion(input.decisions, input.requestId ?? input.taskId, state.session.task, question, input.signal, [], input.repositoryRoot)
     if (automatic.status !== 'answered' && !input.answerer) break
     const value = automatic.status === 'answered' ? automatic.value : await input.answerer!.ask(question, input.signal, input.agent)
     await input.validateCapabilities?.()

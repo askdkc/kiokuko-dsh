@@ -83,17 +83,21 @@ AgenticReplay 的功能配置会自动安装，**无需手动设置**。每次�
 
 ## 更新
 
+通过本地 tarball 或 `file:` 安装的版本，即使 `update --latest` 成功也可能仍是旧版。请先停止 DSH，从各个 profile 中删除旧包，再添加 `kiokuko-dsh@latest`。
+
 停止 DSH 后，更新并重启 Web 版：
 
 ```bash
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
 pnpm dsh web
 ```
 
 停止 DSH 后，更新并重启 CLI 版：
 
 ```bash
-pnpm dsh plugin --profile dsh-cli update kiokuko-dsh --latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 pnpm dsh --profile dsh-cli
 ```
 
@@ -104,7 +108,10 @@ pnpm dsh --profile dsh-cli
 ```bash
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
-pnpm dsh plugin --profile web update kiokuko-dsh --latest
+pnpm dsh plugin --profile web remove kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 ```
 
 此设置会保存到全局配置，后续 pnpm 安装和更新也会关闭发布时间检查。

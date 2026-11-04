@@ -25,11 +25,11 @@ export function mountDshAgenticReplayHooks(ctx: Context, services: DshAgenticRep
       if (resolved && !services.canRecord(resolved)) return next()
       return services.recorder.stream(resolved, options, next)
     }, true)
-    on('agent/error', (event: { agent?: AgenticReplayToolExecution['agent'] }) => {
+    on('agent/error', (event: { agent?: AgenticReplayToolExecution['agent']; error?: unknown; turn?: number; step?: number }) => {
       try {
         const agent = event.agent
         const resolved = agent?.session ? services.resolveSessionBinding(agent, agent.session) : undefined
-        if (resolved && services.canRecord(resolved)) services.recorder.nativeFailure(resolved)
+        if (resolved && services.canRecord(resolved)) services.recorder.nativeFailure(resolved, event.error, event)
       } catch { /* an observer never replaces the native error */ }
     })
     on('tools/pre-execute', async (exec: AgenticReplayToolExecution, next: () => Promise<unknown>) => {

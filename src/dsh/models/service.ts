@@ -134,7 +134,12 @@ class ModelsAdapter extends ProjectionAwareAdapter {
       !(await this.store.read(credentialKey(r.connection)))
     )
       return [];
-    return (r.models ? r.models() : await r.adapter.listModels(r.underlying)).map((m) => ({
+    // resolveModel is the adapter's offline metadata projection. listModels
+    // authenticates and drops reasoning metadata, so do not use it for owned rows.
+    const models = r.models
+      ? await Promise.all(r.models().map(m => r.adapter.resolveModel(r.underlying, m.id)))
+      : await r.adapter.listModels(r.underlying);
+    return models.map((m) => ({
       ...m,
       provider: id,
     }));
@@ -274,6 +279,27 @@ function catalogReasoning(model: unknown): CatalogReasoning | undefined {
   const parsed = ReasoningEffortsSchema.safeParse(efforts);
   return parsed.success ? { reasoning: true, efforts: parsed.data } : { reasoning: true };
 }
+/**
+ * Restore catalog-backed levels for saved gateway rows as well as fresh discovery.
+ * Only exact model IDs are adopted; explicit declarations (including false) win.
+ * This is an offline projection, never a configuration or credential write.
+ */
+function withGatewayReasoning(connection: Connection): Connection {
+  if (connection.kind !== "infron" && connection.kind !== "nous") return connection;
+  const reference = new Map(
+    (adapterBuiltinProviders().find(p => p.id === "openrouter")?.getModels() ?? [])
+      .map(model => [model.id, model]),
+  );
+  return {
+    ...connection,
+    models: connection.models.map(model => {
+      if (model.reasoningEfforts !== undefined) return model;
+      const adopted = catalogReasoning(reference.get(model.id));
+      if (!adopted?.reasoning) return model;
+      return { ...model, reasoning: true, ...(adopted.efforts ? { reasoningEfforts: adopted.efforts } : {}) };
+    }),
+  };
+}
 export class KiokukoModelsService {
   private document: ModelsDocument = {
     version: 1,
@@ -349,7 +375,8 @@ export class KiokukoModelsService {
       );
   }
   async start(): Promise<void> {
-    this.document = await this.options.config.read();
+    const stored = await this.options.config.read();
+    this.document = { ...stored, connections: stored.connections.map(withGatewayReasoning) };
     this.publish(this.build(this.document.connections));
     this.releaseMetadata = registerOwnedModels(this.options.llm, this);
   }
@@ -447,7 +474,7 @@ export class KiokukoModelsService {
   }
   async save(input: unknown, revision: number): Promise<void> {
     return this.serial(async () => {
-      const c = ConnectionSchema.parse(input);
+      const c = withGatewayReasoning(ConnectionSchema.parse(input));
       if (
         c.kind === "codex" &&
         c.baseURL !== "https://chatgpt.com/backend-api/codex"
@@ -621,12 +648,12 @@ export class KiokukoModelsService {
     }
     if (c.kind === "codex") return;
     const key = await this.apiKey(c),
-      // The Infron listing discloses per-model input modalities that discovery's
+      // Gateway listings disclose per-model input modalities that discovery's
       // id-and-capacity rows withhold. Enrichment never fails this refresh: it
       // resolves empty on refusal, timeout or error, so model discovery remains
       // the request whose failure is reported.
       modalities =
-        c.kind === "infron"
+        c.kind === "infron" || c.kind === "nous"
           ? infronModalities(
               c,
               key,

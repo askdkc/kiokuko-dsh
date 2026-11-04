@@ -17,6 +17,21 @@ import { parseDecisionResult } from '../../../src/dsh/decisions/contracts.js'
 import { executionClarification } from '../../../src/dsh/intake-clarification.js'
 
 const task = 'A/B/C をまとめて入れて。前の案で続けて。'
+test('current workspace reaches interpretation and a workspace switch invalidates its evidence', () => {
+  const task = 'このワークスペースで質問の回答ループを修正して'
+  const context = createRequestIntentContext({ task, workspaceDirectory: '/work/current',
+    messageRefs: requestIntentMessageRefs([], task) })!
+  assert.ok(context)
+  assert.equal((buildRequestIntentBatch(context)!.state as any).workspaceDirectory, '/work/current')
+  const refs = requestIntentRequiredReferenceIds(context)
+  assert.ok(refs.some(ref => ref.startsWith('workspace:')))
+  const decision = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: refs }, context)!
+  assert.ok(decision)
+  assert.equal(rebindRequestIntentDecision(decision, { ...context, workspaceDirectory: '/work/other' }), undefined)
+  assert.equal(executionClarification('Fix it', undefined, context) !== undefined, true,
+    'knowing the workspace alone must not invent a specific missing target')
+})
+
 const context = createRequestIntentContext({
   task,
   messageRefs: requestIntentMessageRefs([], task),

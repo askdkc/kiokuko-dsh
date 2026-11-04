@@ -715,7 +715,14 @@ test('public plugin startup repairs unopened histories on first load and reload'
     const plugin = f.ctx.plugin(dshPlugin, { enabled: true })
     f.disposers.push(() => plugin.dispose())
     await plugin
-    assert.match(await scan, /3\/3 checked, 2 repaired, 0 failed$/)
+    const firstScan = await scan
+    assert.match(firstScan, /3\/3 checked, 2 repaired, 0 failed \{/)
+    const firstDiagnostic = JSON.parse(firstScan.slice(firstScan.indexOf('{')))
+    assert.equal(typeof firstDiagnostic.scanId, 'string')
+    assert.equal(Number.isNaN(Date.parse(firstDiagnostic.timestamp)), false)
+    assert.ok(firstDiagnostic.durationMs >= 0)
+    assert.equal(firstDiagnostic.omittedFailures, 0)
+    assert.equal(typeof firstDiagnostic.runtime.pluginVersion, 'string')
     // No chat open, composition mount, or repair command triggers these writes.
     for (const old of [legacy, current]) assert.deepEqual(await readFile(`${old.path}.bak`), old.original)
     assert.deepEqual(await readFile(legacy.path), legacy.original)
@@ -730,7 +737,9 @@ test('public plugin startup repairs unopened histories on first load and reload'
     const reloaded = f.ctx.plugin(dshPlugin, { enabled: true })
     f.disposers.push(() => reloaded.dispose())
     await reloaded
-    assert.match(await scan, /4\/4 checked, 1 repaired, 0 failed$/)
+    const nextScan = await scan
+    assert.match(nextScan, /4\/4 checked, 1 repaired, 0 failed \{/)
+    assert.notEqual(JSON.parse(nextScan.slice(nextScan.indexOf('{'))).scanId, firstDiagnostic.scanId)
     assert.deepEqual(await readFile(`${next.path}.bak`), next.original)
     assert.deepEqual(await readFile(next.path), next.original)
     assert.deepEqual(await readFile(legacy.currentPath), migrated)
