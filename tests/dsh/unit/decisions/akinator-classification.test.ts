@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { isTrivialConversation } from '../../../../src/akinator/domain.js'
 import { buildAkinatorClassificationBatch, classifyTaskForIntake } from '../../../../src/dsh/decisions/akinator-classification.js'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
@@ -8,6 +9,13 @@ import { resolveGroundedIntakeProfile } from '../../../../src/dsh/intake-profile
 
 const configuration = () => TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } })
 const signal = () => new AbortController().signal
+
+test('a whole-message greeting is conversation, not an implementation request', () => {
+  for (const greeting of ['hello!', 'hello there', 'こんにちわ！', 'こんにちは', 'おはようございます', 'ありがとう', '了解です', '雑談', '👋', '👍 ありがとう'])
+    assert.equal(isTrivialConversation(greeting), true, greeting)
+  for (const work of ['hello! Please fix the failing parser.', 'こんにちは。バグを直してください', 'thanks; now deploy the server', 'Fix the parser', 'ok, which parser should I change?'])
+    assert.equal(isTrivialConversation(work), false, work)
+})
 for (const task of ['Fix the failing parser', '調査結果を要約して', 'このバグを直して']) test(`eligible current direct request is complete: ${task}`, () => {
   const batch = buildAkinatorClassificationBatch(task)!
   assert.equal(batch.state, task)

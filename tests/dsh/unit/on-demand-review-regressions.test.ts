@@ -1825,6 +1825,48 @@ test('unowned native coding preparation receives the exact request-intent contex
   assert.equal(f.admissions.length, 0)
 })
 
+test('a trivial greeting is conversation: the startup dialog never opens for it', async t => {
+  for (const greeting of ['hello!', 'こんにちわ！', 'おはようございます', '👋']) {
+    const f = await fixture(t, {
+      nativeOwnership: async () => 'unowned',
+      prepareNativeCoding: async () => {
+        throw new Error('a trivial greeting must not open the decision/Lisp startup question')
+      },
+    })
+    await f.capture([human('greeting', greeting)])
+    const state = f.intake.snapshot(f.session.id)!
+    assert.equal(state.status, 'answer', greeting)
+    assert.equal(state.requestIntent?.unresolvedReason, 'native_unowned_request', greeting)
+  }
+})
+
+test('the startup dialog stays available for work that begins with a greeting', async t => {
+  let prepared = 0
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    prepareNativeCoding: async () => {
+      prepared++
+    },
+  })
+  await f.capture([human('greeting-request', 'hello! Please fix the failing parser.')])
+  assert.equal(prepared, 1, 'a greeting followed by work must still offer the execution choice')
+})
+
+test('a trivial greeting prepares no startup dialog before the turn either', async t => {
+  const f = await fixture(t, {
+    prepareNativeCoding: async () => {
+      throw new Error('pre-turn preparation must not open the startup question for a greeting')
+    },
+  })
+  await f.intake.prepareNativeCapabilities({
+    agent: f.agent,
+    messages: [human('greeting', 'こんにちわ！')],
+    turn: 1,
+    step: 0,
+    signal: signal(),
+  })
+})
+
 test('ordinary native Bash remains available with owned metadata and deferred optional intake', async (t) => {
   const f = await fixture(t, {
     nativeOwnership: async () => 'owned',

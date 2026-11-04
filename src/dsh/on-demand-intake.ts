@@ -16,7 +16,7 @@ import type { AuxiliaryRecovery } from './auxiliary-recovery.js'
 import { filterRequestMemory } from './request-memory.js'
 import { MemorySnapshotStale } from './memory-request-fence.js'
 import { createDshIntakeAnswerer, type DshUserQuestions } from './intake-questions.js'
-import { applyAnswer, deriveProfile, evaluateProfile } from '../akinator/domain.js'
+import { applyAnswer, deriveProfile, evaluateProfile, isTrivialConversation } from '../akinator/domain.js'
 import type { AkinatorQuestion, TaskProfile } from '../akinator/types.js'
 import type { AkinatorAnswer } from './decisions/akinator-answers.js'
 import {
@@ -687,6 +687,9 @@ export class OnDemandIntake {
     input.signal.throwIfAborted()
     const task = requestTask(input.messages)
     if (!task) return
+    // A whole-message greeting is conversation, not an implementation request;
+    // never open the decision/Lisp startup question for it.
+    if (isTrivialConversation(task)) return
     // These are genuine queued-message references, used only for the advisory
     // Lisp choice. capture() later obtains the current source-bound context.
     const context = createRequestIntentContext({
@@ -872,7 +875,10 @@ export class OnDemandIntake {
             ),
           })
         this.assertCurrent(state)
-        await this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input))
+        // A whole-message greeting is conversation, not an implementation
+        // request; the execution choice stays reserved for work requests.
+        if (!isTrivialConversation(state.task))
+          await this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input))
         this.assertCurrent(state)
         state.nativeUnowned = true
         if (context) {
@@ -889,7 +895,7 @@ export class OnDemandIntake {
         await this.diagnose(state, { kind: 'resume' })
         return true
       }
-      if(this.host.prepareNativeCoding){
+      if(this.host.prepareNativeCoding && !isTrivialConversation(state.task)){
         const context=await this.host.requestContext?.(state.input,state.task)
           ?? createRequestIntentContext({task:state.task,messageRefs:requestIntentMessageRefs(state.input.messages,state.task)})
         this.assertCurrent(state)

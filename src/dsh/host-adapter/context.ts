@@ -46,10 +46,9 @@ export function createContextMessages({
     // The intake cache is intentionally stable for the logical turn, while
     // execution operations advance item.prepared after each tool result. Always
     // inject from the current host state.
-    const discussion = getSelection(item.runId)?.value.discussion
     const correctionContextMissing=item.prepared.corrections?.retrieval==='retrieved'&&item.prepared.corrections.sources.some(source=>
       !item.prepared.context?.items.some(candidate=>candidate.entryId===source.entryId&&candidate.revision===source.revision))
-    if(!discussion&&item.prepared.memoryOwner?.kind==='execution'&&!item.prepared.memoryPolicy.contextWithheld
+    if(item.prepared.memoryOwner?.kind==='execution'&&!item.prepared.memoryPolicy.contextWithheld
       &&(item.prepared.corrections?.requestDigest!==canonicalContentHash(event.task)||correctionContextMissing)){
       const timeConstraint=memoryRetrievalConfig.mode==='off'?undefined:timeConstraintForRequest(event.task,memoryRetrievalConfig,Date.now())
       const selected=await runtime.withDatabase(db=>readTaskCorrections(db,{project:item.prepared.project,runId:item.runId,
@@ -72,11 +71,9 @@ export function createContextMessages({
     const workflow = await runtime.withDatabase(db=>codingStatus(db,{runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot}))
     if(workflow.applicable)messages.push({role:'user',source:'user-task',name:'coding-workflow',content:`${CODING_GUIDANCE}\n${JSON.stringify(workflow)}`})
     const executionSelection = getSelection(item.runId)?.value
-    const discussionText = discussion
-      ? `実行方式・モデル選択の質問（${discussion.questionId}）に対するユーザーの自由入力:\n\n${discussion.text}\n\n実行方式・モデル構成はまだ承認されていません。まずこの発言に会話として回答してください。ツールを使った作業や同じ選択質問の繰り返しは行わないでください。`
-      : executionSelection?.status === 'ready'
-        ? '実行方式・モデル構成の選択が確定しました。自由入力への会話のみという制限は解除されています。直近のユーザーの依頼と現在の実行指示に従ってください。'
-        : undefined
+    const discussionText = executionSelection?.status === 'ready'
+      ? '実行方式・モデル構成の選択が確定しました。自由入力への会話のみという制限は解除されています。直近のユーザーの依頼と現在の実行指示に従ってください。'
+      : undefined
     const discussionMessages = discussionText ? [{
       role: 'user' as const, source: 'user-task' as const, name: 'execution-selection-discussion',
       content: discussionText,

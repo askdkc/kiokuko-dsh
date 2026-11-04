@@ -110,9 +110,28 @@ export function normalizeTaskType(value: unknown): TaskType {
   return normalized;
 }
 
+/**
+ * A whole-message greeting, acknowledgement or emoji reaction is conversation,
+ * not an implementation request. Only the entire trimmed message may match; a
+ * greeting that precedes work keeps its work classification.
+ */
+const TRIVIAL_CONVERSATION_TEXT =
+  /^(?:just chatting|casual chat|chat(?:ting)?|hello(?: there)?|hi(?: there)?|hey(?: there)?|yo|sup|howdy|greetings|good (?:morning|afternoon|evening|night)|bye|goodbye|see (?:you|ya)|thanks|thank you|thx|ok|okay|nice to meet you|welcome back|you(?:'| a)re welcome|no problem|雑談|会話|チャット|こんにちは|こんにちわ|こんばんは|おはよう(?:ございます)?|おやすみ(?:なさい)?|さようなら|またね|じゃあね|ありがとう(?:ございます)?|どうも|ハロー|はろー|了解(?:です)?|お疲れ様(?:でした)?|よろしく(?:お願いします)?)[.!?。！？、,\s]*$/u;
+/** Emoji, ZWJ, variation selectors and bare punctuation decorate a reaction. */
+const TRIVIAL_DECORATION =
+  /(?:^|\s)(?:[\p{Extended_Pictographic}\u{1F3FB}-\u{1F3FF}\u200D\uFE0F]|[\s、,。.!！？?～〜])+/gu;
+
+export function isTrivialConversation(task: string): boolean {
+  const normalized = task.trim().toLowerCase();
+  if (TRIVIAL_CONVERSATION_TEXT.test(normalized)) return true;
+  if (!TRIVIAL_DECORATION.test(normalized)) return false;
+  const words = normalized.replace(TRIVIAL_DECORATION, ' ').trim();
+  return words.length === 0 || TRIVIAL_CONVERSATION_TEXT.test(words);
+}
+
 function inferTaskType(task: string): TaskType | null {
   const normalized = task.toLowerCase();
-  if (/^(?:just chatting|casual chat|chat|hello|hi|hey|雑談|会話|チャット|こんにちは|こんばんは)[.!?。！？\s]*$/u.test(normalized)) return 'chat';
+  if (isTrivialConversation(normalized)) return 'chat';
   if (/^(?:all|everything|is (?:it|this|that|everything)|are (?:we|you|they))\s+(?:fixed|done|finished|complete|completed|working|green|passing)(?:\s+now)?[.!?。！？\s]*$/u.test(normalized)) return 'analysis';
   if (/commit\s+message|コミットメッセージ/u.test(normalized)) return 'writing';
   if (/\b(?:debug|bug|fix)\b|修正|不具合|エラー|障害/u.test(normalized)) return 'debug';

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { nativeModelCatalog } from '../../../src/dsh/native-model-catalog.js'
 import { modelBindingProblems, modelRoutesForCatalog, readModelCatalog, type ModelBinding } from '../../../src/dsh/model-configuration.js'
-import { ExecutionSelectionPending, selectExecution } from '../../../src/dsh/model-selection-ui.js'
+import { selectExecution } from '../../../src/dsh/model-selection-ui.js'
 import type { StoredExecutionSelection } from '../../../src/dsh/execution-selection.js'
 
 test('native connection metadata recognizes aliases without reading credentials or guessing a protocol', async () => {
@@ -50,28 +50,22 @@ test('native connection metadata recognizes aliases without reading credentials 
   assert.equal(routes.filter(r => r.provider === 'my-orca').length, 1)
 })
 
-test('a live settings descriptor serves the execution card without losing the draft', async () => {
+test('a pending selection becomes ready without asking the model catalog any question', async () => {
   const provider = 'openai'
   const llm = {
     listProviders: () => [{ id: provider, name: 'OpenAI' }],
     listConfigurableProviders: () => [{ provider, settingsNs: 'llm-pi-ai', settingsPath: ['providers', provider], declared: true }],
     listModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ provider, id, name: id })),
-    discoverModels: async () => ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'].map(id => ({ id, name: id })),
   }
   const catalog = nativeModelCatalog(llm, { describe: () => [{ ns: 'llm-pi-ai', value: { providers: { openai: { baseURL: 'https://api.openai.com/v1', api: 'openai-responses' } } } }] })!
-  let stored: StoredExecutionSelection = { revision: 0, value: { mode: 'pending', status: 'selecting' } }
-  const seen: string[] = []
-  await assert.rejects(selectExecution({ task: 'Fix model selection', signal: new AbortController().signal, routes: [], llm: catalog, stored,
-    save: async (revision, value) => { assert.equal(revision, stored.revision); return stored = { revision: revision + 1, value } },
-    questions: { ask: async request => {
-      const question = request.questions[0]!
-      seen.push(question.id)
-      assert.ok(question.options?.some(option => option.label === '通常実行'))
-      return { answers: [{ id: question.id, selected: ['取消・作業を保持'] }] }
-    } },
-  }), ExecutionSelectionPending)
-  assert.deepEqual(seen, ['execution-mode'])
-  assert.equal(stored.value.headWorker, undefined)
+  assert.ok(catalog, 'the live settings descriptor still serves the model catalog')
+  let saved: StoredExecutionSelection | undefined
+  const result = await selectExecution({ signal: new AbortController().signal,
+    stored: { revision: 0, value: { mode: 'pending', status: 'selecting' } },
+    save: async (revision, value) => { assert.equal(revision, 0); return saved = { revision: revision + 1, value } },
+  })
+  assert.deepEqual(result.value, { mode: 'normal', status: 'ready' })
+  assert.equal(saved?.revision, 1)
 })
 
 test('optional settings metadata failure cannot block the DSH model catalog', async () => {

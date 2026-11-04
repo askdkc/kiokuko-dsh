@@ -50,7 +50,6 @@ import {
   writeExecutionSelection,
   type StoredExecutionSelection,
 } from '../execution-selection.js'
-import { getHeadWorkerForSession } from '../models/session-selection.js'
 import {
   selectExecution,
   ExecutionSelectionPending,
@@ -511,35 +510,6 @@ export function createAdmission({
         )
       }
       if (!stored) return result
-      const discussion = stored.value.discussion
-      if (discussion && event.turn > discussion.turn) {
-        const incomingType = resolveGroundedIntakeProfile({
-          task: event.task,
-          cwd: event.cwd,
-          deferTaskTypeInference: event.deferTaskTypeInference === true,
-          ...(event.profileHints === undefined
-            ? {}
-            : { profileHints: event.profileHints }),
-        }).profileHints.taskType
-        const requestedMode = explicitExecutionMode(event.task)
-        if (
-          requestedMode !== undefined ||
-          (incomingType !== null && incomingType !== 'chat')
-        ) {
-          const { discussion: _answered, ...value } = stored.value
-          const revision = stored.revision
-          stored = await runtime.withDatabase((db) =>
-            writeExecutionSelection(
-              db,
-              runId,
-              revision,
-              requestedMode === undefined
-                ? value
-                : { ...value, mode: 'pending' },
-            ),
-          )
-        }
-      }
       if (
         stored.value.mode === 'pending' &&
         !explicitExecutionMode(event.task) &&
@@ -558,21 +528,9 @@ export function createAdmission({
         return result
       }
       setSelection(runId, stored)
-      const savedHeadWorker = await getHeadWorkerForSession(
-        native.get('llm', false) as object,
-        event.sessionId,
-      )
       const selected = await selectExecution({
-        task: event.task,
-        turn: event.turn,
         signal: event.signal,
         stored,
-        routes: modelRoutes ?? [],
-        ...(savedHeadWorker ? { savedHeadWorker } : {}),
-        ...(event.nativeAgent ? { agent: event.nativeAgent } : {}),
-        ...(userQuestions ? { questions: userQuestions } : {}),
-        ...(modelCatalog ? { llm: modelCatalog } : {}),
-        ...(modelCompatibility ? { compatibility: modelCompatibility } : {}),
         save: async (revision, value) => {
           const saved = await runtime.withDatabase((db) =>
             writeExecutionSelection(db, runId, revision, value),

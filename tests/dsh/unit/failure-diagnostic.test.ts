@@ -15,6 +15,23 @@ test('diagnostics bound hostile fields and omit private error structure', () => 
   assert.equal(failureDiagnostic({ message: 'capacity exceeded' }, 'metadata').message, undefined)
 })
 
+test('tool exposure diagnostics collapse per-step repeats within one native turn', () => {
+  const lines: string[] = []
+  const reporter = createToolExposureDiagnostics(() => ToolExposureConfig.parse({ mode: 'auto' }), { info: line => lines.push(line), warn: line => lines.push(line) })
+  const base: ToolExposureContext = { agentId: 'agent', sessionId: 'session-a', runId: null, turn: null, nativeTurn: 1, step: 1, nativeSeq: 26,
+    prepareGeneration: null, closed: null, failed: null, taskType: null, intakeStatus: null, selectionStatus: null, policyKnown: false }
+  for (let step = 1; step <= 25; step++) reporter.fallback('unbound:turn_record_missing', { ...base, step, nativeSeq: 26 + step * 15 })
+  assert.equal(lines.length, 1, 'steps of one native turn share one identity: the first observation is kept, repeats are dropped')
+  reporter.fallback('unbound:turn_record_missing', { ...base, nativeTurn: 2, step: 1, nativeSeq: 500 })
+  assert.equal(lines.length, 2, 'a new native turn is a new identity')
+  reporter.fallback('unbound:turn_record_missing', { ...base, nativeTurn: 2, step: 2, nativeSeq: 520 })
+  assert.equal(lines.length, 2)
+  reporter.fallback('pre_step_runtime', { ...base, failure: { code: 'API_ERROR' } })
+  assert.equal(lines.length, 3, 'a different reason is never suppressed')
+  const first = JSON.parse(lines[0]!.slice(lines[0]!.indexOf('{')))
+  assert.equal(first.context.nativeSeq, 41, 'the kept line still attributes its own step and sequence')
+})
+
 test('tool exposure diagnostics correlate each native session, deduplicate exact observations and bound retention', () => {
   const lines: string[] = []
   const reporter = createToolExposureDiagnostics(() => ToolExposureConfig.parse({ mode: 'auto' }), { info: line => lines.push(line), warn: line => lines.push(line) })

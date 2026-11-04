@@ -11,6 +11,15 @@ export interface ToolExposureContext {
   failure?: Record<string, unknown>
 }
 
+/** Deduplicate per observation identity — one warning per (session, turn, reason),
+ *  never per step: step and nativeSeq stay in the logged context but are excluded
+ *  from the identity key. Retention of distinct keys stays bounded. */
+const identityKey = (context: ToolExposureContext): string => JSON.stringify([
+  context.agentId, context.sessionId, context.runId, context.turn, context.nativeTurn ?? null,
+  context.prepareGeneration, context.closed, context.failed, context.taskType, context.intakeStatus,
+  context.selectionStatus, context.policyKnown, context.policyPhase ?? null, context.selectionMode ?? null,
+  context.failure === undefined ? null : JSON.stringify(context.failure)])
+
 /** Deduplicate within one binding, not across unrelated sessions, and bound retained keys. */
 export function createToolExposureDiagnostics(config: () => ToolExposureConfig,
   output = { warn: (line: string) => console.warn(line), info: (line: string) => console.info(line) }) {
@@ -18,7 +27,9 @@ export function createToolExposureDiagnostics(config: () => ToolExposureConfig,
   let sequence = 0
   const runtime = { ...runtimeEvidence(), ...loadedPluginEvidence }
   const write = (kind: 'fallback' | 'projection', value: Record<string, unknown>, context: ToolExposureContext) => {
-    const body = { ...value, context }, key = JSON.stringify([kind, body])
+    const body = { ...value, context }
+    const key = JSON.stringify([kind, value.requestedMode, 'mode' in value ? value.mode ?? null : null,
+      'reason' in value ? value.reason ?? null : null, identityKey(context)])
     if (seen.has(key)) return
     if (seen.size >= 512) seen.delete(seen.values().next().value!)
     seen.add(key)

@@ -128,14 +128,6 @@ test('native adapter mounts model tools and admits a grounded turn without redun
     commands: { register() { return () => undefined } },
     userQuestions: { async ask(request: { questions: readonly [{ id: string; options?: { label: string }[] }]; agent?: object }) {
       if (request.agent === undefined) throw new Error('no user-questions answerer accepted the request')
-      if (request.questions[0].id === 'execution-mode' && (request.agent as {id:string}).id === 'lisp-coding-agent') {
-        selectionQuestions.push(request.questions[0].id)
-        return { answers: [{ id: request.questions[0].id, selected: ['通常実行'] }] }
-      }
-      if (request.questions[0].id === 'execution-mode' && executionCustom !== undefined) {
-        selectionQuestions.push(request.questions[0].id)
-        return { answers: [{ id: request.questions[0].id, selected: [], custom: executionCustom }] }
-      }
       const selection = modelSelectionAnswer(request.questions[0])
       if (selection) { selectionQuestions.push(request.questions[0].id); return { answers: [{ id: request.questions[0].id, selected: [selection] }] } }
       questionAgents.push(request.agent)
@@ -282,7 +274,7 @@ test('native adapter mounts model tools and admits a grounded turn without redun
       afterNativeEnter.close()
     }
     assert.deepEqual(questionAgents, [event.nativeAgent, event.nativeAgent])
-    assert.deepEqual(selectionQuestions, ['execution-mode'])
+    assert.deepEqual(selectionQuestions, [], 'the execution-mode card no longer asks a question')
     assert.ok(decision.messages.length > 0)
     // The host proposes messages; only the native loop's durable append proves delivery.
     commitContext(primarySession, decision.messages)
