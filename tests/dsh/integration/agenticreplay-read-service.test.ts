@@ -109,7 +109,7 @@ test('reader does not infer session ownership and rejects traversal or another s
     await assert.rejects(tiny.show(f.binding, row.agenticreplay_run_id), /timeline_line_limit/u)
   } finally { await f.dispose() }
 })
-test('native command requires exact agent/session before every operation, including completed runs', async () => {
+test('native command requires exact agent/session before every operation, including completed runs', async t => {
   const f = await agenticReplayFixture()
   try {
     const row = await completed(f)
@@ -140,6 +140,33 @@ test('native command requires exact agent/session before every operation, includ
     assert.deepEqual(await definition.handler({ rawInput: 'status --json', signal, agent: { ...agent } }),
       { kind: 'error', text: 'session_required' })
     assert.equal(f.recorder.status(session.id).trace?.agenticreplay_run_id, row.agenticreplay_run_id, 'status and invalid options do not start another recording')
+    const prune = DshAgenticReplayReadService.prototype.prune
+    const requests: Parameters<typeof prune>[1][] = []
+    t.mock.method(DshAgenticReplayReadService.prototype, 'prune', function(this: DshAgenticReplayReadService, ...args: Parameters<typeof prune>) {
+      requests.push(args[1])
+      return prune.apply(this, args)
+    })
+    // Optional bounds must be absent when omitted, including at the public
+    // command/service boundary under exactOptionalPropertyTypes.
+    for (const [rawInput, expected] of [
+      ['prune --older-than 1', { olderThanDays: 1 }],
+      ['prune --max-bytes 9007199254740991', { maxBytes: Number.MAX_SAFE_INTEGER }],
+      ['prune --max-bytes 9007199254740991 --older-than 1', { olderThanDays: 1, maxBytes: Number.MAX_SAFE_INTEGER }],
+    ] as const) {
+      const result = await definition.handler({ rawInput, signal, agent })
+      assert.equal(result.kind, 'success', result.text)
+      assert.deepEqual(requests.at(-1), expected)
+      assert.deepEqual(JSON.parse(result.text!).deleted, [])
+    }
+    for (const rawInput of ['prune', 'prune --older-than', 'prune --max-bytes -1', 'prune --older-than 1 --older-than 2', 'prune --max-bytes 9007199254740992']) {
+      assert.deepEqual(await definition.handler({ rawInput, signal, agent }), { kind: 'error', text: 'invalid_command' })
+    }
+    assert.equal(requests.length, 3, 'invalid bounds never reach deletion')
+    const pruned = await definition.handler({ rawInput: 'prune --max-bytes 0', signal, agent })
+    assert.equal(pruned.kind, 'success', pruned.text)
+    assert.deepEqual(requests.at(-1), { maxBytes: 0 }, 'zero is an explicit bound, not an omitted value')
+    assert.deepEqual(JSON.parse(pruned.text!).deleted, [row.agenticreplay_run_id])
+    assert.deepEqual(await f.reader.list(f.binding), [])
     mountDshAgenticReplayCommand({ commands: { register: def => { definition = def; return () => {} } } }, false)
     assert.match((await definition.handler({ rawInput: 'status', signal, agent })).text!, /^AgenticReplay: 機能が無効です\n/u)
     assert.deepEqual(JSON.parse((await definition.handler({ rawInput: 'status --json', signal, agent })).text!), { capability: 'disabled' })
