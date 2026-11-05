@@ -1,3 +1,4 @@
+import { continuableSessionIds } from '../helpers/subagent-receipts.js'
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
 import assert from 'node:assert/strict'
@@ -41,14 +42,6 @@ async function waitBounded(promise: Promise<unknown>, failure: string): Promise<
     await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), 10_000) })])
   } finally { if (timer) clearTimeout(timer) }
 }
-function continuableIds(agent: any): string[] {
-  return agent.session.snapshotEvents().flatMap((event: any) => event.type === 'tool/result'
-    ? event.data.message?.content?.flatMap((block: any) => {
-      const match = block.type === 'text' ? /^started subagent (\S+)$/.exec(block.text) : null
-      return match ? [match[1]!] : []
-    }) ?? [] : [])
-}
-
 for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
@@ -195,7 +188,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         await waitBounded(childrenStarted, 'Two children did not start together')
         assert.equal(ended.length, 0, 'both children must start before either finishes')
         await waitBounded(parent.agent.whenIdle(), 'Continuable launch did not return before child completion')
-        const ids = continuableIds(parent.agent)
+        const ids = await continuableSessionIds(parent.agent, ctx.subagents)
         assert.equal(ids.length, 2, 'both continuable launches must return child ids')
         assert.equal(new Set(ids).size, 2)
         assert.deepEqual(new Set(ids), new Set(started.map(item => item.id)))
@@ -256,7 +249,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         .filter((message: any) => message.source?.kind === 'subagent-settled')
       assert.equal(notices.length, 2)
       assert.ok(notices.every((notice: any) => JSON.stringify(notice).includes('CHILD_COMPLETE')))
-      assert.deepEqual(new Set(notices.map((notice: any) => notice.source.senderSessionId)), new Set(continuableIds(parent.agent)))
+      assert.deepEqual(new Set(notices.map((notice: any) => notice.source.senderSessionId)), new Set(await continuableSessionIds(parent.agent, ctx.subagents)))
     }
   } finally {
     releaseChildren?.()

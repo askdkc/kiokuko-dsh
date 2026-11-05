@@ -110,9 +110,11 @@ export const WORK_REQUEST_GATE_PROBABILITY = 0.2
 export async function suppressStartupDialogForConversation(
   service: DecisionService | undefined, requestId: string, task: string, signal: AbortSignal,
 ): Promise<boolean> {
+  // The advisory probe runs before the user can choose the turn's decision mode.
+  const probeId = `startup-conversation:${canonicalContentHash(requestId)}`
   try {
-    if (!service || (await service.bind(requestId, signal)).mode === 'off') return false
-    const outcome = await service.evaluate(requestId, {
+    if (!service || (await service.bind(probeId, signal)).mode === 'off') return false
+    const outcome = await service.evaluate(probeId, {
       purpose: 'akinator',
       state: { task },
       questions: [{
@@ -127,13 +129,11 @@ export async function suppressStartupDialogForConversation(
   } catch { return false }
 }
 
-/** The same message reaches the startup gate twice per turn (pre-turn
- * capability preparation and turn capture); a bounded per-message decision
- * keeps one provider call for both. */
+/** Capability preparation and capture share a decision for the same turn and message. */
 export function createStartupConversationGate(service: DecisionService | undefined) {
   const decisions = new Map<string, Promise<boolean>>()
   return (requestId: string, task: string, signal: AbortSignal): Promise<boolean> => {
-    const key = canonicalContentHash(task)
+    const key = canonicalContentHash([requestId, task])
     let pending = decisions.get(key)
     if (!pending) {
       pending = suppressStartupDialogForConversation(service, requestId, task, signal)

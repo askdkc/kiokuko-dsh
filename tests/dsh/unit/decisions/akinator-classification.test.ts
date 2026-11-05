@@ -4,7 +4,7 @@ import { isTrivialConversation } from '../../../../src/akinator/domain.js'
 import { buildAkinatorClassificationBatch, classifyTaskForIntake, createStartupConversationGate, suppressStartupDialogForConversation, WORK_REQUEST_GATE_PROBABILITY } from '../../../../src/dsh/decisions/akinator-classification.js'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
-import { DecisionError } from '../../../../src/dsh/decisions/contracts.js'
+import { DecisionError, questionType } from '../../../../src/dsh/decisions/contracts.js'
 import { resolveGroundedIntakeProfile } from '../../../../src/dsh/intake-profile-resolver.js'
 
 const configuration = () => TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } })
@@ -22,7 +22,7 @@ const noulService = (probability: number, calls = { count: 0 }) => new DecisionS
   capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
   evaluate: async batch => {
     calls.count++
-    assert.equal(batch.questions[0]?.type, 'noul', JSON.stringify(batch))
+    assert.equal(questionType(batch.questions[0]!), 'noul', JSON.stringify(batch))
     assert.deepEqual(batch.state, { task: 'How have you been?' })
     return { provider: 'typesafe', requestedModel: 'jev-latest', policyVersion: 'fixture',
       answers: [{ id: 'work-request-gate', status: 'measured' as const, type: 'noul' as const, probability }] }
@@ -39,14 +39,28 @@ test('the startup dialog gate suppresses only confidently conversational message
   assert.equal(await suppressStartupDialogForConversation(ambiguous, 'gate-ambiguous', 'How have you been?', signal()), false)
 })
 
+test('a pre-dialog measurement leaves the turn binding available for the startup choice', async () => {
+  const service = noulService(0.9)
+  const requestId = 'startup-turn'
+  assert.equal(await suppressStartupDialogForConversation(service, requestId, 'How have you been?', signal()), false)
+  assert.equal(await service.readStartup(requestId), undefined)
+  const choice = { decision: false, lisp: true }
+  const binding = await service.bindStartup(requestId, choice, signal())
+  assert.equal(binding.mode, 'off')
+  assert.deepEqual(binding.startup, choice)
+})
+
 test('the startup dialog gate shows the dialog whenever the provider cannot measure conversation', async () => {
   assert.equal(await suppressStartupDialogForConversation(undefined, 'gate-absent', 'How have you been?', signal()), false)
   const off = typesafeConfiguration(); off.mode = 'off'
   const calls = { count: 0 }
-  const disabled = new DecisionService(off, () => ({ capabilities: { maxQuestions: 8, maxBytes: 262144 }, evaluate: async () => { calls.count++; throw new Error('off must not dispatch') } }))
+  const disabled = new DecisionService(off, () => ({ capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144 }, evaluate: async () => { calls.count++; throw new Error('off must not dispatch') } }))
   assert.equal(await suppressStartupDialogForConversation(disabled, 'gate-off', 'How have you been?', signal()), false)
   assert.equal(calls.count, 0)
-  const failing = new DecisionService(typesafeConfiguration(), () => ({ capabilities: { maxQuestions: 8, maxBytes: 262144 }, evaluate: async () => { throw new Error('provider outage') } }))
+  const failing = new DecisionService(typesafeConfiguration(), () => ({
+    capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['noul'] },
+    evaluate: async () => { throw new Error('provider outage') },
+  }))
   assert.equal(await suppressStartupDialogForConversation(failing, 'gate-error', 'How have you been?', signal()), false)
   const abstaining = new DecisionService(typesafeConfiguration(), () => ({
     capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
@@ -56,7 +70,7 @@ test('the startup dialog gate shows the dialog whenever the provider cannot meas
   assert.equal(await suppressStartupDialogForConversation(abstaining, 'gate-abstain', 'How have you been?', signal()), false)
 })
 
-test('the startup dialog gate asks the provider once per message content', async () => {
+test('the startup dialog gate deduplicates a message within its turn', async () => {
   const calls: string[] = []
   const service = new DecisionService(typesafeConfiguration(), () => ({
     capabilities: { maxQuestions: 8, maxChoices: 255, maxBytes: 262144, questionTypes: ['choice', 'noul', 'score'] as const },
@@ -70,10 +84,11 @@ test('the startup dialog gate asks the provider once per message content', async
   }))
   const gate = createStartupConversationGate(service)
   assert.equal(await gate('gate-cache-1', 'How have you been?', signal()), true)
+  assert.equal(await gate('gate-cache-1', 'How have you been?', signal()), true)
+  assert.deepEqual(calls, ['How have you been?'], 'the same turn and message must not dispatch the provider twice')
   assert.equal(await gate('gate-cache-2', 'How have you been?', signal()), true)
-  assert.deepEqual(calls, ['How have you been?'], 'the same message content must not dispatch the provider twice')
-  assert.equal(await gate('gate-cache-3', 'Fix the parser', signal()), false, 'a different message is evaluated separately')
-  assert.deepEqual(calls, ['How have you been?', 'Fix the parser'])
+  assert.equal(await gate('gate-cache-2', 'Fix the parser', signal()), false, 'a different message is evaluated separately')
+  assert.deepEqual(calls, ['How have you been?', 'How have you been?', 'Fix the parser'])
 })
 for (const task of ['Fix the failing parser', '調査結果を要約して', 'このバグを直して']) test(`eligible current direct request is complete: ${task}`, () => {
   const batch = buildAkinatorClassificationBatch(task)!

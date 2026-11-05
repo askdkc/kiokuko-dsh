@@ -709,9 +709,15 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
   f.services.skills.snapshot = async () => ({ ...(await snapshot()), skills: [...(await snapshot()).skills,
     { name: 'fixture-writing', description: 'Rewrite prose clearly', invocation: { modelInvocable: true } },
     { name: 'excluded-skill', description: 'Writing', invocation: { modelInvocable: false } }] })
-  let calls = 0
+  let calls = 0, startupMeasurements = 0
   globalThis.fetch = async (_url, init) => {
-    calls++; const request = JSON.parse(String(init!.body)); assert.ok(!String(init!.body).includes('excluded-skill'))
+    const request = JSON.parse(String(init!.body)); assert.ok(!String(init!.body).includes('excluded-skill'))
+    if ('work-request-gate' in request.questions) {
+      startupMeasurements++
+      assert.deepEqual(Object.keys(request.questions), ['work-request-gate'])
+      return Response.json({ model: request.model, answers: { 'work-request-gate': { type: 'noul', noul: 0.95 } } })
+    }
+    calls++
     return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
       const choice = id === 'task-type' ? 'writing' : q.instructions.includes('fixture-writing') ? 'yes' : 'no'
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
@@ -723,6 +729,7 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     const output = await f.listeners.get('agent/pre-step')!({ agent: f.agent, messages, turn: 1, step: 0, signal: new AbortController().signal }, async () => ({ kind: 'enter', messages }))
     assert.equal(output.kind, 'enter'); assert.match(JSON.stringify(output.messages), /fixture-writing/); assert.ok(!JSON.stringify(output.messages).includes('excluded-skill'))
     assert.equal(calls, 3, 'request intent, task type and Skill selection each use the configured decision provider')
+    assert.equal(startupMeasurements, provider === 'typesafe' ? 1 : 0, 'only providers with Noul measure work before startup')
     const db = openConnection(join(f.root, 'memory.sqlite3'))
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM ledger_runs').get()?.n, 0)
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM akinator_sessions').get()?.n, 0)

@@ -141,7 +141,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     row.results = handle.agent.session.snapshotEvents().filter((e: any) => e.type === 'tool/result').map((e: any) => e.data.message)
     assert.deepEqual(row.errors, [])
     assert.equal(row.requests.length, 6)
-    assert.equal(row.questions.length, hostMode === 'core' ? 0 : 1)
+    assert.equal(row.questions.length, 0, 'normal execution needs no separate mode-selection question')
     const final = openConnection(databasePath)
     try { row.bindings = final.prepare('SELECT mode,required_json FROM task_memory_bindings').all(); row.reviews = final.prepare('SELECT review_json FROM task_memory_reviews').all() } finally { final.close() }
     assert.equal(row.reviews.length,0,'Retired SDK review cannot write memory approval or application rows')
