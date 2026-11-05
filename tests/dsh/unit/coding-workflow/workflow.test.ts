@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { openConnection } from '../../../../src/db/connection.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
+import { findSessionTask, requestTaskStop } from '../../../../src/dsh/task-state.js'
 import { CodingDefinitionSchema, type CodingDefinition } from '../../../../src/dsh/coding-workflow/contracts.js'
 import { codingControlOrRead, codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../../../../src/dsh/coding-workflow/store.js'
@@ -416,7 +417,7 @@ test('criterion conflicts identify every stale criterion revision and a correcte
   } finally { await f.close() }
 })
 
-test('worker-only human recovery does not waive a defined workflow or protected-mode authority', async () => {
+test('human worker recovery remains available with a defined Goal without granting effects or protected-mode authority', async () => {
   const [{ LispManager }, { LispStore }, { LispConfig }] = await Promise.all([
     import('../../../../src/dsh/lisp/manager.js'), import('../../../../src/dsh/lisp/store.js'), import('../../../../src/dsh/lisp/contracts.js'),
   ])
@@ -432,7 +433,19 @@ test('worker-only human recovery does not waive a defined workflow or protected-
     assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'optional Goal-less metadata cannot require work preparation')
     assert.equal(await protectedManager.canRecoverWorkerWithoutTask(owner), false)
     f.propose()
-    assert.equal(await manager.canRecoverWorkerWithoutTask(owner), false, 'a defined workflow retains its task authority')
+    assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'a defined Goal must not prevent human worker recovery')
+    assert.equal(await protectedManager.canRecoverWorkerWithoutTask(owner), false, 'protected mode retains its task authority')
+    await assert.rejects(f.execute('kioku_write', { path: 'recovery-must-not-write', content: 'bad' }, 'recovery-no-effect-authority'), /Lisp choice/)
+    const task = findSessionTask(f.db, { sessionId: owner.sessionId, repositoryRoot: owner.root })!
+    requestTaskStop(f.db, { taskId: task.taskId, sessionId: owner.sessionId, repositoryRoot: owner.root }, {
+      operation: 'wait', operationId: 'stop-before-human-recovery', expectedRevision: task.revision, reason: 'Human stopped the task before recovering Lisp',
+    })
+    assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'task stop must not trap human recovery')
+    await assert.rejects(manager.taskAuthority.run(owner, () => manager.taskAuthority.authorizeEffect(owner), {
+      assertCurrent() {},
+      async run() { throw new Error('Mode control cannot execute a command') },
+    }), (error: any) => ['TASK_REQUIRED', 'TASK_STATE_CONFLICT'].includes(error.code), 'mode-only recovery cannot authorize file effects')
+    await assert.rejects(readFile(join(f.root, 'recovery-must-not-write')), { code: 'ENOENT' })
   } finally { await manager.dispose(); await protectedManager.dispose(); await f.close() }
 })
 
