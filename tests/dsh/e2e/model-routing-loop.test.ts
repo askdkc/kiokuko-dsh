@@ -427,7 +427,8 @@ test('public feature entry returns 42', () => {
   let writes = 0, codingChoices = 0
   const edit = h.ctx.tools.register({ name: 'edit_feature', description: 'Apply the requested feature implementation.', parameters: { type: 'object', properties: {} },
     output: { schema: { type: 'string' }, render: (_args: unknown, value: string) => [{ type: 'text', text: value }] },
-    execute: async () => { writes++; await writeFile(join(h.root, 'feature.mjs'), 'console.log(42)\n'); return 'feature edited' },
+    // Emit the exact public output even when CI forces color for inspected values.
+    execute: async () => { writes++; await writeFile(join(h.root, 'feature.mjs'), "process.stdout.write('42\\n')\n"); return 'feature edited' },
   })
   const model = new h.mock.MockAdapter([
     interpretedPreparation(h.mock, 'prepare-feature', 'new', 'change', 'debug'),
@@ -478,7 +479,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     await turn(h, agent, 'feature.mjsを実装してください。')
     assert.equal(writes, 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type))))
     assert.equal(codingChoices, 1)
-    assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), 'console.log(42)\n')
+    assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), "process.stdout.write('42\\n')\n")
     assert.equal(model.requests.length, 10)
     assert.equal(agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
     assert.ok(JSON.stringify(model.requests[1].messages).includes('feature.mjsを実装してください。'))
