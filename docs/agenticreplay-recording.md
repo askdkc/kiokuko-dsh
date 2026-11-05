@@ -94,6 +94,8 @@ Use the native session's human command interface:
 /kioku-agenticreplay show run_<id>
 /kioku-agenticreplay show run_<id> <cursor>
 /kioku-agenticreplay export run_<id>
+/kioku-agenticreplay prune --older-than <days>
+/kioku-agenticreplay prune --max-bytes <n>
 /kioku-agenticreplay start
 ```
 
@@ -103,6 +105,14 @@ choice as disabled. Start saves the choice as enabled and opens a new recording
 generation; it never reopens old events. `show`/`export` accept only
 completed traces from that native session and workspace. Cursors expire when the
 plugin reloads. Lists contain the most recent 200 generations.
+
+`prune` deletes closed recordings from the whole workspace store, not only this
+session. It requires at least one of `--older-than <days>` or `--max-bytes <n>`;
+the size bound removes the oldest closed recordings until the recorded total fits.
+Every target directory is revalidated the way the reader validates it (private
+path, manifest identity, no symlink) before removal, and a trace that is still
+starting, recording or finalizing is never deleted. Pruned traces also lose their
+index rows; an index row whose directory is already missing is left untouched.
 
 A recording generation spans the native session, not one user turn. Native turn
 completion and DSH's own session-log export do not append `run.end`; explicit

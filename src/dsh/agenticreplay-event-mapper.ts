@@ -13,6 +13,13 @@ export function label(value: unknown): string {
   if (value.length > 512) throw new AgenticReplayError('metadata_limit')
   return scrubAgenticReplayText(value).replace(/[\p{Cc}]/gu, '')
 }
+/**
+ * The core redactor exempts protocol identifiers from the entropy sweep only under
+ * `id`, `tool_use_id` and `tool_call_id`. The camelCase keys this plugin uses are not
+ * covered, so a mixed-case native call id is replaced with a placeholder. Emitting the
+ * same value under `tool_call_id` keeps the trace correlatable with the native session log.
+ */
+export function protocolCallId(value: string): { tool_call_id: string } { return { tool_call_id: value } }
 export function projectBlocks(value: unknown, config: AgenticReplayConfig): unknown[] {
   if (!Array.isArray(value)) return []
   if (value.length * 64 > config.maxQueuedBytesPerTrace) throw new AgenticReplayError('queue_limit')
@@ -103,7 +110,7 @@ export function modelRequest(options: Record<string, any>, id: string, config: A
           ? { sections: source.sections.map((value) => label(record(value).name)) }
           : {}),
         ...(message.role === 'tool' && typeof message.toolCallId === 'string'
-          ? { toolCallId: label(message.toolCallId) }
+          ? { toolCallId: label(message.toolCallId), ...protocolCallId(label(message.toolCallId)) }
           : {}),
       }
     })

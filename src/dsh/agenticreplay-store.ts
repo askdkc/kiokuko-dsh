@@ -29,6 +29,16 @@ export class DshAgenticReplayStore {
     return this.db.prepare('SELECT * FROM dsh_agenticreplay_traces WHERE dsh_session_id=? AND workspace_key=? ORDER BY started_at DESC, agenticreplay_run_id DESC LIMIT 200')
       .all(sessionId, workspaceKey) as unknown as AgenticReplayTrace[]
   }
+  /** Oldest first, across every session that recorded into this store. */
+  listStore(storeRoot: string): AgenticReplayTrace[] {
+    return this.db.prepare('SELECT * FROM dsh_agenticreplay_traces WHERE store_root=? ORDER BY started_at ASC, agenticreplay_run_id ASC LIMIT 10000')
+      .all(storeRoot) as unknown as AgenticReplayTrace[]
+  }
+  /** Index rows cascade to run links; remove them explicitly so the result does not depend on a foreign-key pragma. */
+  remove(runId: string): void {
+    this.db.prepare('DELETE FROM dsh_agenticreplay_trace_run_links WHERE agenticreplay_run_id=?').run(runId)
+    this.db.prepare('DELETE FROM dsh_agenticreplay_traces WHERE agenticreplay_run_id=?').run(runId)
+  }
   get(sessionId: string, workspaceKey: string, runId: string): AgenticReplayTrace | undefined {
     return this.db.prepare('SELECT * FROM dsh_agenticreplay_traces WHERE dsh_session_id=? AND workspace_key=? AND agenticreplay_run_id=?')
       .get(sessionId, workspaceKey, runId) as unknown as AgenticReplayTrace | undefined

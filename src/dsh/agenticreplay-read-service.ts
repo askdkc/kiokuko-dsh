@@ -1,12 +1,34 @@
 import { extractDshReplayMemory, type ReplayEvidenceLimits } from './replay-memory-extract.js'
 import { loadAgenticReplayLibrary, type ViewerLibrary } from './agenticreplay-libraries.js'
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { rename, rm, open } from 'node:fs/promises'
+import { rename, rm, rmdir, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AgenticReplayConfig } from './config.js'
-import { AgenticReplayError, type DshAgenticReplayBinding, type WithAgenticReplayIndex } from './agenticreplay-types.js'
+import { AgenticReplayError, type AgenticReplayTrace, type DshAgenticReplayBinding, type WithAgenticReplayIndex } from './agenticreplay-types.js'
 import { checkedRunDir, checkPrivatePath, AGENTICREPLAY_RUN_ID, privateDirectory, workspaceKey, ensureAgenticReplayGitignore } from './agenticreplay-security.js'
 import { readAgenticReplayManifest, readAgenticReplayPage, scanAgenticReplayTrace } from './agenticreplay-files.js'
+
+export interface AgenticReplayPruneOptions { olderThanDays?: number; maxBytes?: number }
+const PRUNABLE_STATES = new Set(['completed', 'failed', 'incomplete'])
+const sizeOf = (row: AgenticReplayTrace): number => Number.isSafeInteger(row.recorded_bytes) ? row.recorded_bytes : 0
+/**
+ * Oldest first. A trace is selected when it is older than the cutoff or when the store is
+ * still over the byte budget; an active trace is never selected, and its bytes still count
+ * against the budget because they cannot be reclaimed.
+ */
+export function selectPrunableTraces(rows: readonly AgenticReplayTrace[], options: AgenticReplayPruneOptions, now = Date.now()): AgenticReplayTrace[] {
+  const cutoff = options.olderThanDays === undefined ? undefined : now - options.olderThanDays * 86_400_000
+  let total = rows.reduce((sum, row) => sum + sizeOf(row), 0)
+  const selected: AgenticReplayTrace[] = []
+  for (const row of [...rows].sort((a, b) => a.started_at.localeCompare(b.started_at))) {
+    if (!PRUNABLE_STATES.has(row.state)) continue
+    const tooOld = cutoff !== undefined && Date.parse(row.started_at) < cutoff
+    if (!tooOld && !(options.maxBytes !== undefined && total > options.maxBytes)) continue
+    selected.push(row)
+    total -= sizeOf(row)
+  }
+  return selected
+}
 
 export class DshAgenticReplayReadService {
   readonly #cursorKey = randomBytes(32)
@@ -28,6 +50,33 @@ export class DshAgenticReplayReadService {
       }
       return store.list(binding.sessionId, workspaceKey(binding.workspaceRoot))
     })
+  }
+  /**
+   * Delete closed recordings. Every target is revalidated by `checkedRunDir` — the same
+   * private-path, manifest-identity and symlink checks the reader uses — before removal,
+   * and an active trace is never a candidate.
+   */
+  async prune(binding: DshAgenticReplayBinding, options: AgenticReplayPruneOptions) {
+    if (options.olderThanDays === undefined && options.maxBytes === undefined) throw new AgenticReplayError('invalid_command')
+    const rows = await this.withIndex(store => store.listStore(binding.storeRoot))
+    const selected = selectPrunableTraces(rows, options)
+    const deleted: string[] = []
+    let bytes = 0
+    for (const row of selected) {
+      let dir: string
+      try { dir = await checkedRunDir(binding.storeRoot, row.agenticreplay_run_id) }
+      catch (error) {
+        // A missing artifact has nothing to reclaim; leave its index row alone.
+        if (error instanceof AgenticReplayError && error.code === 'trace_not_found') continue
+        throw error
+      }
+      await rm(dir, { recursive: true })
+      await rmdir(join(binding.storeRoot, '.agenticreplay', 'runs', row.agenticreplay_run_id)).catch(() => {})
+      await this.withIndex(store => store.remove(row.agenticreplay_run_id))
+      deleted.push(row.agenticreplay_run_id)
+      bytes += sizeOf(row)
+    }
+    return { deleted, bytes, candidates: selected.length }
   }
   async #authorized(binding: DshAgenticReplayBinding, id: string) {
     if (!AGENTICREPLAY_RUN_ID.test(id)) throw new AgenticReplayError('trace_not_found')

@@ -358,7 +358,9 @@ test('oversized event and cyclic/accessor values cannot bypass the projection bu
   } finally { await f.dispose() }
 })
 test('oversized tool call and result bodies retain correlated metadata and diagnostics', async () => {
-  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 4096 })
+  // The queue budget must cover the per-event overhead (512-byte reserve each) that this
+  // synthetic run produces; the 20_000-character bodies stay far above the payload limit.
+  const f = await agenticReplayFixture({ maxQueuedBytesPerTrace: 8192 })
   try {
     const exec = { token: Symbol(), callId: 'large-tool', rootCallId: 'large-tool', name: 'large_tool', arguments: { value: 'a'.repeat(20_000) } }
     f.recorder.preTool(f.binding, exec)

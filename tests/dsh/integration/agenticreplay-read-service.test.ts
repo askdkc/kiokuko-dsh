@@ -226,6 +226,6 @@ test('duplicate physical runs and nonempty manifest-less reservations are never 
  try{
   const row=await completed(f),runs=join(f.root,'.agenticreplay','runs'),actual=await recordedRunDirectory(f.root,row.agenticreplay_run_id),legacy=join(runs,row.agenticreplay_run_id),named=join(runs,'20261013010101-dsh-session-'+row.agenticreplay_run_id.slice(4))
   await cp(actual,named,{recursive:true});await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_ambiguous/)
-  await rm(named,{recursive:true});await rm(join(legacy,'manifest.json'),{force:true});await writeFile(join(legacy,'unexpected'),'nonempty reservation');await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_integrity_mismatch/)
+  await rm(named,{recursive:true});await mkdir(legacy,{recursive:true,mode:0o700});await rm(join(legacy,'manifest.json'),{force:true});await writeFile(join(legacy,'unexpected'),'nonempty reservation');await assert.rejects(f.reader.show(f.binding,row.agenticreplay_run_id),/trace_integrity_mismatch/)
  }finally{await f.dispose()}
 })
