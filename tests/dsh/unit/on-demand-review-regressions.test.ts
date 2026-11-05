@@ -908,6 +908,16 @@ test('on-demand review: shutdown cancels and drains an in-flight host preparatio
   assert.equal(f.bodies(), 0)
 })
 
+test('on-demand review: a stopped intake declines a turn instead of failing its identity', async (t) => {
+  const f = await fixture(t)
+  f.intake.stop()
+  assert.equal(
+    await f.capture([human('queued-during-unload', 'Implement parser.ts')]),
+    false,
+    'unload must leave a queued native turn to the native owner',
+  )
+})
+
 test('on-demand review: an existing owner must match the exact open native turn', async (t) => {
   const message = human('original', 'Inspect src without changing any files.')
   const intent = activeIntent(

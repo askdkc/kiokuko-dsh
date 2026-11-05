@@ -3,7 +3,7 @@ import { failureDiagnostic } from './failure-diagnostic.js'
 import { runtimeEvidence } from './runtime-evidence.js'
 import { loadedPluginEvidence } from './plugin-evidence.js'
 import { redactionSafeWriter } from './agenticreplay-writer.js'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { mkdir, open, rename, rmdir } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary, installedAgenticReplayCoreVersion, type EventInit, type TraceWriter, type CreateTraceWriter, type CoreLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
@@ -173,9 +173,19 @@ export class DshAgenticReplayRecorder {
       await this.#save(trace)
       if (trace.persistenceFailed) return
       const runs = await prepareAgenticReplayParent(trace.binding.storeRoot)
-      await mkdir(join(runs, trace.row.agenticreplay_run_id), { mode: 0o700 }) // exclusive reservation, never append to an existing run
-      trace.writer = await create(runs, { runId: trace.row.agenticreplay_run_id, adapter: { id: 'kiokuko-dsh' },
-        argv: [], cwd: trace.binding.sessionCwd, agenticreplayVersion, envAllowlist: [] })
+      // Reserve the ID with a dotted sibling: the core reader treats a bare
+      // `run_<id>` directory as a run of its own, so it would list the claim as
+      // a second, empty recording next to the writer's timestamped directory.
+      // The claim only proves exclusive ownership of a fresh ID and is removed
+      // as soon as create() owns the real directory.
+      const claim = join(runs, `.claim-${trace.row.agenticreplay_run_id}`)
+      await mkdir(claim, { mode: 0o700 })
+      try {
+        trace.writer = await create(runs, { runId: trace.row.agenticreplay_run_id, adapter: { id: 'kiokuko-dsh' },
+          argv: [], cwd: trace.binding.sessionCwd, agenticreplayVersion, envAllowlist: [] })
+      } finally {
+        await rmdir(claim).catch(() => undefined)
+      }
       if (trace.row.last_error_code === null) trace.row.state = 'recording'
       trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
       await this.#save(trace)

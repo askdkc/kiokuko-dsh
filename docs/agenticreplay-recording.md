@@ -133,7 +133,11 @@ Unknown usage is not measured zero. Process exit codes are absent.
 
 ## Storage and contents
 
-The default is `<verified session workspace>/.agenticreplay/runs/<run ID>`. The manifest's
+The default is `<verified session workspace>/.agenticreplay/runs`. Each recording is a
+directory named `<UTC start>-<adapter>-<title>-<run ID suffix>`; the title segment is
+added when the first human message is known, so the directory may be renamed during
+the run. The manifest's `run_id` is the stable identity used by `list`, `show` and
+`export`. The manifest's
 `cwd` is the actual session directory. Worktrees have separate roots. A non-Git
 session uses its verified directory. No process-cwd or DSH_HOME fallback is used.
 `storage: data-dir` selects
@@ -220,8 +224,11 @@ rejected instead of silently chmod-ing user files.
 
 Stop active recordings, set `agenticReplay.enabled: false`, and reload. This retains traces
 and the existing Kiokuko database/session mirror. To remove a recording, stop it
-first, then delete its exact `.agenticreplay/runs/<run ID>` directory and associated
-`.agenticreplay/exports/<run ID>.html` file in the verified workspace or data directory.
+first, then find the directory under `.agenticreplay/runs` whose `manifest.json`
+`run_id` matches the recording and delete that directory, together with
+`.agenticreplay/exports/<run ID>.html` in the verified workspace or data directory.
+The directory name is not the run ID and can change when the session title is
+added; resolve it by manifest identity instead.
 The small historical index can remain; a missing artifact is refused by the reader.
 Do not delete/reinitialize the Kiokuko database to remove recordings.
 

@@ -2343,43 +2343,17 @@ export async function mountCore(
                 previous.failed
               )
                 return { kind: 'reject' }
-              const snapshot = await skills.snapshot({
-                scope: payload.agent,
-                cwd: root,
-                signal,
-              })
-              const schemas = stableLispCapabilities(
-                await tools.schemas(payload.agent),
-                payload.agent,
-              )
-              if (!snapshot.complete) return { kind: 'reject' }
-              const capabilities = [
-                ...snapshot.skills
-                  .filter(
-                    (skill: any) => skill.invocation?.modelInvocable !== false,
-                  )
-                  .map((skill: any) => ({
-                    kind: 'skill',
-                    name: skill.name,
-                    ...(skill.description
-                      ? { description: skill.description }
-                      : {}),
-                  })),
-                ...schemas.map((tool: any) => ({
-                  kind: 'tool',
-                  name: tool.name,
-                  ...(tool.description
-                    ? { description: tool.description }
-                    : {}),
-                })),
-              ]
+              // The reconsideration continues the admitted task. Compare the
+              // session catalog saved with the review, never a per-step
+              // capability recomputation: tool presentation varies between
+              // steps and would invalidate a legitimate continuation.
               try {
                 if (
                   !(await answerReview.accept(
                     payload.agent as ReviewAgent,
                     payload.messages,
                     payload.turn,
-                    capabilityCatalogDigest(capabilities),
+                    capabilityCatalogDigest(previous.task.capabilities),
                   ))
                 )
                   return { kind: 'reject' }

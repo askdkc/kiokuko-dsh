@@ -1,7 +1,7 @@
 import { loadAgenticReplayLibrary, type SchemaLibrary } from './agenticreplay-libraries.js'
 import { createHash } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
-import { lstat, mkdir, open, realpath, opendir } from 'node:fs/promises'
+import { lstat, mkdir, open, realpath, opendir, rmdir } from 'node:fs/promises'
 import path from 'node:path'
 import { AgenticReplayError } from './agenticreplay-types.js'
 
@@ -201,6 +201,27 @@ export async function ensureAgenticReplayGitignore(root: string): Promise<void> 
   gitignoreWrites.set(root, pending)
   try { await pending } finally { if (gitignoreWrites.get(root) === pending) gitignoreWrites.delete(root) }
 }
+/** Remove empty legacy `run_<id>` claims; the writer never stores a run there. */
+async function removeLegacyRunClaims(runs: string): Promise<void> {
+  const directory = await opendir(runs)
+  let entries = 0
+  try {
+    for (let entry = await directory.read(); entry !== null; entry = await directory.read()) {
+      if (++entries > 4096) return
+      if (!entry.isDirectory() || !AGENTICREPLAY_RUN_ID.test(entry.name)) continue
+      const candidate = path.join(runs, entry.name)
+      try {
+        const stat = await lstat(candidate)
+        if (stat.isSymbolicLink() || !stat.isDirectory() || (process.getuid !== undefined && stat.uid !== process.getuid())) continue
+        const contents = await opendir(candidate)
+        let first
+        try { first = await contents.read() } finally { await contents.close() }
+        if (first !== null) continue
+        await rmdir(candidate)
+      } catch { /* A live claim or a concurrent removal owns this entry. */ }
+    }
+  } finally { await directory.close() }
+}
 /** Validate every store ancestor without chmod-ing existing user directories. */
 export async function prepareAgenticReplayParent(root: string): Promise<string> {
   if (!path.isAbsolute(root) || root === path.parse(root).root || root.includes('\0')) throw new AgenticReplayError('unsafe_path')
@@ -228,6 +249,7 @@ export async function prepareAgenticReplayParent(root: string): Promise<string> 
   }
   const { ensureRunsDir } = await loadAgenticReplayLibrary('core')
   await ensureRunsDir(root)
+  await removeLegacyRunClaims(path.join(root, '.agenticreplay', 'runs'))
   await checkPrivatePath(ignore, false)
   return path.join(root, '.agenticreplay', 'runs')
 }

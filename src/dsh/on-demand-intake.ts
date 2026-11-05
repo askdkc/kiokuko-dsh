@@ -722,9 +722,12 @@ export class OnDemandIntake {
   /** True means ordinary text may continue; false leaves an existing execution on its original path. */
   async capture(input: DemandInput): Promise<boolean> {
     input.signal.throwIfAborted()
-    if (!this.#stopped && this.host.nativeChild?.(input.agent)) return false
+    // Stopping is an ordinary shutdown, not a request defect. A turn that the
+    // native driver opens while the plugin unloads must continue under the
+    // native owner instead of failing with an intake identity error.
+    if (this.#stopped) return false
+    if (this.host.nativeChild?.(input.agent)) return false
     if (
-      this.#stopped ||
       !input.agent.session ||
       !Number.isSafeInteger(input.turn) ||
       input.turn < 1

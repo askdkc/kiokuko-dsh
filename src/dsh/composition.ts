@@ -234,12 +234,15 @@ export async function mountDshComposition(ctx: Context, host: DshCompositionHost
   const stopIngress = (): void => {
     if (ingressStopped) return
     ingressStopped = true
-    host.onDemandIntake?.stop()
-    mismatchCleanup.abort(new Error('Kiokuko mismatch cleanup stopped on plugin unload'))
-    host.semanticCompaction?.stop()
+    // Remove ingress listeners before marking the intake stopped so a native
+    // step that opens during unload cannot observe a stopped, half-disposed
+    // intake.
     for (const dispose of ingressDisposers.reverse()) {
       try { dispose() } catch (error) { stopErrors.push(error) }
     }
+    host.onDemandIntake?.stop()
+    mismatchCleanup.abort(new Error('Kiokuko mismatch cleanup stopped on plugin unload'))
+    host.semanticCompaction?.stop()
   }
 
   const runCleanup = async (): Promise<void> => {

@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { AnswerReviewCoordinator } from '../../../../src/dsh/answer-review/coordinator.js'
-import { AnswerReviewConfig, type ReviewAgent, type ReviewEvent } from '../../../../src/dsh/answer-review/contracts.js'
+import { AnswerReviewConfig, reviewMessageId, type ReviewAgent, type ReviewEvent } from '../../../../src/dsh/answer-review/contracts.js'
 import { answerReviewInput } from '../../../../src/dsh/answer-review/evidence.js'
 import { TypedDecisionsConfig } from '../../../../src/dsh/decisions/config.js'
 import { DecisionService } from '../../../../src/dsh/decisions/service.js'
@@ -103,6 +103,14 @@ test('fake message, changed catalog and stale binding cannot consume a correctio
   await assert.rejects(f.coordinator.accept(f.agent,[{...(f.sent[0] as any),content:'forged'}],2,'catalog'))
   await assert.rejects(f.coordinator.accept(f.agent,f.sent,2,'changed'))
   f.stop();await assert.rejects(f.coordinator.accept(f.agent,f.sent,2,'catalog'))
+})
+test('a dispatched reconsideration is recognizable by the routing continuation predicate',async t=>{
+  // Host routing uses this exact predicate to keep a rejected continuation from
+  // surfacing as a native turn failure, so it must match the real message.
+  const f=await fixture(t);f.coordinator.hold(f.agent);await f.wait()
+  assert.equal(f.sent.length,1)
+  assert.equal(typeof reviewMessageId(f.sent[0]),'string')
+  assert.equal(reviewMessageId({role:'user',source:{kind:'user'},content:[{type:'text',text:'hello'}]}),undefined)
 })
 test('uncertain delivery is not resent on duplicate event or restart',async t=>{
   const f=await fixture(t);f.throwDispatch();f.coordinator.hold(f.agent);await f.wait()

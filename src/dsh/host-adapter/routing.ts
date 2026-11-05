@@ -15,6 +15,7 @@ import { attachmentTypesFromMessages, nativeContextTokens } from '../model-auto/
 import type { CompactionAgent } from '../semantic-compaction/contracts.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import type { ReviewAgent } from '../answer-review/contracts.js'
+import { reviewMessageId } from '../answer-review/contracts.js'
 import { hasRequestInput } from '../request-input.js'
 import { readExecutionSelection, writeExecutionSelection, type StoredExecutionSelection } from '../execution-selection.js'
 import { ExecutionSelectionPending } from '../model-selection-ui.js'
@@ -294,7 +295,12 @@ export function createRouting({
         admitted = await prepareTurn(event)
       } catch (error) {
         if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending', diagnosticContext()) }
-        else {
+        else if (messages.some(message => reviewMessageId(message) !== undefined)) {
+          // The claimed input is an automatic reconsideration. If it is no
+          // longer authorized it is simply skipped; it is not a user request,
+          // so it must never surface as a native turn failure.
+          reportToolExposureFallback('answer_review_continuation_rejected', diagnosticContext(error))
+        } else {
           const existing = agent.session ? currentSession(agent.session.id) : undefined
           if (existing && hasSelection(existing.runId)) throw error
           const failure = error instanceof KiokukoError ? error.code.toLowerCase() : error instanceof Error ? error.name.toLowerCase() : 'unknown'

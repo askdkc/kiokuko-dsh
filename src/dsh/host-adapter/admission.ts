@@ -793,7 +793,7 @@ export function createAdmission({
               event.nativeAgent as ReviewAgent,
               event.nativeMessages,
               event.turn,
-              event.capabilities.digest,
+              cached.result.catalog.digest,
             ))
           )
             throw new Error('Stale answer review continuation')
@@ -827,7 +827,7 @@ export function createAdmission({
             event.nativeAgent as ReviewAgent,
             reviewMessages,
             event.turn,
-            event.capabilities.digest,
+            previous.catalog.digest,
           ))
         )
           throw new Error('Unbound answer review continuation')
