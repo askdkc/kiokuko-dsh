@@ -52,7 +52,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   local=scope.createScope(ctx,agent);agent.ctx=local.ctx
   intake=new OnDemandIntake({validate:async()=>{},nativeOwnership:async()=>'owned',existing:async()=>controlled,...(controlled?{replay:async()=>true}:{}),classify:async()=>classified?{taskType:'research',deferInference:false}:{deferInference:true},prepare:async()=>{preparations++;throw new Error('Optional intake must not gate ordinary Lisp computation')},ready:()=>controlled},{onlyWhenDeferred:deferredOnly})
   intake.mount(ctx,ctx.tools)
-  surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
+  surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000,...(mode==='unknown'?{timeoutMs:1000}:{})}))
   const enabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal:controller.signal});assert.equal(enabled.kind,'success',enabled.text)
   if(mode==='optional-workflow'){
    const workflow=sessionCodingWorkflow(db,session.id)
@@ -127,6 +127,12 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   registered.execute=()=>{spoofed++;return 42}
   try { assert.equal((await execute('lisp_eval',{operationId:'spoof',code:'(+ 1 2)'})).isError,true);assert.equal(spoofed,0) } finally { registered.execute=original }
   if(mode==='unknown'){
+   const defined=await execute('lisp_eval',{operationId:'define-before-process-wait',code:'(defparameter *preserved-after-wait* 41)'})
+   const waited=await execute('lisp_eval',{operationId:'wait-without-killing-lisp',code:`(kioku.process:run ${JSON.stringify(process.execPath)} (list "-e" "setTimeout(()=>console.log('wait-complete'),1600)") :timeout-ms 5000) (+ *preserved-after-wait* 1)`})
+   assert.equal(waited.value.ok,true,JSON.stringify(waited))
+   assert.equal(waited.value.value.json,42)
+   assert.equal(waited.value.generation,defined.value.generation,'a bounded native wait preserves the live Lisp process')
+   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0)
    const described=await execute('lisp_describe',{operationId:'test-api',symbol:'kioku.test'})
    assert.deepEqual(described.value.value.symbols,['kioku.test:node','kioku.test:vitest'])
    const bin=join(base,'node_modules','.bin')

@@ -102,6 +102,7 @@ export class LispManager {
   #artifactReserved = 0
   readonly #inflight = new Map<string, string>()
   readonly #sessionWorkerAdmissions = new Map<string, Promise<unknown>>()
+  readonly #disabling = new Set<string>()
   constructor(readonly options: ManagerOptions) {
     this.#config = options.config
     this.taskAuthority = new LispTaskAuthority(options.store.database)
@@ -159,6 +160,7 @@ export class LispManager {
   }
   private protectedRoots(): string[] { return [this.options.dataRoot, dirname(this.#library), ...this.options.protectedRoots ?? []] }
   private async authorizeCodingTask(owner:LispOwner):Promise<void> {
+    if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。disable の完了後に enable してください。')
     const workflow=await this.#store.database(db=>sessionCodingWorkflow(db,owner.sessionId))
     if(workflow?.protocol && this.#config.executionMode !== 'protected') fail('PROTOCOL_PROTECTED_REQUIRED','This bounded protocol requires protected Lisp computation. Disable the existing Lisp session before binding, then select protected mode; use owned file/test tools for effects.')
     const native = this.taskAuthority.current()?.nativeCommands
@@ -166,6 +168,7 @@ export class LispManager {
     else if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
       fail('CODING_CHOICE_PENDING','このタスクの Goal と条件を定め、Lisp の選択に回答してから実行してください。')
     await this.claimSession(owner)
+    if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。disable の完了後に enable してください。')
   }
   async enable(owner: LispOwner, hostBusy = false, signal?: AbortSignal): Promise<unknown> {
     await this.authorizeCodingTask(owner)
@@ -407,7 +410,7 @@ export class LispManager {
         const sessionWorker = await this.isSessionWorker(state.owner)
         worker = await this.#supervisor.start(state, {
           signal: combined, ...(!sessionWorker ? { workspace: state.owner.root } : {}), executionMode: this.#config.executionMode,
-          assertCurrent: () => { if (this.#closed || state.disposed || state.state !== 'PREFLIGHT' || combined.aborted) fail('CANCELLED', '起動は取り消されています。') },
+          assertCurrent: () => { if (this.#closed || this.#disabling.has(state.owner.sessionId) || state.disposed || state.state !== 'PREFLIGHT' || combined.aborted) fail('CANCELLED', '起動は取り消されています。') },
           compilation: status => { state.compilation = status },
           assigned: child => { state.worker = child },
           failed: (child, error) => {
@@ -853,6 +856,7 @@ export class LispManager {
   private async dispatch(owner: LispOwner, tool: LispTool, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     try {
       if (tool === 'lisp_status') return await this.status(owner, z.number().int().nonnegative().parse(input.offset ?? 0))
+      if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。')
       const state = this.entry(owner)
       if(['lisp_define','lisp_call','lisp_observe','lisp_hot_call'].includes(tool))await this.claimSession(owner)
       else if(!['lisp_hot_status','lisp_inspect','lisp_cancel'].includes(tool))await this.authorizeCodingTask(owner)
@@ -1180,7 +1184,7 @@ export class LispManager {
         } else args = tool === 'lisp_describe' ? { symbol: typeof input.symbol === 'string' ? input.symbol : '' } : { ref: identifier.parse(input.ref) }
         await this.#store.reserve(owner, id, tool, hash, worker.generation, payload); reserved = true
         if (tool === 'lisp_eval') state.currentVerification = { operationId: id, generation: worker.generation, results: [] }
-        const response = await this.journalRequest(state, worker, tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined)
+        const response = await this.journalRequest(state, worker, tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined, true, tool === 'lisp_eval' && input.timeoutMs === undefined)
         const result = { ok: response.ok, operationId: id, value: response.value, output: worker.output(), generation: worker.generation, proposals: response.proposals }
         evidence = { ...result, state: response.ok ? 'RUNNING' : 'FAILED' }
         await this.#store.transition(owner, id, ['RUNNING'], response.ok ? 'RUNNING' : 'FAILED', evidence)
@@ -1254,7 +1258,7 @@ export class LispManager {
   async canRecoverWorkerWithoutTask(owner: LispOwner): Promise<boolean> {
     if (this.#config.executionMode !== 'development' || await this.isTaskMode(owner)) return false
     const workflow = await this.#store.database(db => sessionCodingWorkflow(db, owner.sessionId))
-    return !workflow?.definition && !workflow?.protocol
+    return !workflow?.protocol
   }
   /** Human conversation recovery only restarts a worker; it cannot grant effects. */
   private async authorizeRecovery(owner: LispOwner): Promise<void> {
@@ -1277,7 +1281,7 @@ export class LispManager {
     await this.claimSession(owner)
     const managed = await this.managedUnresolved(owner)
     if (managed.unknownCount > 0) return {ok:false,code:'RECONCILIATION_REQUIRED',
-      message:'外部処理の結果が未確定です。対象と元のホスト証跡を確認し、影響が無いと確認できた操作だけを /kioku-lisp abandon-managed 操作ID で終了してください。Lisp の再起動では外部処理を確定できず、コマンドは自動再実行しません。',
+      message:'外部処理の結果が未確定です。停止と実行結果を確認した操作は /kioku-lisp abandon-managed 操作ID 確認した内容 で確認待ちを解除できます。タスク終了後も利用できます。コマンドの再実行や変更の復元は行いません。',
       managedOperations:managed.operations,managedUnknownOperations:managed.unknownOperations,
       managedOperationCount:managed.total,managedOperationsTruncated:managed.truncated,
       recovery:'/kioku-lisp diagnostics 操作ID で記録を確認し、/kioku-lisp abandon-managed 操作ID で終了します。' }
@@ -1314,12 +1318,19 @@ export class LispManager {
    * Lisp cannot clear these, so this is the only supported exit. */
   abandonManaged(owner: LispOwner, id: string, evidence: string): Promise<unknown> {
     return this.taskAuthority.run(owner, async () => {
-      this.claimSession(owner)
-      await this.taskAuthority.authorizeEffect(owner)
+      this.entry(owner)
+      await this.claimSession(owner)
       const operationId = identifier.parse(id)
       const note = evidence.trim()
       if (!note) fail('INVALID_INPUT', '照合した内容を evidence として指定してください。確認していない操作を終了することはできません。')
-      const result = await this.#store.database(db => new ManagedOperationJournal(db).abandon(operationId, note))
+      const result = await this.#store.database(db => {
+        const journal = new ManagedOperationJournal(db), operation = journal.readOperation(operationId)
+        if (journal.readScope(operation.scopeId).sessionId !== owner.sessionId)
+          fail('UNKNOWN_OPERATION', 'このセッションの操作記録ではありません。')
+        // Human bookkeeping only: no process, file mutation, replay or task
+        // execution authority. It must remain possible after the task stops.
+        return journal.abandon(operationId, note)
+      })
       return { ok: true, operation: { id: result.operationId, route: result.route, kind: result.kind, state: result.state, receiptRef: result.receiptRef ?? null },
         reconciliation: { recorded: true, reexecuted: false, effectsReverted: false },
         recovery: '/kioku-lisp recover で新しい Lisp を起動できます。元の外部処理は自動再実行も復元もしません。' }
@@ -1358,21 +1369,30 @@ export class LispManager {
     try { return await result } finally { this.#executions.delete(result); state.active.delete(abort) }
   }
   async disable(owner: LispOwner): Promise<unknown> {
-    await this.claimSession(owner)
-    await this.stopTaskWorkers(owner.sessionId)
-    if (await this.isTaskMode(owner)) {
+    if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。')
+    this.#disabling.add(owner.sessionId)
+    const states = [...this.#agents.values()].filter(state => state.owner.sessionId === owner.sessionId)
+    try {
+      await this.claimSession(owner)
+      // Fence admissions before awaiting termination. Attempt every owned stop,
+      // even when one child cannot be confirmed; never affect another session.
+      for (const state of states) state.disposed = true
+      const stopped = await Promise.allSettled([this.stopTaskWorkers(owner.sessionId), ...states.map(state => this.cancel(state))])
+      const failed = stopped.find(result => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
       await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
-      if (await this.#store.hasPending(owner.sessionId)) fail('RECOVERY_REQUIRED', '未確定の処理を照合してから解除してください。')
+      // Disabling is process termination, not a declaration about past effects.
+      // Keep UNKNOWN records, backups and target locks intact across re-enable.
+      const pending = await this.#store.hasPending(owner.sessionId), managed = await this.managedUnresolved(owner)
       await this.#store.disable(owner.sessionId); this.enabled.delete(owner.sessionId)
       for (const [key, state] of this.#agents) if (state.owner.sessionId === owner.sessionId) this.#agents.delete(key)
-      return { ok: true, state: 'DISABLED' }
+      return { ok: true, state: 'DISABLED', processesStopped: true,
+        reconciliationRequired: pending || managed.unknownCount > 0,
+        recovery: '/kioku-lisp enable で新しい Lisp を起動できます。未確定の操作記録は保持し、自動再実行・復元はしません。' }
+    } finally {
+      for (const state of states) state.disposed = false
+      this.#disabling.delete(owner.sessionId)
     }
-    for (const state of this.#agents.values()) if (state.owner.sessionId === owner.sessionId) await this.cancel(state)
-    await Promise.allSettled([...this.#executions].filter(([, session]) => session === owner.sessionId).map(([promise]) => promise))
-    if (await this.#store.hasPending(owner.sessionId)) fail('RECOVERY_REQUIRED', '未確定の処理を /kioku-lisp recover で確認してから解除してください。')
-    await this.#store.disable(owner.sessionId); this.enabled.delete(owner.sessionId)
-    for (const [key, state] of this.#agents) if (state.owner.sessionId === owner.sessionId) this.#agents.delete(key)
-    return { ok: true, state: 'DISABLED' }
   }
   async dispose(): Promise<void> {
     this.#closed = true

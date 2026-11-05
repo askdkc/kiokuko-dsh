@@ -12,6 +12,7 @@ import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { ManagedOperationJournal } from '../../../../src/dsh/managed-operation-journal.js'
 import { workingLispTask } from '../../helpers/lisp-task.js'
+import { requestTaskStop } from '../../../../src/dsh/task-state.js'
 
 test('real SBCL returning 42 retains native process operation and a complete zero-operation evaluation', {
   skip:process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires SBCL' : false,timeout:90000,
@@ -45,12 +46,12 @@ test('real SBCL returning 42 retains native process operation and a complete zer
   }finally{await manager.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })
 
-test('a human abandonment is the only way out of RECONCILIATION_REQUIRED and then Lisp becomes usable again',async()=>{
+test('human reconciliation remains available after task stop and then Lisp becomes usable again',async()=>{
   const base=await realpath(await mkdtemp(join(tmpdir(),'managed-abandon-'))),root=join(base,'work')
   await mkdir(root)
   const db=new NodeSqliteAdapter(join(base,'db'),new DatabaseSync(join(base,'db')))
   const owner={sessionId:'abandon-session',agentId:'abandon-agent',root}
-  workingLispTask(db,owner)
+  const task=workingLispTask(db,owner)
   const manager=new LispManager({store:new LispStore(async fn=>fn(db)),dataRoot:join(base,'runtime'),
     config:LispConfig.parse({enabled:true,executionMode:'development',startupTimeoutMs:60000}),toolCall:async()=>{throw new Error('no native calls expected')}})
   try{
@@ -62,14 +63,25 @@ test('a human abandonment is the only way out of RECONCILIATION_REQUIRED and the
     const blocked=await manager.recover(owner) as any
     assert.equal(blocked.code,'RECONCILIATION_REQUIRED')
     assert.equal(blocked.managedOperations[0].id,operation.operationId)
+    assert.equal((await manager.disable(owner) as any).state,'DISABLED','unknown external results must not prevent OS-level stop')
+    assert.equal((await manager.enable(owner) as any).state,'RECONCILIATION_REQUIRED','restart must retain the unknown external result')
+    assert.equal(journal.readOperation(operation.operationId).state,'unknown')
+    assert.equal((await manager.execute(owner,'lisp_eval',{operationId:'fresh-with-unresolved-history',code:'(+ 20 22)'}) as any).value.json,42,'fresh computation remains usable')
+    requestTaskStop(db,{taskId:task.taskId,sessionId:owner.sessionId,repositoryRoot:root},
+      {operation:'wait',operationId:'stop-failed-task',expectedRevision:task.revision,reason:'Human stopped the failed task'})
     // Abandoning without inspected evidence must be refused.
     await assert.rejects(manager.abandonManaged(owner,operation.operationId,''),/照合した内容を evidence として指定してください/u)
     const abandoned=await manager.abandonManaged(owner,operation.operationId,'Inspected the listed job: no live process, no queued work, target file untouched.') as any
     assert.equal(abandoned.ok,true)
     assert.equal(abandoned.operation.state,'abandoned')
     assert.equal(journal.readOperation(operation.operationId).state,'abandoned')
+    const foreign=journal.createScope({sessionId:'another-session',parentId:'foreign-job',runtimeIdentity:'other-runtime'})
+    const foreignOperation=journal.prepare(foreign.scopeId,{route:'native',kind:'process',request:{program:'foreign'}})
+    journal.claim(foreignOperation.operationId);journal.transition(foreignOperation.operationId,{state:'unknown'})
+    await assert.rejects(manager.abandonManaged(owner,foreignOperation.operationId,'Checked'),{code:'UNKNOWN_OPERATION'})
+    assert.equal(journal.readOperation(foreignOperation.operationId).state,'unknown','recovery cannot clear another session')
     // The blocking condition is gone: recovery now starts a fresh worker.
-    const recovered=await manager.recover(owner) as any
+    const recovered=await manager.taskAuthority.run(owner,()=>manager.recover(owner),{assertCurrent(){},async run(){throw new Error('Recovery must not run commands')}}) as any
     assert.notEqual(recovered.code,'RECONCILIATION_REQUIRED')
     assert.equal((await manager.status(owner) as any).managedReconciliationRequired,false)
     // A later effect is permitted again.

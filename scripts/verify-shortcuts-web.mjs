@@ -130,6 +130,36 @@ export async function apply(ctx) {
     await lispStatus.waitFor()
     assert.equal(await lispDialog.isVisible(),false,'reloading must not reopen a dismissed Lisp notice')
     await page.unroute(lispStatusRoute)
+    let reconciled=false, reconciliationAttempts=0
+    const unknown={id:'orphaned-ci-poll',route:'native',kind:'process',state:'unknown'}
+    await page.route(lispStatusRoute,async route=>{
+      const request=route.request()
+      if(request.method()==='POST'){
+        const body=request.postDataJSON()
+        assert.equal(body.action,'abandon-managed');assert.equal(body.operationId,unknown.id)
+        assert.equal(body.evidence,'CI poll stopped; inspected results; no workspace writes')
+        if(++reconciliationAttempts===1)return route.fulfill({status:409,json:{message:'確認の保存に失敗しました。再試行できます。'}})
+        reconciled=true
+        return route.fulfill({json:{ok:true,operation:{id:unknown.id,state:'abandoned'}}})
+      }
+      return route.fulfill({json:{enabled:true,state:reconciled?'RECOVERY_REQUIRED':'RECONCILIATION_REQUIRED',managedUnknownOperations:reconciled?[]:[unknown]}})
+    })
+    await page.reload()
+    await page.getByRole('button',{name:'Lisp: 外部処理の確認が必要',exact:true}).click()
+    await lispDialog.getByRole('button',{name:'照合して終了',exact:true}).click()
+    const evidence=lispDialog.getByRole('textbox',{name:'確認した内容',exact:true})
+    await evidence.fill('CI poll stopped; inspected results; no workspace writes')
+    const save=lispDialog.getByRole('button',{name:'確認内容を記録して終了',exact:true})
+    await save.click()
+    await lispDialog.getByRole('alert').filter({hasText:'確認の保存に失敗'}).waitFor()
+    assert.equal(await evidence.inputValue(),'CI poll stopped; inspected results; no workspace writes','failure preserves the inspected evidence')
+    await page.screenshot({path:join(base,'lisp-reconciliation-form.png')})
+    await save.click()
+    await evidence.waitFor({state:'hidden'})
+    assert.equal(reconciliationAttempts,2)
+    await page.screenshot({path:join(base,'lisp-reconciliation.png')})
+    await page.keyboard.press('Escape')
+    await page.unroute(lispStatusRoute)
     await page.reload()
     await page.getByRole('button',{name:'Diff レビュー',exact:true}).waitFor()
     const ask = async mode => { await command('/shortcut-fixture '+mode); await page.locator('.kiokuko-intake').waitFor(); await page.locator('.kiokuko-intake').focus() }

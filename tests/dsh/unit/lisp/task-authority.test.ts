@@ -18,6 +18,7 @@ import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { stageCandidate } from '../../../../src/dsh/lisp/candidate.js'
 import { snapshot } from '../../../../src/dsh/lisp/files.js'
 import { mountLispHttp } from '../../../../src/dsh/lisp/http.js'
+import { ManagedOperationJournal } from '../../../../src/dsh/managed-operation-journal.js'
 import type { DshUserQuestions } from '../../../../src/dsh/user-interaction.js'
 
 async function fixture(t: test.TestContext, working = true) {
@@ -180,6 +181,27 @@ test('restore and HTTP recover deny unavailable task state; HTTP status/cancel r
     else assert.equal(body.ok, true)
   }
   await manager.dispose()
+})
+
+test('human HTTP reconciliation needs no Working task and grants no file effects', async t => {
+  const f = await fixture(t, false)
+  const manager = new LispManager({ store: f.store, dataRoot: join(f.base, 'runtime'), config: LispConfig.parse({ enabled: true }) })
+  await manager.enableTask(f.owner)
+  try {
+    const journal = new ManagedOperationJournal(f.db)
+    const scope = journal.createScope({sessionId:f.owner.sessionId,parentId:'stopped-evaluation',runtimeIdentity:'old-worker'})
+    const operation = journal.prepare(scope.scopeId,{route:'native',kind:'process',request:{program:'ci-poll'}})
+    journal.claim(operation.operationId); journal.transition(operation.operationId,{state:'unknown'})
+    let handler!: (request: Request) => Promise<Response>
+    mountLispHttp({ get: () => ({fetch:{register:(route:any)=>{handler=route.fetch;return ()=>{}}}}) } as any, manager, () => f.owner)
+    const response = await handler(new Request('http://localhost/api/kiokuko.lisp?sessionId=session', {
+      method:'POST',headers:{origin:'http://localhost'},body:JSON.stringify({action:'abandon-managed',operationId:operation.operationId,evidence:'CI poll stopped; inspected result; no workspace writes'}),
+    }))
+    assert.equal(response.status,200,JSON.stringify(await response.clone().json()))
+    assert.equal((await response.json() as any).operation.state,'abandoned')
+    assert.equal(journal.readOperation(operation.operationId).state,'abandoned')
+    await assert.rejects(manager.restore(f.owner,'old-proposal',new AbortController().signal),{code:'TASK_REQUIRED'})
+  } finally { await manager.dispose() }
 })
 
 const nativeCommands = {

@@ -16,7 +16,7 @@ const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z
 const TestProgram = Program.extend({ testRunner: z.enum(['node', 'vitest']) })
 export interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
-interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void }
+interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void; waitForProcess?: (timeoutMs: number) => () => void }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
 export class LispWorker {
   readonly generation = randomUUID()
@@ -116,8 +116,13 @@ export class LispWorker {
     this.#pending?.abort.abort(error)
     this.#pending?.reject(error)
     this.#pending = undefined
-    this.#child?.kill('SIGTERM')
-    for (const job of this.jobs.values()) job.child.kill('SIGTERM')
+    // A debugger/OS can suspend the trusted supervisor. Wake it so its TERM
+    // handler can SIGKILL the owned runtime (or private process namespace).
+    for (const child of [this.#child, ...[...this.jobs.values()].map(job => job.child)]) {
+      if (!child || child.exitCode !== null || child.signalCode !== null) continue
+      child.kill('SIGCONT')
+      child.kill('SIGTERM')
+    }
     if (first) this.onFailure?.(error)
   }
   private receive(data: Buffer): void {
@@ -152,7 +157,7 @@ export class LispWorker {
     if (this.#closed || this.#fatal) throw this.#fatal ?? new Error('Worker closed')
     this.#wire!.write(frame)
   }
-  async request(method: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal, allowRpc = true): Promise<WorkerResult> {
+  async request(method: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal, allowRpc = true, excludeProcessWait = false): Promise<WorkerResult> {
     if (this.#pending) throw new LispError('BUSY', 'この Lisp は別の評価を実行中です。')
     if (signal?.aborted) throw new LispError('CANCELLED', '評価を取り消しました。')
     this.#bytes = 0; this.#stdout = []; this.#stderr = []
@@ -160,7 +165,21 @@ export class LispWorker {
     const evaluation = new AbortController()
     const promise = new Promise<WorkerResult>((resolve, reject) => { this.#pending = { id, allowRpc, abort: evaluation, resolve, reject } })
     const abort = () => this.break(new LispError('CANCELLED', '評価を取り消しました。'))
-    const timer = setTimeout(() => this.break(new LispError('TIMEOUT', 'Lisp の評価時間が上限を超えました。')), timeoutMs)
+    const pending = this.#pending!
+    const timedOut = () => this.break(new LispError('TIMEOUT', 'Lisp の評価時間が上限を超えました。'))
+    let remaining = timeoutMs, resumedAt = performance.now(), timer = setTimeout(timedOut, remaining)
+    // A blocked SBCL is not computing. Give a bounded subprocess its own
+    // deadline and cleanup allowance, then resume the remaining Lisp budget.
+    // Explicit evaluation deadlines retain their original wall-clock meaning.
+    if (excludeProcessWait) pending.waitForProcess = processTimeout => {
+      clearTimeout(timer)
+      remaining = Math.max(1, remaining - (performance.now() - resumedAt))
+      timer = setTimeout(timedOut, processTimeout + 5000)
+      return () => {
+        if (this.#pending !== pending) return
+        clearTimeout(timer); resumedAt = performance.now(); timer = setTimeout(timedOut, remaining)
+      }
+    }
     signal?.addEventListener('abort', abort, { once: true })
     try {
       try { this.send({ version: 1, id, method, ...args }) } catch (error) { this.break(new Error(failure(error).message)) }
@@ -172,6 +191,7 @@ export class LispWorker {
     finally { evaluation.abort(); clearTimeout(timer); signal?.removeEventListener('abort', abort); this.#pending = undefined }
   }
   private async rpc(rpc: z.infer<typeof Rpc>): Promise<void> {
+    let resume: (() => void) | undefined
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
       if (!this.#pending.allowRpc || !this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
@@ -179,6 +199,10 @@ export class LispWorker {
         && rpc.arguments !== null && Object.hasOwn(rpc.arguments, 'testRunner') ? TestProgram.parse(rpc.arguments) : undefined
       const { testRunner, ...command } = testRequest ?? {}
       const args = testRequest ? command : rpc.arguments
+      if (rpc.method === 'run' && this.#pending.waitForProcess) {
+        const process = Program.parse(args)
+        resume = this.#pending.waitForProcess(process.timeoutMs)
+      }
       let value: unknown
       if ([...CODE_METHODS, 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
@@ -209,7 +233,7 @@ export class LispWorker {
         const problem = failure(error)
         try { this.send({ id: rpc.id, ok: false, error: problem.message, code: problem.code }) } catch (sendError) { this.break(new Error(failure(sendError).message)) }
       }
-    }
+    } finally { resume?.() }
   }
   private async launchJob(input: z.infer<typeof Program>): Promise<Job> {
     const pending = this.#pending

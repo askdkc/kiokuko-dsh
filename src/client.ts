@@ -422,6 +422,12 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [details, setDetails] = useState('')
+  const [connectionError, setConnectionError] = useState('')
+  const [reconciling, setReconciling] = useState<string | null>(null)
+  const [evidence, setEvidence] = useState('')
+  const [notice, setNotice] = useState('')
+  const acting = useRef(false)
+  const statusRevision = useRef(0)
   const dialog = useRef<HTMLDialogElement | null>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
   const current = useRef(sessionId); current.current = sessionId
@@ -439,58 +445,78 @@ function LispSessionStatus(props: Record<string, unknown>): unknown {
   }, [open])
   useEffect(() => {
     let disposed = false, timer: ReturnType<typeof setTimeout> | undefined, lastState = ''
-    setStatus(null); setError(''); setOpen(false); setDetails(''); setBusy(false)
+    setStatus(null); setError(''); setConnectionError(''); setOpen(false); setDetails(''); setBusy(false); setReconciling(null); setEvidence(''); setNotice(''); acting.current = false; statusRevision.current++
     const refresh = async () => {
       try {
-        const value = await request()
-        if (disposed) return
-        if (value) { setStatus(value); setError(''); lastState = value.state }
-        else if (lastState) setError('Lisp の接続が失われました。保護は解除されていません。プラグインを戻して /kioku-lisp status を確認してください。')
-      } catch (failure) { if (!disposed && lastState) setError(messageOf(failure)) }
+        const revision = statusRevision.current, value = await request()
+        if (disposed || acting.current || revision !== statusRevision.current) return
+        if (value) { setStatus(value); setConnectionError(''); lastState = value.state }
+        else if (lastState) setConnectionError('Lisp の接続が失われました。保護は解除されていません。プラグインを戻して /kioku-lisp status を確認してください。')
+      } catch (failure) { if (!disposed && lastState) setConnectionError(messageOf(failure)) }
       finally { if (!disposed) timer = setTimeout(() => void refresh(), document.hidden ? 10000 : 2000) }
     }
     void refresh()
     return () => { disposed = true; clearTimeout(timer) }
   }, [sessionId])
   const act = async (action: string, payload?: Record<string, unknown>) => {
-    if (busy) return
-    setBusy(true); setError('')
+    if (acting.current) return false
+    acting.current = true; statusRevision.current++
+    setBusy(true); setError(''); setNotice('')
     try {
       const result = await request(action, payload)
-      if (current.current !== sessionId) return
-      if (result?.code) setDetails(JSON.stringify(result, null, 2))
+      if (current.current !== sessionId) return false
+      if (result?.code) { setDetails(JSON.stringify(result, null, 2)); return false }
       else { setDetails(''); if (result?.state) setStatus({ ...status, ...result, enabled: result.enabled ?? status?.enabled ?? true }) }
-    } catch (failure) { if (current.current === sessionId) setError(messageOf(failure)) }
-    finally { if (current.current === sessionId) setBusy(false) }
+      if (action === 'abandon-managed') {
+        // The mutation is already saved. A later refresh failure must not
+        // invite resubmitting it or discard the successful acknowledgement.
+        const resolvedId = payload?.operationId
+        if (status) setStatus({ ...status,
+          managedOperations: status.managedOperations?.filter(item => item.id !== resolvedId) ?? [],
+          managedUnknownOperations: status.managedUnknownOperations?.filter(item => item.id !== resolvedId) ?? [] })
+        setReconciling(null); setEvidence(''); setNotice('確認内容を保存し、確認待ちを解除しました。「新しい Lisp を起動」で再開できます。')
+        const refreshed = await request()
+        if (current.current !== sessionId) return false
+        setStatus(refreshed)
+      }
+      return true
+    } catch (failure) { if (current.current === sessionId) setError(messageOf(failure)); return false }
+    finally { if (current.current === sessionId) { acting.current = false; statusRevision.current++; setBusy(false) } }
   }
-  if (!status?.enabled && !error) return null
+  if (!status?.enabled && !error && !connectionError) return null
   const label = ({ READY: '実行可能', SUSPENDED: '休止中（次回自動起動）', EVALUATING: '処理中', PREFLIGHT: '起動中', STOPPING: '停止中', RECOVERY_REQUIRED: '確認が必要', RECONCILIATION_REQUIRED: '外部処理の確認が必要', STOP_UNCONFIRMED: '停止未確認' } as Record<string, string>)[status?.state ?? ''] ?? '状態不明'
   // An unknown external effect blocks every later turn until a human ends it,
   // so the control offers that exact action instead of only a restart.
   const unknownExternal = [...new Map([...(status?.managedUnknownOperations ?? []), ...(status?.managedOperations ?? [])].filter(item => item.state === 'unknown').map(item => [item.id, item])).values()]
-  const reconcile = (id: string) => {
-    const evidence = typeof window === 'undefined' ? '' : window.prompt(`外部処理の証跡を確認した内容を記録します。\n操作: ${id}\n影響が無いと確認できた場合だけ、確認内容を入力してください。`, '')
-    if (evidence === null || !evidence.trim()) return
-    void act('abandon-managed', { operationId: id, evidence: evidence.trim() })
-  }
   return jsxs(Fragment, { children: [jsx('button', { type: 'button', ref: trigger, onClick: () => setOpen(true), children: `Lisp: ${label}` }),
     jsx('dialog', { ref: dialog, onCancel: () => setOpen(false), 'aria-label': 'Lisp の状態と復旧', style: { maxWidth: 'min(720px, 90vw)', maxHeight: '85vh' },
       children: jsxs('section', { children: [jsx('h2', { children: `Lisp: ${label}` }),
-        jsx('p', { role: 'status', 'aria-live': 'polite', children: busy ? '処理しています。初回の起動には時間がかかる場合があります。' : status?.error?.message ?? '現在のセッションの状態です。' }),
+        jsx('p', { role: 'status', 'aria-live': 'polite', children: busy ? '処理しています。初回の起動には時間がかかる場合があります。' : notice || status?.error?.message || '現在のセッションの状態です。' }),
         jsx('p', { children: status?.error?.recovery ?? status?.recovery ?? '' }),
-        ...(error ? [jsx('p', { role: 'alert', children: error })] : []),
+        ...(error || connectionError ? [jsx('p', { role: 'alert', children: error || connectionError })] : []),
         ...(details ? [jsx('pre', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }, children: details })] : []),
         jsx('p', { children: '未確定の変更は自動で再実行・復元しません。詳細は /kioku-lisp diagnostics でも確認できます。' }),
         ...(unknownExternal.length ? [
-          jsx('p', { children: '外部処理の結果が未確定です。Lisp の再起動・取消では確定できません。元のホスト証跡を確認し、影響が無いと確認できた操作だけを終了してください。' }),
+          jsx('p', { children: '外部処理の終了を確認できていません。「停止する」で停止を試みてから、下の操作記録を確認してください。停止済みで結果も確認できた操作は、確認待ちを解除できます。' }),
           jsx('ul', { children: unknownExternal.slice(0, 3).map(item => jsx('li', { children: jsxs(Fragment, { children: [
             jsx('code', { children: item.id }), ' ', `${item.route}/${item.kind}`, ' ',
-            jsx('button', { type: 'button', disabled: busy, onClick: () => reconcile(item.id), children: '照合して終了' }),
+            jsx('button', { type: 'button', disabled: busy, onClick: () => { setReconciling(item.id); setEvidence(''); setError('') }, children: '照合して終了' }),
           ] }) })) }),
           ...(unknownExternal.length > 3 ? [jsx('p', { children: `/kioku-lisp status で残り ${unknownExternal.length - 3} 件を確認できます。` })] : []),
         ] : []),
+        ...(reconciling ? [jsxs('form', { onSubmit: (event: Event) => { event.preventDefault(); if (evidence.trim()) void act('abandon-managed', { operationId: reconciling, evidence: evidence.trim() }) }, children: [
+          jsx('h3', { children: '外部処理の確認待ちを解除' }),
+          jsx('p', { children: `操作: ${reconciling}` }),
+          jsx('p', { children: `確認する記録: /kioku-lisp diagnostics ${reconciling}` }),
+          jsx('p', { children: '処理が停止済みであることと、実行結果やファイルへの影響を確認した内容を記録してください。確認待ちを解除しても、処理の再実行やファイルの復元は行いません。' }),
+          jsx('label', { children: jsxs(Fragment, { children: ['確認した内容', jsx('textarea', { value: evidence, required: true, maxLength: 512, autoFocus: true, disabled: busy,
+            placeholder: '例: CI の状態確認処理は停止済み。実行結果を確認し、作業ファイルへの変更はなかった。',
+            onChange: (event: { target: { value: string } }) => setEvidence(event.target.value), style: { display: 'block', width: '100%', boxSizing: 'border-box', minHeight: '6em' } })] }) }),
+          jsx('button', { type: 'submit', disabled: busy || !evidence.trim(), children: '確認内容を記録して終了' }),
+          jsx('button', { type: 'button', disabled: busy, onClick: () => setReconciling(null), children: '戻る' }),
+        ] })] : []),
         jsx(NumberedPicker, { label: 'Lisp の操作', disabled: busy,
-          options: [{ value: 'cancel', label: '停止する' }, { value: 'recover', label: '照合して新しい Lisp を起動', disabled: ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? '') }, { value: 'close', label: '閉じる' }],
+          options: [{ value: 'cancel', label: '停止する' }, { value: 'recover', label: '新しい Lisp を起動', disabled: unknownExternal.length > 0 || ['STOP_UNCONFIRMED', 'SUSPENDED'].includes(status?.state ?? '') }, { value: 'close', label: '閉じる' }],
           onChoose: (value: string) => value === 'close' ? setOpen(false) : void act(value) }),
       ] }) })] })
 }

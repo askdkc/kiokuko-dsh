@@ -16,7 +16,7 @@ function pruneOptions(words: readonly string[]): { olderThanDays?: number; maxBy
     else throw new AgenticReplayError('invalid_command')
   }
   if (olderThanDays === undefined && maxBytes === undefined) throw new AgenticReplayError('invalid_command')
-  return { olderThanDays, maxBytes }
+  return { ...(olderThanDays === undefined ? {} : { olderThanDays }), ...(maxBytes === undefined ? {} : { maxBytes }) }
 }
 
 /** Human-only native command. No HTTP route or model tool is registered. */

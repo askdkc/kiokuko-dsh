@@ -374,12 +374,23 @@ remain at the reported paths. Inspect or restore a particular operation with:
 ```
 
 Restore checks the backup digest and asks for fresh confirmation against the
-current target. To return to normal tools after confirmed stop and
-resolution of unknown operations:
+current target. To forcibly stop the current session's Lisp and its owned jobs,
+then start a fresh Lisp:
 
 ```text
 /kioku-lisp disable
+/kioku-lisp enable
 ```
+
+`disable` wakes a suspended supervisor and uses its OS-level `SIGKILL` path for
+the owned runtime/jobs, including jobs that ignore `SIGTERM`. It confirms their
+termination before releasing the session; if termination cannot be confirmed,
+it reports `STOP_UNCONFIRMED` and keeps the execution fence. Other sessions stay
+alive. `enable` creates a new heap; previous variables and functions are lost.
+Interrupted evaluation records, file backups and unresolved external-operation
+records remain available after re-enabling. Restart never marks an unknown
+effect successful, undoes it, or replays it; unresolved external operations still
+require reconciliation before dispatching further effects.
 
 Plugin unload retains a host-owned execution fence. Reloading never silently
 restarts previous Lisp code. A live second host using the same Lisp data directory
@@ -412,8 +423,14 @@ For selected tests, use the bundled `kioku.test` functions inside `lisp_eval`:
 ```
 
 Both accept one file or a list, a `:directory`, a `:name-pattern` regex and
-`:timeout-ms` for the subprocess. Use a Lisp evaluation timeout long enough to
-collect the result. Vitest uses the development project's installed
+`:timeout-ms` for the subprocess. With the default evaluation budget, time spent
+waiting for a bounded `kioku.process:run` (including these test runners) does not
+consume Lisp computation time. The subprocess keeps its own deadline; the host
+also bounds receipt/cleanup waiting. The same Lisp process, variables and function
+definitions survive the wait. An explicitly supplied `lisp_eval.timeoutMs` remains
+a total wall-clock deadline, including subprocess waits. Pure Lisp computation
+still has the configured time limit, and human Stop still cancels immediately.
+Vitest uses the development project's installed
 `./node_modules/.bin/vitest` and its JSON reporter. Node uses TAP and can run in
 protected scratch with `:isolation :none`:
 
