@@ -3,6 +3,7 @@ import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
 import { KiokukoModelsService } from "./service.js";
 import { ModelsConfigStore } from "./config-store.js";
+import { modelServiceKey } from "./metadata.js";
 import { mounted } from "./session-selection.js";
 export { getHeadWorkerSessionSelection, getHeadWorkerForSession, clearHeadWorkerForSession, updateHeadWorkerEffortForSession } from "./session-selection.js";
 import {
@@ -102,7 +103,8 @@ export async function mountKiokukoModels(
     connection = get("connection"),
     llm = get("llm");
   if (!profile || !llm) return async () => {};
-  if (mounted.has(llm)) return async () => {};
+  const serviceKey = modelServiceKey(llm);
+  if (mounted.has(serviceKey)) return async () => {};
   const web = !["dsh-cli", "dsh-tui"].includes(profile.name);
   const agents = { get: (id: string) => get("agents")?.get(id) };
   const sessions = { get: (id: string) => get("sessions")?.get(id) };
@@ -163,7 +165,7 @@ export async function mountKiokukoModels(
     },
   });
   await service.start();
-  mounted.set(llm, service);
+  mounted.set(serviceKey, service);
   const releases: Array<() => unknown> = [];
   try {
     releases.push(
@@ -212,13 +214,13 @@ export async function mountKiokukoModels(
         }),
       );
   } catch (error) {
-    mounted.delete(llm);
+    mounted.delete(serviceKey);
     await Promise.allSettled(releases.reverse().map(async (release) => release()));
     await service.close();
     throw error;
   }
   return async () => {
-    mounted.delete(llm);
+    mounted.delete(serviceKey);
     for (const release of releases.reverse()) release();
     for (const selection of selections.values()) selection.dispose();
     await service.close();

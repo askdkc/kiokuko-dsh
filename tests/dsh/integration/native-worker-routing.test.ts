@@ -56,7 +56,7 @@ function continuableIds(agent: any): string[] {
 for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'lisp', 'same-head', 'same-head-effort', 'revoked-child-tool',
   ...(process.env.KIOKUKO_REQUIRE_LISP_RUNTIME === '1' ? ['lisp-workers' as const] : [])] as const) test(`selected head/worker pair runs native standard ${mode} without child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
-}, async () => {
+}, async t => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
     import(moduleUrl('cordis')), import(moduleUrl('dsh-app-boot')),
     import(moduleUrl('dsh-llm')), import(moduleUrl('dsh-session')), import(moduleUrl('dsh-cmdline')),
@@ -64,6 +64,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
   const temporary = await mkdtemp(join(tmpdir(), 'kiokuko-standard-subagent-'))
   const profileDir = join(temporary, 'profiles/spec')
   const repository = join(temporary, 'repository')
+  const headProvider = 'kiokuko-test-head', workerProvider = 'kiokuko-test-worker'
   let ctx: any
   let adapter: ReturnType<typeof createDshHostAdapter> | undefined
   let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
@@ -107,6 +108,34 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       { insert: [{ id: 'directory-picker-browse', name: '@deepseek-ai/dsh-host-directory-picker-browse' }] },
       { id: 'agent-preset-registry', config: { default: 'standard' } },
     ]
+    const modelCredentials = join(temporary, 'model-credentials.json')
+    const previousModelCredentials = process.env.DSH_AUTH_CREDENTIALS
+    process.env.DSH_AUTH_CREDENTIALS = modelCredentials
+    t.after(() => {
+      if (previousModelCredentials === undefined) delete process.env.DSH_AUTH_CREDENTIALS
+      else process.env.DSH_AUTH_CREDENTIALS = previousModelCredentials
+    })
+    await writeFile(modelCredentials, JSON.stringify({ version: 1, providers: {
+      openai: { type: 'api_key', key: 'fixture' }, deepseek: { type: 'api_key', key: 'fixture' },
+    } }))
+    const model = (id: string) => ({ id, name: id, contextWindow: 131072, maxTokens: 32768 })
+    await writeFile(join(profileDir, 'kiokuko-models.json'), JSON.stringify({
+      version: 1, revision: 1,
+      connections: [
+        { id: headProvider, kind: 'openai', name: 'Head', protocol: 'responses', baseURL: 'http://127.0.0.1:1',
+          models: [{ ...model('gpt-6.1-sol'), reasoning: true, reasoningEfforts: { low: 'low', high: 'high' } }] },
+        { id: workerProvider, kind: 'deepseek', name: 'Worker', protocol: 'chat-completions', baseURL: 'http://127.0.0.1:1',
+          models: [model('deepseek-flash')] },
+      ],
+      sessionHeadWorkers: {
+        'standard-parent': {
+          preset: HEAD_WORKER_PRESET,
+          head: { provider: headProvider, model: 'gpt-6.1-sol' },
+          worker: { provider: workerProvider, model: 'deepseek-flash' },
+        },
+      },
+      sessionHeadWorkerRevisions: { 'standard-parent': 1 },
+    }))
     await writeFile(join(profileDir, 'cordis.yml'), '[]\n')
     const installAnchor = join(packageRoot, '@deepseek-ai/dsh/package.json')
     const profile = { skippedBundles: [], name: 'spec', dir: profileDir, layers: [],
@@ -144,7 +173,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
     let parentRequests = 0
     class ScriptedAdapter extends llm.LlmAdapter {
-      async listModels(provider: string) { const id = provider === 'head' ? 'gpt-6.1-sol' : provider === 'worker' ? 'deepseek-flash' : 'mock'; return [{ provider, id, name: id }] }
+      async listModels(provider: string) { return [{ provider, id: 'mock', name: 'mock' }] }
       async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 131072 }, reasoning: { efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }] } } }
       async *stream(options: any) {
         requests.push(options)
@@ -191,7 +220,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
           { type: 'finish', reason: { kind: 'tool-calls' } },
         ]
         const parentStep = child || !options.tools?.length ? 0 : ++parentRequests
-        if (!child && (mode === 'same-head' || mode === 'same-head-effort') && parentStep === 4) parent.agent.session.append('model/selection', { provider: 'head', model: 'gpt-6.1-sol', ...(mode === 'same-head-effort' ? { reasoningEffort: 'low' } : {}) })
+        if (!child && (mode === 'same-head' || mode === 'same-head-effort') && parentStep === 4) parent.agent.session.append('model/selection', { provider: headProvider, model: 'gpt-6.1-sol', ...(mode === 'same-head-effort' ? { reasoningEffort: 'low' } : {}) })
         if (child && mode === 'revoked-child-tool') parent.agent.session.append('model/selection', { provider: 'mock', model: 'mock' })
         const chunks = child && mode === 'revoked-child-tool' ? mock.toolCallResponse('stale-tool', 'worker_effect', {}) : child ? mock.textResponse('CHILD_COMPLETE')
           : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
@@ -205,10 +234,19 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         for (const chunk of chunks) yield chunk
       }
     }
-    ctx.llm.registerAdapter(['mock', 'head', 'worker'], new ScriptedAdapter())
+    closeModels = await mountKiokukoModels(ctx)
+    const scripted = new ScriptedAdapter()
+    ctx.llm.registerAdapter(['mock'], scripted)
+    const prepareCall = ctx.llm.prepareCall.bind(ctx.llm)
+    ctx.llm.prepareCall = async (...args: any[]) => {
+      const prepared = await prepareCall(...args)
+      return [headProvider, workerProvider].includes(args[0].provider)
+        ? { ...prepared, stream: scripted.stream.bind(scripted) }
+        : prepared
+    }
     // Keep every selectable/provider request inside the deterministic mock transport.
     const nativeProviders = ctx.llm.listProviders.bind(ctx.llm)
-    ctx.llm.listProviders = () => nativeProviders().filter((provider: any) => ['mock', 'head', 'worker'].includes(provider.id))
+    ctx.llm.listProviders = () => nativeProviders().filter((provider: any) => ['mock', headProvider, workerProvider].includes(provider.id))
     const questions: any[] = []
     const nativeQuestions = ctx.get('userQuestions', false)
     assert.ok(nativeQuestions)
@@ -225,22 +263,9 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       }) }
     }
     if (mode === 'lisp') ctx.provide('kiokukoLispCoding', { enabled: () => true, discussing: () => false, prepare: async () => ({ taskType: 'build' }), selectTask: async (input: any, choice: string, answerRef: string) => { assert.equal(input.agent, parent.agent); assert.equal(choice, 'yes'); assert.match(answerRef, /^task-startup:/u) }, activate: async () => {} })
-    await writeFile(join(profileDir, 'kiokuko-models.json'), JSON.stringify({
-      version: 1, revision: 1, connections: [],
-      sessionHeadWorkers: {
-        'standard-parent': {
-          preset: HEAD_WORKER_PRESET,
-          head: { provider: 'head', model: 'gpt-6.1-sol' },
-          worker: { provider: 'worker', model: 'deepseek-flash' },
-        },
-      },
-      sessionHeadWorkerRevisions: { 'standard-parent': 1 },
-    }))
-    closeModels = await mountKiokukoModels(ctx)
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
       repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false }, typedDecisions: { mode: 'off' },
-      modelRoutes: [{ provider: 'head', family: 'openai', connection: 'api', protocol: 'responses' }, { provider: 'worker', family: 'deepseek', connection: 'api', protocol: 'chat-completions' }],
     })
     composition = await mountDshComposition(ctx, adapter.host)
     if(mode==='lisp-workers') lispSurface=await mountLispSurface(ctx,adapter.host.runtime!,LispConfig.parse({enabled:true,executionMode:'development',startupTimeoutMs:60000}))
@@ -283,14 +308,14 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     const workerRequests = requests.filter(request => request.sessionId !== 'standard-parent')
     assert.deepEqual(
       [...new Set(workerRequests.map(request => `${request.provider}/${request.model}`))],
-      ['worker/deepseek-flash'],
+      [`${workerProvider}/deepseek-flash`],
     )
-    assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.model === 'gpt-6.1-sol'))
+    assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === headProvider && request.model === 'gpt-6.1-sol'))
     assert.equal(parent.agent.options.provider, 'mock', 'head overlay must not mutate the original native model')
-    if (mode === 'same-head-effort') assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === 'head' && request.reasoningEffort === 'low'), 'same head effort updates must reach the parent provider')
+    if (mode === 'same-head-effort') assert.ok(requests.some(request => request.sessionId === 'standard-parent' && request.provider === headProvider && request.reasoningEffort === 'low'), 'same head effort updates must reach the parent provider')
     if (mode === 'revoked-child-tool') assert.equal(childToolEffects, 0, 'an in-flight child response cannot execute tools after disabling its selection')
     if (mode === 'lisp') assert.equal(ctx.get('kiokukoLispCoding').enabled(parent.agent), true, 'scripted Lisp service stays enabled while paired routing wins')
-    if (mode === 'same-head') assert.ok(parent.agent.session.snapshotEvents().some((event: any) => event.type === 'model/selection' && event.data.provider === 'head'))
+    if (mode === 'same-head') assert.ok(parent.agent.session.snapshotEvents().some((event: any) => event.type === 'model/selection' && event.data.provider === headProvider))
     const parentRows = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM ledger_runs WHERE dsh_session_id=?').get<{ count: number }>(parent.agent.session.id))
     assert.equal(parentRows?.count, 1, 'only the explicitly prepared parent execution may create a run')
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' &&

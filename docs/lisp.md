@@ -425,6 +425,10 @@ These functions use the existing process permissions and cancellation. The
 result keeps the process `code` and includes `testStatus`, a count summary
 when the reporter is readable, and up to eight failures with available
 locations. A zero exit without observed passing cases yields `unknown`.
+For Vitest, each test failure's `file`, `line`, and `column` identify the test
+definition when available. When the assertion stack contains a usable local
+source frame, `assertionLocation` gives the assertion's own `file`, `line`, and
+`column`. That file can be a helper called by the test.
 For missing or truncated reports, check the returned diagnostic and inspect
 the saved `/value/json/stdout` or `/value/json/stderr` with `lisp_inspect`.
 The saved logs are bounded and `logsTruncated` indicates when capture was

@@ -5,7 +5,7 @@ import {createServer} from 'node:http'
 import test from 'node:test'
 import {mkdir,mkdtemp,realpath,rm,readFile,symlink,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {dirname,join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {claimExecutionOwner} from '../../../../src/dsh/orchestration/execution-owner.js'
 import {prepareAgentTask} from '../../../../src/dsh/task-intake.js'
@@ -143,7 +143,7 @@ process.exitCode = 1
    await writeFile(join(base,'fail.spec.mjs'),`import {test} from 'vitest'
 test('fixture failure', () => { throw new Error('distinct failure') })
 `)
-   if(installedVitest) await symlink(join(installedVitest,'..'),join(base,'node_modules','vitest'))
+   if(installedVitest) await symlink(dirname(installedVitest),join(base,'node_modules','vitest'))
    const code='(kioku.test:vitest "fail.spec.mjs" :config-loader :native)'
    const beforeTests=bodies
    const invalid=await execute('lisp_eval',{operationId:'invalid-test-file',code:'(kioku.test:vitest "--watch")'})
@@ -163,7 +163,13 @@ test('fixture failure', () => { throw new Error('distinct failure') })
    assert.equal(failed.value.value.json.failures[0].name,'fixture failure')
    assert.equal(failed.value.value.json.failures[0].line,2)
    assert.match(failed.value.value.json.failures[0].message,/distinct failure/u)
-   const saved=await execute('lisp_inspect',{operationId:'vitest-log',resultOperationId:'focused-vitest',section:'result',pointer:'/value/json/stdout'})
+   const displayed=JSON.parse(failed.content[0].text)
+   assert.equal(displayed.value.json.stdout,undefined)
+   assert.equal(displayed.value.json.failures[0].name,'fixture failure')
+   const {tool:inspectTool,...inspection}=displayed.inspect
+   assert.equal(inspectTool,'lisp_inspect')
+   assert.equal(inspection.resultOperationId,failed.value.operationId)
+   const saved=await execute(inspectTool,{...inspection,operationId:'vitest-log'})
    assert.match(saved.value.data,/"numFailedTests":1/u)
    assert.equal((await execute('lisp_eval',{operationId:'focused-vitest',code})).value.replay,true)
    assert.equal(bodies,beforeTests+1)

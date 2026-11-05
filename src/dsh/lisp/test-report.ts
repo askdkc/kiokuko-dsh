@@ -1,9 +1,16 @@
+import { isAbsolute } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
 import { z } from 'zod'
 import { hasExplicitTestCases, parseNodeTapSummary, type TapSummary } from '../node-tap-summary.js'
 
 type TestRunner = 'node' | 'vitest'
-interface Failure { name: string; message?: string; file?: string; line?: number; column?: number }
+interface SourceLocation { file: string; line: number; column: number }
+interface Failure extends Partial<SourceLocation> {
+  name: string
+  message?: string
+  assertionLocation?: SourceLocation
+}
 interface Report { summary: TapSummary; failures: Failure[]; failuresOmitted: number; hasCases: boolean; failed: boolean }
 const MAX_FAILURES = 8
 const LOG_CHARS = 24_000
@@ -20,9 +27,25 @@ const vitestReport = z.object({
   })),
 })
 
-function location(text: string): Pick<Failure, 'file' | 'line' | 'column'> {
+function location(text: string): SourceLocation | undefined {
   const match = /^(.+):(\d+):(\d+)$/u.exec(text)
-  return match ? { file: match[1]!, line: Number(match[2]), column: Number(match[3]) } : {}
+  return match ? { file: match[1]!, line: Number(match[2]), column: Number(match[3]) } : undefined
+}
+
+function vitestAssertionLocation(message: string): SourceLocation | undefined {
+  if (!/^AssertionError(?=[:\s]|$)/u.test(message)) return
+  for (const [, frame] of message.matchAll(/^[ \t]+at (?:async )?(.+)$/gmu)) {
+    if (!frame) continue
+    const source = isAbsolute(frame) || frame.startsWith('file://') ? frame : / \((.+)\)$/u.exec(frame)?.[1]
+    const position = source && location(source)
+    if (!position || !Number.isSafeInteger(position.line) || position.line < 1 ||
+      !Number.isSafeInteger(position.column) || position.column < 1) continue
+    let { file } = position
+    if (file.startsWith('file://')) {
+      try { file = fileURLToPath(file) } catch { continue }
+    }
+    if (isAbsolute(file) && !file.split(/[\\/]/u).includes('node_modules')) return { ...position, file }
+  }
 }
 
 function tapField(block: string, field: string): string | undefined {
@@ -79,7 +102,9 @@ function vitestResult(output: string): Report | undefined {
       failureCount++
       if (failures.length < MAX_FAILURES) {
         const message = item.failureMessages[0]
-        failures.push({ name: item.fullName, file: file.name, ...item.location, ...(message ? { message } : {}) })
+        const assertionLocation = message && vitestAssertionLocation(message)
+        failures.push({ name: item.fullName, file: file.name, ...item.location,
+          ...(message ? { message } : {}), ...(assertionLocation ? { assertionLocation } : {}) })
       }
     }
     observedFailures += failedAssertions
@@ -93,8 +118,13 @@ function vitestResult(output: string): Report | undefined {
 }
 
 const shorten = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit)}…` : text
-const limitLog = (text: string) => text.length <= LOG_CHARS ? text
-  : `${text.slice(0, LOG_CHARS / 2)}\n[log shortened]\n${text.slice(-LOG_CHARS / 2)}`
+function limitLog(text: string, limit = LOG_CHARS): string {
+  if (text.length <= limit) return text
+  const marker = '\n[log shortened]\n'
+  const head = Math.floor((limit - marker.length) / 2)
+  const tail = limit - marker.length - head
+  return text.slice(0, head) + marker + text.slice(-tail)
+}
 
 /** Project runner evidence without changing the process receipt or rerunning the command. */
 export function reportTestResult(runner: TestRunner, value: unknown) {
@@ -117,7 +147,7 @@ export function reportTestResult(runner: TestRunner, value: unknown) {
     ...(message ? { message: shorten(message, 600) } : {}), ...position,
   }))
   const diagnostic = testStatus !== 'passed' && failures.length === 0
-    ? stripVTControlCharacters(stderr.trim() || stdout.trim()).slice(-1200) : ''
+    ? limitLog(stripVTControlCharacters(stderr.trim() || stdout.trim()), 1200) : ''
   return { ...result, runner, testStatus, summary: report?.summary ?? null, failures,
     failuresOmitted: report?.failuresOmitted ?? 0,
     ...(diagnostic ? { diagnostic } : {}),

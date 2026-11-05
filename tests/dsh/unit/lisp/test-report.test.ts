@@ -44,3 +44,15 @@ test('Vitest counts skipped and todo cases and identifies failed file setup with
   assert.equal(result.testStatus, 'failed')
   assert.equal(reportTestResult('vitest', processResult(0, [report, report].map(value => JSON.stringify(value)).join('\n'))).testStatus, 'unknown')
 })
+
+test('a long Vitest startup error preserves the cause and the end of the stack', () => {
+  const headline = 'SyntaxError: Invalid regular expression: /[/: Unterminated character class'
+  const stderr = headline + '\n' + '    at a long Vitest dependency path\n'.repeat(60) + '    at startVitest'
+  const report = reportTestResult('vitest', processResult(1, '', stderr))
+  assert.equal(report.code, 1)
+  assert.equal(report.testStatus, 'failed')
+  assert.ok(report.diagnostic?.startsWith(headline))
+  assert.ok(report.diagnostic?.endsWith('at startVitest'))
+  assert.ok(report.diagnostic!.length <= 1200)
+  assert.equal(report.stderr, stderr)
+})
