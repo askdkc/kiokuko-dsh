@@ -17,7 +17,9 @@ dsh-cli
 
 The profile must already supply DSH and the CLI's required peer services. DSH delegates plugin installation to pnpm; adding a tarball with npm to an existing dsh-cli dependency tree can reject the CLI's bundled `workspace:*` dependencies. Keep the host dependency graph coherent. Do not disable compatibility checks or relax permissions to repair a missing peer package.
 
-The resolved configuration must have one enabled `kiokuko-dsh/harness` and a disabled `agent-loop`. Harness options are provider/model defaults and an explicit step budget:
+The resolved configuration must have one enabled `kiokuko-dsh/harness` and a disabled `agent-loop`. Harness options are provider/model defaults and an optional per-turn step budget. By default there is no step-count limit: long work continues until completion, a native stop/refusal, cancellation, or another runtime failure. The previous implicit 128-step limit could interrupt successful tool work before verification and a final answer.
+
+To opt into a fixed limit, set a positive integer explicitly:
 
 ```yaml
 - id: kiokuko-harness
@@ -25,7 +27,7 @@ The resolved configuration must have one enabled `kiokuko-dsh/harness` and a dis
     maxSteps: 128
 ```
 
-Reaching the budget records a failed turn for inspection; it does not assert task success. Set a suitable budget for longer work. Tool authority still belongs to the native tool scope and approvals.
+Reaching an explicit budget while more work remains records `KIOKUKO_STEP_BUDGET_REACHED` with the configured limit. It preserves settled tool results and records a failed turn for inspection; it does not assert task success or automatically replay work. A later user continuation gets a fresh per-turn budget. Completion at the exact limit remains successful. Remove `maxSteps` from an existing profile to use the default without a step-count limit, or raise it to allow longer bounded turns. Tool authority still belongs to the native tool scope and approvals.
 
 For the previous plugin integration, pass the installed overlay **after** the bundle:
 

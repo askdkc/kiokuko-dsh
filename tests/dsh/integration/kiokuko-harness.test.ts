@@ -24,11 +24,11 @@ test('legacy compatibility overlay restores one stock factory and removes its Ki
   assert.equal(rows.some((r:any)=>r.insert),false,'Overlay must not duplicate bundle entries')
 })
 
-async function fixture(productionPlugin = false) {
+async function fixture(productionPlugin = false, maxSteps?: number, nativeTools = productionPlugin) {
   const ctx = new Context(), requests: unknown[] = []
   for (const plugin of [Llm, Sessions, Projections, Agents]) await ctx.plugin(plugin)
-  if (productionPlugin) for (const plugin of [SystemPrompt, Tools]) await ctx.plugin(plugin)
-  if (productionPlugin) await ctx.plugin(NativeExecutor)
+  if (nativeTools) for (const plugin of [SystemPrompt, Tools]) await ctx.plugin(plugin)
+  if (nativeTools) await ctx.plugin(NativeExecutor)
   ctx.llm.registerAdapter(['harness-fixture'], new class extends LlmAdapter {
     async *stream(options: any) {
       requests.push(options)
@@ -38,13 +38,91 @@ async function fixture(productionPlugin = false) {
     }
   }())
   let factory!: KiokukoAgentFactory
-  const plugin = productionPlugin ? await ctx.plugin(Harness, {provider:'harness-fixture',model:'contract-model'}) : await ctx.plugin({name:'harness-contract',inject:['agents','sessions','llm'],apply(scope:Context) {
-    factory = new KiokukoAgentFactory(scope, { provider: 'harness-fixture', model: 'contract-model' })
+  const limits = maxSteps === undefined ? {} : { maxSteps }
+  const plugin = productionPlugin ? await ctx.plugin(Harness, {provider:'harness-fixture',model:'contract-model',...limits}) : await ctx.plugin({name:'harness-contract',inject:['agents','sessions','llm',...(nativeTools?['tools','systemPrompt']:[])],apply(scope:Context) {
+    factory = new KiokukoAgentFactory(scope, { provider: 'harness-fixture', model: 'contract-model', ...limits })
     scope.agents.setFactory(factory)
   }})
   if (productionPlugin) factory = ctx.kiokukoHarness
   return { ctx, factory, requests, async close() { await factory.dispose(); await plugin.dispose(); await ctx.fiber.dispose() } }
 }
+
+for (const productionPlugin of [false, true]) for (const cancel of [false, true]) {
+  test(`${productionPlugin ? 'plugin' : 'factory'} defaults let work ${cancel ? 'be cancelled' : 'finish'} beyond 128 steps`, async () => {
+    const f = await fixture(productionPlugin, undefined, true)
+    try {
+      let steps = 0, executions = 0
+      const errors: unknown[] = []
+      f.ctx.on('agent/error', event => errors.push(event.error))
+      f.ctx.on('agent/pre-step', async (event, next) => {
+        if (cancel && event.step === 130) event.agent.cancel({ kind: 'user' })
+        return next()
+      })
+      f.ctx.tools.register({
+        name: 'progress_probe', description: 'Record one completed work item.', parameters: { type: 'object' },
+        output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] },
+        execute: async () => { executions++; return 'work recorded' },
+      })
+      f.ctx.on('llm/stream', async function* (options, next) {
+        if (++steps > 129) { yield* next(); return }
+        yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `work-${steps}` as any, name: 'progress_probe', arguments: '{}' } }
+        yield { type: 'finish', reason: { kind: 'tool-calls' } }
+      })
+      const { agent } = await f.ctx.agents.create({ sessionId: SessionId(`long-work-${productionPlugin}`) })
+      agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Finish the work and report the result.' }], source: { kind: 'user' } }))
+      await agent.whenIdle()
+      const events = agent.session.snapshotEvents()
+      assert.equal(steps, cancel ? 129 : 130, 'A successful tool result at step 128 must allow further work until completion or cancellation')
+      assert.equal(executions, 129)
+      assert.equal(events.filter(event => event.type === 'tool/result').length, 129)
+      assert.deepEqual(events.filter(event => event.type === 'turn/end').map(event => event.data.reason),
+        [cancel ? { kind: 'aborted', reason: { kind: 'user' } } : { kind: 'completed' }])
+      assert.deepEqual(errors, [])
+    } finally { await f.close() }
+  })
+}
+
+test('an explicit step limit records a specific failure, preserves results and resets for continuation', async () => {
+  const f = await fixture(true, 2)
+  try {
+    let steps = 0, executions = 0
+    const errors: any[] = []
+    f.ctx.on('agent/error', event => errors.push(event.error))
+    f.ctx.tools.register({
+      name: 'budget_probe', description: 'Record a completed work item.', parameters: { type: 'object' },
+      output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: String(value) }] },
+      execute: async () => { executions++; return 'work recorded' },
+    })
+    f.ctx.on('llm/stream', async function* (options, next) {
+      if (++steps > 3) { yield* next(); return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `bounded-work-${steps}` as any, name: 'budget_probe', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    })
+    const { agent } = await f.ctx.agents.create({ sessionId: SessionId('explicit-step-limit') })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Begin bounded work.' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    let events = agent.session.snapshotEvents()
+    const failed = events.find(event => event.type === 'turn/end')!
+    assert.equal(failed.data.reason.kind, 'error')
+    assert.equal(failed.data.reason.error.code, 'KIOKUKO_STEP_BUDGET_REACHED')
+    assert.match(failed.data.reason.error.message, /maxSteps=2/)
+    assert.equal(errors.length, 1)
+    assert.equal(errors[0].failure.code, 'KIOKUKO_STEP_BUDGET_REACHED')
+    assert.equal(steps, 2)
+    assert.equal(executions, 2)
+    assert.equal(events.filter(event => event.type === 'tool/result').length, 2)
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue from the recorded results.' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    events = agent.session.snapshotEvents()
+    assert.equal(steps, 4, 'Continuation receives a fresh per-turn budget and may finish at its exact limit')
+    assert.equal(executions, 3, 'Previously settled tool calls must not run again')
+    assert.equal(events.filter(event => event.type === 'tool/result').length, 3)
+    assert.equal(events.filter(event => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
+    assert.equal(errors.length, 1)
+  } finally { await f.close() }
+})
 
 test('rejected intake retains input and waits for another wake instead of silently consuming or spinning', async () => {
   const f=await fixture()

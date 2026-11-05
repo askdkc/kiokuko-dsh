@@ -18,7 +18,10 @@ declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap { 'plugin:kiokuko-dsh/harness-action': { action:string; phase:string; turn:number; step:number; parentSession?:string; callId?:string; diagnostic?:LlmFailure } }
 }
 declare module '@deepseek-ai/dsh-llm' { interface MessageSourceMap { 'runtime-context': {kind:'runtime-context'} & ContextFormed; 'plugin:kiokuko-dsh': {kind:typeof KIOKUKO_DSH_SOURCE_KIND;form:'instructions'|'snapshot';sections?:readonly {name:string;text:string}[]} } }
-export interface HarnessOptions extends AgentOptions { maxSteps?: number }
+export interface HarnessOptions extends AgentOptions {
+  /** Optional per-turn limit. Omission lets ordinary work continue until completion or cancellation. */
+  maxSteps?: number
+}
 type ModelStepResult = 'continue' | 'completed' | 'max-tokens'
 
 /** Durable turn-failure facts under the current DSH contract: a caught
@@ -75,7 +78,7 @@ class KiokukoHarnessModel {
 /** Kiokuko owns scheduling and request/tool boundaries; DSH supplies the services. */
 export class KiokukoHarnessAgent implements Agent {
   readonly id: Agent['id']; readonly ctx: Context; readonly scope: ReturnType<typeof createScope>
-  readonly inbox: KiokukoInbox; readonly model: KiokukoHarnessModel; readonly options: AgentOptions
+  readonly inbox: KiokukoInbox; readonly model: KiokukoHarnessModel; readonly options: HarnessOptions
   private readonly dispatch: ReturnType<typeof agentEvents>
   private driver: Promise<void>|undefined; private maintenance: Promise<unknown>|undefined; private abort: AbortController|undefined
   private ready=false; private disposed=false; private wake=false; private turn=0; private step=0; private streamRevision=0
@@ -200,7 +203,9 @@ export class KiokukoHarnessAgent implements Agent {
           if(!again&&!this.inbox.nextStep.length){await this.lifecycle.turnStopping({agent:this,turn:this.turn,signal});
             await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal});signal.throwIfAborted()}
           again=again||this.inbox.nextStep.length>0
-          if(again&&this.step>=(this.options as HarnessOptions).maxSteps!){throw new Error('Kiokuko step budget reached; inspect the recorded work before continuing')}
+          if(again&&this.options.maxSteps!==undefined&&this.step>=this.options.maxSteps){
+            throw new LlmError(`Kiokuko configured step budget reached (maxSteps=${this.options.maxSteps}); inspect the recorded work before continuing. Remove or raise the harness maxSteps setting for longer turns.`, 'KIOKUKO_STEP_BUDGET_REACHED')
+          }
           } finally {toolSet?.dispose()}
         }
       } catch(error) {
@@ -359,7 +364,7 @@ export class KiokukoAgentFactory implements AgentFactory {
     const previous=source==='resume'?session.requestHeader():undefined
     const restored:AgentOptions=previous?{provider:previous.config.provider,model:previous.config.model,
       ...(previous.adapterDefaults?.reasoningEffort!==true&&previous.config.reasoningEffort?{reasoningEffort:previous.config.reasoningEffort}:{})}:{}
-    const agent=new KiokukoHarnessAgent(this.ctx,session,{maxSteps:128,...this.defaults,...restored,...options.agentOptions},this.lifecycle,seed,ownerCtx)
+    const agent=new KiokukoHarnessAgent(this.ctx,session,{...this.defaults,...restored,...options.agentOptions},this.lifecycle,seed,ownerCtx)
     let detachAgent:(()=>void)|undefined,detachSession:(()=>void)|undefined,disposing:Promise<void>|undefined
     const dispose=()=>disposing??=(async()=>{
       abort.abort(new Error('Kiokuko agent owner disposed'))
