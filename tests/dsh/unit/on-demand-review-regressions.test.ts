@@ -1,4 +1,5 @@
 import { MemorySnapshotStale } from '../../../src/dsh/memory-request-fence.js'
+import { retainedEvents } from '../../../src/dsh/context-projection.js'
 import { executionRequestAction, codingToolEffect } from '../../../src/dsh/coding-workflow/intent.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
@@ -184,11 +185,47 @@ function event(type: string, turn: number) {
     data: { turn },
   }
 }
+/** Mirrors the native surface contract the request rebuild reads verbatim. */
+function nativeSurfaceSession(id: string) {
+  const events: any[] = [],
+    nodes: number[] = [],
+    bySeq = new Map<number, any>()
+  let seq = 0
+  return {
+    id,
+    header: { version: 4 },
+    surface: { nodes },
+    events,
+    eventAt: (target: number) => bySeq.get(target),
+    snapshotEvents: () => events,
+    append(type: string, data: any, intent?: { surfaceOp?: any }) {
+      const event: any = { type, seq: ++seq, time: 0, data }
+      const op = intent?.surfaceOp
+      if (op === undefined) {
+        events.push(event)
+        bySeq.set(event.seq, event)
+        nodes.push(event.seq)
+        return event.seq
+      }
+      event.surfaceOp = op
+      events.push(event)
+      bySeq.set(event.seq, event)
+      const start = nodes.indexOf(op.startSeq ?? op.start),
+        end = nodes.indexOf(op.endSeq ?? op.end)
+      if (start < 0 || end < start)
+        throw new Error('invalid native surface replacement')
+      nodes.splice(start, end - start + 1, event.seq)
+      return event.seq
+    },
+  }
+}
+type SurfaceSession = ReturnType<typeof nativeSurfaceSession>
 type Dependencies = ConstructorParameters<typeof OnDemandIntake>[0]
 async function fixture(
   t: TestContext,
   options: Partial<Dependencies> = {},
   skillPlacement: 'global' | 'late' | 'agent' = 'global',
+  overrides: { session?: SurfaceSession } = {},
 ) {
   const ctx = new cordis.Context()
   ctx.provide('systemPrompt', {
@@ -199,7 +236,7 @@ async function fixture(
   const fibers: any[] = []
   await mountNativeTools(ctx, nativeTools, packages, fibers)
   const events = [event('turn/start', 1)]
-  const session = { id: 'review-session', snapshotEvents: () => events }
+  const session = overrides.session ?? { id: 'review-session', snapshotEvents: () => events }
   const agent = { id: 'review-agent', session }
   const admissions: DemandInput[] = [],
     advice: string[] = []
@@ -4005,6 +4042,28 @@ for(const terminal of ['completed','cancelled'] as const)test(`memory quarantine
   assert.equal(db.prepare('SELECT state FROM dsh_auxiliary_recovery').get()!.state,terminal==='completed'?'verified':'stale')
   assert.equal(preparations,terminal==='completed'?2:1)
   assert.equal((f.intake.snapshot(f.session.id)!.auxiliary![0] as any).memoryAdopted,false)
+})
+
+test('deferred memory quarantine retires the delivered snapshot so the native request rebuild converges',async t=>{
+  // The native retry rebuilds from the session surface verbatim; pre-step
+  // projection does not run again. Quarantined memory that stays on the
+  // surface therefore fails the fence on every attempt and exhausts the retry.
+  const root=await mkdtemp(join(tmpdir(),'native-memory-rebuild-')),db=openConnection(join(root,'state.sqlite3'));migrateDatabase(db)
+  const runtime={withDatabase:async <T>(fn:DshDatabaseOperation<T>)=>fn(db,undefined as never)}
+  const answerContext=new DshAnswerContext(runtime,{root,projectOnly:true,memoryRetrieval:MemoryRetrievalConfig.parse({}),
+    instructions:async()=>{throw Error('auxiliary network unavailable')}})
+  const session=nativeSurfaceSession('rebuild-session')
+  t.after(async()=>{db.close();await rm(root,{recursive:true,force:true})})
+  const text='{"workspace":"project:fixture","entryId":"delivered","text":"delivered memory"}'
+  session.append('user/message',{id:'delivered-memory',role:'user',content:[{type:'text',text}],
+    source:{kind:KIOKUKO_DSH_SOURCE_KIND,form:'snapshot',sections:[{name:'memory:memory:delivered',text}]}})
+  const f=await fixture(t,{answerContext},'agent',{session})
+  const original=human('rebuild-source','Inspect the plugin without changing files.')
+  await f.capture([original])
+  const rebuilt=retainedEvents(session).filter((e:any)=>e.type==='user/message').map((e:any)=>e.data)
+  assert.ok(!rebuilt.some((m:any)=>m.source?.sections?.some((s:any)=>s.name==='memory:memory:delivered')),
+    'quarantined memory must leave the native surface')
+  await f.intake.fence(f.agent,Object.freeze({sessionId:session.id,messages:Object.freeze(rebuilt)}))
 })
 
 test('memory quarantine: a nonresponsive auxiliary preparation reaches a native read within its deadline',async t=>{

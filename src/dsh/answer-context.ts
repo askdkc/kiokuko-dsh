@@ -188,4 +188,16 @@ export class DshAnswerContext {
   retire(agent: DemandAgent): void {
     if (agent.session && this.#contexts.get(agent.session.id)?.agent === agent) this.#contexts.delete(agent.session.id)
   }
+  /** Optional memory that fails validation must also leave the native surface.
+   * A rebuilt request replays that surface verbatim, so a retained snapshot
+   * would fail validation again and exhaust the single native retry. */
+  async quarantine(agent: DemandAgent): Promise<void> {
+    const session = agent.session
+    if (session && this.#contexts.get(session.id)?.agent === agent) this.#contexts.delete(session.id)
+    if (!session) return
+    try { pruneDshMemorySurface(session, new Map()) } catch { return }
+    try {
+      pruneExplainedMemorySurface(session, await this.runtime.withDatabase(db => retiredExplanationCalls(db, session.id)))
+    } catch { /* Explanation retirement stays optional; the request fence still blocks stale results. */ }
+  }
 }

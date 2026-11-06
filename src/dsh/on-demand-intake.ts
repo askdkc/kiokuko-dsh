@@ -504,7 +504,9 @@ export class OnDemandIntake {
     this.assertCurrent(state)
     await this.host.validate(state.input)
     state.memoryDeferred=true;state.answerContextReady=false
-    this.host.answerContext?.retire(state.input.agent)
+    // A rebuilt request replays the native surface verbatim, so quarantined
+    // memory must leave that surface or the single native retry never converges.
+    await this.host.answerContext?.quarantine?.(state.input.agent)
     const source={sessionId:state.input.agent.session!.id,turn:state.input.turn,origin:'answer-context' as const,
       sourceDigest:canonicalContentHash(state.task),contextDigest:canonicalContentHash(state.input.messages)}
     state.auxiliaryReceipt=await this.host.recovery?.defer({source,current:()=>this.recoveryCurrent(state),
@@ -2065,7 +2067,10 @@ export class OnDemandIntake {
     }
     // Native requests are immutable after assembly. Rebuild before dispatch;
     // never edit the provider request or let quarantined memory pass through.
-    if (state?.input.agent === agent && state.memoryDeferred) requireRebuild()
+    if (state?.input.agent === agent && state.memoryDeferred) {
+      await this.host.answerContext?.quarantine?.(agent)
+      requireRebuild()
+    }
     if (
       state &&
       !state.nativeUnowned &&
