@@ -76,6 +76,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       async resolveModel(provider: string, id: string) { return { provider, id, name: id } }
       async *stream(options: any) {
         if (options.purpose === 'compaction') { yield* mock.textResponse('[]'); return }
+        if (options.purpose === 'akinator-expected') { yield* mock.textResponse('{"expected":null}'); return }
         const names = options.tools.map((t: any) => t.name)
         const step = row.requests.push({ tools: names, sessionId: options.sessionId })
         let response: any[]

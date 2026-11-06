@@ -10,6 +10,7 @@ import { readTaskSnapshot, type TaskIdentity } from './task-state.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { answerAkinatorQuestion } from './decisions/akinator-answers.js'
 import type { DecisionService } from './decisions/service.js'
+import type { DshLlm } from './session-memory-finalizer.js'
 
 /** Continue the existing intake without creating a run or granting execution. */
 export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity & {
@@ -17,7 +18,7 @@ export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity
   capabilities: readonly { kind: 'skill' | 'tool'; name: string; description?: string }[];
   signal: AbortSignal; answerer?: DshIntakeAnswerer | undefined; agent?: DshUserQuestionAgent | undefined;
   validateCapabilities?: (() => Promise<void>) | undefined
-  decisions?: DecisionService | undefined; requestId?: string
+  decisions?: DecisionService | undefined; requestId?: string; llm?: DshLlm | undefined
 }) {
   let revision = input.expectedRevision, generation = input.expectedGeneration
   const assertCurrent = () => {
@@ -34,7 +35,8 @@ export async function continueTaskIntake(db: SqliteDatabase, input: TaskIdentity
   let state = await getAkinatorStateService(db, { workspace: input.workspace, sessionId: link.sessionId })
   while (state.status === 'needs_answer' && state.question) {
     const question = state.question
-    const automatic = await answerAkinatorQuestion(input.decisions, input.requestId ?? input.taskId, state.session.task, question, input.signal, [], input.repositoryRoot)
+    const automatic = await answerAkinatorQuestion(input.decisions, input.requestId ?? input.taskId, state.session.task, question, input.signal, [], input.repositoryRoot,
+      { llm: input.llm, agent: input.agent })
     if (automatic.status !== 'answered' && !input.answerer) break
     const value = automatic.status === 'answered' ? automatic.value : await input.answerer!.ask(question, input.signal, input.agent)
     await input.validateCapabilities?.()

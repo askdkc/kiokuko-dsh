@@ -41,11 +41,22 @@ test('staging selects exact current source, removes obsolete packages, and prese
     assert.equal(assertDshFixtureIdentity(f.runtime, installed).sha, f.sha)
     const obsolete = join(f.runtime, 'node_modules/@deepseek-ai/obsolete')
     mkdirSync(obsolete)
-    assert.throws(() => assertDshFixtureIdentity(f.runtime, installed), /package scope differs/)
+    assert.throws(() => assertDshFixtureIdentity(f.runtime, installed), error => {
+      assert.match(error.message, /package scope differs/)
+      assert.ok(error.message.includes(join(f.runtime, 'node_modules/@deepseek-ai')))
+      assert.match(error.message, /unexpected=obsolete/)
+      return true
+    })
     rmSync(obsolete, { recursive: true })
     const tools = join(development, 'node_modules/@deepseek-ai/dsh-tools')
     rmSync(tools); symlinkSync(join(f.source, 'packages/core/agent-loop'), tools, 'dir')
-    assert.throws(() => assertDshFixtureIdentity(f.runtime, installed), /package mapping is stale/)
+    assert.throws(() => assertDshFixtureIdentity(f.runtime, installed), error => {
+      assert.match(error.message, /package mapping is stale/)
+      assert.ok(error.message.includes(tools))
+      assert.ok(error.message.includes(`expected=${join(identity.sourceRoot, 'packages/core/tools')}`))
+      assert.ok(error.message.includes(`actual=${join(identity.sourceRoot, 'packages/core/agent-loop')}`))
+      return true
+    })
   } finally { f.close() }
 })
 

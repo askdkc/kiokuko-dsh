@@ -4,6 +4,7 @@ import { z } from "zod";
 import { TASK_TYPES, type TaskType } from "../akinator/types.js";
 import { applyAnswer, evaluateProfile } from "../akinator/domain.js";
 import { answerAkinatorQuestion } from "./decisions/akinator-answers.js";
+import type { DshLlm } from "./session-memory-finalizer.js";
 import type { DecisionService } from "./decisions/service.js";
 import { createDshIntakeAnswerer, type DshUserQuestions } from "./intake-questions.js";
 import { KiokukoError } from "../errors.js";
@@ -109,6 +110,7 @@ interface ModelOperationReplay {
 interface HostOptions {
   runtime: DshCoreRuntime;
   decisions?: DecisionService;
+  llm?: DshLlm | undefined;
   questions?: DshUserQuestions;
   demand?: OnDemandIntake;
   agents: { get(id: string): unknown };
@@ -287,7 +289,8 @@ export class DshTaskWorkflow {
     let evaluation = evaluateProfile(intake.profile, intake.questionCount);
     while (evaluation.status === 'needs_answer' && evaluation.question) {
       const question = evaluation.question;
-      const automatic = await answerAkinatorQuestion(this.options.decisions, operationId, request, question, signal, [], owner.repositoryRoot);
+      const automatic = await answerAkinatorQuestion(this.options.decisions, operationId, request, question, signal, [], owner.repositoryRoot,
+        { llm: this.options.llm, agent });
       if (automatic.status !== 'answered' && !this.options.questions) break;
       const value = automatic.status === 'answered' ? automatic.value
         : await createDshIntakeAnswerer(this.options.questions!).ask(question, signal, agent);

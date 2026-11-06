@@ -751,6 +751,7 @@ export function createDshHostAdapter(
 
   const admission = createAdmission({
     native,
+    llm,
     skills,
     tools,
     userQuestions,
@@ -851,7 +852,8 @@ export function createDshHostAdapter(
               ),
             answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
               dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
-              [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),
+              [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory,
+              { llm, agent: input.agent }),
             diagnostic: createIntakeDiagnosticSink(runtime),
             recovery: runtime.auxiliaryRecovery,
             assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -1138,6 +1140,7 @@ export function createDshHostAdapter(
       ? new DshTaskWorkflow({
           runtime,
           decisions,
+          llm,
           ...(userQuestions ? { questions: userQuestions } : {}),
           demand,
           agents,

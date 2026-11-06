@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -12,6 +12,7 @@ import { createLispHostDispatch as sourceCreateLispHostDispatch } from '../../..
 import { LISP_ASSEMBLY_SERVICE } from '../../../../src/dsh/lisp/request-surface.js'
 import { currentTaskAuthority, withTaskAuthority } from '../../../../src/dsh/task-authority-context.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { workingLispTask } from '../../helpers/lisp-task.js'
 const builtRoot = process.env.KIOKUKO_LISP_BUILT_ROOT
 const mountLispSurface: typeof sourceMountLispSurface = builtRoot ? (await import(pathToFileURL(join(builtRoot, 'dsh/lisp/surface.js')).href)).mountLispSurface : sourceMountLispSurface
 const createLispHostDispatch: typeof sourceCreateLispHostDispatch = builtRoot ? (await import(pathToFileURL(join(builtRoot, 'dsh/lisp/host-tool-dispatch.js')).href)).createLispHostDispatch : sourceCreateLispHostDispatch
@@ -196,14 +197,28 @@ for (const executionMode of ['development', 'protected'] as const) test(`current
     fibers.push(await ctx.plugin({ name: 'turn-commands', apply(c: any) { c.provide('commands', { register(definition: any) { commands.set(definition.name, definition); return () => commands.delete(definition.name) } }) } }))
     // Only the external model is scripted; session creation, pre-step hooks,
     // scoped lookup, batch dispatch and turn settlement are official DSH.
+    const toolResults = () => handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result')
+    const lastToolResult = () => JSON.parse(toolResults().at(-1)?.data.message.content[0].text)
     class ScriptedAdapter extends llm.LlmAdapter {
       requests: any[] = []
       async resolveModel(provider: string, model: string) { return { provider, id: model, name: model } }
       async *stream(options: any) {
         this.requests.push(options)
-        if (this.requests.length === 1) {
+        const step = this.requests.length
+        let call: { name: string; args: Record<string, unknown> } | undefined
+        if (step === 1 || step === 3) call = { name: 'lisp_status', args: {} }
+        if (step === 4) {
+          const status = lastToolResult()
+          assert.equal(status.state, 'RECOVERY_REQUIRED')
+          call = { name: 'lisp_recover', args: { operationId: 'model-recovery', expectedGeneration: status.generation } }
+        }
+        if (step === 5) {
+          assert.equal(lastToolResult().ok, true)
+          call = { name: 'lisp_eval', args: { operationId: 'model-verification', code: '(+ 40 2)' } }
+        }
+        if (call) {
           yield { type: 'block-start', index: 0, blockType: 'tool-call' }
-          yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: llm.ToolCallId('status'), name: 'lisp_status', arguments: '{}' } }
+          yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: llm.ToolCallId(`lisp-step-${step}`), name: call.name, arguments: JSON.stringify(call.args) } }
           yield { type: 'finish', reason: { kind: 'tool-calls' } }
         } else {
           yield { type: 'block-start', index: 0, blockType: 'text' }
@@ -225,5 +240,84 @@ for (const executionMode of ['development', 'protected'] as const) test(`current
     assert.ok(events.some((event: any) => event.type === 'turn/start'))
     assert.ok(events.some((event: any) => event.type === 'tool/result' && event.data.message.isError === false))
     assert.ok(events.some((event: any) => event.type === 'turn/end' && event.data.reason.kind === 'completed'))
+    const command = (rawInput: string) => commands.get('kioku-lisp').handler({ rawInput, agent: handle.agent, signal: new AbortController().signal })
+    assert.notEqual((await command('disable')).kind, 'error')
+    assert.notEqual((await command('enable')).kind, 'error')
+    workingLispTask(db, { sessionId: handle.agent.session.id, agentId: handle.agent.id, root: await realpath(root) })
+    const timedOut = (await ctx.tools.execute({ calls: [{ type: 'tool-call', id: 'timeout', name: 'lisp_eval',
+      arguments: JSON.stringify({ operationId: 'time-out', code: '(loop)', timeoutMs: 100 }) }], agent: handle.agent, signal: new AbortController().signal })).results[0].result
+    assert.equal(timedOut.value?.code, 'TIMEOUT', JSON.stringify(timedOut))
+    handle.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Investigate the Lisp failure and continue.' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    assert.equal(adapter.requests.length, 6, 'a stopped worker must not prevent the next turn from diagnosing, recovering and verifying')
+    assert.equal(lastToolResult().value.json, 42)
+    assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
   } finally { await handle?.dispose(); surface?.stop(); await surface?.dispose(); for (const fiber of fibers.reverse()) await fiber.dispose(); db.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+for (const executionMode of ['development', 'protected'] as const) test(`current DSH ${executionMode} model diagnoses, fixes and recovers Lisp`, actual, async () => {
+  const h = await harness(), commands = new Map<string, any>()
+  const dbFile = join(h.root, 'recovery.sqlite')
+  const db = new NodeSqliteAdapter(dbFile, new DatabaseSync(dbFile))
+  const owner = { sessionId: h.agent.session.id, agentId: h.agent.id, root: await realpath(h.root) }
+  workingLispTask(db, owner)
+  let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined
+  try {
+    h.fibers.push(await h.ctx.plugin({ name: 'recovery-host', apply(c: any) {
+      c.provide('agents', { get: (id: string) => id === h.agent.id ? h.agent : undefined })
+      c.provide('sessions', { get: (id: string) => id === h.agent.id ? h.agent.session : undefined })
+      c.provide('commands', { register(d: any) { commands.set(d.name, d); return () => commands.delete(d.name) } })
+    } }))
+    surface = await mountLispSurface(h.ctx, { withDatabase: async (fn: any) => fn(db) } as any, LispConfig.parse({ enabled: true, executionMode }))
+    const enabled = await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent: h.agent, signal: new AbortController().signal })
+    assert.notEqual(enabled.kind, 'error', enabled.text)
+    let serial = 0
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const id = `recovery-call-${++serial}`
+      const result = (await h.ctx.tools.execute({ calls: [{ type: 'tool-call', id, name, arguments: JSON.stringify(args) }], agent: h.agent, signal: new AbortController().signal })).results[0].result
+      assert.ok(result.value, JSON.stringify(result))
+      return result.value
+    }
+    const evaluate = (operationId: string, code: string, timeoutMs?: number) => call('lisp_eval', { operationId, code, ...(timeoutMs ? { timeoutMs } : {}) })
+    const broken = await evaluate('broken', '(defparameter *before-failure* 40) (missing-helper *before-failure*)')
+    assert.equal(broken.ok, false)
+    assert.equal(broken.condition?.type, 'UNDEFINED-FUNCTION', JSON.stringify(broken))
+    assert.equal(broken.condition.formIndex, 1)
+    assert.equal(broken.workerState, 'READY')
+    const inspected = await call('lisp_inspect', { operationId: 'inspect-failure', resultOperationId: broken.operationId, pointer: '/condition' })
+    assert.match(inspected.data, /UNDEFINED-FUNCTION/)
+    const fixed = await evaluate('fixed', '(defun missing-helper (n) (+ n 2)) (missing-helper *before-failure*)')
+    assert.equal(fixed.value.json, 42)
+    assert.equal(fixed.generation, broken.generation)
+    const timeout = await evaluate('timed-out', '(loop)', 100)
+    assert.equal(timeout.code, 'TIMEOUT', JSON.stringify(timeout))
+    const status = await call('lisp_status', {})
+    assert.equal(status.state, 'RECOVERY_REQUIRED')
+    const recovery = { operationId: 'recover-after-timeout', expectedGeneration: status.generation }
+    const candidates = [recovery, { ...recovery, operationId: 'competing-recovery' }]
+    const results = await Promise.all(candidates.map(candidate => call('lisp_recover', candidate)))
+    const winner = results.findIndex(result => result.ok)
+    const ready = results[winner], racing = results[1 - winner]
+    assert.ok(ready, JSON.stringify(results))
+    assert.equal(ready.ok, true, JSON.stringify(ready))
+    assert.match(racing.code, /^(BUSY|STALE_GENERATION)$/u)
+    assert.equal(ready.reexecuted, false)
+    assert.notEqual(ready.generation, status.generation)
+    const replay = await call('lisp_recover', candidates[winner]!)
+    assert.equal(replay.replay, true)
+    assert.equal(replay.result.generation, ready.generation)
+    assert.equal((await call('lisp_recover', { ...candidates[winner], expectedGeneration: ready.generation })).code, 'ID_CONFLICT')
+    assert.equal((await call('lisp_recover', { ...recovery, operationId: 'stale' })).code, 'STALE_GENERATION')
+    assert.equal((await evaluate('after-recovery', '(+ 40 2)')).value.json, 42)
+    const original = await call('lisp_inspect', { operationId: 'original-timeout', resultOperationId: timeout.operationId, pointer: '/code' })
+    assert.equal(original.state, 'UNKNOWN')
+    assert.match(original.data, /TIMEOUT/)
+    assert.equal((await evaluate('timed-out-again', '(loop)', 100)).code, 'TIMEOUT')
+    const second = await call('lisp_recover', { operationId: 'recover-again', expectedGeneration: ready.generation })
+    assert.equal(second.ok, true, JSON.stringify(second))
+    assert.equal((await evaluate('timed-out-third', '(loop)', 100)).code, 'TIMEOUT')
+    assert.equal((await call('lisp_recover', { operationId: 'recover-limited', expectedGeneration: second.generation })).code, 'WORKER_RESTART_LIMIT')
+    await call('lisp_cancel', { operationId: 'stop', generation: second.generation })
+    assert.equal((await call('lisp_recover', { operationId: 'recover-after-stop', expectedGeneration: second.generation })).code, 'RECOVERY_REQUIRES_USER')
+  } finally { surface?.stop(); await surface?.dispose(); db.close(); await h.close() }
 })

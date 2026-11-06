@@ -24,6 +24,7 @@ import {
   isLispNativeCommand,
   withRootLispAdmission,
   rememberLispConversation,
+  isJournalLispInspection,
 } from './lisp-tool-identity.js'
 import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshAnswerContext } from './answer-context.js'
@@ -230,7 +231,7 @@ interface Turn {
   selectionPending?: boolean
   nativeUnowned?: boolean
   nativeIntake?: TaskProfile
-  nativeIntakeSources?: Partial<Record<keyof TaskProfile, 'decision' | 'human'>>
+  nativeIntakeSources?: Partial<Record<keyof TaskProfile, 'decision' | 'main-model' | 'human'>>
   /** An issued source question fences effects until real preparation, not model inference. */
   clarificationPending?: boolean
   /** Only project context actually produced for this exact captured turn. */
@@ -1099,8 +1100,10 @@ export class OnDemandIntake {
     const answerer = this.host.questions && createDshIntakeAnswerer(this.host.questions)
     let current = { task: state.task, profile: deriveProfile(state.task, {}, { inferTaskType: false }), questionCount: 0 }
     let evaluation = evaluateProfile(current.profile, current.questionCount)
-    const sources: Partial<Record<keyof TaskProfile, 'decision' | 'human'>> = {}
+    const sources: NonNullable<Turn['nativeIntakeSources']> = {}
     while (evaluation.status === 'needs_answer' && evaluation.question) {
+      // Ordinary conversation can defer the success condition until work preparation.
+      if (evaluation.question.id === 'expected' && !missingScope) break
       const automatic = await this.host.answerIntake?.(state.input, state.task, evaluation.question, state.requestIntentContext)
       this.assertCurrent(state)
       // An auxiliary abstention is not a missing user requirement. The main
@@ -1117,7 +1120,7 @@ export class OnDemandIntake {
       const value = automatic?.status === 'answered' ? automatic.value
         : await abortable(answerer!.ask(evaluation.question!, state.input.signal, state.input.agent), state.input.signal)
       this.assertCurrent(state)
-      sources[evaluation.question!.id] = automatic?.status === 'answered' ? 'decision' : 'human'
+      sources[evaluation.question!.id] = automatic?.status === 'answered' ? automatic.source ?? 'decision' : 'human'
       current = applyAnswer(current, { questionId: evaluation.question!.id, value })
       evaluation = evaluateProfile(current.profile, current.questionCount)
     }
@@ -2287,9 +2290,7 @@ export class OnDemandIntake {
    * Live evaluation is effect-capable; do not inspect or guess its code string. */
   private pendingLispEffect(execution: Execution): boolean {
     if (['lisp_status','lisp_hot_status','lisp_cancel'].includes(execution.name)) return false
-    const args = execution.arguments as {resultOperationId?:unknown;ref?:unknown} | undefined
-    return !(execution.name === 'lisp_inspect' && execution.parent === undefined &&
-      typeof args?.resultOperationId === 'string' && args.ref === undefined)
+    return !isJournalLispInspection(execution)
   }
   /** Delegate real root Lisp tools to their own effect/lease/approval authority. */
   nativeLisp(execution: Execution): boolean {

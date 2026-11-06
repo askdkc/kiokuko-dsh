@@ -23,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { DshSkillPrompts } from '../skill-prompts.js'
 import { realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
@@ -57,7 +57,7 @@ interface Agent { id: string; status?: string; session: Session; ctx: { get(name
 interface Tools { register(definition: any, options?: {when: () => boolean}): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
 interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
-interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean }
+interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean; diagnosticOnly?: WeakSet<Agent> }
 const fenceKey = Symbol.for('kiokuko.lisp.host-fence.v1')
 const PROTOCOL_OWNED_TOOLS = ['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_exec', 'kioku_result'] as const
 const PROTOCOL_OWNED_EFFECTS = new Set<string>(['kioku_write', 'kioku_edit', 'kioku_exec'])
@@ -123,7 +123,7 @@ export const ToolInput = z.object({ operationId: identifier.optional(), code: z.
   verificationRef: identifier.optional(), leftRef: z.string().uuid().optional(), rightRef: z.string().uuid().optional(),
   target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']).optional(), script: z.string().max(256).optional(),
   timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional(),
-  resultOperationId: identifier.optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
+  resultOperationId: identifier.optional(), managedOperationId: identifier.optional(), expectedGeneration: identifier.nullable().optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
   pointer: z.string().max(1024).optional(),
   offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
 
@@ -308,6 +308,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (persistent.stopped || !persistent.controller) return persistent.executionMode==='development' ? 'Lisp は停止中です。通常ツールは利用できます。' : 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
       if (!agent || agents.get(agent.id) !== agent || sessions.get(agent.session.id) !== agent.session) return 'Lisp のセッションを確認できません。'
       if (agent.session.id !== scope) return '保護中の子セッションでは任意ツールを実行できません。親セッションの Lisp を使用してください。'
+      if (persistent.executionMode === 'protected' && persistent.diagnosticOnly?.has(agent)) {
+        const name = execution.name as LispTool
+        const diagnostic = ['lisp_status', 'lisp_hot_status', 'lisp_recover', 'lisp_cancel'].includes(name) || isSavedLispResultRead(execution)
+        if (PROTOCOL_OWNED_EFFECTS.has(name) || LISP_TOOLS.includes(name) && !diagnostic)
+          return 'RECOVERY_REQUIRED: inspect lisp_status and the saved receipts before resuming Lisp work.'
+      }
       if (persistent.protocolBridge?.(execution)) return undefined
       // Goal preparation temporarily removes Lisp registrations. Keep this
       // plugin's actual controls reachable without admitting same-name replacements.
@@ -349,6 +355,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
   await manager.start()
   fence.executionMode=config.executionMode
+  const diagnosticOnly = new WeakSet<Agent>(); fence.diagnosticOnly = diagnosticOnly
   fence.sessions = manager.enabled; fence.controller = manager; fence.stopped = false
   fence.protocolBridge = execution => {
     const active = protocolBridgeScope.getStore()
@@ -511,19 +518,34 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                 // Observe the registry's exact dispatch stage, not an error string:
                 // policy rejection returns before tools/execute is reached.
                 let dispatchStarted = false
-                const removeDispatchWitness = (ctx as any).on('tools/execute', (execution: any, next: () => Promise<unknown>) => {
+                let invalidDirectory: ManagedDispatchDenied | undefined
+                const removeDispatchWitness = (ctx as any).on('tools/execute', async (execution: any, next: () => Promise<unknown>) => {
                   if (execution.callId === child.callId && execution.agent === child.agent && execution.parent === child.parent && execution.name === child.name) {
                     // Recheck the existing exact-call capability before allowing
                     // the dispatch continuation. Mutated arguments/owners never
                     // enter the pinned body and are a known admission denial.
                     if (!isLispNativeCommand(execution, pinned.execute)) throw new ManagedDispatchDenied('Host rejected tool before dispatch.')
+                    if (input.directory !== undefined) {
+                      const info = await stat(workdir).catch((error: NodeJS.ErrnoException) => {
+                        if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null
+                        // Leave other filesystem errors to the native tool.
+                        return undefined
+                      })
+                      if (!isLispNativeCommand(execution, pinned.execute)) throw new ManagedDispatchDenied('Host rejected tool before dispatch.')
+                      if (info === null || (info && !info.isDirectory())) {
+                        invalidDirectory = new ManagedDispatchDenied('指定した作業ディレクトリがありません。作成済みのディレクトリを指定してください。コマンドは起動していません。')
+                        throw invalidDirectory
+                      }
+                    }
                     dispatchStarted = true
                   }
                   return next()
                 }, {global:true, prepend:true})
                 let result: any
                 try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child)) }
+                catch (error) { throw invalidDirectory ?? error }
                 finally { removeDispatchWitness() }
+                if (invalidDirectory) throw invalidDirectory
                 if (result.isError) {
                   if (!dispatchStarted) throw new ManagedDispatchDenied('Host rejected tool before dispatch.')
                   const stopped = nativeStopReceipt(result, { callId: child.callId, rootCallId: child.rootCallId ?? child.callId,
@@ -551,12 +573,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   timedOut: value.timedOut, sandbox: value.sandbox, receipt: { route: 'native', callId: child.callId, processStopped: true } }
               },
             } : undefined
-            if(development && !admission && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
+            if((name === 'lisp_recover' || development && !admission) && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
             if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed, ...(parsed.prototype === true ? {codingRequest} : {}) })
             const result = await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal, nativeCommands)
             const outcome = parsed.prototype && prototypeProcessFailed ? { ...result as object, ok:false, code:'LISP_PROTOTYPE_PROCESS_FAILED', message:'A managed process failed or timed out; this is not successful prototype evidence.' } : result
+            if (name === 'lisp_recover' && (outcome as { ok?: boolean; state?: string }).ok === true) diagnosticOnly.delete(binding.agent)
             preparation.observed(binding.agent, name, parsed, outcome, codingRequest)
             return name === 'lisp_status' ? { ...outcome as object, codingPreparation:preparation.status(binding.agent) } : outcome
           }
@@ -586,8 +609,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     })
   }
   const recover = async (binding: ReturnType<typeof owner>, signal?: AbortSignal) => {
+    const request = preparation.binding(binding.agent)
     const restart = () => manager.recover(binding.owner, signal)
-    return await manager.canRecoverWorkerWithoutTask(binding.owner) ? modeOnly(binding, restart) : restart()
+    const result = await (await manager.canRecoverWorkerWithoutTask(binding.owner) ? modeOnly(binding, restart) : restart()) as { state?: string }
+    if (!signal?.aborted && (result.state === 'READY' || result.state === 'TASK_READY')) {
+      diagnosticOnly.delete(binding.agent)
+      preparation.recovered(binding.agent, request)
+    }
+    return { ...result, codingPreparation: preparation.status(binding.agent) }
   }
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
@@ -597,18 +626,22 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     manager.setAgentBusy(binding.owner, true)
     if (await manager.isTaskMode(binding.owner)) {
       binding.signal.throwIfAborted()
+      diagnosticOnly.delete(binding.agent)
       register(binding.agent)
       return true
     }
-    const prepare = () => manager.prepare(binding.owner)
+    const prepare = () => manager.prepare(binding.owner, binding.signal, true)
     const status = await (development && isLispConversation(candidate) ? modeOnly(binding, prepare) : prepare()) as { state: string; generation?: string; resumed?: boolean }
     binding.signal.throwIfAborted()
+    if (['READY', 'EVALUATING'].includes(status.state)) diagnosticOnly.delete(binding.agent)
+    else diagnosticOnly.add(binding.agent)
     register(binding.agent)
     const prompt = binding.agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
     if (prompt) { const previous = runtimePrompts.get(candidate.id); const remove = prompt.section({ name: 'kiokuko:lisp-runtime', order: -89999,
       text: `Current Lisp generation: ${status.generation ?? 'none'}. State: ${status.state}.` + (status.resumed
         ? ' Lisp was automatically restarted after normal suspension. Definitions, variables and object references from older generations are gone. Recreate needed helpers; never replay completed file or process effects. Compare the generation of previous tool results before reusing state.' : '') }); runtimePrompts.set(candidate.id, () => { previous?.(); remove() }) }
-    return ['READY', 'EVALUATING'].includes(status.state)
+    // Keep the model and the existing protected dispatch guards available for diagnosis.
+    return ['READY', 'EVALUATING', 'RECOVERY_REQUIRED', 'STOP_UNCONFIRMED', 'RECONCILIATION_REQUIRED', 'SUSPENDED'].includes(status.state)
   }
   disposers.push((ctx as any).on('agent/status', (event: { agent: Agent; status: string }) => {
     if (!manager.enabled.has(event.agent.session.id) || agents.get(event.agent.id) !== event.agent || sessions.get(event.agent.session.id) !== event.agent.session) return
@@ -888,7 +921,8 @@ function description(name: LispTool): string {
     lisp_verify: 'Materialize one candidate from frozen observed bytes in private scratch, then run an approved host verifier. The receipt remains bound to that candidate; unknown test reporting is not a pass.',
     lisp_apply: 'Apply one staged candidate through existing host approval. Reject changed evidence, duplicate attempts and unknown effects.',
     lisp_compare: 'Compare two immutable candidates by common base and per-path intent hashes without rerunning either tool or claiming a verifier pass.',
-    lisp_describe: 'Describe Lisp APIs or task functions. symbol="kioku.user" lists this worker\'s functions; symbol="kioku.user::name" returns arguments and documentation. No symbol returns the bundled API/verifier map.', lisp_inspect: 'Read a retained object or a page of saved evidence; never executes the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
+    lisp_describe: 'Describe Lisp APIs or task functions. symbol="kioku.user" lists this worker\'s functions; symbol="kioku.user::name" returns arguments and documentation. No symbol returns the bundled API/verifier map.', lisp_inspect: 'Read a retained object, a saved result page, or a managed operation receipt (managedOperationId). Inspect saved evidence before retrying; journal reads never execute the original operation.', lisp_status: 'Read current host state and paged operation summaries without contacting Lisp.',
+    lisp_recover: 'After checking lisp_status and saved receipts, restart a faulted persistent worker using its expectedGeneration (null before startup). Retains original results and never replays code. Does not clear unknown effects, override Stop or unlock the protected prototype budget. Rebuild needed definitions after a new generation.',
     lisp_cancel: 'Stop Lisp and all managed jobs without waiting for evaluation.', lisp_reset: 'Stop a healthy worker and start a new generation. Never use to bypass recovery.' })[name]
 }
 export function lispToolSchema(name: LispTool): object {
@@ -905,7 +939,7 @@ export function lispToolSchema(name: LispTool): object {
   const properties: Record<string, unknown> = name === 'lisp_status' ? {} : { operationId: { type: 'string', minLength: 1, maxLength: 256 } }
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
-  if (name === 'lisp_eval') { Object.assign(properties, { prototype: { type:'boolean', description:'Mark the small coding prototype. After success inspect its saved resultOperationId before implementation.' }, code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact host paths of files uploaded by the user in this session. Copied read-only; other absolute paths are refused.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
+  if (name === 'lisp_eval') { Object.assign(properties, { prototype: { type:'boolean', description:'Mark the small coding prototype. After success inspect its saved resultOperationId before implementation.' }, code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact paths of uploads in this session. The worker reads copies in array order. (kioku.files:input 0) returns a path, not the contents. Use (kioku.files:read-text (kioku.files:input 0)) for text. Iterate only over the declared indices, for example (loop for i below 2 collect (kioku.files:read-text (kioku.files:input i))) for two small files.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
   if (name === 'lisp_define') { Object.assign(properties, { name: { type: 'string', maxLength: 64 }, description: { type: 'string', maxLength: 1000 }, source: { type: 'string', maxLength: 262144 }, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, dependencies: { type: 'array', items: { type: 'object' }, maxItems: 32 }, examples: { type: 'array', items: { type: 'object' }, maxItems: 10 }, firstInput: {} }); required.push('name', 'description', 'source', 'inputSchema', 'outputSchema') }
   if (name === 'lisp_call') { Object.assign(properties, { toolRef: { type: 'string', format: 'uuid' }, input: {}, inputRef: { type: 'string', format: 'uuid' }, fields: { type: 'array', items: { type: 'string' }, maxItems: 20 } }); required.push('toolRef') }
   if (name === 'lisp_observe') { Object.assign(properties, { paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 }, format: { type: 'string', enum: ['text', 'json'] } }); required.push('paths') }
@@ -917,11 +951,13 @@ export function lispToolSchema(name: LispTool): object {
   if (name === 'lisp_inspect') Object.assign(properties, {
     ref: { type: 'string', maxLength: 256, description: 'Worker reference; use either ref or resultOperationId.' },
     resultOperationId: { type: 'string', maxLength: 256, description: 'Saved operation from this session and agent. Reads evidence without executing again.' },
+    managedOperationId: { type: 'string', maxLength: 256, description: 'Managed operation from this session. Use alone, without ref, resultOperationId or paging arguments.' },
     section: { type: 'string', enum: ['result', 'value', 'stdout', 'stderr', 'changes'] },
     pointer: { type: 'string', maxLength: 1024, description: 'With section=result, follow the returned JSON pointer to the exact omitted field.' },
     offset: { type: 'integer', minimum: 0, description: 'Unicode character offset; use the returned nextOffset.' },
     limit: { type: 'integer', minimum: 1, maximum: 2000 },
   })
   if (name === 'lisp_cancel') properties.generation = { type: 'string', maxLength: 256, description: 'Required for a persistent worker; omit in task mode.' }
+  if (name === 'lisp_recover') { properties.expectedGeneration = { anyOf: [{ type: 'string', minLength: 1, maxLength: 256 }, { type: 'null' }] }; required.push('expectedGeneration') }
   return { type: 'object', properties, required, additionalProperties: false }
 }

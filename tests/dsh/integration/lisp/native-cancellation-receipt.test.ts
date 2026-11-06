@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -13,13 +13,19 @@ import { ManagedOperationJournal } from '../../../../src/dsh/managed-operation-j
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import { OnDemandIntake } from '../../../../src/dsh/on-demand-intake.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { LISP_CODING_SERVICE, type LispCodingService } from '../../../../src/dsh/lisp/coding-choice.js'
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import { executeNativeTool, mountNativeTools } from '../../helpers/native-tools.js'
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
 // New hosts must retain proof. Older supported hosts exercise the conservative fallback.
 const supportsHostReceipts = typeof (await load('dsh-tools')).ToolExecutionError === 'function'
-for (const jobs of [false, true]) for (const retained of supportsHostReceipts ? [true, false] : [false]) test(`late native cancellation receipt: hostReceipt=${supportsHostReceipts}, jobs=${jobs}, retained=${retained}`, { timeout: 30000 }, async () => {
+const cases = [false, true].flatMap(jobs => (supportsHostReceipts ? [true, false] : [false]).map(retained => ({
+  jobs, retained, scenario: 'cancellation', title: `late native cancellation receipt: hostReceipt=${supportsHostReceipts}, jobs=${jobs}, retained=${retained}`,
+})))
+cases.push({ jobs: true, retained: false, scenario: 'workdir', title: 'missing native workdir never dispatches or blocks the next Lisp command' })
+cases.push({ jobs: true, retained: false, scenario: 'prototype', title: 'human Lisp recovery reopens a failed protected prototype on the same task' })
+for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 30000 }, async () => {
   const [cordis, prompt, tools, scope, sessions] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-session'].map(load))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'native-receipt-'))), root = join(base, 'repo')
   await mkdir(root); execFileSync('git', ['init', '-q', root])
@@ -60,6 +66,37 @@ for (const jobs of [false, true]) for (const retained of supportsHostReceipts ? 
     assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal })).kind, 'success')
     await intake.capture({ agent, turn: 1, step: 0, messages: [{ id: 'human', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Verify this isolated fixture.' }] }], signal })
     assert.equal((await execute('lisp_eval', { operationId: 'warm', code: '(+ 20 22)' })).value.ok, true)
+    if (scenario === 'workdir') {
+      const command = `(kioku.process:run ${JSON.stringify(process.execPath)} '("--version")`
+      const missing = await execute('lisp_eval', { operationId: 'missing', code: `${command} :directory "missing-dir")` })
+      assert.equal(missing.value.ok, false)
+      assert.match(missing.value.value, /作業ディレクトリ/u)
+      assert.equal(db.prepare('SELECT state FROM dsh_managed_operations').get<{state:string}>()?.state, 'denied')
+      const next = await execute('lisp_eval', { operationId: 'corrected', code: `${command})` })
+      assert.equal(next.value.value.json.code, 0, JSON.stringify(next))
+      assert.equal(next.value.generation, missing.value.generation)
+      return
+    }
+    if (scenario === 'prototype') {
+      const coding = ctx.get(LISP_CODING_SERVICE) as LispCodingService
+      coding.answered!(agent, 'Implement the fixture', 'yes', 'human:choice')
+      const evaluate = (operationId:string, code:string, inputs: string[] = []) => execute('lisp_eval', {operationId, code, inputs, prototype:true})
+      assert.match((await evaluate('bad-prototype', '(error "bad prototype")')).value.value, /bad prototype/u)
+      const crashed = await evaluate('crash', '(sb-ext:exit :code 1)')
+      assert.equal(crashed.value.code, 'WORKER_EXITED')
+      assert.match(JSON.stringify(await evaluate('blocked', '42')), /LISP_PROTOTYPE_FAILED/u)
+      const recovery = await commands.get('kioku-lisp').handler({rawInput:'recover', agent, signal})
+      assert.equal(recovery.kind, 'success', recovery.text)
+      await writeFile(join(root, 'first.txt'), '40')
+      await writeFile(join(root, 'second.txt'), '2')
+      const fresh = await evaluate('fresh', '(loop for i below 2 sum (parse-integer (kioku.files:read-text (kioku.files:input i))))', ['first.txt', 'second.txt'])
+      assert.equal(fresh.value?.value?.json, 42, JSON.stringify(fresh))
+      assert.notEqual(fresh.value.generation, crashed.value.generation)
+      const saved = await execute('lisp_inspect', { operationId: 'inspect-fresh', resultOperationId: fresh.value.operationId, section: 'result' })
+      assert.equal(saved.value.state, 'SUCCEEDED')
+      assert.equal((await execute('lisp_status', {})).value.codingPreparation.verified, true)
+      return
+    }
     const resultObserver = ctx.on('tools/result', (e: any, result: any) => { if (e.name === 'bash') finalized = { code: result.error?.info?.code, meta: result.meta, content: result.content } }, { global: true })
     const dispose = ctx.on('tools/execute', async (e: any, next: () => Promise<any>) => {
       const result = await next()
@@ -108,6 +145,17 @@ for (const jobs of [false, true]) for (const retained of supportsHostReceipts ? 
       assert.equal(await readFile(join(root, 'effects'), 'utf8'), 'x', 'earlier effects remain and no command is replayed')
       assert.equal(bashCalls, 1)
       assert.equal(status.managedReconciliationRequired, !retained)
+      if (!retained) {
+        const proof = await execute('lisp_inspect', { operationId: 'inspect-managed', managedOperationId: operation.operationId })
+        assert.equal(proof.value.state, 'unknown', JSON.stringify(proof))
+        assert.equal(proof.value.originalRef, observed.execution.callId)
+        const mixed = await execute('lisp_inspect', { operationId: 'inspect-mixed', managedOperationId: operation.operationId, resultOperationId: result.value.operationId })
+        assert.equal(mixed.value?.code ?? mixed.error?.code, 'INVALID_INSPECTION', JSON.stringify(mixed))
+        const denied = await execute('lisp_recover', { operationId: 'recover-without-receipt', expectedGeneration: status.generation })
+        assert.equal(denied.value.code, 'RECONCILIATION_REQUIRED', JSON.stringify(denied))
+        assert.equal(denied.value.nextInspection.managedOperationId, operation.operationId)
+        assert.equal((await surface.manager.status(owner) as any).generation, status.generation)
+      }
       const recovered = await commands.get('kioku-lisp').handler({ rawInput: 'recover', agent, signal })
       assert.equal(recovered.kind, 'success')
       if (retained) {

@@ -6,6 +6,12 @@ import { upstreamIdentity } from './stage-dsh-upstream.mjs'
 const packageName = '@deepseek-ai/dsh'
 const reinstall = 'npm ci --prefix tests/fixtures/dsh-runtime'
 
+function packageList(names) {
+  if (!names.length) return 'none'
+  const sample = names.slice(0, 10).join(', ')
+  return names.length > 10 ? `${sample} (${names.length} total)` : sample
+}
+
 export function assertDshFixtureIdentity(fixtureRoot, installed) {
   const upstreamFile = join(fixtureRoot, 'node_modules/.kiokuko-dsh-upstream.json')
   if (existsSync(upstreamFile)) {
@@ -17,15 +23,24 @@ export function assertDshFixtureIdentity(fixtureRoot, installed) {
       throw new Error('Official DSH fixture identity is stale or inconsistent; rebuild and stage the selected SHA')
     }
     if (!recorded.packages || !Object.keys(recorded.packages).length) throw new Error('Official DSH package map is missing')
+    const expected = new Set(Object.keys(recorded.packages).map(name => name.slice('@deepseek-ai/'.length)).sort())
     for (const packageRoot of new Set([join(fixtureRoot, 'node_modules'), recorded.developmentPackageRoot].filter(Boolean))) {
-      const expected = Object.keys(recorded.packages).map(name => name.slice('@deepseek-ai/'.length)).sort()
-      if (JSON.stringify(readdirSync(join(packageRoot, '@deepseek-ai')).sort()) !== JSON.stringify(expected)) {
-        throw new Error('Official DSH package scope differs from the recorded workspace map')
+      const scope = join(packageRoot, '@deepseek-ai')
+      const actual = new Set(readdirSync(scope).sort())
+      const missing = [...expected].filter(name => !actual.has(name))
+      const unexpected = [...actual].filter(name => !expected.has(name))
+      if (missing.length || unexpected.length) {
+        throw new Error(`Official DSH package scope differs from the recorded workspace map at ${scope}: missing=${packageList(missing)}; unexpected=${packageList(unexpected)}. Stage the selected SHA in both package roots.`)
       }
       for (const [name, target] of Object.entries(recorded.packages)) {
-        if (!/^@deepseek-ai\/[a-z0-9][a-z0-9._-]*$/.test(name) || typeof target !== 'string' || !target.startsWith(identity.sourceRoot + '/')
-          || realpathSync(join(packageRoot, name)) !== realpathSync(target)) {
-          throw new Error(`Official DSH package mapping is stale: ${name}`)
+        if (!/^@deepseek-ai\/[a-z0-9][a-z0-9._-]*$/.test(name) || typeof target !== 'string' || !target.startsWith(identity.sourceRoot + '/')) {
+          throw new Error(`Official DSH package mapping is stale: invalid entry for ${name} at ${packageRoot}`)
+        }
+        const packagePath = join(packageRoot, name)
+        const actualPath = realpathSync(packagePath)
+        const expectedPath = realpathSync(target)
+        if (actualPath !== expectedPath) {
+          throw new Error(`Official DSH package mapping is stale at ${packagePath}: expected=${expectedPath}; actual=${actualPath}. Stage the selected SHA in both package roots.`)
         }
       }
     }

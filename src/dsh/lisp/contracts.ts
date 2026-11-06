@@ -4,7 +4,7 @@ import { HostServiceError } from '../service-error.js'
 export { LispConfig, type LispConfiguration } from '../lisp-config.js'
 
 export const LISP_TOOLS = ['lisp_eval', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset',
-  'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_call', 'lisp_hot_status', 'lisp_hot_deactivate'] as const
+  'lisp_recover', 'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_call', 'lisp_hot_status', 'lisp_hot_deactivate'] as const
 export type LispTool = typeof LISP_TOOLS[number]
 export const FRAME_BYTES = 1_048_576
 export const FILE_BYTES = 64 * 1024 * 1024
@@ -29,6 +29,8 @@ export function failure(error: unknown): { ok: false; code: string; message: str
 }
 export const EvalInput = z.object({ code: z.string().min(1).max(262_144), timeoutMs: z.number().int().min(100).max(600_000).optional(),
   inputs: z.array(z.string().min(1).max(4096)).max(100).default([]) }).strict()
+export const RecoverInput = z.object({ operationId: identifier, expectedGeneration: identifier.nullable() }).strict()
+export const EvalCondition = z.object({ type: z.string().max(512), message: z.string().max(8000), formIndex: z.number().int().nonnegative().optional() }).strict()
 export const ProposalRequest = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('write'), path: z.string().min(1).max(4096), content: z.string().max(262_144) }).strict(),
   z.object({ operation: z.literal('delete'), path: z.string().min(1).max(4096) }).strict(),
@@ -36,6 +38,6 @@ export const ProposalRequest = z.discriminatedUnion('operation', [
 export type ProposalInput = z.infer<typeof ProposalRequest>
 export const WorkerFrame = z.discriminatedUnion('type', [
   z.object({ version: z.literal(1), type: z.literal('ready') }).strict(),
-  z.object({ version: z.literal(1), type: z.literal('result'), id: identifier, ok: z.boolean(), value: z.unknown(), proposals: z.array(ProposalRequest).max(100) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('result'), id: identifier, ok: z.boolean(), value: z.unknown(), condition: EvalCondition.optional(), proposals: z.array(ProposalRequest).max(100) }).strict(),
 ])
 export type WorkerResult = Extract<z.infer<typeof WorkerFrame>, { type: 'result' }>

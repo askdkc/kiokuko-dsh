@@ -121,6 +121,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       async listModels(provider: string) { return [{ provider, id: 'mock', name: 'mock' }] }
       async resolveModel(provider: string, model: string) { return { provider, id: model, name: model } }
       async *stream(options: any) {
+        if (options.purpose === 'akinator-expected') { yield* mock.textResponse('{"expected":null}'); return }
         requests.push(options)
         const child = options.sessionId !== 'standard-parent'
         if (child && mode === 'failure') throw new Error('child fixture failure')

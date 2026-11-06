@@ -67,6 +67,7 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
       async listModels(provider:string){return [{provider,id:'fixed',name:'fixed'}]}
       async resolveModel(provider:string,id:string){return {provider,id,name:id,context:{contextWindow:200000}}}
       async *stream(request:any){
+        if(request.purpose==='akinator-expected'){yield*mock.textResponse('{"expected":null}');return}
         requests.push(request)
         if(request.purpose==='compaction'){yield*mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');return}
         if(prepare){prepare=false;const guidance = request.messages.flatMap((m:any)=>m.content??[]).find((b:any)=>b.text?.includes('Current request references and same-session work'))?.text

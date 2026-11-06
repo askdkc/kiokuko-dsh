@@ -6,6 +6,16 @@ const implementations = new WeakSet<object>()
 export function rememberLispImplementation(execute: object): void { implementations.add(execute) }
 export function isLispImplementation(execute: unknown): boolean { return typeof execute === 'function' && implementations.has(execute) }
 
+/** Journal queries are independent of the worker; a live ref is not. */
+export function isJournalLispInspection(execution: { name: string; arguments?: unknown; parent?: unknown }): boolean {
+  if (execution.name !== 'lisp_inspect' || execution.parent !== undefined || !execution.arguments || typeof execution.arguments !== 'object') return false
+  const args = execution.arguments as Record<string, unknown>
+  if (args.ref !== undefined) return false
+  if (typeof args.managedOperationId === 'string')
+    return [args.resultOperationId, args.section, args.pointer, args.offset, args.limit].every(value => value === undefined)
+  return args.managedOperationId === undefined && typeof args.resultOperationId === 'string'
+}
+
 const conversations = new WeakMap<object, () => boolean>()
 export function rememberLispConversation(agent: object, current: () => boolean): void { conversations.set(agent, current) }
 export function isLispConversation(agent: object): boolean { return conversations.get(agent)?.() === true }

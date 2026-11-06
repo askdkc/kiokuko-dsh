@@ -145,7 +145,7 @@ protected workspace proposals for the same file still return `TARGET_LOCKED` to 
 When upgrading from the older exclusive `host.lock` implementation, stop the old
 hosts before starting the updated hosts.
 
-Enter a normal implementation or debugging request in DSH, including dsh-cli. Clear unowned native implementation requests now offer Lisp before model generation, including native Bash. A manually enabled session uses the selected route. When Lisp is selected, ordinary development uses Lisp for computation and command orchestration without requiring a preliminary prototype. Direct native shell calls are rejected; external programs run through Lisp's process APIs. An explicitly protected coding workflow still requires a fresh `lisp_eval` prototype (`prototype: true`) followed by complete saved-result inspection through `lisp_inspect` before implementation, with its two-failure retry budget. ON alone is not verification. Explicit cancellation, numeric cancel, submitted Skip and `ASK_CANCELLED` end the implementation attempt while preserving work; hiding a named card alone leaves its question pending. Cancellation never authorizes a different execution route. A new independent conversation/read does not inherit the ended question gate. Native permissions, Stop and read-only conversation/research remain independent.
+Enter a normal implementation or debugging request in DSH, including dsh-cli. Clear unowned native implementation requests now offer Lisp before model generation, including native Bash. A manually enabled session uses the selected route. When Lisp is selected, ordinary development uses Lisp for computation and command orchestration without requiring a preliminary prototype. Direct native shell calls are rejected; external programs run through Lisp's process APIs. An explicitly protected coding workflow still requires a fresh `lisp_eval` prototype (`prototype: true`) followed by complete saved-result inspection through `lisp_inspect` before implementation, with its two-failure retry budget. Successful recovery from the Lisp status control or `/kioku-lisp recover` opens a fresh prototype attempt for the same task when that budget is exhausted. Explicit cancellation, numeric cancel, submitted Skip and `ASK_CANCELLED` end the implementation attempt while preserving work; hiding a named card alone leaves its question pending. Cancellation never authorizes a different execution route. A new independent conversation/read does not inherit the ended question gate. Native permissions, Stop and read-only conversation/research remain independent.
 With `typedDecisions.mode: auto`, an accepted Jev/Laya `build` or `debug`
 classification reaches the existing Lisp question without repeating the task-category
 question. Laya receives complete requests up to 4096 UTF-8 bytes, including quoted
@@ -317,6 +317,21 @@ The default `status` view shows counts and up to three unresolved Lisp operation
 and three unresolved external operations, each with its exact `diagnostics` command.
 Successful operation IDs stay in `/kioku-lisp status --json`; ordinary status does
 not print the full history. Reading either view never starts or recovers a worker.
+
+During a DSH turn, the model can inspect failures even when a protected worker
+is waiting for recovery. A failed evaluation includes its Lisp condition type,
+message, and zero-based top-level form index when available. Use `lisp_inspect`
+with `resultOperationId` to read the saved failure, or `managedOperationId` alone
+to read a managed receipt from the current session. If the worker is healthy,
+fix the failing expression or redefine its helper in the same generation.
+
+After diagnosing a confirmed worker fault, the model can call
+`lisp_recover { operationId, expectedGeneration }` with the generation from
+`lisp_status` (`null` before startup). The tool starts a fresh worker, retains the
+original receipts, and does not re-execute the failed operation. Rebuild only the
+definitions needed for the next check. Recovery is limited to two fault restarts
+per owner per minute, uses the existing execution authority, and cannot override
+Stop, reconcile unknown external effects, or reset protected prototype limits.
 
 An owned file proposal rejected by the host before dispatch is `NOT_APPLIED`,
 not an unknown mutation. The Lisp generation and its definitions remain usable;

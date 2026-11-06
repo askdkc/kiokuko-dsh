@@ -277,6 +277,10 @@ export function createRouting({
       selectionBlocked.delete(agent)
       const claim = assemblyClaims.get(agent)
       assemblyClaims.delete(agent)
+      // Inbox maintenance runs before turn/start. Without a claim it can
+      // refresh availability, but must not re-prepare the previous turn with
+      // the new tool view. A mismatch there would fail the next human turn.
+      if (!claim && agent.status === 'idle') return await nativeWorkers.head(agent, signal)
       const current = agent.session ? currentSession(agent.session.id) : undefined
       const turn = claim?.turn ?? current?.turn
       if (turn === undefined) {

@@ -22,7 +22,7 @@ const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'te
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
 const [cordis, tools] = await Promise.all([load('cordis'), load('dsh-tools')])
 const cliRoot = process.env.KIOKUKO_CLI_SOURCE_ROOT
-for (const provider of ['typesafe', 'openai'] as const) for (const host of ['official', ...(cliRoot ? ['cli'] : [])]) for (const verdict of ['supported', 'insufficient', 'contradicted'] as const) {
+for (const provider of ['typesafe', 'openai'] as const) for (const host of ['official', ...(cliRoot ? ['cli'] : [])]) for (const verdict of ['supported', 'insufficient', 'contradicted', 'timeout'] as const) {
   test(`ordinary document edit: ${host}, ${provider}, independent ${verdict}`, { timeout: 20000 }, async t => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'ordinary-edit-'))), path = join(base, 'README.md')
     await writeFile(path, 'Original introduction.\n')
@@ -54,6 +54,7 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
         providerCalls++
         const wire = JSON.parse(String(init?.body))
         assert.ok(JSON.stringify(wire).includes(taskText), 'the assessment receives the original captured source')
+        if (verdict === 'timeout') return new Promise<Response>(() => {})
         if(provider==='openai')return Response.json({model:wire.model,answers:wire.questions.map((q:any)=>({name:q.name,type:'choice',choice:verdict,confidence:1,probabilities:q.choices.map((c:any)=>({value:c.value,probability:c.value===verdict?1:0}))})),usage:{input_tokens:1,output_tokens:1,total_tokens:2,input_tokens_details:{cached_tokens:0,cache_write_tokens:0},output_tokens_details:{reasoning_tokens:0}}})
         return Response.json({ model: wire.model, answers: Object.fromEntries(Object.keys(wire.questions).map(id => [id, {
           type: 'choice', choice: verdict, confidence: 1,
@@ -105,9 +106,12 @@ for (const provider of ['typesafe', 'openai'] as const) for (const host of ['off
     let prepared = await execute(TASK_PREPARE_TOOL, submit())
     assert.equal(prepared.isError, false, JSON.stringify(prepared))
     assert.equal(providerCalls, 1, 'candidate providerSent=false does not mean the independent provider was not called')
-    assert.equal(assessments[0]?.semantic, verdict)
+    assert.equal(assessments[0]?.semantic, verdict === 'timeout' ? 'unavailable' : verdict, JSON.stringify(prepared))
     assert.equal(questions, 0, 'a host without native injection returns the question to the model')
-    if (verdict === 'insufficient') assert.equal(assessments[0]?.outcome, 'advisory')
+    if (verdict === 'insufficient' || verdict === 'timeout') {
+      assert.equal(assessments[0]?.detector.state, 'available')
+      assert.equal(assessments[0]?.outcome, 'advisory')
+    }
     assert.equal(prepared.value.prepared, verdict !== 'contradicted', JSON.stringify(prepared))
     if (verdict === 'contradicted') {
       assert.equal(prepared.value.status, 'awaiting_clarification')

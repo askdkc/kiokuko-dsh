@@ -13,7 +13,7 @@ import { LispManager } from '../../../../src/dsh/lisp/manager.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
 import { digest, LISP_TOOLS, LispConfig, type LispTool } from '../../../../src/dsh/lisp/contracts.js'
 
-test('all 18 Lisp entry points use effect authority without blocking saved reads or pure real SBCL computation', {
+test('all Lisp entry points use effect authority without blocking saved reads or pure real SBCL computation', {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires the existing local SBCL runtime' : false, timeout: 180000,
 }, async () => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-task-table-'))), root = join(base, 'workspace')
@@ -34,6 +34,12 @@ test('all 18 Lisp entry points use effect authority without blocking saved reads
   try {
     await manager.start(); await manager.enableTask(owner)
     success(await run('lisp_eval', { code: '(+ 20 22)' }))
+    const broken = await run('lisp_eval', { code: '(+ 20 22) (unknown-helper)' })
+    assert.equal(broken.condition?.type, 'UNDEFINED-FUNCTION')
+    assert.equal(broken.condition.formIndex, 1)
+    assert.equal(broken.workerState, 'TASK_READY')
+    const saved = success(await run('lisp_inspect', { resultOperationId: broken.operationId, pointer: '/condition/type' }))
+    assert.equal(saved.data, 'UNDEFINED-FUNCTION')
     const definition = success(await run('lisp_define', { name: 'identity', description: 'Return the input', source: '(lambda (input) input)', inputSchema: { type: 'integer' }, outputSchema: { type: 'integer' } }))
     const called = success(await run('lisp_call', { toolRef: definition.toolRef, input: 42 })); assert.equal(called.value, 42)
     const observed = success(await run('lisp_observe', { paths: ['value.txt'] }))
@@ -62,6 +68,7 @@ test('all 18 Lisp entry points use effect authority without blocking saved reads
     const resetOwner = { ...owner, sessionId: 'persistent-session' }
     await store.enable(resetOwner); manager.enabled.set(resetOwner.sessionId, root)
     assert.equal((await run('lisp_reset', {}, resetOwner)).code, 'TASK_REQUIRED')
+    assert.equal((await run('lisp_recover', { expectedGeneration: null }, resetOwner)).code, 'TASK_REQUIRED')
     assert.equal(verifications, 0); assert.equal(questions, 0)
 
     const working = workingLispTask(db, owner)

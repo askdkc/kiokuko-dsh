@@ -4,7 +4,7 @@ import type {LispCodingInput} from './coding-choice.js'
 import { LispCodingCancelled, type LispCodingQuestionResult } from '../coding-question.js'
 
 export const LISP_PROTOTYPE_GUIDANCE = 'Lisp is the selected execution route. Use lisp_eval for calculations and transformations, kioku.test:node / vitest for selected tests, and kioku.process:run / start-job for other external commands including Git, GitHub CLI and builds. Do not call native Bash/zsh/PowerShell directly while Lisp is enabled. Read/search/Skill and owned file tools remain available. A preliminary prototype is optional in ordinary development. Native permissions still apply. Never bypass a denial or automatically fall back after cancellation, timeout, unknown outcomes or partial effects. An explicitly protected coding workflow retains its own prototype and verification gates.'
-const PROTECTED_PROTOTYPE_GUIDANCE = 'This protected workflow requires a small relevant lisp_eval prototype:true and complete saved-result inspection with lisp_inspect before implementation. Prototype success is not task completion. Two failures stop automatic prototype retries; repair the cause or explicitly disable Lisp. Ordinary read tools and conversation remain available; Bash still follows host permissions.'
+const PROTECTED_PROTOTYPE_GUIDANCE = 'This protected workflow requires a small relevant lisp_eval prototype:true and complete saved-result inspection with lisp_inspect before implementation. Prototype success is not task completion. Two failures stop automatic prototype retries. After fixing the cause, the user can select “新しい Lisp を起動” in the Lisp status control or run /kioku-lisp recover to retry with a fresh worker. Ordinary read tools and conversation remain available; Bash still follows host permissions.'
 type Agent = LispCodingInput['agent']
 interface Preparation {
   agent: Agent; sessionId: string; root: string; task: string; key: string
@@ -114,6 +114,15 @@ export class LispCodingPreparation {
     } else {state.key=randomUUID();state.phase='cancelled';delete state.choice;delete state.answerRef}
   }
   binding(agent:Agent):string|undefined { return this.current(agent)?.key }
+  recovered(agent:Agent, key:string|undefined):void {
+    const state = this.current(agent)
+    if (state?.key !== key || state?.phase !== 'failed') return
+    state.key = randomUUID()
+    state.phase = 'prototype_required'
+    state.attempts = 0
+    state.failures = 0
+    delete state.operationId
+  }
   status(agent:Agent):object {
     const state=this.current(agent)
     return state?{phase:state.phase,attempts:state.attempts,failures:state.failures,operationId:state.operationId ?? null,verified:state.phase==='reviewed',guidance:state.phase==='cancelled'?'Implementation attempt cancelled; work retained. Do not automatically retry or switch tools.':state.phase==='unavailable'?`Question unavailable: ${state.reason}`:state.phase==='selected'?LISP_PROTOTYPE_GUIDANCE:state.phase==='declined'?'Use ordinary tools; do not reopen Lisp for this request.':state.phase==='reviewed'?'The prototype was inspected. Implement and verify separately; this is not task completion.':state.phase==='choice_pending'?'Await the human Lisp choice; reads and conversation remain available.':state.protectedWorkflow?PROTECTED_PROTOTYPE_GUIDANCE:LISP_PROTOTYPE_GUIDANCE}:{phase:'not_applicable',verified:false}
@@ -122,12 +131,13 @@ export class LispCodingPreparation {
     const state=this.current(agent)
     if(!state || parent!==undefined || state.choice==='no' || state.phase==='reviewed')return
     const effect = ['bash','zsh','exec','run_code','write','edit','delete','remove','kioku_write','kioku_edit','kioku_remove','kioku_exec','lisp_eval','lisp_apply','lisp_call','lisp_hot_call'].includes(name)
-    if(state.phase==='cancelled')return effect?'LISP_REQUEST_CANCELLED: this implementation attempt stopped. Do not retry or switch tools; a new explicit implementation request is required.':undefined
-    if(state.phase==='unavailable')return effect?`LISP_CHOICE_UNAVAILABLE: ${state.reason}`:undefined
-    if(state.phase==='choice_pending')return effect?'LISP_CHOICE_PENDING: answer the Lisp choice or explicitly use /kioku-lisp enable or disable. Ordinary read tools and conversation remain available; Bash follows host permissions.':undefined
+    const execution = effect || name === 'lisp_recover'
+    if(state.phase==='cancelled')return execution?'LISP_REQUEST_CANCELLED: this implementation attempt stopped. Do not retry or switch tools; a new explicit implementation request is required.':undefined
+    if(state.phase==='unavailable')return execution?`LISP_CHOICE_UNAVAILABLE: ${state.reason}`:undefined
+    if(state.phase==='choice_pending')return execution?'LISP_CHOICE_PENDING: answer the Lisp choice or explicitly use /kioku-lisp enable or disable. Ordinary read tools and conversation remain available; Bash follows host permissions.':undefined
     if(!state.protectedWorkflow || !this.host.enabled(agent))return
     if(name==='lisp_eval' && args?.prototype===true) {
-      return state.failures>=2?'LISP_PROTOTYPE_FAILED: two attempts failed; repair the cause or explicitly disable Lisp.':undefined
+      return state.failures>=2?'LISP_PROTOTYPE_FAILED: two attempts failed. After fixing the cause, use the Lisp recovery control or /kioku-lisp recover before trying again.':undefined
     }
     if(effect)
       return `LISP_PROTOTYPE_REQUIRED: ${state.phase}. ${PROTECTED_PROTOTYPE_GUIDANCE}`

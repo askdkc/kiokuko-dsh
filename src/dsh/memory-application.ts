@@ -40,6 +40,7 @@ import type { CorrectionReceipt } from "./correction-context.js";
 import type { DshUserQuestions } from "./intake-questions.js";
 import { canonicalContentHash } from "../serialization/validate.js";
 import { KiokukoError } from "../errors.js";
+import { isJournalLispInspection } from "./lisp-tool-identity.js";
 
 const inputSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("status") }).strict(),
@@ -184,16 +185,11 @@ function isPtcSubcall(execution: NativeExecution): boolean {
   );
 }
 
-/** Only saved-result paging is a read; ref inspection can run a live worker. */
+/** Only journal inspection is a read; ref inspection can run a live worker. */
 export function isSavedLispResultRead(
   execution: Pick<NativeExecution, "name" | "arguments" | "parent">,
 ): boolean {
-  return (
-    execution.name === "lisp_inspect" &&
-    execution.parent === undefined &&
-    typeof execution.arguments?.resultOperationId === "string" &&
-    execution.arguments.ref === undefined
-  );
+  return isJournalLispInspection(execution);
 }
 
 /** Mount on the actual DSH pre-execute/result path; it never grants native permission. */

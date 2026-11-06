@@ -151,9 +151,11 @@ import {
 import { initializeCodingWorkflow } from '../coding-workflow/store.js'
 import { codingWorkRequested } from '../coding-workflow/intent.js'
 import { initializeTaskCompletion } from '../task-completion.js'
+import type { DshLlm } from '../session-memory-finalizer.js'
 
 interface AdmissionDependencies {
   readonly completionMode: import('../task-completion.js').CompletionMode
+  readonly llm: DshLlm | undefined
   readonly native: AdapterContext
   readonly skills: NativeSkills | undefined
   readonly tools: NativeTools | undefined
@@ -261,6 +263,7 @@ export function createAdmission({
   modelRoutes,
   now,
   runtime,
+  llm,
   decisions,
   answerReview,
   executionSupport,
@@ -1390,6 +1393,7 @@ export function createAdmission({
     decisions,
     completionMode,
     memoryRetrievalConfig,
+    llm,
   )
   const refreshMemoryOwner = async (
     item: TurnRecord,

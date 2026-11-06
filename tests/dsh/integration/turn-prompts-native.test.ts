@@ -18,6 +18,7 @@ test('ordinary native chat asks mode once, clarifies a vague request, and offers
     nativeAnswer: async request => {
       const q = request.questions[0]; asked.push(q.id)
       assert.ok(['target', 'expected'].includes(q.id))
+      if (q.id === 'expected') assert.equal(f.model.auxiliaryRequests.filter(request => request.purpose === 'akinator-expected').length, 1)
       return { answers: [{ id: q.id, selected: [], custom: q.id === 'target' ? 'src/parser.ts' : 'Empty input returns an empty result' }] }
     },
   })
@@ -84,6 +85,8 @@ for (const probability of [.509, .51]) test(`native Akinator leaves a concrete r
     assert.deepEqual(asked, [], 'provider uncertainty must not require the human to repeat the target')
     assert.ok(intakeWorkspaces.length > 0)
     assert.ok(intakeWorkspaces.every(cwd => cwd === f.dir), 'the source-answer provider receives the same live workspace')
-    for (const id of ['task-type', 'intake-target', ...(probability >= .51 ? ['intake-expected'] : [])]) assert.ok(decided.includes(id), id)
+    for (const id of ['task-type', 'intake-target']) assert.ok(decided.includes(id), id)
+    assert.ok(!decided.includes('intake-expected'))
+    assert.ok(!f.model.auxiliaryRequests.some(request => request.purpose === 'akinator-expected'), 'success criteria can wait until work is prepared')
   } finally { await f.close() }
 })

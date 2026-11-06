@@ -9,6 +9,27 @@ import { processIdentity, sameProcess } from '../lisp/process-identity.mjs'
 const exec = promisify(execFile)
 const runner = resolve('scripts/run-tests.mjs')
 
+test('direct native runs reject a missing DSH graph before executing tests', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-native-preflight-'))
+  try {
+    const file = join(root, 'native.test.ts')
+    const packageRoot = join(root, 'missing-node_modules')
+    await writeFile(file, "import test from 'node:test'; test('native test started', () => {});\n")
+    await assert.rejects(exec(process.execPath, [runner, file], {
+      env: { ...process.env, KIOKUKO_REQUIRE_DSH_NATIVE: '1', KIOKUKO_DSH_RUNTIME_MODE: 'current', KIOKUKO_DSH_PACKAGE_ROOT: packageRoot },
+      timeout: 6000,
+    }), error => {
+      assert.equal(error.code, 1)
+      assert.match(error.stderr, /Cannot read installed DSH runtime/)
+      assert.ok(error.stderr.includes(join(packageRoot, '@deepseek-ai/dsh/package.json')))
+      assert.doesNotMatch(error.stdout, /native test started/)
+      return true
+    })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test(
   'suite watchdog preserves a normally completed test',
   { timeout: 10000 },

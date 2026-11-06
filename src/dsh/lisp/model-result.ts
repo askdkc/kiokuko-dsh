@@ -115,7 +115,8 @@ export function renderResult(value: unknown): string {
   const source = record(value.result) && value.replay === true ? { ...value.result, ...value, result: undefined } : value
   const core: RecordValue = {}
   for (const key of ['ok', 'operationId', 'generation', 'state', 'code', 'message', 'reason', 'recovery', 'replay',
-    'resultOperationId', 'section', 'pointer', 'offset', 'nextOffset', 'totalCharacters', 'operationCount', 'pendingCount', 'pendingStates']) {
+    'resultOperationId', 'section', 'pointer', 'offset', 'nextOffset', 'totalCharacters', 'operationCount', 'pendingCount', 'pendingStates',
+    'workerState', 'nextInspection', 'reexecuted', 'definitionsLost']) {
     if (source[key] !== undefined) core[key] = source[key]
   }
   const summary = codeOutcomes(source.value)

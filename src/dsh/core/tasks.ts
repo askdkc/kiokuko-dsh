@@ -40,6 +40,7 @@ import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwner
 import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot,
   taskCanExecute, type TaskLease } from '../task-state.js'
 import { continueTaskIntake } from '../existing-task-intake.js'
+import type { DshLlm } from '../session-memory-finalizer.js'
 
 export interface CoreTaskInput {
   readonly requestId: string
@@ -136,7 +137,7 @@ function recallView(db: SqliteDatabase, context: ScopedContextResult | null): Sc
 /** Ordinary task/memory path over the existing ledger and Akinator; no model/provider selection. */
 export class CoreTasks {
   constructor(private readonly runtime: DshCoreRuntime, private readonly answerer?: DshIntakeAnswerer, private readonly moduleIds: readonly string[] = [], private readonly decisions?: DecisionService,
-    private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({})) {}
+    private readonly memoryRetrieval: MemoryRetrievalConfiguration = MemoryRetrievalConfig.parse({}), private readonly llm?: DshLlm) {}
   /** Reuse the exact SQLite task after a source-bound continuation, for every task category. */
   async resume(input: CoreTaskInput): Promise<CoreTask> {
     input.signal.throwIfAborted()
@@ -163,7 +164,7 @@ export class CoreTasks {
       assertCapabilityCatalogBinding(run.metadata, input.capabilities)
       const { state: intakeState, link } = await continueTaskIntake(db, { ...taskIdentity, workspace: project.workspace,
         expectedRevision: state.revision, expectedGeneration: state.generation, capabilities: input.capabilities,
-        decisions: this.decisions, requestId: input.requestId,
+        decisions: this.decisions, requestId: input.requestId, llm: this.llm,
         signal: input.signal, answerer: this.answerer, agent: input.agent, validateCapabilities: input.validateCapabilities })
       const intake = intakeState.session
       const admitted = intakeState.status !== 'needs_answer' && taskCanExecute(readTaskSnapshot(db, taskIdentity))
@@ -261,7 +262,8 @@ export class CoreTasks {
         while (state.status === 'needs_answer' && state.question) {
           const question = state.question
           const automatic = question.id !== 'taskType'
-            ? await answerAkinatorQuestion(this.decisions, input.requestId, input.task, question, input.signal, [], cwd)
+            ? await answerAkinatorQuestion(this.decisions, input.requestId, input.task, question, input.signal, [], cwd,
+              { llm: this.llm, agent: input.agent })
             : { status: 'ask' as const }
           if (automatic.status !== 'answered' && !this.answerer) break
           const value = automatic.status === 'answered' ? automatic.value

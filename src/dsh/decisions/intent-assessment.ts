@@ -1,4 +1,5 @@
 import { canonicalContentHash } from '../../serialization/validate.js'
+import { abortable } from '../models/vendor/abortable.js'
 import type {
   RequestIntentContext,
   RequestIntentDecision,
@@ -12,6 +13,8 @@ import {
   type MicroJudgeResult,
 } from './micro-judge.js'
 export const INTENT_ASSESSMENT_POLICY = 'source-candidate-independent-v2'
+// Leave time within the intake's 1.5 s deadline for the finite-domain check.
+const SEMANTIC_ASSESSMENT_BUDGET_MS = 1_000
 export type SemanticVerdict =
   'supported' | 'contradicted' | 'insufficient' | 'unavailable'
 export type SemanticCheck = { criterion: typeof criteria[number][0] } & (
@@ -218,9 +221,18 @@ export async function assessRequestIntent(
   signal: AbortSignal,
   options: Parameters<typeof runMicroJudge>[3] & {recoveryAttempt?:number; userConfirmed?:boolean} = {},
 ): Promise<IntentAssessment | undefined> {
+  signal.throwIfAborted()
+  const semanticSignal = AbortSignal.any([signal, AbortSignal.timeout(SEMANTIC_ASSESSMENT_BUDGET_MS)])
   // Explicitly disabled typed decisions retain the existing native authority path; no assessment is claimed.
-  if (service && (await service.bind(requestId, signal)).mode === 'off')
-    return undefined
+  if (service) {
+    try {
+      if ((await abortable(service.bind(requestId, semanticSignal), semanticSignal)).mode === 'off')
+        return undefined
+    } catch (error) {
+      signal.throwIfAborted()
+      if (!semanticSignal.aborted) throw error
+    }
+  }
   const batch = buildIntentAssessmentBatch(context, candidate),
     semanticInputDigest = canonicalContentHash(batch)
   let semantic: SemanticVerdict = 'unavailable',
@@ -230,10 +242,11 @@ export async function assessRequestIntent(
   let semanticChecks: SemanticCheck[] | undefined
   if (service)
     try {
-      const result = await service.evaluate(
+      semanticSignal.throwIfAborted()
+      const result = await abortable(service.evaluate(
         requestId,
         batch,
-        signal,
+        semanticSignal,
         options.recoveryAttempt?canonicalContentHash([INTENT_ASSESSMENT_POLICY,'idle-recheck',options.recoveryAttempt]):INTENT_ASSESSMENT_POLICY,
         undefined,
         {
@@ -241,8 +254,8 @@ export async function assessRequestIntent(
             providerDecisionId = o.decisionId
           },
         },
-      )
-      signal.throwIfAborted()
+      ), semanticSignal)
+      semanticSignal.throwIfAborted()
       if (result.status === 'completed') {
         semanticOutputDigest = canonicalContentHash(result.result)
         const answers = result.result.answers
@@ -278,6 +291,7 @@ export async function assessRequestIntent(
     } catch {
       signal.throwIfAborted()
     }
+  signal.throwIfAborted()
   const interpreted = options.userConfirmed === true && semantic === 'insufficient' && mayConfirmRequestInterpretation(candidate)
   const problem = compileIntentRelations(context, candidate, semantic, interpreted ? 'native-user' : candidate.source === 'main-model' ? 'main-model' : 'independent')
   const detector = await runMicroJudge(

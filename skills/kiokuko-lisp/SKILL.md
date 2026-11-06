@@ -23,7 +23,8 @@ Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
 `lisp_describe`: functions; `lisp_inspect`: paged evidence; `lisp_status`: state;
-`lisp_cancel`: stop; `lisp_reset`: healthy, confirmed-stopped worker only, no recovery bypass.
+`lisp_cancel`: stop; `lisp_recover`: restart a stopped worker after diagnosis;
+`lisp_reset`: healthy, confirmed-stopped worker only, no recovery bypass.
 Task `lisp_define`: compiled, schema/example-checked lambda; `lisp_call`: inline input/inputRef;
 `lisp_observe`: workspace capture without bodies; `lisp_stage`: freeze against observed
 baseRef; `lisp_verify`: private-scratch check; `lisp_apply`: frozen-target
@@ -57,7 +58,11 @@ lists `kioku.user` exports/arguments/docs. Native tool entries stay fixed.
 
 Persistent `inputs`: workspace-relative/current-session upload paths only, checked
 identity/size/digest and read-only copies; other absolute paths fail. Limits: 64 MiB/file,
-256 MiB/generation. `kioku.files:input`: read; `kioku.files:scratch`: write/unzip. Reimport
+256 MiB/generation. `(kioku.files:input 0)` returns the path of the first copy. Use
+`(kioku.files:read-text (kioku.files:input 0))` for its text. When iterating, bound the
+index by the number of declared inputs (`below`), or iterate over the filenames with
+`loop for name in names for i from 0`. For scratch output use `kioku.files:scratch`.
+The `:directory` of `kioku.process:run` must already exist. Reimport
 applied files for comparison; export only when authorized. `kioku.files:propose-write`:
 relative paths, successful evaluation, durable recording.
 Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Protected compatibility mode retains frozen targets and its protected-path restrictions. Duplicate targets fail;
@@ -95,6 +100,17 @@ journals, clean restart/idle exit auto-starts on next admission, never status; n
 recovery prompt. Fault replacements: 2/owner/minute. WORKER_RESUMED ran no code:
 rebuild state, never effects. Cancellation, unknown effects, unconfirmed stop or restart
 limit require inspection/recovery.
+When work fails, inspect the condition and saved result; check a command's exit
+code and retained logs. Correct the cause and run a focused check with a new ID.
+An ordinary Lisp condition leaves the worker usable: redefine the failing helper
+and keep the current generation. If the worker stopped, read `lisp_status` and
+inspect unresolved evidence (`lisp_inspect` with `managedOperationId` for a
+managed receipt). For a confirmed fault with no unresolved effects, call
+`lisp_recover` with a new `operationId` and the status `generation` as
+`expectedGeneration` (including `null`). Recreate needed definitions in the new
+generation and verify the fix. Recovery never repeats previous code, clears
+unknown effects, overrides Stop/permissions, or resets protected prototype limits.
+Use explicitly offered Lisp restarts when available; never retry an unknown effect.
 Results: 16 KiB, no source echoes/duplicates. Page journaled evidence, never rerun/fetch
 all history. Fix missing paths with native reads; input errors need no recovery. Report
 observed errors/recovery; missing results never prove deletion/restoration.
@@ -146,7 +162,7 @@ ask_user_question/exit_plan_mode preserve ownership, cancellation and the select
 <!-- kiokuko:documentation examples -->
 ## Native coding preparation
 
-Clear native implementation requests offer Lisp before model generation. A task choice is reused at Goal preparation; explicit manual session ON persists across reload. Run one small relevant `lisp_eval` with `prototype: true`, then read its successful saved `operationId` using `lisp_inspect` (`resultOperationId`, `section: "result"`, complete page from zero) before implementation. ON is not evidence or completion. Two failed attempts stop automatic retries: repair the cause or explicitly disable Lisp. New requests and formal Goal scopes need fresh proof. These steps are also supplied by the live coding-preparation status and tool schemas; conversation and research are unaffected.
+Clear native implementation requests offer Lisp before model generation. A task choice is reused at Goal preparation; explicit manual session ON persists across reload. In a protected workflow, run one small relevant `lisp_eval` with `prototype: true`, then read its successful saved `operationId` using `lisp_inspect` (`resultOperationId`, `section: "result"`, complete page from zero) before implementation. Two failed attempts stop automatic retries. Once the cause is understood, direct the user to the Lisp status control’s “新しい Lisp を起動” action or `/kioku-lisp recover`. A successful recovery reopens the prototype for the same task. New requests and formal Goal scopes need fresh proof. Conversation and research are unaffected.
 
 ## Project-shared functions
 

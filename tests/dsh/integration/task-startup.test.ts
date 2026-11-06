@@ -7,6 +7,7 @@ import { TaskStartup, TASK_STARTUP_OPTIONS, parseTaskStartupAnswer } from '../..
 import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { DecisionService, databaseDecisionStore } from '../../../src/dsh/decisions/service.js'
 import { dshTurnRequestId } from '../../../src/dsh/intake-profile-resolver.js'
+import { canonicalContentHash } from '../../../src/serialization/validate.js'
 import { LispCodingPreparation } from '../../../src/dsh/lisp/coding-preparation.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import type { DshUserQuestions } from '../../../src/dsh/intake-questions.js'
@@ -233,4 +234,29 @@ test('native clarification reuses its exact original startup binding, not the la
   assert.deepEqual(bound.startup,{decision:true,lisp:false})
   await startup.prepare({...request(4,'Unmatched original key'),clarificationFrom:{turn:1,task:'Other README.md request'}})
   assert.equal(asks,1,'an unmatched clarification still retains the same chat mode')
+})
+
+test('an in-turn clarification keeps Lisp disabled after the startup already bound the continued request', async t => {
+  const f = await setup(t), decisions = f.make()
+  let manual = false
+  const startup = new TaskStartup({
+    decisions, root: () => '/repo',
+    lisp: () => ({ ...f.lisp, manualOverride: () => manual ? { choice: 'no', answerRef: 'human-command:disable' } : undefined }),
+    questions: { ask: async q => ({ answers: [{ id: q.questions[0]!.id, selected: [TASK_STARTUP_OPTIONS[0]] }] }) },
+  })
+  await startup.prepare(request())
+  manual = true
+  await startup.prepare(request(2, '続けて'))
+  manual = false // The explicit command was consumed when the continued request started.
+  assert.equal(f.counts().enabled, false)
+
+  await startup.prepare(request(2, 'Edit answer.mjs and run its test'))
+  const staleTask = 'Change the value and verify it'
+  const staleKey = `task-startup:${canonicalContentHash(['session', '/repo'])}:0000000000000002:${canonicalContentHash(staleTask)}`
+  await decisions.bindStartup(staleKey, { decision: true, lisp: true }, signal())
+  await startup.prepare(request(2, staleTask))
+  assert.equal(f.counts().enabled, false)
+  assert.equal(f.counts().activations, 1)
+  assert.deepEqual((await decisions.bind(dshTurnRequestId({ dshSessionId: 'session', turn: 2 }))).startup,
+    { decision: true, lisp: false })
 })

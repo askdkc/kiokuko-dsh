@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdtemp, realpath, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { selectedDshRuntime } from './dsh-fixture-identity.mjs';
 
 const TEST_FILE_SUFFIX = '.test.ts';
 const contract=JSON.parse(await readFile(new URL('./verification.json',import.meta.url),'utf8'));
@@ -42,7 +43,7 @@ async function collectTestFiles(targets) {
   return testFiles;
 }
 
-function runNodeTests(testFiles, testTempRoot) {
+function runNodeTests(testFiles, testTempRoot, environment) {
   const concurrency = process.env.KIOKUKO_TEST_CONCURRENCY === undefined
     ? (testFiles.some(file => file.includes(`${path.sep}lisp${path.sep}`)) ? 2 : 4)
     : Number(process.env.KIOKUKO_TEST_CONCURRENCY);
@@ -51,7 +52,7 @@ function runNodeTests(testFiles, testTempRoot) {
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('KIOKUKO_TEST_TIMEOUT_MS must be a positive integer');
   return new Promise((resolve, reject) => {
     const childEnvironment = {
-      ...process.env,
+      ...environment,
       TEMP: testTempRoot,
       TMP: testTempRoot,
       TMPDIR: testTempRoot,
@@ -125,10 +126,13 @@ function runNodeTests(testFiles, testTempRoot) {
 async function run() {
   const targets = process.argv.length > 2 ? process.argv.slice(2) : ['tests'];
   const testFiles = await collectTestFiles(targets);
+  const environment = process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1'
+    ? selectedDshRuntime(path.resolve(import.meta.dirname, '..')).environment
+    : process.env;
   const testTempRoot = await realpath(await mkdtemp(path.join(tmpdir(), 'kiokuko-test-run-')));
 
   try {
-    return await runNodeTests(testFiles, testTempRoot);
+    return await runNodeTests(testFiles, testTempRoot, environment);
   } finally {
     await rm(testTempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }

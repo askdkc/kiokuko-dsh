@@ -119,23 +119,22 @@ export function nativeMock(llm: any) {
       return { provider, id: model, name: model };
     }
     async *stream(options: any) {
-      // Repository learning is an independent native auxiliary model call, not
-      // the next scripted foreground response. Tests of useful learned content
-      // override this route explicitly; ordinary fixtures truthfully produce no
-      // new hypothesis while still exercising automatic turn capture.
-      if (
+      // Auxiliary calls have their own responses so they do not consume the
+      // foreground script. Tests can override them when the answer matters.
+      const repositoryLearning =
         options.purpose === "compaction" &&
         String(options.system).startsWith(
           "Extract compact repository-scoped learning",
-        )
-      ) {
+        );
+      if (repositoryLearning || options.purpose === "akinator-expected") {
         this.auxiliaryRequests.push(options);
         assert.deepEqual(
           options.tools,
           [],
-          "repository reflection must not execute tools",
+          "auxiliary inference must not execute tools",
         );
-        for (const chunk of textResponse(JSON.stringify({ lessons: [] }))) {
+        const answer = repositoryLearning ? { lessons: [] } : { expected: null };
+        for (const chunk of textResponse(JSON.stringify(answer))) {
           options.signal?.throwIfAborted();
           yield chunk;
         }

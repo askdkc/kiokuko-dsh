@@ -1,4 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
+import { managedAdmissionDenied } from '../managed-operation-runner.js'
+import { LispError } from './contracts.js'
 
 interface Invocation {
   callId: string
@@ -21,6 +23,14 @@ interface Tools {
 }
 
 const notDispatched = new WeakSet<object>()
+const pipelineSpecifier: string = '@deepseek-ai/dsh-tools/pipeline'
+
+async function rejectUnavailablePipeline(): Promise<never> {
+  return managedAdmissionDenied(new LispError('HOST_ADAPTER_UNAVAILABLE',
+    `DSH nested tool pipeline ${pipelineSpecifier} is unavailable. The tool was not dispatched.`,
+    'DSH とプラグインが同じ DSH パッケージ一式を参照しているか確認してください。'))
+}
+
 /** Host-local preparation evidence; serialized error text cannot mint this fact. */
 export function lispHostToolWasNotDispatched(result: unknown): boolean {
   return !!result && typeof result === 'object' && notDispatched.has(result)
@@ -32,20 +42,21 @@ export async function createLispHostDispatch(ctx: Context, tools: Tools): Promis
   // The batch entry point accepts model calls, not nested host invocations. Its
   // parser drops parent/root identity. Use the exported scheduler stages for
   // this single, already-parsed nested invocation instead.
-  const specifier: string = '@deepseek-ai/dsh-tools/pipeline'
-  let pipeline: Pipeline | undefined
+  let pipelineModule: { ToolExecutionPipeline: new (ctx: Context) => Pipeline }
   try {
-    const { ToolExecutionPipeline } = await import(specifier) as { ToolExecutionPipeline: new (ctx: Context) => Pipeline }
-    await ctx.inject(['tools'], scope => {
-      pipeline = new ToolExecutionPipeline(scope)
-    })
+    pipelineModule = await import(pipelineSpecifier) as typeof pipelineModule
   } catch (error) {
-    // Optional peer absent in this host: nested calls go through the plain tool
-    // executor. Host policy stages own their identity checks at the boundary.
-    if (error instanceof Error && !/Cannot find module|ERR_MODULE_NOT_FOUND|Cannot find package/u.test(error.message)) throw error
-    pipeline = undefined
+    const code = (error as NodeJS.ErrnoException | null)?.code
+    if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND' && code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error
+    return rejectUnavailablePipeline
   }
-  if (!pipeline) return input => tools.execute(input)
+  const { ToolExecutionPipeline } = pipelineModule
+  if (typeof ToolExecutionPipeline !== 'function') return rejectUnavailablePipeline
+  let pipeline: Pipeline | undefined
+  await ctx.inject(['tools'], scope => {
+    pipeline = new ToolExecutionPipeline(scope)
+  })
+  if (!pipeline) return rejectUnavailablePipeline
   const activePipeline = pipeline
   return async input => {
     const prepared = await activePipeline.prepare(input)

@@ -1,14 +1,14 @@
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {readFile} from 'node:fs/promises'
+import {readFile, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
 import {DecisionService} from '../../../src/dsh/decisions/service.js'
 import {TypedDecisionsConfig} from '../../../src/dsh/decisions/config.js'
 import {nativeSkillFixture} from '../helpers/skill-native.js'
 import {nativeToolResults} from '../helpers/native-mock.js'
-import {codingPrelude, toolValue} from '../helpers/coding-script.js'
+import {codingPrelude, interpretedPreparation, toolValue} from '../helpers/coding-script.js'
 import {isolateSkillHome} from '../helpers/skill-home.js'
 isolateSkillHome()
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
@@ -106,6 +106,89 @@ test('ordinary optional prototype failures stay unverified without installing a 
  const off=(await f.ctx.commands.execute(f.agent,'/kioku-lisp disable',[],new AbortController().signal)).result;assert.equal(off.kind,'success',off.text)
  f.responses.push((q:any)=>{assert.ok(!q.tools.some((t:any)=>t.name==='lisp_eval'));return f.mock.textResponse('Explicit OFF is retained for this request.')});await f.turn('この作業を続行してください')
  }finally{await f.close()}
+})
+
+test('disabling a failed Lisp route lets 続けて resume the same Goal through native Edit', {timeout:120000}, async () => {
+ const decisions = new DecisionService(TypedDecisionsConfig.parse({provider:'typesafe'}), () => ({
+   capabilities:{maxQuestions:256,maxChoices:256,maxBytes:262144},
+   async evaluate(batch: any) {
+     const continuation = batch.state?.currentUserMessage === '続けて'
+     return {provider:'fixture', requestedModel:'fixture', policyVersion:'lisp-resume-fixture',
+       answers:batch.questions.map((question: any) => {
+         const choiceId = question.id === 'task-type' ? 'build'
+           : question.id.startsWith('semantic-') ? 'supported'
+           : continuation && question.id === 'request-relation' ? 'same_scope_continuation'
+           : continuation && question.id === 'request-action' ? 'change'
+           : continuation && question.id === 'request-change-scope' ? 'implementation'
+           : continuation && question.id === 'request-task-operation' ? 'none'
+           : continuation && question.id.startsWith('request-proposal-') ? 'not_selected'
+           : undefined
+         return choiceId && question.choices.some((choice: any) => choice.id === choiceId)
+           ? {id:question.id, status:'selected', choiceId}
+           : {id:question.id, status:'abstained', reason:'uncertain'}
+       })}
+   },
+ }) as any)
+ const f = await nativeSkillFixture({packages, ...(packageRoot ? {packageRoot} : {}), explicit:true, mode:'compiled', decisions,
+   extra:{...extra, typedDecisions:{provider:'typesafe'}}, startupChoice:'decision ON / Lisp ON'})
+ const command = async (action: string) => {
+   const r = (await f.ctx.commands.execute(f.agent, `/kioku-lisp ${action}`, [], new AbortController().signal)).result
+   assert.equal(r.kind, 'success', r.text)
+   return r
+ }
+ const path = join(f.dir, 'parser.txt')
+ let edits = 0
+ let releaseTemporaryTool: (() => void) | undefined
+ const releaseEdit = f.ctx.tools.register({
+   name: 'edit', description: 'Write the fixture parser', parameters: {type:'object', properties:{}},
+   output: {schema:{}, render: () => [{type:'text', text:'Saved'}]},
+   execute: async () => { edits++; await writeFile(path, '42'); return {saved:true} },
+ })
+ const releaseClaim = f.agent.ctx.on('agent/inbox/claimed', () => {
+   releaseTemporaryTool?.()
+   releaseTemporaryTool = undefined
+ })
+ try {
+   let runId: string
+   await command('enable')
+   f.responses.push(...codingPrelude(f.mock, 'failed-route'), (q: any) => {
+     runId = toolValue(q, 'failed-route-propose').runId
+     return f.mock.textResponse('The Goal is ready for implementation.')
+   })
+   await f.turn('Implement the parser in parser.txt.')
+   f.responses.push(interpretedPreparation(f.mock, 'before-timeout', 'same_scope_continuation', 'change'), (q: any) => {
+     assert.equal(toolValue(q, 'before-timeout').prepared, true)
+     return f.mock.toolCallResponse('timeout', 'lisp_eval', {operationId:'timeout', prototype:true, code:'(loop)', timeoutMs:1500})
+   }, (q: any) => {
+     assert.equal(toolValue(q, 'timeout').code, 'TIMEOUT')
+     return f.mock.textResponse('Lisp stopped. The user can disable it to resume ordinary execution.')
+   })
+   await f.turn('Continue the parser implementation.')
+   assert.equal(JSON.parse((await command('status --json')).text).state, 'RECOVERY_REQUIRED')
+   await command('disable')
+   // The idle tool view can differ while switching routes. Restore the
+   // admitted inventory as soon as the new turn claims its actual input.
+   releaseTemporaryTool = f.ctx.tools.register({
+     name:'idle_probe', description:'Temporary idle capability', parameters:{type:'object'},
+     output:{schema:{}, render: () => []}, execute: () => ({}),
+   })
+   f.responses.push((q: any) => {
+     assert.ok(!q.tools.some((tool: any) => tool.name === 'lisp_eval'))
+     return interpretedPreparation(f.mock, 'resume', 'same_scope_continuation', 'change')(q)
+   }, (q: any) => {
+     assert.equal(toolValue(q, 'resume').prepared, true)
+     return f.mock.toolCallResponse('same-goal', 'coding_workflow', {action:'status'})
+   }, (q: any) => {
+     assert.equal(toolValue(q, 'same-goal').runId, runId)
+     return f.mock.toolCallResponse('ordinary-edit', 'edit', {})
+   }, (q: any) => {
+     assert.equal(result(q, 'ordinary-edit').isError, false)
+     return f.mock.textResponse('Continued the existing Goal through native Edit.')
+   })
+   await f.turn('続けて')
+   assert.equal(edits, 1)
+   assert.equal(await readFile(path, 'utf8'), '42')
+ } finally { releaseClaim(); releaseTemporaryTool?.(); releaseEdit(); await f.close() }
 })
 
 test('manual ON survives same-session reload and a new coding request starts unverified without another question',{timeout:120000},async()=>{

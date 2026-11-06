@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { readFileSync } from 'node:fs'
+import { registerHooks } from 'node:module'
+import type { Context } from '@deepseek-ai/cordis'
 import { NodeSqliteAdapter } from '../../../src/db/adapter.js'
+import { createLispHostDispatch } from '../../../src/dsh/lisp/host-tool-dispatch.js'
 import { ManagedOperationJournal } from '../../../src/dsh/managed-operation-journal.js'
 import { runManagedOperation, ManagedDispatchDenied, currentManagedOperation, observeManagedResult } from '../../../src/dsh/managed-operation-runner.js'
 
@@ -45,6 +48,32 @@ test('denial is terminal, timeout without stop proof remains unresolved and is n
   assert.deepEqual(snapshot.operations.map(op=>op.state),['denied','unknown'])
   assert.equal(snapshot.complete,false)
   assert.equal(effects,1)
+})
+
+test('a modern Lisp host without the nested pipeline records a pre-dispatch denial', async t => {
+  const { journal, scope } = fixture(t)
+  const specifier = '@deepseek-ai/dsh-tools/pipeline'
+  const hook = registerHooks({
+    resolve(name, context, next) {
+      if (name === specifier) throw Object.assign(new Error(`Cannot find module ${name}`), { code: 'ERR_MODULE_NOT_FOUND' })
+      return next(name, context)
+    },
+  })
+  t.after(() => hook.deregister())
+  let executions = 0
+  const dispatch = await createLispHostDispatch({} as Context, {
+    setExecutor() {},
+    async execute() { executions++; throw new Error('Modern batch executor received a nested invocation') },
+  })
+  await assert.rejects(runManagedOperation(scope, input, () => dispatch({
+    callId: 'nested-call', name: 'Bash', arguments: {}, signal: new AbortController().signal,
+  })), { code: 'HOST_ADAPTER_UNAVAILABLE', message: /@deepseek-ai\/dsh-tools\/pipeline/ })
+  assert.equal(executions, 0)
+  journal.seal(scope.scopeId)
+  const snapshot = journal.snapshot(scope.scopeId)
+  assert.equal(snapshot.operations[0]!.state, 'denied')
+  assert.equal(snapshot.operations[0]!.delivery, 'not-delivered')
+  assert.equal(snapshot.complete, true)
 })
 
 test('journal admission storage failure prevents dispatch', async t => {

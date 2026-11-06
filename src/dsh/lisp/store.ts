@@ -78,7 +78,7 @@ export class LispStore {
   expireResults(now = new Date()): Promise<void> {
     const cutoff = new Date(now.getTime() - 30 * 86400000).toISOString()
     return this.database(db => {
-      db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_eval','lisp_describe','lisp_inspect','lisp_reset','lisp_cancel') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
+      db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_eval','lisp_describe','lisp_inspect','lisp_reset','lisp_cancel','lisp_recover') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
       db.prepare("UPDATE dsh_lisp_operations SET result=NULL WHERE kind IN ('lisp_define','lisp_call','lisp_observe','task_result','lisp_hot_contract','lisp_hot_install','lisp_hot_call','lisp_hot_deactivate') AND state IN ('SUCCEEDED','FAILED','CANCELLED') AND updated_at<? AND result IS NOT NULL").run(cutoff)
       db.prepare("UPDATE dsh_lisp_operations SET payload='{}',result=NULL WHERE kind='task_tool' AND state='SUCCEEDED' AND updated_at<? AND payload!='{}'").run(cutoff)
     })
@@ -185,6 +185,14 @@ export class LispStore {
   }
   hasPending(sessionId: string): Promise<boolean> {
     return this.database(db => db.prepare("SELECT 1 FROM dsh_lisp_operations WHERE session_id=? AND state IN ('RUNNING','UNKNOWN','APPLYING','AWAITING_APPROVAL') LIMIT 1").get(sessionId) !== undefined)
+  }
+  /** A stopped evaluation without an accepted result may lose its Lisp state.
+   * It still stays UNKNOWN; separate managed and proposal receipts fence effects. */
+  hasBlockingRecoveryOperation(owner: LispOwner): Promise<boolean> {
+    return this.database(db => db.prepare(`SELECT 1 FROM dsh_lisp_operations WHERE session_id=?
+      AND state IN ('RUNNING','UNKNOWN','APPLYING','AWAITING_APPROVAL') AND NOT (
+        agent_id=? AND kind='lisp_eval' AND state='UNKNOWN'
+        AND COALESCE(json_extract(result,'$.interruptedBeforeResult'),0)=1) LIMIT 1`).get(owner.sessionId, owner.agentId) !== undefined)
   }
   countByKind(sessionId: string, kind: string): Promise<number> {
     return this.database(db => db.prepare('SELECT COUNT(*) AS count FROM dsh_lisp_operations WHERE session_id=? AND kind=?').get<{count:number}>(sessionId,kind)!.count)

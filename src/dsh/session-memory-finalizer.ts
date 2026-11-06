@@ -83,7 +83,7 @@ export interface DshLlm {
     readonly maxTokens?: number
     readonly signal?: AbortSignal
     readonly sessionId?: string
-    readonly purpose?: 'compaction' | 'session-title'
+    readonly purpose?: 'compaction' | 'session-title' | 'akinator-expected'
   }): AsyncIterable<unknown>
 }
 

@@ -120,6 +120,7 @@ import {
   type ModuleBinding,
 } from './modules.js'
 import { CoreTasks, type CoreTask, type CoreTaskInput } from './tasks.js'
+import type { DshLlm } from '../session-memory-finalizer.js'
 import type { ConfiguredSkillPrompts } from '../configured-skill-prompts.js'
 import { withCoreSkills } from '../modules/resources.js'
 import {
@@ -394,12 +395,14 @@ export async function mountCore(
     root,
     config.modelHandoff,
   )
+  const llm = get('llm') as DshLlm | undefined
   const tasks = new CoreTasks(
     runtime,
     questions ? createDshIntakeAnswerer(questions) : undefined,
     modules.ids(),
     decisions,
     config.memoryRetrieval,
+    llm,
   )
   const requestIntentContextFor = async (
     input: DemandInput,
@@ -576,7 +579,8 @@ export async function mountCore(
         ),
       answerIntake: (input, task, question, context) => answerAkinatorQuestion(decisions,
         dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
-        [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory),
+        [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory,
+        { llm, agent: input.agent }),
       diagnostic: createIntakeDiagnosticSink(runtime),
       recovery: runtime.auxiliaryRecovery,
       assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -847,6 +851,7 @@ export async function mountCore(
   const taskWorkflow = new DshTaskWorkflow({
     runtime,
     decisions,
+    llm,
     ...(questions ? { questions } : {}),
     demand,
     agents,

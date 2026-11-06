@@ -68,6 +68,7 @@ export class TaskStartup {
     }
     input.signal.throwIfAborted()
     const requestId = dshTurnRequestId({ dshSessionId: input.sessionId, turn: input.turn })
+    const bound = await decisions.readStartup(requestId)
     let receipt = await decisions.readStartup(key)
     if (!receipt?.startup) {
       const configured = await decisions.startupConfiguration()
@@ -77,8 +78,10 @@ export class TaskStartup {
       const prior = from && Number.isSafeInteger(from.turn) && from.turn >= 1 && from.turn <= input.turn
         ? await decisions.readStartup(`${prefix}${String(from.turn).padStart(16, '0')}:${canonicalContentHash(from.task)}`)
         : undefined
-      const config = await decisions.readStartup(requestId) ?? prior ?? configured
-      let choice: TaskStartupChoice | undefined = prior?.startup ?? configured.startup
+      const config = bound ?? prior ?? configured
+      // A clarification changes the text key without opening a new turn.
+      // Keep the already-admitted route ahead of older chat preferences.
+      let choice: TaskStartupChoice | undefined = bound?.startup ?? prior?.startup ?? configured.startup
       if (!choice) {
         const previous = this.last.get(prefix)
         const rows = previous && previous.id < before ? [previous] : await decisions.startupBefore(prefix, before)
@@ -120,11 +123,14 @@ export class TaskStartup {
       receipt = await decisions.bindStartup(key, choice, input.signal, config)
     }
     current()
-    const choice = receipt.startup!
-    this.last.set(prefix, { id: key, config: receipt })
+    // An earlier failed clarification may already have saved a conflicting
+    // text-key receipt. Keep the admitted turn binding and any explicit stop.
+    const selected = !receipt.startup?.cancelled && bound?.startup ? bound : receipt
+    const choice = selected.startup!
+    this.last.set(prefix, { id: key, config: selected })
     if (this.last.size > 128) this.last.delete(this.last.keys().next().value!)
     if (choice.cancelled) { lisp?.cancelled?.(input.agent, input.task); throw new LispCodingCancelled('Task startup cancelled; work retained') }
-    await decisions.bindStartup(requestId, choice, input.signal, receipt).catch(error=>{
+    await decisions.bindStartup(requestId, choice, input.signal, selected).catch(error=>{
       if(error?.code==='DECISION_INVALID_INPUT')throw new ExecutionSelectionPending('This request already has an immutable decision binding. Start a new request to change decision mode; the existing backend was not substituted.')
       throw error
     })
