@@ -39,14 +39,19 @@ test('native result DTOs survive text-only logs without automatic episode extrac
       output:{schema:{type:'object',additionalProperties:false,properties:{exitCode:{type:'number',required:true}}},render:()=>[{type:'text',text:'Native execution output; the renderer omits its exit code.'}]},
       execute:async(args:any)=>({exitCode:args.exitCode})}),[Symbol.for('kiokuko.coding.read-only')]:true})
     const questions=ctx.plugin({name:'evolution-questions',apply(context:any){return context.provide('userQuestions',{async ask(request:any){ const scope = answerFixtureScope(request); if (scope) return scope;if(request.questions[0]?.id.startsWith('task-startup:'))return answerTaskStartup(request,'decision OFF / Lisp OFF');return {answers:request.questions.map((q:any)=>{const selected=q.id==='kioku-agenticreplay-recording'?'記録しない':q.id==='execution-mode'?'通常実行':q.options.find((option:any)=>option.label==='今回は保存しない')?.label;assert.ok(selected&&q.options.some((option:any)=>option.label===selected),`Unexpected fixture question: ${q.id}`);return {id:q.id,selected:[selected]}})}}})}});fibers.push(questions);await questions
+    const task = '検証結果を調査して、失敗と成功を報告してください。'
     let extractionCalls = 0
-    adapter=createDshHostAdapter(ctx,{decisions:intentFixtureDecisions(task=>task==='検証結果を調査して、失敗と成功を報告してください。'?{action:'verify'}:undefined),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),migrationsDirectory:join(process.cwd(),'migrations'),llm:{async *stream(){
+    adapter=createDshHostAdapter(ctx,{decisions:intentFixtureDecisions(request=>request===task?{action:'verify'}:undefined),repositoryRoot:root,databasePath:join(root,'state.sqlite3'),migrationsDirectory:join(process.cwd(),'migrations'),llm:{async *stream({ purpose }){
+      if (purpose === 'akinator-expected') {
+        yield* mock.textResponse(JSON.stringify({ expected: '検証の失敗と成功が報告されている。', quote: task }))
+        return
+      }
       extractionCalls++;throw new Error('unapproved automatic memory extraction')
     }}})
     composition=await mountDshComposition(ctx,adapter.host)
     const settingsBefore=await adapter.host.runtime!.withDatabase(db=>db.prepare('SELECT mode,generation FROM memory_evolution_settings').get())
     const agent=(await ctx.agents.create({sessionId:session.SessionId('evolution-native'),agentOptions:{provider:'evolution-test',model:'mock'},meta:{cwd:root,delegationDepth:0}})).agent
-    agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'検証結果を調査して、失敗と成功を報告してください。'}]}))
+    agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:task}]}))
     const deadline=Date.now()+15000
     while(Date.now()<deadline) {
       if(agent.status==='idle'&&model.requests.length===4)break

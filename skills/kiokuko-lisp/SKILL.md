@@ -11,14 +11,11 @@ description: Compose reusable Common Lisp task tools alongside owned development
 ## Admission and tools
 
 Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. Pending blocks effects; next reopens. Resume saved choice; new task/scope asks again. No uses ordinary tools. Verify items, then the user entry with fresh host results.
+Use the coding choice or /kioku-lisp enable for a persistent worker, and enable-task for disposable scratch. lisp_define, lisp_call and lisp_observe need no mode switch or Working task. Compose exact dependency refs in your own protected worker or private scratch without repository mounts or host RPC. Schemas cannot prove Lisp safe. Children get only native-scope capabilities and never inherit the parent's lease, heap or refs. Publication and effects retain approvals and authority. With Lisp ON, use kioku.process:run/start-job for Git/gh/builds/tests. Direct shells are blocked, even reads. Read/search/Skill and owned file tools remain available. On failure recover or explicitly disable Lisp. Never spoof host-bound session/agent/directory/generation.
 
+Owned kioku_read/write/edit/remove/exec/result retain receipts. Routine development needs no confirmation. Declare destructiveTargets for known effects. Classification of arbitrary code is incomplete. After completion, organize memory with permission and save only the approved text.
 
-
-Persistent: coding choice or /kioku-lisp enable. /kioku-lisp enable-task optionally selects disposable scratch evaluations. lisp_define, lisp_call and lisp_observe need no task-mode switch or Working task. Compose functions by exact dependency refs; reuse only your own protected worker, otherwise compute in private protected scratch with no repository mount or host RPC. Schemas never prove arbitrary Lisp safe. A child inherits only capabilities visible in its native scope, not the parent's task lease, heap, or result refs. Shared publication and real effects retain their approval and authority checks. ON selects Lisp computation/orchestration; direct Bash/zsh/PowerShell is rejected, even reads. Run Git/gh/builds/tests through kioku.process:run / start-job. Read/search/Skill and owned file tools remain available. Failure requires recovery or explicit /kioku-lisp disable; no silent shell fallback. Never spoof host-bound session/agent/directory/generation.
-
-Owned kioku_read/write/edit/remove/exec/result retain development receipts. Ordinary commands, investigation, builds/tests, edits and disposable artifacts need no routine confirmation. Declare destructiveTargets for known command effects. Arbitrary code effects are not exhaustively classified. Organize memory only after completion and permission; save only the exact approved content.
-
-Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires prototype/result inspection. Admitted workflows, owned tools and async jobs keep task/protocol authority. Use kioku.tools:call-tool/broker receipts. All workers are OS-isolated; direct Lisp/FFI cannot access workspace files or inherited credentials. Generated passed fields prove no verification. Bind task_completion conditions/source paths before checks; collect async receipts with kioku_result. Cancellation/ownership remain authoritative. Plan permits read/search/status until human approval exits at the next boundary.
+Foreground kioku.process:run retains native Bash sandbox/approval/Stop without a memory task/Goal. Protected coding requires a prototype and result inspection. Workflows, owned tools and async jobs retain task authority. Use broker receipts. OS isolation denies direct Lisp/FFI workspace access and inherited credentials. Bind task_completion conditions/source paths before checks and collect async receipts with kioku_result. Plan permits read/search/status until approved exit.
 
 Schemas define arguments; never guess. `lisp_describe` without a symbol gives the
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
@@ -56,15 +53,12 @@ inputs. Batch known work/compact evidence; split at decisions/approvals/limits. 
 preprogram guesses or eval data. Definitions last one generation; `lisp_describe`
 lists `kioku.user` exports/arguments/docs. Native tool entries stay fixed.
 
-Persistent `inputs`: workspace-relative/current-session upload paths only, checked
-identity/size/digest and read-only copies; other absolute paths fail. Limits: 64 MiB/file,
-256 MiB/generation. `(kioku.files:input 0)` returns the path of the first copy. Use
-`(kioku.files:read-text (kioku.files:input 0))` for its text. When iterating, bound the
-index by the number of declared inputs (`below`), or iterate over the filenames with
-`loop for name in names for i from 0`. For scratch output use `kioku.files:scratch`.
-The `:directory` of `kioku.process:run` must already exist. Reimport
-applied files for comparison; export only when authorized. `kioku.files:propose-write`:
-relative paths, successful evaluation, durable recording.
+Persistent `inputs` accepts workspace-relative or current-session upload paths.
+Read-only copies are checked for identity, size and digest (64 MiB/file, 256 MiB/generation).
+`(kioku.files:read-text (kioku.files:input 0))` reads the first copy. Iterate only over
+declared inputs. Use `kioku.files:scratch` for output and an existing `:directory` for
+`kioku.process:run`. Reimport applied files for comparison. Export needs authorization.
+`kioku.files:propose-write` uses relative paths and records successful evaluations durably.
 Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Protected compatibility mode retains frozen targets and its protected-path restrictions. Duplicate targets fail;
 unchanged writes do nothing. Refusal/skip/UI failure/cancellation never authorizes.
 Trust APPLIED/UNCHANGED/NOT_APPLIED/UNKNOWN receipts; partial failure stops later writes.
@@ -91,26 +85,18 @@ approval never authorizes writes; only host changes receipts establish APPLIED/U
 
 ## Evidence, recovery and adapters
 
-Workers persist by default; configured idle suspension never interrupts turns/evaluations/approvals/jobs.
-Routed children keep separate persistent heaps/scratch; reuse definitions per generation.
-Return results via native delivery; never borrow parent authority or foreign refs.
-Failed startup blocks admission; disposal stops only that child. Effects retain session
-permissions/tool restrictions. The host owns startup, capacity and exit. With settled
-journals, clean restart/idle exit auto-starts on next admission, never status; no manual
-recovery prompt. Fault replacements: 2/owner/minute. WORKER_RESUMED ran no code:
-rebuild state, never effects. Cancellation, unknown effects, unconfirmed stop or restart
-limit require inspection/recovery.
-When work fails, inspect the condition and saved result; check a command's exit
-code and retained logs. Correct the cause and run a focused check with a new ID.
-An ordinary Lisp condition leaves the worker usable: redefine the failing helper
-and keep the current generation. If the worker stopped, read `lisp_status` and
-inspect unresolved evidence (`lisp_inspect` with `managedOperationId` for a
-managed receipt). For a confirmed fault with no unresolved effects, call
-`lisp_recover` with a new `operationId` and the status `generation` as
-`expectedGeneration` (including `null`). Recreate needed definitions in the new
-generation and verify the fix. Recovery never repeats previous code, clears
-unknown effects, overrides Stop/permissions, or resets protected prototype limits.
-Use explicitly offered Lisp restarts when available; never retry an unknown effect.
+Workers persist by default. Idle suspension waits for turns/evaluations/approvals/jobs.
+Children own their heaps, scratch and refs, deliver results natively and stop independently.
+Failed startup blocks admission. The host controls capacity and exit. With settled
+journals, clean exit auto-starts on admission, never status. Fault replacements: 2/owner/minute.
+WORKER_RESUMED ran no code. Rebuild definitions, never replay effects.
+Inspect failures, saved results, exit codes and logs. For an ordinary Lisp condition,
+fix the helper in place, using an offered restart when applicable. After confirmed stop,
+check `lisp_status` and inspect receipts with `lisp_inspect`/`managedOperationId`.
+With effects settled, call `lisp_recover` with a new `operationId` and status generation
+as `expectedGeneration` (including `null`). Recreate definitions and verify with a new ID.
+Recovery preserves Stop, permissions and prototype limits. Inspect cancellation,
+unknown effects, unconfirmed stops or restart limits before recovery.
 Results: 16 KiB, no source echoes/duplicates. Page journaled evidence, never rerun/fetch
 all history. Fix missing paths with native reads; input errors need no recovery. Report
 observed errors/recovery; missing results never prove deletion/restoration.

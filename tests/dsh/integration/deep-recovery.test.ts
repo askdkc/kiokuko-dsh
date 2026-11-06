@@ -7,7 +7,7 @@ import { DeepScheduler } from '../../../src/deep-thinker/scheduler.js'
 import { DeepReportPort } from '../../../src/deep-thinker/report-port.js'
 import { DeepMemoryFinalizer } from '../../../src/deep-thinker/memory-finalizer.js'
 import { deepQuestion } from '../../../src/deep-thinker/configuration.js'
-import { abortableStream } from '../../../src/deep-thinker/abortable-stream.js'
+import { abortableStream } from '../../../src/abortable-stream.js'
 
 test('independent OS processes cannot simultaneously own a Deep run', {timeout:20_000}, async () => {
   const f=await deepFixture()

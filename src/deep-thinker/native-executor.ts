@@ -11,7 +11,7 @@ import { deepMemoryRequestScope } from './memory-request.js'
 import { estimateRequestTokens } from './core/budget.js'
 import { isModelAvailabilityFailure } from '../dsh/model-routing.js'
 import { DeepModelUnavailable } from './failures.js'
-import { abortableStream } from './abortable-stream.js'
+import { abortableStream } from '../abortable-stream.js'
 
 export interface DeepNativeAgent extends RoutableAgent {
   readonly options?: { provider?: string; model?: string; reasoningEffort?: string }

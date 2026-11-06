@@ -28,7 +28,7 @@ import { initialDeepState } from './initial-state.js'
 import { DeepReportPort, type DeepSessions } from './report-port.js'
 import { deepStatusText } from './report.js'
 import { parseDeepCommand, DEEP_HELP } from './commands.js'
-import { withDeepAbort } from './abortable-stream.js'
+import { withDeepAbort } from './with-abort.js'
 import { budgetProblem } from './core/budget.js'
 
 type Claimed = { turn: number; messages: unknown[] }

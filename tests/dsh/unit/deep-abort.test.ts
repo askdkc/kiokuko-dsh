@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
-import { withDeepAbort } from '../../../src/deep-thinker/abortable-stream.js'
+import { withDeepAbort } from '../../../src/deep-thinker/with-abort.js'
 
-for(const [name,path,symbol] of [['Deep','../../../src/deep-thinker/abortable-stream.ts','withDeepAbort'],['boundary','../../../src/dsh/boundary-worker.ts','abortable']])test(`pre-cancelled ${name} wait still observes the rejected operation`, () => {
+for(const [name,path,symbol] of [['Deep','../../../src/deep-thinker/with-abort.ts','withDeepAbort'],['boundary','../../../src/dsh/boundary-worker.ts','abortable']])test(`pre-cancelled ${name} wait still observes the rejected operation`, () => {
   const source = new URL(path!, import.meta.url).href
   const child = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
     import {${symbol} as withDeepAbort} from ${JSON.stringify(source)};

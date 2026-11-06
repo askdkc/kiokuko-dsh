@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { abortableStream } from '../../deep-thinker/abortable-stream.js'
+import { abortableStream } from '../../abortable-stream.js'
 import { containsDisallowedTextCharacters } from '../../serialization/validate.js'
 import type { DshLlm } from '../session-memory-finalizer.js'
 

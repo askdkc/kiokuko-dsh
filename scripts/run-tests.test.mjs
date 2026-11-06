@@ -8,6 +8,8 @@ import test from 'node:test'
 import { processIdentity, sameProcess } from '../lisp/process-identity.mjs'
 const exec = promisify(execFile)
 const runner = resolve('scripts/run-tests.mjs')
+// These fixtures exercise the process watchdog without a DSH runtime, even in CI.
+const watchdogEnv = { ...process.env, KIOKUKO_REQUIRE_DSH_NATIVE: '0' }
 
 test('direct native runs reject a missing DSH graph before executing tests', async () => {
   const root = await mkdtemp(join(tmpdir(), 'kiokuko-native-preflight-'))
@@ -42,7 +44,7 @@ test(
         "import test from 'node:test'; test('normal', () => {});\n",
       )
       const result = await exec(process.execPath, [runner, file], {
-        env: { ...process.env, KIOKUKO_TEST_TIMEOUT_MS: '2000' },
+        env: { ...watchdogEnv, KIOKUKO_TEST_TIMEOUT_MS: '2000' },
         timeout: 6000,
       })
       assert.match(result.stdout, /normal/)
@@ -82,7 +84,7 @@ for (const exitedGroupEperm of [false, true]) test(
       const start = Date.now()
       await assert.rejects(
         exec(process.execPath, [...(exitedGroupEperm ? ['--import', preload] : []), runner, file], {
-          env: { ...process.env, KIOKUKO_TEST_TIMEOUT_MS: '2000' },
+          env: { ...watchdogEnv, KIOKUKO_TEST_TIMEOUT_MS: '2000' },
           timeout: 6000,
         }),
         (error) => {
@@ -138,7 +140,7 @@ test('a permission failure against a live owned group remains fatal', { timeout:
       };
     `)
     await assert.rejects(exec(process.execPath, ['--import', preload, runner, file], {
-      env: { ...process.env, KIOKUKO_TEST_TIMEOUT_MS: '1000' }, timeout: 7000,
+      env: { ...watchdogEnv, KIOKUKO_TEST_TIMEOUT_MS: '1000' }, timeout: 7000,
     }), error => {
       assert.equal(error.code, 1)
       assert.match(error.stderr, /live owned group termination denied/)
@@ -165,7 +167,7 @@ test('an exited leader does not hide EPERM while its owned descendant is alive',
       const kill=process.kill;process.kill=function(pid,signal){if(pid<0&&signal==='SIGKILL'&&exited.has(-pid))
         throw Object.assign(new Error('live descendant termination denied'),{code:'EPERM'});return kill.call(this,pid,signal)};
     `)
-    await assert.rejects(exec(process.execPath, ['--import', preload, runner, file], { timeout: 7000 }), error => {
+    await assert.rejects(exec(process.execPath, ['--import', preload, runner, file], { env: watchdogEnv, timeout: 7000 }), error => {
       assert.equal(error.code, 1)
       assert.match(error.stderr, /live descendant termination denied/)
       return true

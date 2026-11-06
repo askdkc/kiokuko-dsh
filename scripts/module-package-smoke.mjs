@@ -37,6 +37,16 @@ class FixtureModel extends llm.LlmAdapter {
   async listModels(provider) { return [{ provider, id: 'fixture', name: 'fixture' }] }
   async resolveModel(provider, id) { return { provider, id, name: id, context: { contextWindow: semanticReady ? 20000 : 100000 } } }
   async *stream(options) {
+    if (options.purpose === 'akinator-expected') {
+      assert.deepEqual(options.tools, [])
+      const { request } = JSON.parse(options.messages[0].content[0].text)
+      const text = JSON.stringify({ expected: request, quote: request })
+      yield { type: 'block-start', index: 0, blockType: 'text' }
+      yield { type: 'text-delta', index: 0, text }
+      yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+      yield { type: 'finish', reason: { kind: 'stop' } }
+      return
+    }
     if (options.purpose === 'compaction') {
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'block-end', index: 0, block: { type: 'text', text: '{"schemaVersion":1,"memories":[]}' } }

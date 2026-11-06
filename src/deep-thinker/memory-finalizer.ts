@@ -11,7 +11,7 @@ import { budgetProblem, estimateRequestTokens } from './core/budget.js'
 import { LegacyDeepConfigurationSchema, CandidateSchema, GoalNodeSchema, QualityNodeSchema } from './core/contracts.js'
 import { deepMemoryRequestScope } from './memory-request.js'
 import { currentArtifacts, changedSources } from './evidence.js'
-import { abortableStream } from './abortable-stream.js'
+import { abortableStream } from '../abortable-stream.js'
 import { processDeepSlots } from './slots.js'
 
 export const DeepFinalizationSourceSchema = z.object({ kind: z.literal('deep-report'), workspace: z.string(), sessionId: z.string(), configuration: LegacyDeepConfigurationSchema,

@@ -8,7 +8,7 @@ import { acquireMemoryLease, assertMemoryLease, releaseMemoryLease, reviewState 
 import { adoptMemories, memorySnapshots } from '../memory/review/adoption.js'
 import { collectReviewEvidence, reviewManifest } from '../memory/review/evidence.js'
 import { FinalizerResultV4, CITED_REVIEW_SYSTEM, FinalizerResult, type MemoryOperation, type ReviewEvidence, type MemorySnapshot, type ReviewRange } from '../memory/review/contracts.js'
-import { abortableStream } from '../deep-thinker/abortable-stream.js'
+import { abortableStream } from '../abortable-stream.js'
 import { EVOLUTION_OBSERVATION_EVENT, observationMatchesResult, type EvolutionObservation, type EvolutionObservationBinding } from './evolution-observation.js'
 import { readEvolutionObservation } from './plugin-records.js'
 import { isSyntheticContextSource } from './plugin-source.js'
