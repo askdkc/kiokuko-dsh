@@ -81,7 +81,7 @@ async function fixture(nestedLaunch = false) {
   });
   await runtime.start();
   const host = new Host();
-  // This fixture explicitly approves both native review steps; production has
+  // This fixture explicitly approves the concrete native proposal; production has
   // no default answer. Consent rejection is exercised separately below.
   host.answer = async request => ({ answers: [{ id: request.questions[0].id,
     selected: [request.questions[0].options[0].label] }] });
@@ -231,7 +231,29 @@ function turn(
   });
   a.append("turn/end", { turn: id, reason: { kind: outcome } });
 }
-test("every completed turn asks before organizing and saves only the approved proposal", async () => {
+test("greetings leave the conversation usable without a memory question or save", async () => {
+  const f = await fixture();
+  try {
+    f.host.model = async function* () {
+      yield { type: "text-delta", text: '{"lessons":[]}' };
+      yield { type: "finish", reason: { kind: "stop" } };
+    };
+    const a = f.agent("greeting");
+    for (const [index, prompt] of ["yo", "thanks", "こんにちは"].entries()) {
+      const turn = index + 1;
+      a.append("turn/start", { turn });
+      a.append("user/message", { turn, source: { kind: "user" }, content: [{ type: "text", text: prompt }] });
+      a.append("assistant/message", { turn, message: { content: [{ type: "text", text: "Hello!" }] } });
+      a.append("turn/end", { turn, reason: { kind: "completed" } });
+      await f.memory.whenIdle();
+      assert.equal(f.host.questions.length, 0);
+      assert.equal((await f.snapshot()).turnCount, 0);
+      assert.equal((await a.step(turn + 1)).kind, "enter");
+    }
+    assert.equal(f.host.modelCalls.length, 3);
+  } finally { await f.close(); }
+});
+test("useful learning asks once with concrete content and saves only the approved proposal", async () => {
   const f = await fixture();
   try {
     const a = f.agent("consent");
@@ -239,13 +261,13 @@ test("every completed turn asks before organizing and saves only the approved pr
     turn(a, 1);
     await f.memory.whenIdle();
     assert.equal(f.host.questions.length, 1);
-    assert.equal(f.host.modelCalls.length, 0);
+    assert.equal(f.host.modelCalls.length, 1);
     assert.equal((await f.snapshot()).turnCount, 0);
     f.host.answer = async request => ({ answers: [{ id: request.questions[0].id, selected: [request.questions[0].options[0].label] }] });
     turn(a, 2);
     await f.memory.whenIdle();
-    assert.equal(f.host.questions.length, 3);
-    assert.match(f.host.questions[2].questions[0].detail, /Create output directory/);
+    assert.equal(f.host.questions.length, 2);
+    assert.match(f.host.questions[1].questions[0].detail, /Create output directory/);
     assert.equal((await f.snapshot()).turnCount, 1, JSON.stringify(a.events.filter(e => e.type === 'kiokuko/repository-learning')));
   } finally { await f.close(); }
 });
@@ -259,18 +281,18 @@ test("an unavailable review UI cannot silently save turn memories", async () => 
     assert.equal((await f.snapshot()).turnCount, 0);
   } finally { await f.close(); }
 });
-test("a no-tool turn still prompts, and closing its proposal saves nothing", async () => {
+test("useful no-tool learning still prompts, and closing its proposal saves nothing", async () => {
   const f = await fixture();
   try {
     const a = f.agent("no-tool");
     f.host.answer = async request => ({ answers: [{ id: request.questions[0].id,
-      selected: f.host.questions.length === 1 ? ["整理して確認する"] : [] }] });
+      selected: [] }] });
     a.append("turn/start", { turn: 1 });
     a.append("user/message", { source: { kind: "user" }, content: [{ type: "text", text: "Explain the parser" }] });
     a.append("assistant/message", { turn: 1, message: { content: [{ type: "text", text: "The parser reads tokens." }] } });
     a.append("turn/end", { turn: 1, reason: { kind: "completed" } });
     await f.memory.whenIdle();
-    assert.equal(f.host.questions.length, 2);
+    assert.equal(f.host.questions.length, 1);
     assert.equal((await f.snapshot()).turnCount, 0);
   } finally { await f.close(); }
 });
@@ -282,7 +304,6 @@ test("a new turn discards a pending save approval and its late answer", async ()
     const a = f.agent("late-approval");
     let questionId = '';
     f.host.answer = async request => {
-      if (f.host.questions.length === 1) return { answers: [{ id: request.questions[0].id, selected: ["整理して確認する"] }] };
       questionId = request.questions[0].id;
       shown();
       return new Promise(done => { resolve = done; });
@@ -404,7 +425,7 @@ test("capture refusal, excluded session and delayed model result cannot create r
     await f.close();
   }
 });
-test("missing model route saves bounded observed turn and reports unavailable instead of claiming a generated lesson", async () => {
+test("missing model route neither prompts nor saves and reports unavailable", async () => {
   const f = await fixture();
   try {
     delete f.host.model;
@@ -412,7 +433,8 @@ test("missing model route saves bounded observed turn and reports unavailable in
     turn(a, 1);
     await f.memory.whenIdle();
     const snapshot = await f.snapshot();
-    assert.equal(snapshot.turnCount, 1);
+    assert.equal(snapshot.turnCount, 0);
+    assert.equal(f.host.questions.length, 0);
     assert.equal(
       snapshot.points.filter((p) => p.kind === "hypothesis").length,
       0,
@@ -489,11 +511,11 @@ test("repository reset invalidates a different session reflection already in fli
     const gate = new Promise<void>((r) => {
       release = r;
     });
-    f.host.model = async function* () {
+    const reflect = f.host.model!;
+    f.host.model = async function* (request) {
       entered();
       await gate;
-      yield { type: "text-delta", text: '{"lessons":[]}' };
-      yield { type: "finish", reason: { kind: "stop" } };
+      yield* reflect(request);
     };
     const later = f.agent("later-derived");
     turn(later, 1);
@@ -530,7 +552,7 @@ for (const boundary of [
   "mid-stream",
   "after-response",
 ] as const) {
-  test(`repository reflection connection loss ${boundary} saves only observations and the next turn remains usable`, async () => {
+  test(`repository reflection connection loss ${boundary} does not prompt or save and the next turn remains usable`, async () => {
     const f = await fixture();
     const original = f.host.model!;
     try {
@@ -550,7 +572,8 @@ for (const boundary of [
       turn(a, 1);
       await f.memory.whenIdle();
       const first = await f.snapshot();
-      assert.equal(first.turnCount, 1);
+      assert.equal(first.turnCount, 0);
+      assert.equal(f.host.questions.length, 0);
       assert.ok(
         first.points.every(
           (point) =>
@@ -562,7 +585,7 @@ for (const boundary of [
         a.events.some(
           (event) =>
             event.type === "kiokuko/repository-learning" &&
-            event.data.status === "saved" &&
+            event.data.status === "unavailable" &&
             event.data.reason === "model_call_failed",
         ),
       );
@@ -570,7 +593,7 @@ for (const boundary of [
       f.host.model = original;
       turn(a, 2);
       await f.memory.whenIdle();
-      assert.equal((await f.snapshot()).turnCount, 2);
+      assert.equal((await f.snapshot()).turnCount, 1);
       assert.equal(
         f.host.modelCalls.length,
         2,

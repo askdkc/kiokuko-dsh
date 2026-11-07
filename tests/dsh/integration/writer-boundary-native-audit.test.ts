@@ -43,10 +43,10 @@ test('explicit managed completion remains reviewable after native turn learning 
     f.setAnswer(q=>reply(q,f.asked.length%2===1?'整理して確認する':'この内容を保存する'))
     f.agent.followup(f.llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:'Complete ordinary native conversation.'}]}))
     await f.agent.whenIdle();await f.memory.whenIdle()
-    assert.equal(f.asked.length,2,'ordinary turn learning requires exact approval')
+    assert.equal(f.asked.length,0,'ordinary conversation with no learning must not open review')
     f.memory.completed('native-task','completed',f.agent.session.id)
     await f.memory.whenIdle()
-    assert.equal(f.asked.length,4,'explicit managed completion retains its separate exact-preview approval')
+    assert.equal(f.asked.length,2,'explicit managed completion retains its separate exact-preview approval')
     assert.equal(count(f.database,'replay_memories'),1)
     assert.deepEqual(f.errors,[])
   }finally{await f.close()}

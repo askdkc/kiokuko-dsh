@@ -5,7 +5,7 @@ import { fail } from './contracts.js'
 import { networkFilter } from './seccomp.js'
 import { checkedDirectory } from './files.js'
 
-export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string; workspace?: string; protected?: boolean }
+export interface SandboxLayout { base: string; scratch: string; inputs: string; cache: string; library: string; compiled?: string; runtimeExecutable?: string; workspace?: string; protected?: boolean }
 export interface Launch { command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; seccompPath?: string; group?: boolean; namespaceInfo?: boolean }
 const systemPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin']
 export async function executable(name: string): Promise<string> {

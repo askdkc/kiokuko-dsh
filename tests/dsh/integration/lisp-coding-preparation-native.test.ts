@@ -17,10 +17,10 @@ const extra={lisp:{enabled:true,executionMode:'development',sbclPath:process.env
 const result=(q:any,id:string)=>{const r=nativeToolResults(q.messages).find((r:any)=>r.toolCallId===id);assert.ok(r,id);return r}
 
 test('a protected write requires every page of the 4,188-character prototype result', {timeout:120000}, async () => {
- const f = await nativeSkillFixture({packages, ...(packageRoot ? {packageRoot} : {}), extra, startupChoice:'decision OFF / Lisp ON'})
+ const f = await nativeSkillFixture({packages, ...(packageRoot ? {packageRoot} : {}), extra:{...extra,lisp:{...extra.lisp,executionMode:'protected'}}, startupChoice:'decision OFF / Lisp ON'})
  const path = join(f.dir, 'parser.txt')
  const {mock} = f
- const write = (id: string) => mock.toolCallResponse(id, 'kioku_write', {path:'parser.txt', content:'42'})
+ const write = (id: string) => mock.toolCallResponse(id, 'lisp_eval', {operationId:id,code:'(kioku.files:propose-write "parser.txt" "42")'})
  let saved: string
  const page = (id: string, offset: number) => mock.toolCallResponse(id, 'lisp_inspect', {
    operationId:id, resultOperationId:saved, section:'result', offset,
@@ -260,10 +260,10 @@ test('manual ON survives same-session reload and a new coding request starts unv
  assert.equal(await f.agent.ctx.get('kiokukoLispCoding').manualSelected(f.agent),true)
  // Reload preserves the choice but does not replay or silently recover a Lisp process.
  assert.match((await f.ctx.commands.execute(f.agent,'/kioku-lisp status',[],new AbortController().signal)).result.text,/RECOVERY_REQUIRED/u)
- f.responses.push(...codingPrelude(f.mock,'reload'),(q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/selected/u);return f.mock.textResponse('The prototype has not run; implementation remains pending.')})
+ f.responses.push(...codingPrelude(f.mock,'reload'),(q:any)=>{assert.ok(q.tools.some((t:any)=>t.name==='lisp_eval'));assert.match(JSON.stringify(q),/selected/u);return f.mock.textResponse('Lisp remains selected for ordinary development.')})
  await f.turn('src/new.ts に関数を実装して。')
  const status=JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
- assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'prototype_required');assert.equal(status.codingPreparation.attempts,0)
+ assert.equal(questions,0);assert.equal(status.codingPreparation.verified,false);assert.equal(status.codingPreparation.phase,'selected');assert.equal(status.codingPreparation.attempts,0)
  }finally{await f.close()}
 })
 
@@ -283,14 +283,14 @@ for (const reload of [false, true]) test(`manual ON supplies a formal Goal choic
      assert.equal(workflow.choice.state,'yes')
      assert.equal(f.startupQuestions.length,1);assert.equal(workflow.choice.answerRef,f.startupQuestions[0]!.id,'Goal must use the exact accepted startup setting')
      assert.equal(workflow.assessment.verified,false)
-     return f.mock.textResponse('Goal prepared; the prototype and verification remain pending.')
+     return f.mock.textResponse('Goal prepared; Lisp remains selected and verification is pending.')
    })
    // Structured interpretation admits the implementation; the opaque text has
    // no lexical early-preparation choice for the formal workflow to reuse.
    await f.turn('A/B/C をまとめて入れて。通常実行で。')
    assert.equal(questions,0)
    const status = JSON.parse((await f.ctx.commands.execute(f.agent,'/kioku-lisp status --json',[],new AbortController().signal)).result.text)
-   assert.equal(status.codingPreparation.phase,'prototype_required')
+   assert.equal(status.codingPreparation.phase,'selected')
    assert.equal(status.codingPreparation.verified,false)
  } finally {await f.close()}
 })

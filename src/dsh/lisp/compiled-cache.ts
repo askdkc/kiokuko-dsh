@@ -43,9 +43,10 @@ function setupDiagnostics(stderr: Buffer, truncated: boolean): string {
 /** Bounded, supervised, sandboxed setup. No user code or inherited environment. */
 export async function runLispSetup(layout: SandboxLayout, config: LispConfiguration, script: string, signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
-  const phase = ['runtime-identity.lisp', 'compile.lisp', 'check-compiled.lisp'].includes(script) ? script : 'setup'
-  const launch = await sandboxLaunch(layout, config.sbclPath,
-    ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(layout.library, script)], 'setup', true)
+  const phase = ['runtime-identity.lisp', 'compile.lisp', 'check-compiled.lisp', 'save-executable.lisp', 'check-executable'].includes(script) ? script : 'setup'
+  const checkExecutable = script === 'check-executable'
+  const launch = await sandboxLaunch(layout, checkExecutable ? join(layout.cache, 'kiokuko-lisp') : config.sbclPath,
+    checkExecutable ? ['--self-test'] : ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(layout.library, script)], 'setup', true)
   signal.throwIfAborted()
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [join(layout.library, 'supervisor.mjs'), JSON.stringify({ ...launch, env:undefined, protocol: false })],

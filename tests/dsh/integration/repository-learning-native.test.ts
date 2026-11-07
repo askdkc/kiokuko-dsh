@@ -14,6 +14,7 @@ isolateSkillHome();
 const packages =
   process.env.KIOKUKO_DSH_PACKAGE_ROOT ??
   join(process.cwd(), "tests/fixtures/dsh-runtime/node_modules");
+const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT;
 const extra = {
   lisp: { enabled: false },
   typedDecisions: { mode: "off" },
@@ -31,13 +32,50 @@ const memoryMessages = (request: any) =>
     message.source?.sections?.some((value: any) => value.name === section),
   );
 
+test("native greetings and study follow-ups remain conversational across plugin reload", { timeout: 30_000 }, async () => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko', explicit: false, extra, approveMemory: true });
+  const diagnostics: any[] = [];
+  const off = f.ctx.on('session/event', (_session: any, event: any) => {
+    if (event.type === 'plugin:kiokuko-dsh/repository-learning') diagnostics.push(event.data);
+  }, { global: true });
+  const original = f.model.stream.bind(f.model);
+  f.model.stream = async function* (request: any) {
+    if (String(request.system).startsWith('Extract compact repository-scoped learning')) {
+      yield* f.mock.textResponse('{"lessons":[]}');
+      return;
+    }
+    yield* original(request);
+  };
+  try {
+    const exchanges = [
+      ['yo', 'Hey!'],
+      ['Explain recursion with a simple example.', 'Recursion solves a problem by calling itself on a smaller input.'],
+      ['Can you give me a practice question?', 'Write a function that sums a list recursively.'],
+      ['Thanks!', 'You are welcome.'],
+    ] as const;
+    for (const [index, [prompt, answer]] of exchanges.entries()) {
+      f.responses.push(f.mock.textResponse(answer));
+      await f.turn(prompt);
+      const deadline = Date.now() + 5000;
+      while (diagnostics.filter(value => value.status === 'no_learning').length <= index && Date.now() < deadline) await delay(10);
+      assert.equal(diagnostics.filter(value => value.status === 'no_learning').length, index + 1);
+      assert.equal(f.memoryQuestions.length, 0);
+      assert.equal(f.responses.length, 0, 'foreground answer was consumed');
+      if (index === 1) await f.reload('compiled');
+    }
+    const db = openConnection(join(f.dir, 'kiokuko-dsh.sqlite3'));
+    try { assert.equal(readRepositoryLearning(db, f.dir).turnCount, 0); }
+    finally { db.close(); }
+  } finally { off(); await f.close(); }
+});
+
 test(
-  "public native plugin learns each turn through its model route, injects repo compact, and survives reload/new session without cross-repo leakage",
+  "public native plugin learns useful turns through its model route, injects repo compact, and survives reload/new session without cross-repo leakage",
   { timeout: 60_000 },
   async () => {
     // Public plugin bootstrap, not an injected host or external reflector. The
     // transport is deterministic; this proves wiring, not external model quality.
-    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
+    const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko', explicit: false, extra, approveMemory: true });
     const requests: any[] = [],
       reflections: any[] = [],
       diagnostics: any[] = [],
@@ -254,7 +292,10 @@ test(
         }),
       );
       await fresh.whenIdle();
-      await waitForRevision(3);
+      const emptyDeadline = Date.now() + 5000;
+      while (!diagnostics.some(value => value.status === "no_learning") && Date.now() < emptyDeadline) await delay(10);
+      assert.ok(diagnostics.some(value => value.status === "no_learning"));
+      assert.equal(snapshot().revision, 2);
 
       const otherRoot = join(f.dir, "other-repository");
       await mkdir(join(otherRoot, ".git"), { recursive: true });
@@ -282,7 +323,7 @@ test(
         }),
       );
       await foreign.whenIdle();
-      assert.equal(snapshot().revision, 3);
+      assert.equal(snapshot().revision, 2);
       assert.equal(reflections.length, 3);
       assert.equal(f.responses.length, 0);
       const status = await f.ctx.commands.execute(
@@ -292,7 +333,7 @@ test(
         new AbortController().signal,
       );
       assert.equal(status.result.kind, "success", status.result.text);
-      assert.match(status.result.text, /"turnCount": 3/);
+      assert.match(status.result.text, /"turnCount": 2/);
       assert.doesNotMatch(
         status.result.text,
         /ALPHA_REPO_LESSON|BETA_CORRECTED_LESSON/,
@@ -345,10 +386,10 @@ test(
 );
 
 test(
-  "public native plugin records a failed no-tool turn without promoting a failed auxiliary model to learned success",
+  "public native plugin does not interrupt or save a failed turn when reflection fails",
   { timeout: 30_000 },
   async () => {
-    const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
+    const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko', explicit: false, extra, approveMemory: true });
     const diagnostics: any[] = [];
     const off = f.ctx.on(
       "session/event",
@@ -395,9 +436,10 @@ test(
       const db = openConnection(join(f.dir, "kiokuko-dsh.sqlite3"));
       try {
         const stored = readRepositoryLearning(db, f.dir);
-        assert.equal(stored.turnCount, 1, JSON.stringify(diagnostics));
+        assert.equal(stored.turnCount, 0, JSON.stringify(diagnostics));
+        assert.equal(f.memoryQuestions.length, 0);
         assert.equal(stored.outcomeCounts.completed, 0);
-        assert.equal(stored.outcomeCounts.failed, 1);
+        assert.equal(stored.outcomeCounts.failed, 0);
         assert.equal(
           stored.points.filter((point) => point.kind === "hypothesis").length,
           0,
@@ -431,7 +473,7 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
     `public native automatic learning honors ${scenario} boundaries`,
     { timeout: 30_000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
+      const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko', explicit: false, extra, approveMemory: true });
       const diagnostics: any[] = [];
       const off = f.ctx.on(
         "session/event",
@@ -523,7 +565,8 @@ for (const scenario of ["refusal", "cancelled", "secret"] as const) {
               1,
               "sanitized observation must reach reflection, not pass vacuously",
             );
-            assert.equal(saved.turnCount, 1);
+            assert.equal(saved.turnCount, 0);
+            assert.equal(f.memoryQuestions.length, 0);
             assert.doesNotMatch(
               JSON.stringify(auxiliary),
               /FixtureOnlyNotReal12345/,
@@ -549,7 +592,7 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
     `public native learning recovers from ${interruption} while its old model response is delayed`,
     { timeout: 30000 },
     async () => {
-      const f = await nativeSkillFixture({ packages, driver: 'kiokuko', explicit: false, extra, approveMemory: true });
+      const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko', explicit: false, extra, approveMemory: true });
       const original = f.model.stream.bind(f.model);
       let release!: () => void;
       let entered!: () => void;
@@ -590,7 +633,14 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
             entered();
             await gate;
           }
-          yield* f.mock.textResponse('{"lessons":[]}');
+          const evidence = JSON.parse(request.messages[0].content[0].text);
+          yield* f.mock.textResponse(JSON.stringify({ lessons: [{
+            hypothesis: "Fixture output needs its parent directory.",
+            applicability: "New fixture output paths.",
+            nextAction: "Create the parent before writing.",
+            verifyWith: "Inspect output from a clean directory.",
+            evidenceRefs: [evidence.evidenceRefs[0]],
+          }] }));
           return;
         }
         yield* original(request);

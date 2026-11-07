@@ -246,3 +246,13 @@ for (const choice of ['yes', 'no'] as const)
     assert.deepEqual(JSON.parse(JSON.stringify(status)), status)
     assert.equal((status as any).operationId, null)
   })
+
+
+test('ordinary coding metadata never enrolls a selected session in the protected prototype protocol', async () => {
+  const f = fixture()
+  await f.p.prepare(f.input)
+  f.p.answered(f.agent, f.input.task, 'yes', 'ordinary-task-choice', 'optional-workflow:1', false)
+  assert.equal(f.p.denial(f.agent, 'lisp_eval', {code:'(+ 20 22)'}), undefined)
+  assert.equal(f.p.denial(f.agent, 'kioku_write', {}), undefined)
+  assert.equal((f.p.status(f.agent) as any).phase, 'selected')
+})

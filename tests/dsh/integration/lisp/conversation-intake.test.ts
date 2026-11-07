@@ -1,3 +1,4 @@
+import { isLispConversation as sourceIsLispConversation } from '../../../../src/dsh/lisp-tool-identity.js'
 import { execFileSync } from 'node:child_process'
 import { mountNativeTools, executeNativeTool } from '../../helpers/native-tools.js'
 import assert from 'node:assert/strict'
@@ -16,6 +17,7 @@ import {mountLispSurface as sourceLispSurface} from '../../../../src/dsh/lisp/su
 import {LispConfig} from '../../../../src/dsh/lisp/contracts.js'
 import {OnDemandIntake as SourceOnDemandIntake} from '../../../../src/dsh/on-demand-intake.js'
 const ownedPackageRoot=process.env.KIOKUKO_OWNED_PACKAGE_ROOT
+const isLispConversation:typeof sourceIsLispConversation=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/lisp-tool-identity.js')).href)).isLispConversation:sourceIsLispConversation
 const mountLispSurface:typeof sourceLispSurface=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/lisp/surface.js')).href)).mountLispSurface:sourceLispSurface
 const OnDemandIntake:typeof SourceOnDemandIntake=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/on-demand-intake.js')).href)).OnDemandIntake:SourceOnDemandIntake
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
@@ -69,7 +71,9 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    assert.equal(current?.definition,undefined,'changing the route does not create a plan')
   }
   await intake.capture({agent,turn:1,step:0,messages:[{id:'original-human',role:'user',source:{kind:'user'},content:[{type:'text',text:'Calculate 20 plus 22 in this conversation. Inspect only; do not change workspace files.'}]}],signal:controller.signal})
-  if(mode==='optional-workflow'){
+  if(mode==='optional-workflow'||controlled){
+   assert.equal(isLispConversation(agent),true,'preparing optional work must preserve the selected session Lisp route')
+   assert.equal(intake.nativeLisp({name:'lisp_eval',arguments:{code:'(+ 20 22)'},agent,callId:'route-check',signal:controller.signal}),true)
    const projected=await (ctx.get('kiokukoLispAssembly') as any).project(agent,{sections:[],variables:{},tools:ctx.tools.schemas(agent)})
    assert.ok(projected.tools.some((t:any)=>t.name==='lisp_eval'),'optional Goal metadata cannot remove the native model-facing Lisp surface')
   }
@@ -117,6 +121,18 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    assert.equal(rebound.value.ok,false);assert.equal(bodies,beforeOwnerChange,'a changed owner context never reaches native execution')
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0,JSON.stringify(rebound))
   } finally {agent.ctx=originalContext;onApproval=undefined}
+  if(mode==='unknown'){
+   const originalGet=ctx.tools.get,beforeHidden=bodies
+   const nativeCount=()=>db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE json_extract(operation_json,'$.route')='native'").get<{n:number}>()!.n
+   const before=nativeCount()
+   ctx.tools.get=function(name:string,candidate:any){return name==='bash'&&candidate===agent?undefined:originalGet.call(this,name,candidate)}
+   try{
+    const hidden=await execute('lisp_eval',{operationId:'hidden-native-bash',code:'(kioku.process:run "node" (list "--version"))'})
+    assert.equal(hidden.value.ok,false);assert.equal(bodies,beforeHidden)
+    assert.equal(nativeCount(),before+1,'an agent restriction must not switch from native Bash to owned execution')
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0)
+   }finally{ctx.tools.get=originalGet}
+  }
   const nested=await executeNativeTool(ctx,packages,{name:'lisp_eval',arguments:{operationId:'untrusted-child',code:'(+ 1 2)'},agent,callId:'untrusted-child',parent:Symbol('untrusted'),signal:controller.signal})
   assert.equal(nested.isError,true,'an arbitrary child Lisp call cannot acquire the root native capability')
   plan=true

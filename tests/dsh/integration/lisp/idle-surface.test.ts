@@ -10,7 +10,7 @@ import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import { CompiledLispCache } from '../../../../src/dsh/lisp/compiled-cache.js'
 
-for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFences ? 'host fence' : 'root fence'}) suspend, resume and preserve identity`, {
+for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFences ? 'host fence' : 'root fence'}) retain the session heap across idle and reopening`, {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 90000,
 }, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-idle-surface-')))
@@ -41,14 +41,17 @@ for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFence
   try {
     assert.equal((await command.handler({ rawInput: 'enable', agent, signal: new AbortController().signal })).kind, 'success')
     const firstGeneration = (await state()).generation
+    const firstPid = (await state()).runtimePid
+    await surface.manager.execute(owner, 'lisp_eval', {operationId:'session-definition',code:'(defparameter *session-value* 42)'})
     await listeners.get('agent/status')!({ agent, status: 'running' })
     await new Promise(resolve => setTimeout(resolve, 1100))
     assert.equal((await state()).state, 'READY')
     await listeners.get('agent/status')!({ agent, status: 'idle' })
-    const deadline = Date.now() + 5000
-    while ((await state()).state !== 'SUSPENDED') { assert.ok(Date.now() < deadline); await new Promise(resolve => setTimeout(resolve, 20)) }
-    assert.match(guard({ agent, name: 'bash' }), /Lisp/u, 'normal suspension never releases protection')
-    assert.match((await command.handler({ rawInput: 'status', agent })).text, /SUSPENDED/u)
+    await new Promise(resolve => setTimeout(resolve, 1100))
+    assert.equal((await state()).state, 'READY')
+    assert.equal((await state()).runtimePid, firstPid)
+    assert.match(guard({ agent, name: 'bash' }), /Lisp/u, 'idle retains the selected route')
+    assert.match((await command.handler({ rawInput: 'status', agent })).text, /READY/u)
     assert.equal(await step(), 'model-ready')
     assert.match((sections.get('kiokuko:lisp-approval') as unknown as () => string)(), /mode: ask/)
     assert.equal((await command.handler({ rawInput: 'approval auto', agent })).kind, 'success')
@@ -58,20 +61,24 @@ for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFence
     const applied = await surface.manager.execute(owner, 'lisp_eval', {operationId:'auto-identity',code:'(kioku.files:propose-write "auto.txt" "ok")'}) as any
     assert.equal(applied.changes?.[0]?.state, 'APPLIED', JSON.stringify(applied))
     const nextGeneration = (await state()).generation
-    assert.notEqual(nextGeneration, firstGeneration)
-    assert.match(sections.get('kiokuko:lisp-runtime')!, /automatically restarted/u)
+    assert.equal(nextGeneration, firstGeneration)
+    assert.doesNotMatch(sections.get('kiokuko:lisp-runtime')!, /automatically restarted/u)
     assert.ok(sections.get('kiokuko:lisp-runtime')!.includes(nextGeneration), 'new generation reaches the model before its next step')
     await listeners.get('session/disposed')!({ ...agent.session })
     assert.equal((await state()).state, 'READY', 'a same-ID stale session cannot terminate this worker')
     const ended = agent.session
     currentAgent = undefined; currentSession = undefined
     await listeners.get('session/disposed')!(ended)
-    assert.equal((await state()).state, 'SUSPENDED')
+    assert.equal((await state()).state, 'READY')
     assert.equal(definitions.size, 0)
     assert.equal(sections.size, 0)
     agent = { ...agent, session: { ...ended } }; currentAgent = agent; currentSession = agent.session
     assert.equal(await step(), 'model-ready', 'reopening the conversation resumes without manual recovery')
     assert.ok(definitions.has('lisp_eval'))
+    assert.equal((await state()).runtimePid, firstPid)
+    const retained = await surface.manager.execute(owner, 'lisp_eval', {operationId:'after-reopen',code:'*session-value*'}) as any
+    assert.equal(retained.value.printed, '(42)')
+    assert.equal(retained.generation, firstGeneration)
     assert.match(guard({ agent, name: 'bash' }), /Lisp/u)
     // Session disposal can arrive before startup registers tools. It still
     // cancels the admission and must not register a dead agent afterward.

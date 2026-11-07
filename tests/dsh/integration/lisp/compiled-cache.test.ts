@@ -33,7 +33,7 @@ async function fixture(startupTimeoutMs = 60000) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-compiled-')))
   const root = join(base, 'project'), library = join(base, 'lisp'), dataRoot = join(base, 'data')
   await mkdir(root)
-  await cp(fileURLToPath(new URL('../../../../lisp/', import.meta.url)), library, { recursive: true })
+  await cp(fileURLToPath(new URL('../../../../lisp/', import.meta.url)), library, { recursive: true, filter: path => !path.includes('/.native') })
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   const store = new LispStore(async fn => fn(db))
   const manager = new LispManager({ dataRoot, library, store,

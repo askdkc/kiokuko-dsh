@@ -25,6 +25,7 @@
     "dsh/",
     "docs/",
     "scripts/prepare-build.mjs",
+    "scripts/install-lisp.mjs",
     "scripts/backfill-akinator-memory.mjs",
     "scripts/setup-dsh.mjs",
     "scripts/repair-session-log.mjs",
@@ -39,6 +40,8 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "lisp/",
+    "!lisp/.native/",
+    "!lisp/.native-build-*/",
     "scripts/verify-lisp-vendor.mjs",
     "scripts/smoke-typesafe.mjs",
     "scripts/laya-worker.py",
@@ -133,6 +136,7 @@
         ".agenticreplay/runs and .agenticreplay/exports inside verified session workspaces, or the configured Kiokuko data directory",
         "Legacy history compatibility under DSH's native write lease: exact rejected v3 file or validated new v3 generation from retained v0, identical .bak, disposable validation artifacts, and automatic deletion of confirmed identity-mismatched native logs",
         "Opt-in Lisp scratch, input snapshots, verified compiled bundle cache, durable operation journal, and approved file changes with host backups",
+        "Installation-built standalone Lisp executable under the package lisp/.native directory",
         "Project files through owned native tools; private execution outbox beside the configured Kiokuko database"
       ],
       "commands": [
@@ -170,6 +174,7 @@
       ],
       "lifecycleEvidence": [
         "prepare builds by default; selected CI installs defer to the verifier clean build",
+        "postinstall builds and verifies a standalone Lisp executable using local SBCL; runtime use needs no external SBCL; missing build prerequisites leave Lisp unbuilt with a diagnostic",
         "Git installs use repository-scoped pnpm allowBuilds approval on a supporting pnpm version; source revision pinning is optional and separate",
         "Disposable-profile install, Web start, and uninstall evidence is recorded by CI"
       ]
@@ -201,6 +206,8 @@
     "pack:check": "node scripts/pack-check.mjs",
     "prepublishOnly": "node scripts/prepublish.mjs",
     "prepare": "node scripts/prepare-build.mjs",
+    "postinstall": "node scripts/install-lisp.mjs --optional",
+    "lisp:build": "node scripts/install-lisp.mjs",
     "test:agenticreplay:package": "npm run build && node scripts/verify-agenticreplay-consumer.mjs && node scripts/verify-agenticreplay-consumer.mjs --pnpm",
     "test:memory-review": "node scripts/run-tests.mjs tests/dsh/unit/memory-review tests/dsh/integration/memory-review",
     "test:evolution": "node scripts/run-tests.mjs tests/dsh/unit/evolution tests/dsh/integration/evolution",

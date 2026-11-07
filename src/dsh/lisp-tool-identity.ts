@@ -60,6 +60,8 @@ export function isLispNativeCommandFence(execution: Pick<CommandExecution, 'name
 
 /** A capability created by the Lisp surface from the admitted root execution. */
 export interface LispNativeCommands {
+  /** Select once from host capabilities; never switch routes after a denial. */
+  processRoute?: 'native' | 'owned'
   assertCurrent(): void
   run(input: { program: string; argv: string[]; directory?: string | undefined; timeoutMs: number }, signal: AbortSignal): Promise<unknown>
 }

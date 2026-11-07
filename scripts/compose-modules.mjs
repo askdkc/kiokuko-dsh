@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url'
 async function files(directory, prefix = '') {
   const result = []
   for (const entry of await readdir(join(directory, prefix), { withFileTypes: true })) {
+    if (entry.name === '.native' || entry.name.startsWith('.native-build-')) continue
     const path = join(prefix, entry.name)
     if (entry.isDirectory()) result.push(...await files(directory, path))
     else if (entry.isFile()) result.push(path)
@@ -44,6 +45,7 @@ export async function composeModules(sources, destination) {
     if (descriptor.id !== name || descriptor.coreVersion !== 1) throw new Error(`Incompatible local artifact: ${name}`)
     const extra = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8'))
     if (extra.name !== manifest.name || extra.version !== manifest.version) throw new Error(`Artifact package identity mismatch: ${name}`)
+    if (name === 'lisp') manifest.scripts = { postinstall: extra.scripts.postinstall, 'lisp:build': extra.scripts['lisp:build'] }
     for (const field of ['dependencies', 'peerDependencies', 'peerDependenciesMeta']) {
       for (const [key, value] of Object.entries(extra[field] ?? {})) if (manifest[field]?.[key] !== undefined) assert.deepEqual(manifest[field][key], value, `Conflicting dependency: ${key}`)
       manifest[field] = { ...manifest[field], ...extra[field] }
@@ -87,7 +89,7 @@ export async function composeModules(sources, destination) {
   const permissionLists = ['readPaths', 'writePaths', 'commands', 'externalServices', 'credentials', 'failureBoundaries', 'lifecycleEvidence']
   manifest.dsh.permissions = { ...inheritedPermissions, ...manifest.dsh.permissions,
     ...Object.fromEntries(permissionLists.filter(key => inheritedPermissions[key] || manifest.dsh.permissions[key]).map(key => [key, [...new Set([...(inheritedPermissions[key] ?? []), ...(manifest.dsh.permissions[key] ?? [])])]])) }
-  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(hasMicroJudge ? ['micro-judge/'] : []), ...(sources.lisp ? ['lisp/'] : ['lisp/supervisor.mjs', 'lisp/process-identity.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
+  manifest.files = ['dist/', 'skills/', 'scripts/', 'migrations/', 'docs/', 'PERMISSIONS.md', 'dsh/cordis.patch.yml', ...(manifest.guardrail ? ['guardrail/'] : []), ...(hasMicroJudge ? ['micro-judge/'] : []), ...(sources.lisp ? ['lisp/', '!lisp/.native/', '!lisp/.native-build-*/'] : ['lisp/supervisor.mjs', 'lisp/process-identity.mjs']), ...Object.keys(sources).map(name => `module-${name}.json`), 'LICENSE', 'THIRD_PARTY_NOTICES.md']
   await writeFile(join(destination, 'package.json'), JSON.stringify(manifest, null, 2) + '\n')
   return manifest
 }

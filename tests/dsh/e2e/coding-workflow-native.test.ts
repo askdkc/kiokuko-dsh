@@ -64,6 +64,10 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     f.responses.push((request: any) => {
       const failed = nativeToolResults(request.messages).filter(value => value.isError)
       assert.deepEqual(failed, [], JSON.stringify({ proposal: toolValue(request, 'coding-propose'), final: toolValue(request, 'completed') }))
+      if (choice === '使う') for (const id of ['prototype','write-program','write-test','item-check','goal-check']) {
+        const result = toolValue(request, id)
+        assert.equal(result.ok, true, JSON.stringify({id,result}))
+      }
       const status = toolValue(request, 'completed'); assert.equal(status.state, 'completed', JSON.stringify(status.assessment)); assert.equal(status.assessment.verified, true)
       return f.mock.textResponse('Goal achieved: the public entry returns 42; regression and final user-entry checks passed.')
     })

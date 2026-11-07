@@ -72,6 +72,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   const pi = await import(modulePath('dsh-llm-pi-ai', 'packages/llm/llm-pi-ai'))
   const requests: { url: string; bodyText: string; body: Record<string, any> }[] = []
   const auxiliaryRequests: typeof requests = []
+  const memoryQuestions: unknown[] = []
   const toolCalls: unknown[] = []
   const unexpectedRequests: string[] = []
   let roundtrip: 'capture' | 'prepare' | 'tool-call' | 'final-answer' = 'capture'
@@ -193,7 +194,6 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   } as const
   let fixtureTaskType: keyof typeof fixtureRequests = 'build'
   const preparedTurn = async (agent: any, executeExternal = false) => {
-    const auxiliaryBefore = auxiliaryRequests.length
     roundtrip = 'prepare'; afterPreparation = executeExternal ? 'tool-call' : 'capture'
     await turn(h, agent, fixtureRequests[fixtureTaskType])
     const events = agent.session.snapshotEvents()
@@ -204,7 +204,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
     assert.equal(result.prepared, true, `public preparation must admit this request before phase assertions: ${JSON.stringify(result)}`)
     assert.equal(result.taskType, fixtureTaskType)
     assert.equal(result.originalTask, fixtureRequests[fixtureTaskType])
-    assert.equal(auxiliaryRequests.length, auxiliaryBefore, 'declined memory organization cannot invoke reflection')
+    assert.equal(memoryQuestions.length, 0, 'failed background reflection must not interrupt the foreground turn')
   }
   let questions: any, credentials: any, settings: any
   let wire: any, adapter: ReturnType<typeof createDshHostAdapter> | undefined, composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
@@ -252,6 +252,7 @@ async function verifyNativeToolExposure(protocol: typeof protocols[number]) {
   try {
     questions = h.ctx.plugin({ name: 'tool-exposure-baseline-ui', apply(ctx: any) {
       return ctx.provide('userQuestions', { ask: async (request: any) => { if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+if (request.questions[0]?.id.startsWith('repository-learning:')) { memoryQuestions.push(request); return { answers: [] } }
 return ({ answers: request.questions.map((question: any) => ({ id: question.id, selected: [({ taskType: fixtureTaskType, target: fixtureTaskType === 'writing' ? 'README.md' : fixtureTaskType === 'devops' ? 'fixture service' : 'src/dsh/tool-exposure.ts', expected: 'phase-eligible tools are the only Kiokuko tools in the native request' } as Record<string, string>)[question.id] ?? '通常実行'] })) }) } })
     } }); await questions
     credentials = h.ctx.plugin({ name: 'tool-exposure-baseline-credentials', apply(ctx: any) {
@@ -299,7 +300,7 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
     console.warn = (...args: unknown[]) => { phaseWarnings.push(args.map(String).join(' ')); previousWarn(...args) }
     try { await preparedTurn(phaseAgent) } finally { console.warn = previousWarn }
     assert.equal(requests.length, 4, JSON.stringify(phaseAgent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').map((event: any) => event.data)))
-    if (protocol.name === 'deepseek') assert.equal(auxiliaryRequests.length, 0, 'declining organization prevents every reflection')
+    assert.equal(memoryQuestions.length, 0, 'an unavailable reflection never offers a summary-only save')
     const phaseBody = requests[3]!.body
     const phaseNames = modelFacingNames(phaseBody)
     assert.deepEqual(phaseNames, ['curator_check', 'memory_checkpoint'], `phase fallback diagnostics: ${phaseWarnings.join(' | ') || '(none)'}`)

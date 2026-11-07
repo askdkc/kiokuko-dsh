@@ -58,7 +58,13 @@ for (const mode of ['core', 'adapter'] as const) for (const [changes, timing] of
       class Provider extends llm.LlmAdapter {
         async listModels(provider: string) { return [{ provider, id: 'fixed', name: 'fixed' }] }
         async resolveModel(provider: string, id: string) { return { provider, id, name: id, context: { contextWindow: 200000 } } }
-        async *stream(request: any) { requests.push(request); yield* mock.textResponse('Acknowledged.') }
+        async *stream(request: any) {
+          // Count foreground dispatches only; post-turn reflection is independently covered.
+          if (String(request.system).startsWith('Extract compact repository-scoped learning')) {
+            yield* mock.textResponse('{"lessons":[]}'); return
+          }
+          requests.push(request); yield* mock.textResponse('Acknowledged.')
+        }
       }
       ctx.llm.registerAdapter(['memory-race'], new Provider())
       ctx.on('agent/error', (event: any) => errors.push(event.error))
@@ -162,8 +168,8 @@ for (const explicit of [false, true]) for (const changes of [1, 3]) test(`${expl
       while (readRepositoryLearning(db, f.dir).revision === 0 && Date.now() < deadline) await delay(10)
       assert.ok(reflections >= 1, 'memory generation still runs after memory-free request recovery')
       assert.match(readRepositoryLearning(db, f.dir).compact, /RECOVERED_RACECODE/)
-      assert.deepEqual(f.memoryQuestions.map(q => q.options[0].label), ['整理して確認する', 'この内容を保存する'])
-      assert.match(f.memoryQuestions[1].detail, /RECOVERED_RACECODE/, 'the exact generated content is displayed before storage')
+      assert.deepEqual(f.memoryQuestions.map(q => q.options[0].label), ['この内容を保存する'])
+      assert.match(f.memoryQuestions[0].detail, /RECOVERED_RACECODE/, 'the exact generated content is displayed before storage')
       f.responses.push((request: any) => {
         assert.match(JSON.stringify(request.messages), /RECOVERED_RACECODE/, 'approved learning is usable on the next turn')
         return f.mock.textResponse('The saved parser observation is available.')

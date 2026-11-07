@@ -9,7 +9,7 @@ import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { OpenAIDecisionProvider } from '../../../src/dsh/decisions/openai.js'
 
 isolateSkillHome()
-test('ordinary native chat asks mode once, clarifies a vague request, and offers memory after each answer', { timeout: 20000 }, async () => {
+test('ordinary native chat asks mode once, clarifies a vague request, and leaves ordinary answers free of memory prompts', { timeout: 20000 }, async () => {
   const asked: string[] = []
   const f = await nativeSkillFixture({
     packages: process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules'),
@@ -22,22 +22,24 @@ test('ordinary native chat asks mode once, clarifies a vague request, and offers
       return { answers: [{ id: q.id, selected: [], custom: q.id === 'target' ? 'src/parser.ts' : 'Empty input returns an empty result' }] }
     },
   })
-  const waitForReviews = async (count: number) => {
+  const waitForReflection = async (count: number) => {
+    const reflections = () => f.model.auxiliaryRequests.filter(request => String(request.system).startsWith("Extract compact repository-scoped learning")).length
     const deadline = Date.now() + 3000
-    while (f.memoryQuestions.length < count && Date.now() < deadline) await delay(10)
-    assert.equal(f.memoryQuestions.length, count)
+    while (reflections() < count && Date.now() < deadline) await delay(10)
+    assert.equal(reflections(), count)
+    assert.equal(f.memoryQuestions.length, 0)
   }
   try {
     f.responses.push(f.mock.textResponse('Ready to discuss the parser.'))
     await f.turn('Explain how parsers work.')
-    await waitForReviews(1)
+    await waitForReflection(1)
     f.responses.push(async function* (request: any) {
       assert.match(JSON.stringify(request.messages), /src\/parser.ts/)
       assert.match(JSON.stringify(request.messages), /Empty input returns an empty result/)
       yield* f.mock.textResponse('The clarified target is src/parser.ts.')
     })
     await f.turn('Fix it')
-    await waitForReviews(2)
+    await waitForReflection(2)
     assert.equal(f.startupQuestions.length, 1)
     assert.deepEqual(asked, ['target', 'expected'])
   } finally { await f.close() }

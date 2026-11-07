@@ -20,7 +20,7 @@ export interface LispCodingService {
   prepare(input: LispCodingInput): Promise<LispCodingResult>
   prepareNative?(input: LispCodingInput): Promise<void>
   cancelled?(agent: DshUserQuestionAgent, task: string): void
-  answered?(agent: DshUserQuestionAgent, task: string, choice: 'yes'|'no', answerRef: string, scope: string): void
+  answered?(agent: DshUserQuestionAgent, task: string, choice: 'yes'|'no', answerRef: string, scope: string, protectedWorkflow?: boolean): void
   choiceFor?(agent: DshUserQuestionAgent, task: string): { choice: 'yes'|'no'; answerRef: string } | undefined
   /** Explicit session preference only; runtime availability or a previous task yes is insufficient. */
   manualSelected?(agent: DshUserQuestionAgent): Promise<boolean>

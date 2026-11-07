@@ -35,4 +35,6 @@ GEMINI.md
 
 # Local module staging and measurements
 .artifacts/
+lisp/.native/
+lisp/.native-build-*/
 .kiokuko-ai.json

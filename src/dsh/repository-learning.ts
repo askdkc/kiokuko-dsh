@@ -83,7 +83,6 @@ function proposalText(proposal: TurnProposal): string {
       `根拠: ${lesson.evidenceRefs.join(', ')}`,
       ...(lesson.supersedes?.length ? [`置き換える記憶: ${lesson.supersedes.join(', ')}`, `訂正理由: ${lesson.correctionReason}`] : []),
     ].join('\n')),
-    ...(proposal.lessons?.length ? [] : ['新しい教訓の案はありません。保存するのは上記の要約と出典だけです。']),
     `タグ: ${proposal.tags?.join(', ') ?? ''}`,
     `出典: ${proposal.evidenceRefs.join(', ')}`,
     `整理の結果: ${proposal.reflectionStatus}`,
@@ -342,7 +341,7 @@ export class DshRepositoryLearning {
     agent: Agent,
     input: RepositoryTurnReflectionInput,
     signal: AbortSignal,
-    proposal?: TurnProposal,
+    proposal: TurnProposal,
   ): Promise<boolean> {
     const questions = this.host.get("userQuestions", false) as DshUserQuestions | undefined;
     if (!questions || !this.owned(agent) || signal.aborted) {
@@ -350,17 +349,13 @@ export class DshRepositoryLearning {
       return false;
     }
     const id = `repository-learning:${input.sessionId}:${input.turnId}:${randomUUID()}`;
-    const label = proposal === undefined ? "整理して確認する" : "この内容を保存する";
+    const label = "この内容を保存する";
     const result = await abortable(questions.ask({
       agent, signal, questions: [{
         id,
         header: "Kiokuko · 記憶の確認",
-        question: proposal === undefined
-          ? "このターンは終了しました。今回の記憶を整理して確認しますか？"
-          : "保存する記憶はこの内容でよいですか？",
-        detail: proposal === undefined
-          ? "まだ保存しません。整理後に内容を表示し、承認された場合だけ保存します。新しい入力・Stop・閉じるでは保存しません。"
-          : `対象はこのリポジトリのターン ${input.turnId} です。実行ログからの案で、タスクの成功を保証するものではありません。\n\n${proposalText(proposal)}`,
+        question: "保存する記憶はこの内容でよいですか？",
+        detail: `まだ保存していません。新しい入力・Stop・閉じるでは保存しません。対象はこのリポジトリのターン ${input.turnId} です。実行ログからの案で、タスクの成功を保証するものではありません。\n\n${proposalText(proposal)}`,
         options: [{ label }, { label: "今回は保存しない" }],
       }],
     }), signal);
@@ -468,7 +463,10 @@ export class DshRepositoryLearning {
           controller,
         );
         try {
-          if (!await this.approve(agent, input, controller.signal)) return;
+          if (!this.host.get("userQuestions", false)) {
+            this.diagnostic(agent, { phase: "capture", turn: input.turnId, status: "review_unavailable", saveState: "not_saved" });
+            return;
+          }
           const latest = await this.runtime.withDatabase((db) =>
             readRepositoryLearning(db, this.root, { maxChars: 8192 }),
           );
@@ -484,6 +482,15 @@ export class DshRepositoryLearning {
           );
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.stopped) return;
+          if (reflection.status !== "model" || reflection.lessons.length === 0) {
+            this.diagnostic(agent, {
+              phase: "capture", turn: input.turnId,
+              status: reflection.status === "model" ? "no_learning" : "unavailable",
+              saveState: "not_saved", reflection: reflection.status,
+              reason: reflection.reason ?? null,
+            });
+            return;
+          }
           const proposal = {
             outcome: input.outcome,
             summary: input.summary,

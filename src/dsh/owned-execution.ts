@@ -240,6 +240,12 @@ export class OwnedExecutionService {
   async execute(name: string, raw: unknown, execution: NativeExecution): Promise<unknown> {
     if (!['kioku_exec', 'kioku_write', 'kioku_edit', 'kioku_remove'].includes(name))
       return this.executeManaged(name, raw, execution)
+    // Invalid arguments never reached an effect. Reject before creating a
+    // dispatch journal, otherwise a typo becomes an unreconciled operation.
+    try {
+      if (name === 'kioku_exec') commandInput.parse(raw)
+      else fileInput.parse(raw)
+    } catch (error) { managedAdmissionDenied(error) }
     const parentOperation = currentManagedOperation()
     const identity = this.current(execution)
     const database = <T>(fn: (db: SqliteDatabase) => T) => this.host.runtime.withDatabase(fn)

@@ -65,32 +65,47 @@ the `skill` tool before enabling Lisp. Reading the Skill does not enable Lisp or
 start SBCL. Execution requires the configuration below and an explicit session
 choice through the coding prompt or enable command.
 
-Target hosts: macOS and Linux, with a working SBCL installed by the user.
-Linux also requires Bubblewrap (`bwrap`) with user/PID/network namespaces enabled.
-There is no VM/container engine dependency, implicit installer, Quicklisp download,
-or compilation of native helpers on plugin load. Common Lisp compilation starts
-automatically when a session first enables Lisp.
+Target hosts: macOS and Linux. Installation builds a standalone native Lisp
+executable containing SBCL, its compiler, the bundled libraries and toolset.
+SBCL is needed **at build/install time**, but ordinary use of the installed
+executable does not look for `sbcl` on PATH or load an external SBCL core.
+Shared libraries linked by that runtime must remain installed (for example,
+Homebrew's `zstd` library); this is an embedded runtime, not a statically linked
+executable independent of all system libraries.
+Linux also requires Bubblewrap (`bwrap`) at build and runtime with
+user/PID/network namespaces enabled. No compiler or runtime is downloaded.
+
+The npm `postinstall` hook builds and checks the executable. Source/Git installs
+also build it after `prepare` has produced JavaScript. If SBCL is unavailable,
+installation reports that Lisp could not be built; the rest of Kiokuko can still
+be installed. Install SBCL and run `npm run lisp:build` in the package directory
+to enable this path. Use `KIOKUKO_LISP_SBCL=/absolute/path/to/sbcl` to select the
+build compiler. Package managers that disable lifecycle scripts require this
+explicit build command too. Build failures other than missing prerequisites
+fail the hook rather than claiming a usable executable.
 
 Add this to the existing `kiokuko-dsh` plugin configuration and reload the plugin:
 
 ```yaml
 lisp:
   enabled: true
-  sbclPath: sbcl
 ```
 
-Workers preserve their state by default (`idleTimeoutMs: 0`). An explicit
-`idleTimeoutMs` of 1000–3600000 opts into idle suspension. When `maxWorkers`
-(default 4) is reached, admission returns `WORKER_LIMIT`; existing workers remain.
-Active agent turns, evaluations, approvals and running jobs cannot idle-suspend.
-Session disposal also stops its workers. Normal suspension appears as `SUSPENDED`,
-retains protection and resumes automatically on the next use; status polling never
-starts a worker. Variables, definitions and references are lost on restart; the
-agent receives the new generation and must rebuild helpers without replaying
-completed effects. A clean host restart or an exited idle child resumes on the next
-admitted request after confirmed process termination and journal reconciliation.
-Fault replacements are limited to two per owner in 60 seconds. Explicit cancellation,
-unresolved effects, unconfirmed termination and exhausted restart limits require recovery.
+A session retains its SBCL process, variables, definitions and references across
+idle time, task changes and unloading/reopening that conversation in the same
+host. Legacy `idleTimeoutMs` values are accepted but no longer stop the runtime.
+When `maxWorkers` (default 4) is reached, admission returns `WORKER_LIMIT`;
+existing workers remain. Optional coding records do not change the selected
+session route or enroll ordinary development in protected prototype requirements.
+An unresolved external-operation receipt remains visible separately from the
+runtime's health; restarting Lisp does not reconcile it.
+
+Explicit disable/reset, host shutdown, or cancellation of active work can stop
+workers. An idle task stop keeps the session heap. A clean host restart or an
+exited child can start a fresh generation after confirmed termination and journal
+reconciliation; saved results are never replayed as effects. Status polling never
+starts a worker. Fault replacements are limited to two per owner in 60 seconds.
+Unconfirmed termination and exhausted restart limits require recovery.
 
 Kiokuko owns a local master–worker hierarchy: `LispManager` binds requests and their
 existing operation journals; `LispSupervisor` owns shared capacity, compiled startup,
@@ -156,7 +171,7 @@ rejection and model abstention defer classification. Native adapters let the
 ordinary model infer advisory intent or ask a concrete clarification; they do not
 repeat the generic category dialog merely because the classifier abstained. Classification does not authorize implementation. For an explicit coding request the agent defines the Goal, implementation items and their observable criteria, then the host asks whether to use Lisp for that task. Both yes and no persist for the task and scope across restart. Conversation, review and plan-only requests do not trigger this prompt. Closing, free text without a clear choice or a disconnected question leaves implementation pending. Cancellation preserves the prepared work. A selected Lisp startup failure remains a recoverable blocker.
 
-Execution-mode selection and Lisp choice are separate. The task question remains available when the Lisp module is disabled; no needs no Lisp runtime, while yes requires the enabled module and working SBCL. To explicitly change the current task's Lisp route or inspect its state, use these commands in the desired DSH session:
+Execution-mode selection and Lisp choice are separate. The task question remains available when the Lisp module is disabled; no needs no Lisp runtime, while yes requires the enabled module and a verified Lisp executable (or SBCL for source-checkout fallback). To explicitly change the current task's Lisp route or inspect its state, use these commands in the desired DSH session:
 
 ```text
 /kioku-lisp enable
@@ -176,7 +191,9 @@ session permissions, so project files and applicable Skills can be inspected.
 File changes can use owned native tools or Lisp proposals. Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. For a coding task with a saved yes, recover Lisp or explicitly choose another task route before continuing implementation.
 The protected agent uses native tool presentation even in a PTC deployment.
 
-`sbclPath` can point to an explicit installed SBCL launcher. Its runtime files must
+`sbclPath` selects the source-checkout fallback launcher; a verified installed
+executable takes precedence and needs no external SBCL. For fallback, it can
+point to an explicit installed SBCL launcher. Its runtime files must
 be in a dedicated installation directory; do not point it at an entire project or
 home directory. SBCL starts without system/user init files and inherited ASDF
 configuration. macOS 27 testing found the existing SBCL 2.6.4 unable to perform
@@ -184,9 +201,23 @@ even an unprotected minimal calculation. A disposable copy of the macOS 27 SBCL
 2.6.8 Homebrew bottle successfully started; the user's installation was preserved.
 Version output alone is not a successful runtime probe.
 
-## Automatic compilation and reuse
+## Installation executable and compilation cache
 
-The first enable compiles the bundled libraries and `tools.lisp` into one FASL
+Installation publishes a self-tested executable under `lisp/.native/`, keyed by
+OS, CPU architecture, bundled source and vendor digests. Startup checks its
+manifest, executable hash and size before launching it. The executable is local
+to the installation and excluded from published archives; each target builds its
+own. Moving an installation on the same OS/architecture is supported. Changing
+sources requires rebuilding; a damaged image blocks startup and requires a clean
+reinstall. Neither case silently executes the old binary or falls back to SBCL.
+
+The image contains no previous user code, variables or object references. Every
+new session initializes its own generation, scratch paths and protocol streams.
+The embedded compiler remains available for dynamic functions and task tools.
+Once started, the session retains its live state as described above. No relative
+performance claim against C has been benchmarked.
+
+For source checkouts or installations without an image, the first enable compiles the bundled libraries and `tools.lisp` into one FASL
 (compiled Lisp file). A fresh SBCL process checks that file before the host
 publishes it atomically under the Lisp data directory's `compiled/` directory.
 Subsequent enables, resets, recovery and host restarts reuse that bundle after

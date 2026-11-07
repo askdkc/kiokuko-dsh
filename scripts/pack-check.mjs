@@ -142,6 +142,9 @@ const requiredFiles = [
   'lisp/bootstrap.lisp',
   'lisp/compile.lisp',
   'lisp/check-compiled.lisp',
+  'lisp/save-executable.lisp',
+  'scripts/install-lisp.mjs',
+  'dist/dsh/lisp/installed-runtime.js',
   'lisp/runtime-identity.lisp',
   'lisp/kioku-runtime.asd',
   'lisp/supervisor.mjs',
@@ -188,6 +191,8 @@ const requiredFiles = [
 ]
 const requiredDirectories = ['dist/', 'migrations/', 'skills/', 'docs/']
 const forbiddenPrefixes = [
+  'lisp/.native/',
+  'lisp/.native-build-',
   'guardrail/x86_64-apple-darwin/',
   'micro-judge/darwin-x64/',
   'micro-judge/native-verification-darwin-x64.json',
@@ -309,6 +314,19 @@ async function createAndSmokeTestTarball() {
     }
   }
   const packageRoot = join(consumerRoot, 'node_modules', 'kiokuko-dsh')
+  if (process.env.KIOKUKO_REQUIRE_LISP_RUNTIME === '1') {
+    // Exercise npm's actual installed-package lifecycle without enabling unrelated dependency scripts.
+    const built = await exec('npm', ['rebuild', 'kiokuko-dsh', '--offline', '--foreground-scripts'], {
+      cwd: consumerRoot, env: { ...consumerInstallEnvironment(process.env, { home: work, cache }),
+        ...(process.env.KIOKUKO_LISP_SBCL ? { KIOKUKO_LISP_SBCL: process.env.KIOKUKO_LISP_SBCL } : {}) },
+      timeout: 120_000, maxBuffer: 16 * 1024 * 1024,
+    })
+    process.stdout.write(built.stdout)
+    const smoke = await exec(process.execPath, ['scripts/smoke-installed-lisp.mjs', packageRoot], {
+      cwd: root, timeout: 60_000, maxBuffer: 1024 * 1024,
+    })
+    process.stdout.write(smoke.stdout)
+  }
   await assertRelativeClosure(packageRoot, packed[0]?.files ?? [])
   await assertDshClientArtifact(packageRoot)
   if (process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1') {

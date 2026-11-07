@@ -1,6 +1,6 @@
 # Continuous repository learning
 
-Kiokuko offers review after each completed or failed **native conversation turn**, including answers without tools. First it asks whether to organize the turn. It then shows the exact proposed summary, lessons and sources and asks whether to save them. Neither a completed turn nor model output authorizes persistence.
+Kiokuko checks completed or failed **native conversation turns** in the background for useful repository learning, including concrete preferences and corrections in answers without tools. Greetings, routine study explanations and turns with no useful new learning do not open a memory dialog or save a turn summary. When there is a concrete proposal, it shows the exact summary, lessons and sources in one save review. Neither a completed turn nor model output authorizes persistence.
 
 Decline, dismissal, missing question UI, Stop, a new turn and plugin reload save no pending proposal. Cancelled and unknown turns do not open review or create memories. Existing stored memories are preserved.
 
@@ -8,7 +8,7 @@ Decline, dismissal, missing question UI, Stop, a new turn and plugin reload save
 
 The public plugin's lifecycle memory mounts the repository-learning coordinator.
 At a turn boundary it freezes bounded, redacted native user/tool/result/assistant
-observations, the native session/turn identity and the current model route. After the human chooses to organize, it uses
+observations, the native session/turn identity and the current model route. Without interrupting foreground conversation, it uses
 the host's actual `llm.prepareCall` / `llm.stream` API on that route, with no tools,
 to propose up to four source-cited hypotheses. An externally registered
 `kiokukoReplayReflector` service is **not required** for this path.
@@ -44,12 +44,11 @@ checks. At plugin reload, up to 512 session events reconstruct an active turn, e
 Ignorable session plugin records named `plugin:kiokuko-dsh/repository-learning`
 (and live host events `kiokuko/repository-learning`) report capture and retrieval:
 
-- capture: saved, duplicate, declined, review_unavailable, discarded, excluded or unavailable; revision and reflection status;
+- capture: saved, duplicate, no_learning, declined, review_unavailable, discarded, excluded or unavailable; revision and reflection status;
 - retrieval: injected, empty or unavailable; injected and omitted point counts.
 
 A missing model route, malformed/ungrounded result or 15-second model deadline
-produces an explicit unavailable/invalid reflection status. The observed turn can
-still be proposed without invented model lessons, but requires approval before saving. Database/capture failures are
+produces an explicit unavailable/invalid reflection status. No review is shown and nothing is saved when reflection is unavailable, invalid, or has no useful lessons. Database/capture failures are
 reported as unavailable, not silently described as successful saving. This feature
 never launches DSH, changes repository source, runs learned commands or grants tool
 permissions.
@@ -79,8 +78,8 @@ process.
 
 ## Interrupted saves and recovery
 
-Reflection has a bounded deadline and no automatic network retry. A failed model call may produce a summary-only proposal; it never permits an automatic save. Foreground work remains usable.
+Reflection has a bounded deadline and no automatic network retry. A failed model call produces no save prompt and no memory. Foreground work remains usable.
 
-SQLite retries recognized lock contention under its finite backoff policy only while the same approval remains active. An uncertain commit is reconciled against the exact repository/session/turn identity. A failed save is reported as absent or unknown; reload never recreates its approval or retries the old proposal. A new completed turn offers a new review.
+SQLite retries recognized lock contention under its finite backoff policy only while the same approval remains active. An uncertain commit is reconciled against the exact repository/session/turn identity. A failed save is reported as absent or unknown; reload never recreates its approval or retries the old proposal. A later turn can offer a new review when it contains useful learning.
 
 Reset, forgetting, native Stop, owner changes and capture exclusions retain their existing fences. Already saved records are not undone by cancelling a later proposal. Native conversation logs are separate from reusable memory and are not erased by declining a save.

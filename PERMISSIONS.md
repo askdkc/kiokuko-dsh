@@ -140,7 +140,14 @@ prepare = node scripts/prepare-build.mjs
 ```
 
 It normally runs the invoking package manager's `run build` from the source
-checkout. Only an explicit `CI=true` plus `KIOKUKO_CI_DEFER_PREPARE=1` defers
+checkout, then builds the standalone Lisp executable. Registry installs use
+`postinstall = node scripts/install-lisp.mjs --optional`. This runs the local
+SBCL compiler against bundled, verified source, checks the resulting executable,
+and writes a platform-specific image under the package's `lisp/.native/`.
+Missing SBCL leaves Lisp unbuilt with a diagnostic; no runtime is downloaded.
+Linux builds and launches also require Bubblewrap. Installed images contain the
+compiler and runtime, so session launches need no external SBCL. Lifecycle scripts
+blocked by the package manager require an explicit `npm run lisp:build`. Only an explicit `CI=true` plus `KIOKUKO_CI_DEFER_PREPARE=1` defers
 this package's duplicate prepare build to the selected verifier's required clean
 build. Dependency lifecycle scripts still run; source/build digests and tested
 archive receipts remain required. It does not modify a DSH

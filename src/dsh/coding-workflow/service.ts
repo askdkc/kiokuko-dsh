@@ -239,7 +239,7 @@ export function assertCodingDispatch(db: SqliteDatabase, identity: CodingIdentit
   assertCodingIdentity(value, identity)
   if (codingExecutionEnded(db, value)) throw new KiokukoError('CONFLICT', `Coding workflow is ${value.state}; the task has ended.`)
   if (name.startsWith('lisp_') && value.choice.state !== 'yes') throw new KiokukoError('CONFLICT', 'Lisp is not selected for this coding task')
-  if (value.choice.state === 'yes' && value.blocker?.kind === 'runtime')
+  if (name !== 'lisp_recover' && value.choice.state === 'yes' && value.blocker?.kind === 'runtime')
     throw new KiokukoError('CONFLICT', `Lisp runtime blocker: ${value.blocker.required}`)
   return value
 }

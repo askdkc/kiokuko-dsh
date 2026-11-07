@@ -120,6 +120,11 @@ try {
     const consumerHost = join(consumer, 'node_modules')
     // Type consumers need declaration-only imports too. Node types are validation tooling.
     await isolatedDependencies(consumer, { '@types/node': '*' })
+    if (configuration.includes('lisp')) {
+      assert.equal(manifest.scripts.postinstall, 'node scripts/install-lisp.mjs --optional')
+      await command('npm', ['run', 'postinstall'], consumer, { KIOKUKO_CI_DEFER_PREPARE: '0' })
+      await command(process.execPath, [join(root, 'scripts/smoke-installed-lisp.mjs'), consumer], root)
+    }
     await writeFile(join(consumer, 'consumer.mts'), "import { createConfiguredPlugin, DshModules } from 'kiokuko-dsh/core'\nconst plugin = createConfiguredPlugin([])\nvoid plugin.Config.parse({})\nvoid new DshModules([], [])\n")
     await command(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--target', 'ES2023', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--types', 'node', 'consumer.mts'], consumer)
     if (configuration.includes('lisp')) await command(process.execPath, [join(root, 'scripts/run-tests.mjs'), 'tests/dsh/integration/lisp/plan-surface.test.ts'], root, { KIOKUKO_DSH_PACKAGE_ROOT: nativeRoot, KIOKUKO_REQUIRE_DSH_NATIVE: '1', KIOKUKO_LISP_PLAN_ENTRY: join(consumer, 'dist/dsh/lisp/surface.js') })

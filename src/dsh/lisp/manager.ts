@@ -41,7 +41,7 @@ interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; 
   taskSettlement?: Promise<void>;
   codeLease?: { evaluationId: string; adapter: CodeIntelligenceAdapterV1 };
   ownedJobs?:Set<string>; ownedCalls?:Set<Promise<unknown>>; ownedDispatches?:Set<AbortController>; ownedStop?:Promise<void>;
-  hostBusy?: boolean; idleSince?: number; idleTimer?: ReturnType<typeof setTimeout>; suspension?: Promise<void>; resumed?: boolean; disposed?: boolean;
+  hostBusy?: boolean; resumed?: boolean; disposed?: boolean;
   packageBase?: NonNullable<PackageResult['base']>;
   currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
 const MODEL_RECOVERY_CAUSES = new Set(['TIMEOUT', 'OUTPUT_LIMIT', 'WORKER_EXITED', 'PROTOCOL_ERROR', 'WORKER_NOT_RESUMED', 'CACHE_INVALID', 'COMPILE_TIMEOUT', 'WORKER_RESTART_LIMIT'])
@@ -362,7 +362,6 @@ export class LispManager {
     if(state.state!=='READY'||!worker.healthy||worker.busy)
       fail(state.state==='EVALUATING'?'BUSY':'RECOVERY_REQUIRED','常駐 Lisp の状態を確認してください。新しい worker は起動しません。')
     signal?.throwIfAborted()
-    clearTimeout(state.idleTimer)
     state.state='EVALUATING' // Reserve before awaiting scratch or input I/O.
     state.execution=this.taskAuthority.current()
     const abort=new AbortController();state.active.add(abort)
@@ -407,7 +406,6 @@ export class LispManager {
     signal?.throwIfAborted()
     if (state.admission) return state.admission
     if (this.#closed || state.disposed) fail('HOST_STOPPED', 'Lisp のセッションが停止しています。')
-    clearTimeout(state.idleTimer)
     state.state = 'PREFLIGHT'
     state.compilation = { state: 'checking' }
     const abort = new AbortController(); state.active.add(abort)
@@ -440,46 +438,13 @@ export class LispManager {
       }
     })()
     state.admission = admission
-    try { return await admission } finally { delete state.admission; state.active.delete(abort); this.scheduleIdle(state) }
-  }
-  private canSuspend(state: AgentState): boolean {
-    return !this.#closed && !state.disposed && state.state === 'READY' && !state.hostBusy && !state.admission && state.active.size === 0
-      && !state.ownedJobs?.size && !state.ownedCalls?.size && Boolean(state.worker?.healthy) && !state.worker?.hasRunningJobs
-  }
-  private scheduleIdle(state: AgentState): void {
-    clearTimeout(state.idleTimer)
-    if (this.#closed || state.disposed || state.state !== 'READY' || state.hostBusy || state.admission || state.active.size) return
-    state.idleSince = Date.now()
-    if(this.#config.idleTimeoutMs===0)return
-    state.idleTimer = setTimeout(() => {
-      void this.suspend(state).then(() => {
-        // A background job can outlive the last evaluation. Recheck after it ends.
-        if (state.state === 'READY') this.scheduleIdle(state)
-      }).catch(error => this.halted(state, error))
-    }, this.#config.idleTimeoutMs)
-    state.idleTimer.unref()
-  }
-  private async suspend(state: AgentState): Promise<void> {
-    if (!this.canSuspend(state)) return
-    clearTimeout(state.idleTimer)
-    state.state = 'STOPPING' // claim before awaiting the journal or process exit
-    const suspension = (async () => {
-      try {
-        const pending = await this.#store.hasPending(state.owner.sessionId)
-        if (pending) { state.state = 'READY'; return }
-        await this.#supervisor.stop(state.worker)
-        state.state = 'SUSPENDED'; delete state.error; delete state.worker
-      } catch (error) { this.halted(state, error); throw error }
-    })()
-    state.suspension = suspension
-    try { await suspension } finally { delete state.suspension }
+    try { return await admission } finally { delete state.admission; state.active.delete(abort) }
   }
   /** Admit a fresh generation only after the master has reconciled its old child and journals. */
   async prepare(owner: LispOwner, signal?: AbortSignal, allowStartupDiagnostics = false): Promise<unknown> {
     await this.authorizeCodingTask(owner)
     const state = this.entry(owner)
     if (this.#recovering.has(owner.sessionId)) return this.status(owner)
-    if (state.suspension) await state.suspension
     if (state.state === 'READY' && !state.worker?.healthy)
       this.halted(state, new LispError('WORKER_EXITED', 'Lisp の子プロセスが終了しています。'))
     const cold = state.error?.code === 'WORKER_NOT_RESUMED' && !state.worker
@@ -518,15 +483,26 @@ export class LispManager {
     const state = this.entry(owner)
     if (state.hostBusy === busy) return
     state.hostBusy = busy
-    if (busy) clearTimeout(state.idleTimer)
-    else this.scheduleIdle(state)
+  }
+  /** Detach a turn/task without destroying an idle session heap. Active work
+   * still drains through cancellation; no background effect survives Stop. */
+  async stopSessionWork(sessionId: string): Promise<void> {
+    await this.stopTaskWorkers(sessionId)
+    const states = [...this.#agents.values()].filter(state => state.owner.sessionId === sessionId)
+    if (states.every(state => state.state === 'READY' && state.worker?.healthy && !state.worker.busy
+      && !state.admission && state.active.size === 0 && !state.ownedJobs?.size && !state.ownedCalls?.size
+      && !state.worker.hasRunningJobs)) {
+      for (const state of states) state.hostBusy = false
+      return
+    }
+    await this.disposeSession(sessionId)
   }
   /** Disposed sessions retain their fence/journal but cannot admit new work. */
   async disposeSession(sessionId: string): Promise<void> {
     await this.stopTaskWorkers(sessionId)
     const states = [...this.#agents.values()].filter(state => state.owner.sessionId === sessionId)
     const resumable = states.filter(state => state.state === 'READY' || state.state === 'SUSPENDED')
-    for (const state of states) { state.disposed = true; clearTimeout(state.idleTimer) }
+    for (const state of states) { state.disposed = true }
     const stopped = await Promise.allSettled(states.map(state => this.cancel(state)))
     await Promise.allSettled([...this.#executions].filter(([, execution]) => execution.sessionId === sessionId).map(([promise]) => promise))
     const pending = await this.#store.hasPending(sessionId)
@@ -619,7 +595,8 @@ export class LispManager {
       const file = method === 'tool-call' && ['kioku_write', 'kioku_edit', 'kioku_remove'].includes(parsed?.name ?? '')
       if (!processEffect && !file) return this.bridgeBound(state, method, args, context)
       if (!state.managedScope) fail('JOURNAL_SCOPE_MISSING', 'Managed evaluation collection is unavailable; no operation was dispatched.')
-      const route = method === 'run' && this.taskAuthority.current()?.nativeCommands && this.#config.executionMode === 'development' ? 'native' : 'owned'
+      const native = this.taskAuthority.current()?.nativeCommands
+      const route = method === 'run' && native && native.processRoute !== 'owned' && this.#config.executionMode === 'development' ? 'native' : 'owned'
       return runManagedOperation(state.managedScope, { route, kind: file ? 'file' : 'process',
         request: { method, args, cwd: state.owner.root, workerGeneration: context.generation, evaluationId: context.evaluationId, rpcId: context.rpcId,environment:{...process.env},runtime:process.version } },
         () => this.bridgeBound(state, method, args, context))
@@ -701,7 +678,7 @@ export class LispManager {
       const quote=(value:string)=>"'" + value.replaceAll("'", "'\\''") + "'"
       const directory=input.directory??'.'
       const native = this.taskAuthority.current()?.nativeCommands
-      if (method === 'run' && native && this.#config.executionMode === 'development') {
+      if (method === 'run' && native && native.processRoute !== 'owned' && this.#config.executionMode === 'development') {
         native.assertCurrent()
         return this.ownedDispatch(state, signal => native.run(input, AbortSignal.any([signal, context.signal])))
       }
@@ -830,7 +807,7 @@ export class LispManager {
       jobs: [...(state.worker?.jobStatus() ?? []),...[...state.ownedJobs??[]].map(operationId=>({operationId,owner:'kiokuko-execution'}))],
       executionMode:this.#config.executionMode,
       compilation: state.compilation ?? null, resumed: state.resumed ?? false,
-      limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: this.#config.idleTimeoutMs,
+      limits: { timeoutMs: this.#config.timeoutMs, maxOutputBytes: this.#config.maxOutputBytes, maxWorkers: this.#config.maxWorkers, idleTimeoutMs: 0,
         aggregateMemory: 'unavailable', aggregateCpu: 'unavailable', scratchQuota: 'unavailable', termination: 'supervised', fileBoundary: process.platform === 'darwin' ? 'seatbelt' : 'bubblewrap' },
       operations, operationCount: summary.count, pendingCount: Object.values(summary.pendingStates).reduce((a,b) => a+b,0), pendingStates: summary.pendingStates,
       ...(taskSummary ? { task: taskSummary } : {}),
@@ -871,8 +848,6 @@ export class LispManager {
       tool === 'lisp_inspect' && (input.resultOperationId !== undefined || input.managedOperationId !== undefined)) })
     const finished = () => {
       this.#executions.delete(result); if (key) this.#inflight.delete(key)
-      const state = this.#agents.get(JSON.stringify([owner.sessionId, owner.agentId]))
-      if (tool !== 'lisp_status' && state && state.owner.root === owner.root && this.enabled.get(owner.sessionId) === owner.root) this.scheduleIdle(state)
     }
     void result.then(finished, finished)
     return result
@@ -1160,7 +1135,7 @@ export class LispManager {
           return problem
         }
       }
-      if (state.suspension || state.state === 'SUSPENDED') {
+      if (state.state === 'SUSPENDED') {
         const prepared = await this.prepare(owner) as { state: string }
         if (prepared.state !== 'READY') fail('RECOVERY_REQUIRED', 'Lisp の停止状態を確認してください。')
         return { ok: false, code: 'WORKER_RESUMED', generation: state.worker?.generation, executed: false,
@@ -1276,8 +1251,6 @@ export class LispManager {
       result: await recordedResult(this.#store, owner, old), recovery: ['RUNNING', 'UNKNOWN'].includes(old.state) ? '/kioku-lisp status で確認してください。自動再実行はしません。' : null }
   }
   private async cancel(state: AgentState): Promise<void> {
-    clearTimeout(state.idleTimer)
-    if (state.suspension) await state.suspension
     state.state = 'STOPPING'
     for (const abort of state.active) abort.abort(new LispError('CANCELLED', 'Lisp の処理を取り消しました。'))
     try {

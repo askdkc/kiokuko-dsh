@@ -91,18 +91,18 @@ export class LispCodingPreparation {
     const state=this.current(agent)
     return state?.task===task && state.choice && state.answerRef ? {choice:state.choice,answerRef:state.answerRef}:undefined
   }
-  answered(agent:Agent,task:string,choice:'yes'|'no',answerRef:string,scope:string):void {
+  answered(agent:Agent,task:string,choice:'yes'|'no',answerRef:string,scope:string,protectedWorkflow = true):void {
     let state=this.current(agent)
     if(!state || state.task!==task || state.answerRef && state.answerRef!==answerRef || state.scope && state.scope!==scope) {
       const identity=this.host.identity(agent),key=createHash('sha256').update(JSON.stringify([identity,task,answerRef,scope])).digest('hex')
       state={agent,...identity,task,key,protectedWorkflow:true,phase:'choice_pending',attempts:0,failures:0}
       this.states.set(agent,state)
     }
-    if(state.choice===choice && state.scope===scope)return
+    if(state.choice===choice && state.scope===scope && state.protectedWorkflow===protectedWorkflow)return
     state.key=createHash('sha256').update(JSON.stringify([state.key,task,answerRef,scope,'protected'])).digest('hex')
-    state.protectedWorkflow=true
+    state.protectedWorkflow=protectedWorkflow
     state.scope=scope
-    state.choice=choice;state.answerRef=answerRef;state.phase=choice==='yes'?'prototype_required':'declined';state.attempts=0;state.failures=0;delete state.review
+    state.choice=choice;state.answerRef=answerRef;state.phase=choice==='yes'?(protectedWorkflow?'prototype_required':'selected'):'declined';state.attempts=0;state.failures=0;delete state.review
   }
   manual(agent:Agent,enabled:boolean,answerRef?:string):void {
     const state=this.current(agent)

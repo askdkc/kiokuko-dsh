@@ -121,7 +121,14 @@ test("actual unowned native Bash -> final answer -> approved repository learning
           )
         ) {
           reflectionInputs.push(JSON.parse(q.messages[0].content[0].text));
-          yield* native.textResponse(JSON.stringify({ lessons: [] }));
+          const evidence = reflectionInputs.at(-1);
+          yield* native.textResponse(JSON.stringify({ lessons: [{
+            hypothesis: "Native Bash completion needs the observed tool result, not just an assistant claim.",
+            applicability: "Verifying native Bash output in this repository.",
+            nextAction: "Check the tool result before reporting completion.",
+            verifyWith: "Match reported output to the native tool receipt.",
+            evidenceRefs: [evidence.observations.find((o: any) => o.type === "tool/result").ref],
+          }] }));
           return;
         }
         mainCalls++;
@@ -209,8 +216,8 @@ test("actual unowned native Bash -> final answer -> approved repository learning
     );
     assert.equal(
       asked.length,
-      2,
-      "native learning requires organization and exact proposal approval",
+      1,
+      "useful native learning requires one exact proposal approval",
     );
     assert.equal(count(f.database, "ledger_runs"), 0);
     assert.equal(count(f.database, "replay_memories"), 0);

@@ -55,7 +55,8 @@ export class LispWorker {
   repositoryRoot: string | null = null
   async start(): Promise<void> {
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')
-    const launch = await sandboxLaunch(this.layout, this.config.sbclPath, ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
+    const launch = await sandboxLaunch(this.layout, this.layout.runtimeExecutable ?? this.config.sbclPath,
+      this.layout.runtimeExecutable ? [] : ['--noinform', '--disable-debugger', '--no-sysinit', '--no-userinit', '--script', join(this.layout.library, 'bootstrap.lisp')], this.generation, true)
     launch.env.KIOKU_EXECUTION_MODE = this.config.executionMode
     // stop() can run while executable/sandbox preparation is awaiting I/O.
     if (this.#closed || this.#fatal) throw this.#fatal ?? new LispError('CANCELLED', 'Lisp の起動を取り消しました。')

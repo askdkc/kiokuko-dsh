@@ -849,7 +849,7 @@ export class OnDemandIntake {
         !this.options.onlyWhenDeferred &&
         !this.#stopped &&
         this.#turns.get(sessionId) === state &&
-        state.status === 'answer' &&
+        (state.status === 'answer' || state.status === 'prepared') &&
         !state.input.signal.aborted &&
         this.host.nativeChild?.(input.agent) !== true,
     )
@@ -2314,7 +2314,7 @@ export class OnDemandIntake {
       execution.signal.aborted ||
       execution.parent !== undefined ||
       !state ||
-      state.status !== 'answer' ||
+      (state.status !== 'answer' && state.status !== 'prepared') ||
       state.input.signal.aborted ||
       !actual ||
       (state.clarificationPending && this.pendingLispEffect(execution)) ||

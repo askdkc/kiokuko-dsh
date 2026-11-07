@@ -68,6 +68,8 @@ return {answers:request.questions.map((q:any)=>({id:q.id,selected:['research']})
       async resolveModel(provider:string,id:string){return {provider,id,name:id,context:{contextWindow:200000}}}
       async *stream(request:any){
         if(request.purpose==='akinator-expected'){yield*mock.textResponse('{"expected":null}');return}
+        // Background repository reflection is a separate call, not a foreground memory delivery.
+        if(String(request.system).startsWith('Extract compact repository-scoped learning')){yield*mock.textResponse('{"lessons":[]}');return}
         requests.push(request)
         if(request.purpose==='compaction'){yield*mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');return}
         if(prepare){prepare=false;const guidance = request.messages.flatMap((m:any)=>m.content??[]).find((b:any)=>b.text?.includes('Current request references and same-session work'))?.text

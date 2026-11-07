@@ -4,6 +4,7 @@ import { CompiledLispCache, type CompilationStatus } from './compiled-cache.js'
 import { LispError, type LispConfiguration, type WorkerResult } from './contracts.js'
 import { prepareLayout } from './sandbox.js'
 import { LispWorker } from './worker.js'
+import { installedLispRuntime } from './installed-runtime.js'
 
 interface WorkerAssignment {
   signal: AbortSignal
@@ -41,11 +42,14 @@ export class LispSupervisor {
     this.#children.set(owner, undefined)
     let worker: LispWorker | undefined
     try {
-      const compiled = await this.#compiled.ensure(assignment.signal, status => assignment.compilation?.(status))
+      const installed = await installedLispRuntime(this.library)
+      const compiled = installed ?? await this.#compiled.ensure(assignment.signal, status => assignment.compilation?.(status))
+      if (installed) assignment.compilation?.({ state: 'ready', key: installed.key, reused: true, prepareMs: installed.prepareMs })
       assignment.assertCurrent()
       const base = await mkdtemp(join(this.dataRoot, 'w-'))
       const layout = await prepareLayout(base, this.library)
       layout.compiled = compiled.path
+      if (installed) layout.runtimeExecutable = installed.executable
       if (assignment.workspace) layout.workspace = assignment.workspace
       layout.protected = true
       assignment.assertCurrent()

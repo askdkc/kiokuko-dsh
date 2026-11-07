@@ -1,3 +1,5 @@
+import { ManagedOperationJournal } from '../../../../src/dsh/managed-operation-journal.js'
+import { runManagedOperation } from '../../../../src/dsh/managed-operation-runner.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdir, mkdtemp, rm, writeFile, readFile, realpath } from 'node:fs/promises'
@@ -609,5 +611,46 @@ test('read-only status preserves retry blockers and database mutations while nex
     assert.equal(f.db.prepare('SELECT total_changes() n').get()!.n, changes)
     nextCodingWork(f.db, f.identity)
     assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.state, 'ready', 'stateful next preserves explicit recovery behavior')
+  } finally { await f.close() }
+})
+
+
+test('a runtime blocker keeps its own recovery tool reachable', async () => {
+  const f = await fixture()
+  try {
+    const value = f.choose('yes')
+    reportCodingBlocker(f.db, f.identity, 'runtime-failure', value.revision, {criterionIds:[],kind:'runtime',cause:'worker exited',required:'Recover the runtime',recovery:[],resumeWhen:'runtime ready'})
+    assert.doesNotThrow(() => assertCodingDispatch(f.db, f.identity, 'lisp_recover'))
+    assert.throws(() => assertCodingDispatch(f.db, f.identity, 'lisp_eval'), /runtime blocker/)
+  } finally { await f.close() }
+})
+
+test('invalid owned file arguments cannot poison Lisp with an unknown external operation', async () => {
+  const f = await fixture()
+  try {
+    f.choose()
+    await assert.rejects(f.execute('kioku_write', {file_path:'output.txt',content:'never written'}, 'invalid-file-path'), /path/)
+    assert.equal(f.db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get()!.n, 0)
+    await assert.rejects(readFile(join(f.root, 'output.txt')), {code:'ENOENT'})
+    const result = await f.execute('kioku_write', {path:'output.txt',content:'corrected'}, 'corrected-file-path')
+    assert.equal(result.applied, true)
+    assert.equal(await readFile(join(f.root, 'output.txt'), 'utf8'), 'corrected')
+  } finally { await f.close() }
+})
+
+
+test('invalid file arguments inside a Lisp bridge are a known denial, never an unknown effect', async () => {
+  const f = await fixture()
+  try {
+    f.choose()
+    const journal = new ManagedOperationJournal(f.db)
+    const scope = journal.createScope({sessionId:f.identity.sessionId,parentId:'lisp-evaluation',runtimeIdentity:'fixture'})
+    await assert.rejects(runManagedOperation({database:async fn=>fn(f.db),scopeId:scope.scopeId},
+      {route:'owned',kind:'file',request:{name:'kioku_write'}},
+      () => f.execute('kioku_write', {file_path:'output.txt',content:'never written'}, 'invalid-nested-file-path')), /path/)
+    const operations = journal.snapshot(scope.scopeId).operations
+    assert.equal(operations.length, 1)
+    assert.equal(operations[0]!.state, 'denied')
+    await assert.rejects(readFile(join(f.root, 'output.txt')), {code:'ENOENT'})
   } finally { await f.close() }
 })

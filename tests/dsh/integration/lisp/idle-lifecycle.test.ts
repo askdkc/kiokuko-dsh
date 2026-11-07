@@ -71,7 +71,7 @@ test('capacity pressure preserves repository workers; replay never wakes or repe
   } finally { await f.close() }
 })
 
-test('idle timeout releases workers despite status polling, while active turns are protected', native, async () => {
+test('idle timeout preserves workers until explicit disposal; host restart reconciles journals', native, async () => {
   const f = await fixture(1000), first = f.owner('active'), second = f.owner('waiting')
   try {
     await f.manager.enable(first, true)
@@ -80,7 +80,10 @@ test('idle timeout releases workers despite status polling, while active turns a
     await assert.rejects(f.manager.enable(second), { code: 'WORKER_LIMIT' })
     assert.equal((await status(f.manager, second)).state, 'SUSPENDED', 'capacity pressure is not abnormal recovery')
     f.manager.setAgentBusy(first, false)
-    await until(async () => (await status(f.manager, first)).state === 'SUSPENDED')
+    await new Promise(resolve => setTimeout(resolve, 1100))
+    assert.equal((await status(f.manager, first)).state, 'READY')
+    await assert.rejects(f.manager.prepare(second), {code:'WORKER_LIMIT'})
+    await f.manager.disposeSession(first.sessionId)
     assert.equal((await f.manager.prepare(second) as any).state, 'READY')
     await f.manager.disposeSession(second.sessionId)
     assert.equal((await status(f.manager, second)).state, 'SUSPENDED')
@@ -219,5 +222,27 @@ test('task-stop disposal drains a real protected background job after its execut
     assert.ok(jobs.every(job => job.settled), 'all supervised background receipts must settle before disposal returns')
     assert.throws(() => process.kill(supervisorPid, 0), { code: 'ESRCH' })
     assert.equal((await status(f.manager, owner)).state, 'SUSPENDED')
+  } finally { await f.close() }
+})
+
+
+test('session Lisp keeps its heap across configured idle time and task/session detachment', native, async () => {
+  const f = await fixture(1000), owner = f.owner('persistent')
+  try {
+    await f.manager.enable(owner)
+    const original = await status(f.manager, owner)
+    await f.manager.execute(owner, 'lisp_eval', { operationId: 'define-persistent', code: '(defparameter *session-value* 41)' })
+    f.manager.setAgentBusy(owner, false)
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal((await status(f.manager, owner)).runtimePid, original.runtimePid, 'idle timeout must not destroy a session heap')
+    await f.manager.stopSessionWork(owner.sessionId)
+    await f.manager.prepare(owner)
+    const failed = await f.manager.execute(owner, 'lisp_eval', { operationId: 'ordinary-error', code: '(error "expected evaluation failure")' }) as any
+    assert.equal(failed.ok, false)
+    const result = await f.manager.execute(owner, 'lisp_eval', { operationId: 'use-persistent', code: '(+ *session-value* 1)' }) as any
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(result.value.printed, '(42)')
+    assert.equal(result.generation, original.generation)
+    assert.equal((await status(f.manager, owner)).runtimePid, original.runtimePid)
   } finally { await f.close() }
 })

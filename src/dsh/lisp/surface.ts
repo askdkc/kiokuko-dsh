@@ -491,6 +491,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
             const pinned = bash ? { definition: bash, execute: bash.execute } : undefined
             let prototypeProcessFailed = false
             const nativeCommands: LispNativeCommands | undefined = admission ? {
+              // Only hosts without Bash use the owned adapter. A scoped
+              // restriction on an existing Bash tool must remain a denial.
+              processRoute: pinned || tools.get('bash') ? 'native' : 'owned',
               assertCurrent() {
                 const current = owner(execution.agent)
                 if (!admission.current() || binding.signal.aborted || execution.signal?.aborted || current.signal !== binding.signal
@@ -499,7 +502,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
               },
               async run(input, signal) {
                 this.assertCurrent()
-                if (!pinned) fail('HOST_ADAPTER_UNAVAILABLE', 'The native Bash tool is unavailable.')
+                if (!pinned) managedAdmissionDenied(new LispError('HOST_ADAPTER_UNAVAILABLE', 'The native Bash tool is unavailable.'))
                 if (tools.get('bash', binding.agent) !== pinned.definition || tools.get('bash', binding.agent)?.execute !== pinned.execute)
                   fail('STALE_NATIVE_COMMAND', 'Native Bash implementation changed.')
                 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
@@ -666,7 +669,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (binding?.session !== session) return
     closedSessions.add(session); binding.abort.abort(); sessionBindings.delete(session.id)
     const attached = [...boundAgents.values()].filter(agent => agent.session === session)
-    try { await manager.disposeSession(session.id) }
+    try {
+      // A completed child session ends its lifetime; unloading a root chat
+      // only detaches its UI and must preserve that chat's idle heap.
+      if (attached.some(isNativeSubagent)) await manager.disposeSession(session.id)
+      else await manager.stopSessionWork(session.id)
+    }
     finally { for (const agent of attached) unregister(agent) }
   }, { global: true }))
   const enable = async (binding: ReturnType<typeof owner>, standalone = false): Promise<unknown> => {
@@ -750,7 +758,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     },
   }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), manualOverride: (agent: LispCodingInput['agent']) => preparation.manualOverride(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
-    answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string, scope:string) => preparation.answered(agent,task,choice,answerRef,scope) }))
+    answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string, scope:string, protectedWorkflow = true) => preparation.answered(agent,task,choice,answerRef,scope,!development || protectedWorkflow) }))
   const childOwnership = new NativeChildOwnership(root.get('subagents', false) as any, agents)
   disposers.push(() => childOwnership.dispose())
   const workerRouter = (binding: ReturnType<typeof owner>) => {
@@ -786,7 +794,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     async stopTask(candidate) {
       const binding = owner(candidate)
       if (!manager.enabled.has(binding.owner.sessionId)) return
-      await manager.disposeSession(binding.owner.sessionId)
+      await manager.stopSessionWork(binding.owner.sessionId)
       const current = owner(candidate)
       if (current.agent !== binding.agent || current.owner.root !== binding.owner.root)
         fail('SESSION_MISMATCH', 'Lisp の停止中にセッションが変わりました。')

@@ -253,6 +253,7 @@ export function mountCodingWorkflow(
           value.choice.state,
           value.choice.answerRef ?? `stored-choice:${value.choice.questionId}`,
           `${value.workflowId}:${value.scopeVersion}`,
+          Boolean(value.protocol),
         )
     if (value.choice.state !== 'pending') {
       if (value.choice.state === 'yes') {
@@ -369,6 +370,7 @@ export function mountCodingWorkflow(
           choice,
           saved.choice.answerRef!,
           `${saved.workflowId}:${saved.scopeVersion}`,
+          Boolean(saved.protocol),
         )
       if (choice === 'no') {
         await host.lisp()?.exclude?.(identity.agent)
