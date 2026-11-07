@@ -12,6 +12,7 @@ import YAML from 'yaml'
 import { satisfies } from 'semver'
 import * as plugin from '../../../src/dsh/index.js'
 import { Config } from '../../../src/dsh/config.js'
+import { webTarballInstallArgs } from '../../../scripts/web-test-install.mjs'
 
 const execFileAsync = promisify(execFile)
 const repositoryRoot = resolve(import.meta.dirname, '../../..')
@@ -191,7 +192,9 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
   const packageOutput = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-pack-'))
   const npmCache = await mkdtemp(join(tmpdir(), 'kiokuko-dsh-npm-cache-'))
   try {
-    const packed = JSON.parse((await run('npm', ['pack', '--json', '--pack-destination', packageOutput], {
+    // The manifest test exercises source prepare in its own checkout. Package
+    // the selected build here so the install test cannot rebuild shared dist.
+    const packed = JSON.parse((await run('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', packageOutput], {
       npm_config_cache: npmCache,
       npm_config_dry_run: 'false',
     })).stdout) as Array<{ filename?: string }>
@@ -201,10 +204,12 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     await access(tarball)
 
     const env = { DSH_HOME: home, npm_config_dry_run: 'false' }
-    const install = await run(process.env.DSH_BIN ?? 'dsh', [
-      'plugin', '--profile', 'web', 'add', tarball,
-    ], env)
+    const install = await run(process.env.DSH_BIN ?? 'dsh', webTarballInstallArgs(tarball, home), env)
     assert.ok(install.stdout !== undefined)
+    if (process.env.KIOKUKO_REQUIRE_LISP_RUNTIME === '1') {
+      const installedPackage = join(home, 'profiles/web/node_modules/kiokuko-dsh')
+      await run(process.execPath, ['scripts/smoke-installed-lisp.mjs', installedPackage], env)
+    }
 
     const dumped = await run(process.env.DSH_BIN ?? 'dsh', [
       '--profile', 'web', '--dump-config',

@@ -90,7 +90,7 @@ release is available because its tarball already contains `dist/`:
 Run the following from a DeepSeek Harness checkout:
 
 ```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
@@ -98,7 +98,7 @@ For the [dsh-cli](https://github.com/askdkc/dsh-cli) terminal UI, use its `dsh-c
 
 ```bash
 pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
-pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh --profile dsh-cli
 ```
 
@@ -110,6 +110,17 @@ pnpm dsh --profile dsh-cli
 ```
 
 The remaining examples use `web`; substitute `dsh-cli` for that profile. With a globally installed `dsh`, omit `pnpm`.
+
+`--allow-build=kiokuko-dsh` explicitly approves the npm package's install script
+in that profile. The script uses local SBCL to build the standalone Lisp
+executable. For a local `.tgz`, use the exact `kiokuko-dsh@file:…` key shown by
+pnpm as the `--allow-build` value. For example, a tarball at
+`<DSH_HOME>/local-packages/kiokuko-dsh.tgz` uses:
+
+```bash
+dsh plugin --profile web add /absolute/path/to/local-packages/kiokuko-dsh.tgz \
+  --allow-build=kiokuko-dsh@file:../../local-packages/kiokuko-dsh.tgz
+```
 
 For a direct GitHub install, run the following from a DeepSeek Harness checkout:
 

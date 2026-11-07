@@ -47,7 +47,7 @@ Requires Node.js **24.16.0+** and pnpm.
 From the DSH source directory, install and start the Web profile:
 
 ```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh web
 ```
 
@@ -55,7 +55,7 @@ Install and start the CLI profile:
 
 ```bash
 pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
-pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh --profile dsh-cli
 ```
 
@@ -73,7 +73,7 @@ Stop DSH, then update and restart the Web profile:
 
 ```bash
 pnpm dsh plugin --profile web remove kiokuko-dsh
-pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile web add kiokuko-dsh@latest --allow-build=kiokuko-dsh
 pnpm dsh web
 ```
 
@@ -81,7 +81,7 @@ Stop DSH, then update and restart the CLI profile:
 
 ```bash
 pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
-pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest --allow-build=kiokuko-dsh
 pnpm dsh --profile dsh-cli
 ```
 
@@ -94,9 +94,9 @@ then update:
 pnpm config set --location=global --json minimumReleaseAge 0
 pnpm config get minimumReleaseAge
 pnpm dsh plugin --profile web remove kiokuko-dsh
-pnpm dsh plugin --profile web add kiokuko-dsh@latest
+pnpm dsh plugin --profile web add kiokuko-dsh@latest --allow-build=kiokuko-dsh
 pnpm dsh plugin --profile dsh-cli remove kiokuko-dsh
-pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest --allow-build=kiokuko-dsh
 ```
 
 This setting persists globally and disables the release-age check for future pnpm

@@ -76,7 +76,9 @@ Linux also requires Bubblewrap (`bwrap`) at build and runtime with
 user/PID/network namespaces enabled. No compiler or runtime is downloaded.
 
 The npm `postinstall` hook builds and checks the executable. Source/Git installs
-also build it after `prepare` has produced JavaScript. If SBCL is unavailable,
+also build it after `prepare` has produced JavaScript. In a fresh DSH profile,
+explicitly [approve the package's build script](dsh-plugin.md#install) so pnpm
+can run the hook. If SBCL is unavailable,
 installation reports that Lisp could not be built; the rest of Kiokuko can still
 be installed. Install SBCL and run `npm run lisp:build` in the package directory
 to enable this path. Use `KIOKUKO_LISP_SBCL=/absolute/path/to/sbcl` to select the

@@ -33,8 +33,9 @@ test('consumer transport absence and invalid proxy toggle do not expand inherita
 
 test('pack transport applies only to consumer installation, not native engine execution', () => {
   const source = readFileSync(new URL('../../../scripts/pack-check.mjs', import.meta.url), 'utf8')
-  assert.equal(source.match(/consumerInstallEnvironment\(process.env/g)?.length, 1)
+  assert.equal(source.match(/consumerInstallEnvironment\(process.env/g)?.length, 2)
   assert.match(source, /cwd: consumerRoot, env: consumerInstallEnvironment\(process.env, \{ home: work, cache \}\)/)
+  assert.match(source, /'rebuild', 'kiokuko-dsh', '--offline', '--foreground-scripts'\], \{\s*cwd: consumerRoot, env: \{ \.\.\.consumerInstallEnvironment\(process.env, \{ home: work, cache \}\)/)
   assert.match(source, /exec\(guardrail.binary, \['--version'\], \{ cwd: extractRoot, env: \{ PATH: '', HOME: work \}/)
   assert.match(source, /exec\(guardrail.binary, \['validate', guardrail.protocol\], \{ cwd: extractRoot, env: \{ PATH: '', HOME: work \}/)
   assert.match(source, /timeoutMs: 180_000/)

@@ -293,7 +293,8 @@ async function tui(resumeSessionId) {
       return
     }
     if (!memoryOffer(question) || declinedQuestions.has(request.requestSequence) || !ready) return
-    assert.deepEqual(question.options.map(option => option.label), ['整理して確認する', '今回は保存しない'])
+    const acceptLabel = question.id?.startsWith('repository-learning:') ? 'この内容を保存する' : '整理して確認する'
+    assert.deepEqual(question.options.map(option => option.label), [acceptLabel, '今回は保存しない'])
     selectQuestion(request, '今回は保存しない', () => {
       declinedQuestions.add(request.requestSequence)
       appendFileSync(env.KIOKUKO_CLI_PROBE_EVENTS, JSON.stringify({ type: 'probe-observation', name: 'memoryReviewDeclined', requestSequence: request.requestSequence, questionId: question.id, time: Date.now() }) + '\n')

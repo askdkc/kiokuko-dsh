@@ -12,7 +12,7 @@ Use current official DeepSeek Harness and Node.js 24.16.0 or newer. Compatibilit
 From a DeepSeek Harness checkout:
 
 ```bash
-pnpm dsh plugin --profile web add kiokuko-dsh
+pnpm dsh plugin --profile web add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh --profile web --dump-config
 ```
 
@@ -20,7 +20,7 @@ For the dsh-cli terminal UI, use the separate `dsh-cli` profile:
 
 ```bash
 pnpm dsh plugin --profile dsh-cli add @askdkc/dsh-cli
-pnpm dsh plugin --profile dsh-cli add kiokuko-dsh
+pnpm dsh plugin --profile dsh-cli add kiokuko-dsh --allow-build=kiokuko-dsh
 pnpm dsh --profile dsh-cli
 ```
 

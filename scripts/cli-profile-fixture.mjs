@@ -7,6 +7,20 @@ import { liveAssistantStream } from './live-assistant-bridge.mjs'
 export const name = 'kiokuko-cli-profile-fixture'
 export const inject = ['llm', 'agents', 'sessions', 'tools', 'commands']
 
+function repositoryLearningAnswer(messages) {
+  const evidence = JSON.parse(messages[0].content[0].text)
+  if (!evidence.request.startsWith('profile-fixture-lisp ')) return JSON.stringify({ lessons: [] })
+  const result = evidence.observations.find(observation => observation.type === 'tool/result' && observation.text.includes('42'))
+  assert.ok(result, 'Lisp memory review requires the native result as evidence')
+  return JSON.stringify({ lessons: [{
+    hypothesis: 'A native Lisp CLI smoke test can use (+ 20 22) to verify the tool result is returned.',
+    applicability: 'The native DSH CLI acceptance path in this repository.',
+    nextAction: 'Check the native lisp_eval tool receipt for the smoke test.',
+    verifyWith: 'The tool returns 42 and the CLI renders the completed answer.',
+    evidenceRefs: [result.ref],
+  }] })
+}
+
 export function apply(ctx) {
   const file = process.env.KIOKUKO_CLI_PROBE_EVENTS
   if (!file) throw new Error('This fixture requires a private observation file')
@@ -38,7 +52,7 @@ export function apply(ctx) {
       if (!['standalone','ignore'].includes(process.env.KIOKUKO_CLI_VARIANT) && text.includes('profile-fixture-hello') && options.tools?.length) {
         for (const name of ['prepare_requested_work', 'kioku_read']) assert.ok(options.tools?.some(tool => tool.name === name), `Kiokuko tool ${name} was not ready`)
       }
-      let answer = reflection ? JSON.stringify({ lessons: [] }) : 'PROFILE_FIXTURE_OK'
+      let answer = reflection ? repositoryLearningAnswer(options.messages) : 'PROFILE_FIXTURE_OK'
       if (text.includes('profile-fixture-lisp') && options.tools?.length) {
         const nativeResult = id => options.messages.flatMap(message => message.role === 'tool' && message.toolCallId === id ? [message]
           : (message.content ?? []).filter(block => block.type === 'tool-result' && block.toolCallId === id)).at(-1)

@@ -1,3 +1,4 @@
+import { webTarballInstallArgs } from './web-test-install.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
 import { declineOptionalMemoryOffers, declinePendingMemoryOffer, openSettings, answerTaskStartupForTest } from './lib/web-test-navigation.mjs';
@@ -229,7 +230,7 @@ try {
   console.log("Installing packed models fixture");
   await exec(
     dsh,
-    ["plugin", "--profile", "web", "add", process.env.KIOKUKO_VERIFY_TARBALL ?? join(base, packed), "--force"],
+    webTarballInstallArgs(process.env.KIOKUKO_VERIFY_TARBALL ?? join(base, packed), env.DSH_HOME),
     { cwd: project, env, timeout: 180000, maxBuffer: 16 * 1024 ** 2 },
   );
   const fixture = join(base, "fixture.mjs");

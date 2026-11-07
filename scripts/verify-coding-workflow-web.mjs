@@ -1,3 +1,4 @@
+import { webTarballInstallArgs } from './web-test-install.mjs'
 import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
@@ -31,7 +32,7 @@ try {
   for (const directory of ['project','home','dsh','data']) await mkdir(join(base, directory))
   await mkdir(join(project, 'src'))
   const packed = process.env.KIOKUKO_VERIFY_TARBALL ? JSON.parse(await readFile(process.env.KIOKUKO_VERIFY_PACK_METADATA,'utf8'))[0] : JSON.parse((await exec('npm', ['pack','--ignore-scripts','--pack-destination',base,'--json'], {cwd:root,env})).stdout)[0]
-  await exec(dsh, ['plugin','--profile','web','add',process.env.KIOKUKO_VERIFY_TARBALL ?? join(base,packed.filename),'--force'], {cwd:project,env,timeout:120000,maxBuffer:16*1024**2})
+  await exec(dsh, webTarballInstallArgs(process.env.KIOKUKO_VERIFY_TARBALL ?? join(base, packed.filename), env.DSH_HOME), {cwd:project,env,timeout:120000,maxBuffer:16*1024**2})
   const mockPath = join(base, 'mock.mjs'), fixture = join(base, 'fixture.mjs')
   await writeFile(mockPath, (await transform(await readFile(join(root,'tests/dsh/helpers/native-mock.ts'),'utf8'), {loader:'ts',format:'esm'})).code)
   const definition = {
