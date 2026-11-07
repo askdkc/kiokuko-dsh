@@ -125,6 +125,9 @@ for (const mode of ['core', 'adapter'] as const)
                   const scope = answerFixtureScope(request); if (scope) return scope
                   if (request.questions[0]?.id === 'taskType') return { answers: [{ id: 'taskType', selected: ['実装・変更'] }] }
 if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, legacy === 'assessment' ? 'decision ON / Lisp OFF' : 'decision OFF / Lisp OFF')
+                  const memoryReview = request.questions[0]
+                  if (memoryReview?.options?.some((option: { label: string }) => option.label === '今回は保存しない'))
+                    return { answers: [{ id: memoryReview.id, selected: ['今回は保存しない'] }] }
 
                   asked.push(
                     ...request.questions.map((q: any) =>

@@ -1742,6 +1742,7 @@ export async function mountCore(
               return identity
                 ? {
                     ...identity,
+                    turn: active.get(identity.sessionId)?.turn,
                     task: active.get(identity.sessionId)?.taskText,
                   }
                 : undefined

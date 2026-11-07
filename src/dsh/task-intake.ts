@@ -69,7 +69,7 @@ import { canonicalDirectory } from '../repository/detect-root.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
 import { codingWorkRequested } from './coding-workflow/intent.js';
 import { resolveNativeIntakeTarget } from './intake-target.js';
-import { initializeCodingWorkflowInTransaction } from './coding-workflow/store.js';
+import { initializeCodingWorkflow } from './coding-workflow/store.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
 import { MemoryRetrievalConfig, timeConstraintForRequest, validateMemoryTimeConstraint, type MemoryTimeConstraint } from '../memory/retrieval-contracts.js';
@@ -907,9 +907,8 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
       if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
       if (input.sessionOwnership && codingWorkRequested(input.task, input.requestIntent, profileHints.taskType)) {
-        initializeTaskCompletion(transactionDatabase, runId, 'enforce');
-        initializeCodingWorkflowInTransaction(transactionDatabase, { runId, sessionId: dshSessionId, requestId,
-          repositoryRoot: project.repositoryRoot, task: input.task });
+        initializeCodingWorkflow(transactionDatabase, { runId, sessionId: dshSessionId, requestId,
+          repositoryRoot: project.repositoryRoot, task: input.task }, { optional: true });
       }
       if (input.executionSelection) initializeExecutionSelection(transactionDatabase, runId);
       if (input.sessionOwnership || input.deepSelection) claimExecutionOwner(transactionDatabase, {

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import { identifier, LispError, RESULT_BYTES, type LispOwner } from './contracts.js'
 import type { LispStore } from './store.js'
 import { recordedResult } from './recorded-result.js'
@@ -8,6 +9,18 @@ export const SavedInspection = z.object({ resultOperationId: identifier,
   pointer: z.string().max(1024).optional(),
   offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(2000).default(2000),
 }).strict()
+
+export function savedResultVersion(serialized: string): string {
+  return createHash('sha256').update(serialized).digest('hex')
+}
+
+export type SavedResultPage = Awaited<ReturnType<typeof inspectSavedResult>>
+// The receipt stays inside the host. It is tied to the exact page produced by
+// the journal read, and cannot be supplied in tool arguments or Lisp output.
+const pageVersions = new WeakMap<object, string>()
+export function savedPageVersion(page: object): string | undefined {
+  return pageVersions.get(page)
+}
 
 function pointedValue(result: unknown, pointer: string): unknown {
   if (pointer === '') return result
@@ -41,7 +54,12 @@ export async function inspectSavedResult(store: LispStore, owner: LispOwner, inp
     const page = { ok: true, resultOperationId: request.resultOperationId, state: operation.state, section: request.section,
       ...(request.pointer === undefined ? {} : { pointer: request.pointer }),
       offset: request.offset, totalCharacters: chars.length, nextOffset: end < chars.length ? end : null, data: chars.slice(request.offset, end).join('') }
-    if (Buffer.byteLength(JSON.stringify(page)) <= RESULT_BYTES) return page
+    if (Buffer.byteLength(JSON.stringify(page)) <= RESULT_BYTES) {
+      if (operation.kind === 'lisp_eval' && operation.state === 'SUCCEEDED'
+        && request.section === 'result' && request.pointer === undefined)
+        pageVersions.set(page, savedResultVersion(operation.result))
+      return page
+    }
     if (end <= request.offset + 1) throw new LispError('RESULT_METADATA_LIMIT', '取得条件が応答サイズの上限を超えています。', 'section による取得を使用してください。')
     end = request.offset + Math.floor((end - request.offset) / 2)
   }

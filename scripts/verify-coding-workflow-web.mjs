@@ -1,6 +1,7 @@
 import { answerFixtureQuestions, installFixtureQuestionAnswers, answerTaskStartupForTest } from './lib/web-test-navigation.mjs'
 import { newSessionForTest } from './browser-session.mjs'
 import { selectedDshRuntime } from './dsh-fixture-identity.mjs'
+import { webTestPort } from './test-web-port.mjs'
 import {completeVerification} from './verification-completion.mjs';
 // Packed plugin + published DSH Web + Chromium. Only model generation is scripted.
 import assert from 'node:assert/strict'
@@ -92,7 +93,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
       name: ${JSON.stringify(fixture)}
       inject: [workspaceRegistry, commands, tools, agents, llm]
 `)
-  const launch = async (port = '0') => {
+  const launch = async (port = webTestPort()) => {
     logs = ''
     host = spawn(dsh,['--profile','web','--no-open','--port',port],{cwd:project,env,stdio:['ignore','pipe','pipe']})
     for (const stream of [host.stdout,host.stderr]) stream.on('data',chunk=>{logs+=chunk})
@@ -149,7 +150,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   assert.equal(await goal.count(),0,'replacement admission must not start implementation or reopen the cancelled Goal')
   console.log(JSON.stringify({result:'passed',runtime:JSON.parse(await readFile(join(packages,'@deepseek-ai/dsh/package.json'),'utf8')).version,package:packed.filename,checks:['Goal before effects','keyboard no','ordinary CLI artifact','current item and final evidence','close cancels normally','host restart does not reopen cancellation','admission proceeds without an execution-mode card','replacement task has fresh identity and no effects'],externalModelCalls:0}))
 } catch(error) {
-  console.error(logs.slice(-4000));console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-1500));if(page)console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-2500));throw error
+  console.error(logs.slice(-4000).replace(/([?&]token=)[^\s&]+/g, '$1[redacted]'));console.error((await readFile(receipts,'utf8').catch(()=>'' )).slice(-1500));if(page)console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-2500));throw error
 } finally {
   await browser?.close()
   if(host&&host.exitCode===null){host.kill('SIGTERM');await Promise.race([new Promise(resolve=>host.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,5000))]);if(host.exitCode===null)host.kill('SIGKILL')}

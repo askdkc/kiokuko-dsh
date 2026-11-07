@@ -259,6 +259,21 @@ test('the rendered inspection hint retrieves the omitted verifier log even when 
   assert.equal(digest(actual), digest(verifierOutput), 'following the model-visible hint must return the exact omitted evidence')
 })
 
+test('saved pages preserve supplementary and combining characters at a code point boundary', async t => {
+  const f = await fixture(t)
+  const result = {text: 'a'.repeat(1989) + '🙂e\u0301z'}
+  const expected = JSON.stringify(result)
+  await f.store.reserve(f.owner, 'unicode', 'lisp_eval', 'hash', 'g', {})
+  await f.store.transition(f.owner, 'unicode', ['RUNNING'], 'SUCCEEDED', result)
+  const first = JSON.parse(renderResult(await inspectSavedResult(f.store, f.owner, {resultOperationId:'unicode'})))
+  assert.equal(first.nextOffset, 2000)
+  assert.ok(first.data.endsWith('🙂e'))
+  const last = JSON.parse(renderResult(await inspectSavedResult(f.store, f.owner, {resultOperationId:'unicode', offset:2000})))
+  assert.ok(last.data.startsWith('\u0301'))
+  assert.equal(last.nextOffset, null)
+  assert.equal(first.data + last.data, expected)
+})
+
 test('inspection hints escape stored keys and cannot follow inherited properties', async t => {
   const f = await fixture(t), source = 'evidence'.repeat(3000)
   const saved = { ok: true, operationId: 'keys', value: { json: { 'a/b~c': source } }, changes: [] }

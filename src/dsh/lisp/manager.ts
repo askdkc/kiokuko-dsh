@@ -172,8 +172,8 @@ export class LispManager {
     if(workflow?.protocol && this.#config.executionMode !== 'protected') fail('PROTOCOL_PROTECTED_REQUIRED','This bounded protocol requires protected Lisp computation. Disable the existing Lisp session before binding, then select protected mode; use owned file/test tools for effects.')
     const native = this.taskAuthority.current()?.nativeCommands
     if (native && !workflow?.protocol) native.assertCurrent()
-    else if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||!workflow.definition||['cancelled','superseded','completed'].includes(workflow.state)))
-      fail('CODING_CHOICE_PENDING','このタスクの Goal と条件を定め、Lisp の選択に回答してから実行してください。')
+    else if(workflow&&(workflow.repositoryRoot!==owner.root||workflow.choice.state!=='yes'||['cancelled','superseded'].includes(workflow.state)))
+      fail('CODING_CHOICE_PENDING','このタスクで Lisp を使う選択が必要です。')
     await this.claimSession(owner)
     if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。disable の完了後に enable してください。')
   }

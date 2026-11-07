@@ -1636,6 +1636,7 @@ export function createDshHostAdapter(
               sessionId: item.sessionId,
               repositoryRoot: item.repositoryRoot,
               agent,
+              turn: item.turn,
               task: item.task,
               requestIntent: item.requestIntent,
               requestIntentContext: item.requestIntentContext,

@@ -274,7 +274,7 @@ export class OwnedExecutionService {
         if (!value) throw new Error('No current execution result owner')
         return Object.freeze({...value})
       }) : this.current(execution)
-    const action = executionRequestAction(identity.requestIntent, identity.requestIntentContext, name)
+    executionRequestAction(identity.requestIntent, identity.requestIntentContext, name)
     ownedCalls.add(execution)
     if (name === 'kioku_read' || name === 'kioku_result') {
       await this.host.runtime.withDatabase(db => {
@@ -301,10 +301,6 @@ export class OwnedExecutionService {
       try {
         await this.host.runtime.withDatabase(db=>{
           const workflowIdentity = { ...identity, sessionId: identity.workflowSessionId ?? identity.sessionId }
-          if (action === 'verify' && name === 'kioku_exec') {
-            if (readCodingWorkflow(db, identity.runId)?.pendingScopeChange) throw new KiokukoError('CONFLICT', 'Revise the pending Goal scope before execution.')
-            return
-          }
           if (!assertCodingDispatch(db,workflowIdentity,name)) this.#legacyRuns.add(identity.runId)
           else this.#legacyRuns.delete(identity.runId)
           if (name === 'kioku_exec') assertCodingCommandRetry(db, workflowIdentity, (input as z.infer<typeof commandInput>).command)

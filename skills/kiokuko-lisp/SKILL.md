@@ -10,7 +10,7 @@ description: Compose reusable Common Lisp task tools alongside owned development
 
 ## Admission and tools
 
-Coding: coding_workflow defines Goal/items/checks before the task Lisp choice. Pending blocks effects; next reopens. Resume saved choice; new task/scope asks again. No uses ordinary tools. Verify items, then the user entry with fresh host results.
+Coding: use the host’s task Lisp choice independently of optional coding notes. Pending is not consent to start Lisp. Resume the saved choice. Verify the requested user entry with fresh host results.
 Use the coding choice or /kioku-lisp enable for a persistent worker, and enable-task for disposable scratch. lisp_define, lisp_call and lisp_observe need no mode switch or Working task. Compose exact dependency refs in your own protected worker or private scratch without repository mounts or host RPC. Schemas cannot prove Lisp safe. Children get only native-scope capabilities and never inherit the parent's lease, heap or refs. Publication and effects retain approvals and authority. With Lisp ON, use kioku.process:run/start-job for Git/gh/builds/tests. Direct shells are blocked, even reads. Read/search/Skill and owned file tools remain available. On failure recover or explicitly disable Lisp. Never spoof host-bound session/agent/directory/generation.
 
 Owned kioku_read/write/edit/remove/exec/result retain receipts. Routine development needs no confirmation. Declare destructiveTargets for known effects. Classification of arbitrary code is incomplete. After completion, organize memory with permission and save only the approved text.

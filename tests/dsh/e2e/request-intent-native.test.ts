@@ -45,6 +45,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     f.responses.push(interpretedPreparation(f.mock, 'continue', 'same_scope_continuation', 'change'),
       f.mock.toolCallResponse('continued-state', 'coding_workflow', { action: 'status' }),
       (request: any) => {
+        assert.equal(toolValue(request, 'continue').prepared, true)
         assert.equal(toolValue(request, 'continued-state').workflowId, toolValue(request, 'proposal-propose').workflowId)
         assert.equal(toolValue(request, 'continued-state').choice.state, 'no')
         return f.mock.toolCallResponse('continued-write', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' })
@@ -66,17 +67,16 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     assert.equal(choices.length, 1)
     const expansion = 'src/extra.mjs も変更対象に追加して実装して。通常実行で。'
     f.responses.push(interpretedPreparation(f.mock, 'expand', 'scope_change', 'change'),
-      f.mock.toolCallResponse('premature-expand', 'kioku_write', { path: 'src/extra.mjs', content: 'wrong' }),
+      f.mock.toolCallResponse('expand-before-record', 'kioku_write', { path: 'src/extra.mjs', content: 'console.log(43)\n' }),
       f.mock.toolCallResponse('expand-state', 'coding_workflow', { action: 'status' }),
       (request: any) => {
-        assert.equal(nativeToolResults(request.messages).find(value => value.toolCallId === 'premature-expand')?.isError, true)
+        assert.equal(nativeToolResults(request.messages).find(value => value.toolCallId === 'expand-before-record')?.isError, false)
         const definition = fixtureDefinition('src/parser.mjs and src/extra.mjs')
         definition.goal.revision = 2; definition.goal.requestBasis = expansion
         return f.mock.toolCallResponse('revise', 'coding_workflow_apply',
           { action: 'revise', expectedRevision: toolValue(request, 'expand-state').revision, definition })
       },
-      (request: any) => { toolValue(request, 'revise'); return f.mock.toolCallResponse('expanded-write', 'kioku_write',
-        { path: 'src/extra.mjs', content: 'console.log(43)\n' }) }, f.mock.textResponse('改訂したGoalの範囲を実装した。'))
+      (request: any) => { toolValue(request, 'revise'); return f.mock.textResponse('改訂したGoalの範囲を実装した。') })
     await f.turn(expansion)
     assert.equal(await readFile(join(f.dir, 'src/extra.mjs'), 'utf8'), 'console.log(43)\n')
     assert.equal(choices.length, 2, 'scope revision requires a fresh coding choice')

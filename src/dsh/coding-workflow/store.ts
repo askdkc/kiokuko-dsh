@@ -97,11 +97,21 @@ export function assertCodingIdentity(workflow: CodingWorkflow, identity: CodingI
   if (workflow.runId !== identity.runId || workflow.sessionId !== identity.sessionId || workflow.repositoryRoot !== identity.repositoryRoot)
     throw new KiokukoError('CONFLICT', 'Coding workflow owner or repository changed')
 }
-export function initializeCodingWorkflow(db: SqliteDatabase, input: CodingIdentity & { requestId: string; task: string }): CodingWorkflow {
-  return withImmediateTransaction(db, () => initializeCodingWorkflowInTransaction(db, input))
+type CodingRecordInput = CodingIdentity & { requestId: string; task: string }
+export function initializeCodingWorkflow(db: SqliteDatabase, input: CodingRecordInput): CodingWorkflow
+export function initializeCodingWorkflow(db: SqliteDatabase, input: CodingRecordInput, options: { optional: true }): CodingWorkflow | undefined
+export function initializeCodingWorkflow(db: SqliteDatabase, input: CodingRecordInput,
+  options: { optional?: boolean } = {}): CodingWorkflow | undefined {
+  try {
+    return withImmediateTransaction(db, () => initializeCodingWorkflowInTransaction(db, input))
+  } catch (error) {
+    if (!options.optional || error instanceof KiokukoError || error instanceof AggregateError) throw error
+    // The task admission and existing execution receipts do not depend on this projection.
+    return undefined
+  }
 }
 /** Run admission already owns the transaction that creates its ledger identity. */
-export function initializeCodingWorkflowInTransaction(db: SqliteDatabase, input: CodingIdentity & { requestId: string; task: string }): CodingWorkflow {
+function initializeCodingWorkflowInTransaction(db: SqliteDatabase, input: CodingRecordInput): CodingWorkflow {
   const previous = readCodingWorkflow(db, input.runId)
   if (previous) {
     assertCodingIdentity(previous, input)
@@ -116,9 +126,8 @@ export function initializeCodingWorkflowInTransaction(db: SqliteDatabase, input:
     choice: { state: 'pending', scopeVersion: 1, questionId: `coding-lisp-${workflowId}-1`, revision: 1 } }
   db.prepare('INSERT INTO dsh_coding_workflows VALUES(?,?,?,?,?,?,?,?)')
     .run(workflowId, input.runId, input.sessionId, input.repositoryRoot, input.requestId, 1, JSON.stringify(value), new Date().toISOString())
-  db.prepare('INSERT OR IGNORE INTO dsh_completion_runs(run_id,mode,created_at) VALUES(?,?,?)')
-    .run(input.runId, 'enforce', new Date().toISOString())
-  db.prepare("UPDATE dsh_completion_runs SET mode='enforce' WHERE run_id=?").run(input.runId)
+  db.prepare("INSERT OR IGNORE INTO dsh_completion_runs(run_id,mode,created_at) VALUES(?,'shadow',?)")
+    .run(input.runId, new Date().toISOString())
   return value
 }
 /** Revision, effect and replay receipt commit together. Callers never retain mutable stored state. */

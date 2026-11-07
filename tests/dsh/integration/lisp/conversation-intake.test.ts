@@ -58,10 +58,15 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    const workflow=sessionCodingWorkflow(db,session.id)
    const disabled=await commands.get('kioku-lisp').handler({rawInput:'disable',agent,signal:controller.signal})
    assert.equal(disabled.kind,'success',disabled.text)
+   assert.equal(sessionCodingWorkflow(db,session.id)?.choice.state,'no')
    assert.equal(ctx.tools.executable('lisp_eval',agent),undefined,'Disabled sessions cannot dispatch the inherited worker descriptor')
    const reenabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal:controller.signal})
    assert.equal(reenabled.kind,'success',reenabled.text)
-   assert.deepEqual(sessionCodingWorkflow(db,session.id),workflow,'ordinary mode controls must not rewrite the unrelated Goal-less workflow')
+   const current=sessionCodingWorkflow(db,session.id)
+   assert.equal(current?.choice.state,'yes')
+   assert.equal(current?.workflowId,workflow?.workflowId)
+   assert.equal(current?.request,workflow?.request)
+   assert.equal(current?.definition,undefined,'changing the route does not create a plan')
   }
   await intake.capture({agent,turn:1,step:0,messages:[{id:'original-human',role:'user',source:{kind:'user'},content:[{type:'text',text:'Calculate 20 plus 22 in this conversation. Inspect only; do not change workspace files.'}]}],signal:controller.signal})
   if(mode==='optional-workflow'){
@@ -77,13 +82,13 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
   }
   const result=await execute('lisp_eval',{operationId:'pure',code:'(+ 20 22)'})
   if(deferredOnly){assert.equal(result.isError,true,JSON.stringify(result));assert.match(JSON.stringify(result),/prepare_requested_work/);assert.equal(preparations,0);return}
-  if(controlled){assert.equal(result.value.ok,false);assert.match(JSON.stringify(result),/CODING_CHOICE_PENDING|Goal/);return}
   assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.ok,true,JSON.stringify(result));assert.match(JSON.stringify(result.value),/42/)
   assert.equal(preparations,0);assert.equal(db.prepare('SELECT count(*) n FROM ledger_runs').get<any>()!.n,originalRunCount)
   assert.equal((await execute('lisp_status',{})).isError,false)
   const effect=await execute('lisp_eval',{operationId:'unowned-effect',code:'(kioku.files:propose-write "denied.txt" "bad")'})
   assert.equal(effect.value.ok,false);assert.match(JSON.stringify(effect.value),/Working タスク/,'delegating Lisp dispatch never grants an effect lease')
   await assert.rejects(readFile(join(base,'denied.txt')),{code:'ENOENT'})
+  if(controlled)return
   const processEffect=await execute('lisp_eval',{operationId:'unowned-process',code:'(kioku.process:run "node" (list "--version"))'})
   assert.equal(processEffect.value.ok,true,JSON.stringify(processEffect));assert.equal(processEffect.value.value.json.code,0)
   assert.match(processEffect.value.value.json.stdout,/v[0-9]+\./);assert.equal(approvals,1)

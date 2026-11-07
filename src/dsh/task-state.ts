@@ -163,7 +163,7 @@ export function recordTaskEvidence(db: SqliteDatabase, identity: TaskIdentity, i
   db.prepare('INSERT INTO ledger_task_evidence VALUES(?,?,?,?,?,?)')
     .run(identity.taskId, input.ref, input.generation, input.kind, Number(input.verified), JSON.stringify(details))
 }
-export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: TaskOperationInput, host?: { sourceEndSeq?: number }): TaskSnapshot {
+export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: TaskOperationInput, host?: { sourceEndSeq?: number; continueCodingTurn?: boolean }): TaskSnapshot {
   const parsed = TaskOperationSchema.parse(raw)
   return withImmediateTransaction(db, () => {
     // Ownership still applies when replaying a previously successful operation.
@@ -200,7 +200,7 @@ export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: 
         .run(state, input.reason, JSON.stringify(input.evidence), reopen ? 1 : Number(current.resumedFromTerminal),
           previousOutcome ? JSON.stringify(previousOutcome) : null, Number(reopen), Number(reopen),
           new Date().toISOString(), identity.taskId, current.revision)
-      if (input.operation === 'resume') reopenTerminalCodingWorkflow(db, { runId: identity.taskId, sessionId: identity.sessionId,
+      if (input.operation === 'resume' && !host?.continueCodingTurn) reopenTerminalCodingWorkflow(db, { runId: identity.taskId, sessionId: identity.sessionId,
         repositoryRoot: identity.repositoryRoot }, input.operationId, { terminalOutcome: executionTerminal(current.runStatus) || isTaskTerminal(current) })
       const updated = readTaskSnapshot(db, identity)
       if (updated.revision !== current.revision + 1) conflict('Task revision compare-and-swap failed')
@@ -208,6 +208,21 @@ export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: 
       return updated as unknown as JsonValue
     }) as unknown as TaskSnapshot
   })
+}
+
+/** A new human request can continue a normally ended turn on the same task.
+ * An explicit Stop or a failed task still follows the explicit resume path. */
+export function canContinueCompletedTurn(task: TaskSnapshot): boolean {
+  return task.runStatus === 'completed' && task.state === 'Pending' && !task.pendingStop
+}
+
+export function resumeCompletedCodingTurn(db: SqliteDatabase, task: TaskSnapshot, requestId: string, evidence: string[]): TaskSnapshot {
+  if (!canContinueCompletedTurn(task)) return task
+  return transitionTask(db, task, {
+    operation: 'resume', operationId: `turn-continuation:${canonicalContentHash(requestId)}`,
+    expectedRevision: task.revision, expectedGeneration: task.generation, explicit: true,
+    reason: 'Continue work requested in this native session', evidence,
+  }, { continueCodingTurn: true })
 }
 /** Durable stop request; acknowledging it is not evidence that the process stopped. */
 export function requestTaskStop(db: SqliteDatabase, identity: TaskIdentity, raw: TaskOperationInput): TaskSnapshot {

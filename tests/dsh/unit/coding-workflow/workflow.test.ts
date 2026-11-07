@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { openConnection } from '../../../../src/db/connection.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
-import { findSessionTask, requestTaskStop } from '../../../../src/dsh/task-state.js'
+import { bindTaskRepository, findSessionTask, requestTaskStop } from '../../../../src/dsh/task-state.js'
 import { CodingDefinitionSchema, type CodingDefinition } from '../../../../src/dsh/coding-workflow/contracts.js'
 import { codingControlOrRead, codingIntent, codingContinuation, documentEditIntent, documentContinuation } from '../../../../src/dsh/coding-workflow/intent.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../../../../src/dsh/coding-workflow/store.js'
@@ -54,10 +54,10 @@ async function fixture() {
     async close() { await service.close(); db.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
-test('strict definition rejects empty criteria, unknown IDs, disconnected Goal and cycles', () => {
+test('legacy definition rejects empty criteria, unknown execution dependencies and cycles', () => {
   assert.equal(CodingDefinitionSchema.safeParse(definition).success, true)
   for (const alter of [(v:any)=>v.goal.ideal='', (v:any)=>v.items[0].criterionIds=[], (v:any)=>v.items[0].dependsOn=['missing'],
-    (v:any)=>v.items[0].dependsOn=['parser'], (v:any)=>v.items[0].goalCriterionIds=['missing'], (v:any)=>v.criteria.push({...v.criteria[0]})]) {
+    (v:any)=>v.items[0].dependsOn=['parser'], (v:any)=>v.items[0].criterionIds=['missing'], (v:any)=>v.criteria.push({...v.criteria[0]})]) {
     const value = structuredClone(definition); alter(value); assert.equal(CodingDefinitionSchema.safeParse(value).success, false)
   }
 })
@@ -85,22 +85,19 @@ test('continuation cannot silently reuse a Lisp answer for an appended scope-cha
   for (const text of ['Continue the current task.', 'Resume the same task without changing its scope.', 'このタスクを再開してください。']) assert.equal(codingContinuation(text), true)
   for (const text of ['Continue the current task and implement another API.', 'Resume the current task. Also change its scope.', 'このタスクを再開して、新しいAPIも追加して']) assert.equal(codingContinuation(text), false)
 })
-test('Goal and choice gate effects, preserve reads and survive restart with exact replay', async () => {
+test('owned effects and closing do not require a coding definition, even on an older enforce run', async () => {
   const f = await fixture()
   try {
-    assert.equal(taskCompletionBlocksClose(assessTaskCompletion(f.db,f.identity.runId)), true, 'empty workflow must enforce completion')
-    await assert.rejects(f.execute('kioku_write',{path:'output',content:'bad'},'before-goal'),/Goal/)
-    const proposed = f.propose()
-    assert.deepEqual(f.propose(),proposed)
-    assert.throws(()=>proposeCodingWorkflow(f.db,f.identity,'propose',1,{...definition,goal:{...definition.goal,ideal:'different'}}),/reused/)
-    await assert.rejects(f.execute('kioku_exec',{command:'touch must-not-exist'},'before-choice'),/Lisp choice/)
-    assert.ok(await f.execute('kioku_read',{path:'src/check.test.mjs'},'read'))
-    await f.restart(); assert.equal(readCodingWorkflow(f.db,f.identity.runId)!.choice.state,'pending')
-    f.choose(); assert.equal(assertCodingDispatch(f.db,f.identity,'kioku_write')!.choice.state,'no')
-    assert.throws(()=>assertCodingDispatch(f.db,f.identity,'lisp_eval'),/not selected/)
-    await f.execute('kioku_write',{path:'output',content:'ok'},'write')
-    await f.restart(); const replay=await f.execute('kioku_write',{path:'output',content:'ok'},'write')
-    assert.equal(replay.replayed,true); assert.equal(await readFile(join(f.root,'output'),'utf8'),'ok')
+    f.db.prepare("UPDATE dsh_completion_runs SET mode='enforce' WHERE run_id=?").run(f.identity.runId)
+    await f.execute('kioku_write', { path: 'output', content: 'ok' }, 'write')
+    await f.restart()
+    const replay = await f.execute('kioku_write', { path: 'output', content: 'ok' }, 'write')
+    assert.equal(replay.replayed, true)
+    assert.equal(await readFile(join(f.root, 'output'), 'utf8'), 'ok')
+    const assessment = assessTaskCompletion(f.db, f.identity.runId)
+    assert.equal(assessment.verified, false)
+    assert.equal(taskCompletionBlocksClose(assessment), false)
+    assert.throws(() => assertCodingDispatch(f.db, f.identity, 'lisp_eval'), /not selected/)
   } finally { await f.close() }
 })
 test('host evidence must verify items before a fresh final Goal command; source changes become stale', async () => {
@@ -122,6 +119,22 @@ test('host evidence must verify items before a fresh final Goal command; source 
     assert.ok(assessTaskCompletion(f.db,f.identity.runId).criteria.every(item=>item.state==='stale'))
   }finally{await f.close()}
 })
+test('a shared check verifies Goal and item from one observed result and becomes stale after an edit', async () => {
+  const f = await fixture()
+  try {
+    const shared = structuredClone(definition)
+    shared.goal.criterionIds = ['parser-check']
+    shared.items[0]!.goalCriterionIds = []
+    shared.criteria = [shared.criteria[0]!]
+    proposeCodingWorkflow(f.db, f.identity, 'shared', 1, shared)
+    f.bind('parser-check')
+    await f.execute('kioku_exec', { command: f.command }, 'single-check')
+    assert.equal(assessTaskCompletion(f.db, f.identity.runId).verified, true)
+    assert.equal(synchronizeCodingWorkflow(f.db, f.identity.runId)!.state, 'completed')
+    await f.execute('kioku_write', { path: 'src/check.test.mjs', content: 'console.log("changed")' }, 'follow-up')
+    assert.equal(assessTaskCompletion(f.db, f.identity.runId).criteria[0]!.state, 'stale')
+  } finally { await f.close() }
+})
 test('zero tests, skips, failing child process and fake success output do not complete checks', async () => {
   for(const source of ["console.log('passed:true')", "import test from 'node:test';test.skip('skip',()=>{});", "import test from 'node:test';test('failure',()=>{throw Error('actual failure')})"]){
     const f=await fixture();try{f.propose();f.choose();await writeFile(join(f.root,'src/check.test.mjs'),source);f.bind('parser-check');await f.execute('kioku_exec',{command:f.command},'bad');assert.notEqual(assessTaskCompletion(f.db,f.identity.runId).criteria[0]!.state,'satisfied')}finally{await f.close()}
@@ -130,11 +143,13 @@ test('zero tests, skips, failing child process and fake success output do not co
 test('revisions preserve reordered IDs, require changed-condition revisions and reject old scope answers', async()=>{
   const f=await fixture();try{
     f.propose();f.choose();let value=readCodingWorkflow(f.db,f.identity.runId)!
-    const reordered={...definition,criteria:[...definition.criteria].reverse()}
+    const reordered={...definition,criteria:[...definition.criteria].reverse(),
+      items: definition.items.map(item => ({ ...item, goalCriterionIds: [] }))}
     value=proposeCodingWorkflow(f.db,f.identity,'reorder',value.revision,reordered,true);assert.equal(value.scopeVersion,1);assert.equal(value.choice.state,'no')
+    assert.deepEqual(value.definition?.items[0]?.goalCriterionIds, ['goal-check'])
     assert.throws(()=>proposeCodingWorkflow(f.db,f.identity,'bad-revision',value.revision,{...definition,criteria:[{...definition.criteria[0],expected:'changed'},definition.criteria[1]]},true),/revision/)
     value=proposeCodingWorkflow(f.db,f.identity,'scope',value.revision,{...definition,goal:{...definition.goal,revision:2,target:'another target'}},true)
-    assert.equal(value.scopeVersion,2);assert.equal(value.choice.state,'pending')
+    assert.equal(value.scopeVersion,2);assert.equal(value.choice.state,'no')
     assert.throws(()=>answerCodingChoice(f.db,f.identity,{callId:'old-answer',expectedRevision:value.revision,workflowId:value.workflowId,scopeVersion:1,questionId:`coding-lisp-${value.workflowId}-1`,questionRevision:1,answerRef:'old-human',choice:'yes'}),/pending coding task/)
     assert.throws(()=>proposeCodingWorkflow(f.db,{...f.identity,sessionId:'other'},'other',value.revision,definition,true),/owner/)
   }finally{await f.close()}
@@ -213,7 +228,9 @@ test('public apply schema, minimum example and validation errors agree with exec
   const f = await fixture(), host = mounted(f)
   try {
     const apply = host.tools.get('coding_workflow_apply')
-    assert.ok(apply.parameters.required.includes('expectedRevision'))
+    assert.ok(apply.parameters.anyOf.some((branch: any) => branch.required.includes('expectedRevision')))
+    assert.ok(apply.parameters.anyOf.some((branch: any) => branch.properties.action.const === 'annotate'
+      && !branch.required.includes('expectedRevision')))
     const execution = (callId: string) => ({ name: 'coding_workflow_apply', callId, agent: host.agent, signal: new AbortController().signal })
     await assert.rejects(apply.execute({ action: 'propose', definition }, execution('missing-revision')), /expectedRevision.*current revision/s)
     const invalid = structuredClone(definition); invalid.items[0]!.itemId = invalid.goal.goalId
@@ -224,6 +241,30 @@ test('public apply schema, minimum example and validation errors agree with exec
     const result = await host.tools.get(example.tool).execute(example.arguments, execution('valid-example'))
     assert.equal(result.applicable, true)
     await assert.rejects(apply.execute({ ...example.arguments, action: 'revise' }, execution('stale')), /revision/i)
+  } finally { host.unmount(); await f.close() }
+})
+test('annotation failure can be repaired independently of an already recorded effect', async () => {
+  const f = await fixture(), host = mounted(f)
+  try {
+    const write = await f.execute('kioku_write', { path: 'output', content: 'ok' }, 'write')
+    const apply = host.tools.get('coding_workflow_apply')
+    const execution = { name: apply.name, callId: 'note', agent: host.agent, signal: new AbortController().signal }
+    const notes = { action: 'annotate', notes: 'Wrote the requested artifact.',
+      evidenceRefs: [write.receipt.evidenceRef, 'foreign-ref', write.receipt.evidenceRef] }
+    f.db.exec("CREATE TEMP TRIGGER fail_note BEFORE INSERT ON dsh_coding_operations BEGIN SELECT RAISE(ABORT, 'record unavailable'); END")
+    assert.deepEqual(await apply.execute(notes, execution), { recorded: false, reason: 'record_unavailable' })
+    assert.equal(await readFile(join(f.root, 'output'), 'utf8'), 'ok')
+    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.annotation, undefined)
+    f.db.exec('DROP TRIGGER fail_note')
+    const saved = await apply.execute(notes, execution)
+    assert.equal(saved.recorded, true)
+    assert.deepEqual(saved.annotation.evidenceRefs, [write.receipt.evidenceRef])
+    assert.deepEqual(saved.annotation.unresolvedEvidenceRefs, ['foreign-ref'])
+    await f.restart()
+    assert.deepEqual(await apply.execute(notes, execution), saved)
+    await assert.rejects(apply.execute({ ...notes, notes: 'Changed replay' }, execution), /reused/)
+    assert.equal(f.db.prepare("SELECT count(*) AS n FROM dsh_owned_operations WHERE run_id=?").get(f.identity.runId)?.n, 1)
+    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.request, 'Implement the parser in src/parser.mjs')
   } finally { host.unmount(); await f.close() }
 })
 test('execution consumes the bound action: verification Bash is allowed, direct writes are not', async () => {
@@ -257,7 +298,7 @@ test('implementation scope opens Lisp admission even when intake labels it writi
   assert.equal(codingWorkRequested('README.mdを修正してください。', decide('document'), 'build'), false)
   assert.equal(codingWorkRequested(task, decide('unknown'), 'build'), false)
 })
-test('opaque implementation shorthand still requires Goal and choice; forged intent cannot authorize effects', async () => {
+test('bound implementation intent allows work before notes; forged intent cannot authorize effects', async () => {
   const f = await fixture(), task = 'A/B/C をまとめて入れて'
   const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), proposals: [
     { id: 'proposal', revision: 1, digest: 'a'.repeat(64), text: 'A/B/C: repair the three parser defects' },
@@ -268,22 +309,20 @@ test('opaque implementation shorthand still requires Goal and choice; forged int
   const host = mounted(f, { resolve: (execution: any) => execution.agent === agent ? identity : undefined })
   try {
     const run = () => host.hooks.get('tools/pre-execute')({ name: 'kioku_write', agent, callId: 'write', arguments: {}, signal: new AbortController().signal }, async () => 'native')
-    assert.equal((await run()).kind, 'deny')
-    f.propose(); f.choose()
     assert.equal(await run(), 'native')
     identity.requestIntent = { ...requestIntent, evidence: { ...requestIntent.evidence, requestDigest: 'b'.repeat(64) } }
     assert.equal((await run()).kind, 'deny')
   } finally { host.unmount(); await f.close() }
 })
-test('missing native question service preserves the Goal and pending choice, while effects remain denied', async () => {
+test('pending record choice preserves the Goal and does not select Lisp implicitly', async () => {
   const f = await fixture(), host = mounted(f)
   try {
     f.propose()
     const execution = { name: 'coding_workflow', callId: 'reopen', agent: host.agent, arguments: { action: 'next' }, signal: new AbortController().signal }
     const status = await host.tools.get('coding_workflow').execute(execution.arguments, execution)
     assert.equal(status.choice.state, 'pending'); assert.equal(status.definition.goal.goalId, 'goal')
-    const denied = await host.hooks.get('tools/pre-execute')({ ...execution, name: 'kioku_write', callId: 'blocked-write' }, async () => ({ kind: 'allow' }))
-    assert.equal(denied.kind, 'deny'); assert.match(denied.reason, /Lisp choice/)
+    const denied = await host.hooks.get('tools/pre-execute')({ ...execution, name: 'lisp_eval', callId: 'blocked-write' }, async () => ({ kind: 'allow' }))
+    assert.equal(denied.kind, 'deny'); assert.match(denied.reason, /not selected/)
   } finally { host.unmount(); await f.close() }
 })
 test('durable task cancellation aborts an already running process before its delayed write', async () => {
@@ -318,7 +357,7 @@ test('a saved yes survives startup failure and retries the recovered runtime wit
     assert.equal(await readFile(join(f.root, 'recovered'), 'utf8'), 'ok')
   } finally { host.unmount(); await f.close() }
 })
-test('scope revision during native approval invalidates the queued effect and the previous answer', async () => {
+test('scope revision invalidates queued approval while retaining the explicit route', async () => {
   const f = await fixture(), host = mounted(f)
   try {
     f.propose(); f.choose(); host.tools.set('kioku_write', { execute() {} })
@@ -329,7 +368,7 @@ test('scope revision during native approval invalidates the queued effect and th
     await host.tools.get('coding_workflow').execute({ action: 'revise', expectedRevision: value.revision, definition: changed },
       { name: 'coding_workflow', callId: 'scope-change', agent: host.agent, signal: new AbortController().signal })
     await assert.rejects(host.hooks.get('tools/execute')(execution, async () => { throw Error('Old effect must never execute') }), /approval/)
-    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.choice.state, 'pending')
+    assert.equal(readCodingWorkflow(f.db, f.identity.runId)!.choice.state, 'no')
     await assert.rejects(readFile(join(f.root, 'late')), { code: 'ENOENT' })
   } finally { host.unmount(); await f.close() }
 })
@@ -343,7 +382,7 @@ test('current and restarted model snapshots expose pending and stale checks befo
   const support = new DshExecutionSupport(runtime)
   try {
     f.propose()
-    assert.match(codingVerificationText(f.db, f.identity), /"next":"answer_lisp_choice"/)
+    assert.match(codingVerificationText(f.db, f.identity), /"next":"verify_current_item"/)
     f.choose(); f.bind('parser-check'); f.bind('goal-check')
     await support.refresh(binding, true)
     const assembly = support.projectMessages('session', []) as any[]
@@ -435,12 +474,13 @@ test('human worker recovery remains available with a defined Goal without granti
     f.propose()
     assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'a defined Goal must not prevent human worker recovery')
     assert.equal(await protectedManager.canRecoverWorkerWithoutTask(owner), false, 'protected mode retains its task authority')
-    await assert.rejects(f.execute('kioku_write', { path: 'recovery-must-not-write', content: 'bad' }, 'recovery-no-effect-authority'), /Lisp choice/)
-    const task = findSessionTask(f.db, { sessionId: owner.sessionId, repositoryRoot: owner.root })!
+    const task = bindTaskRepository(f.db, { taskId: f.identity.runId, sessionId: owner.sessionId, repositoryRoot: owner.root })
     requestTaskStop(f.db, { taskId: task.taskId, sessionId: owner.sessionId, repositoryRoot: owner.root }, {
       operation: 'wait', operationId: 'stop-before-human-recovery', expectedRevision: task.revision, reason: 'Human stopped the task before recovering Lisp',
     })
     assert.equal(await manager.canRecoverWorkerWithoutTask(owner), true, 'task stop must not trap human recovery')
+    await assert.rejects(f.execute('kioku_write', { path: 'recovery-must-not-write', content: 'bad' }, 'recovery-no-effect-authority'),
+      /Working|stale or stopped/u)
     await assert.rejects(manager.taskAuthority.run(owner, () => manager.taskAuthority.authorizeEffect(owner), {
       assertCurrent() {},
       async run() { throw new Error('Mode control cannot execute a command') },

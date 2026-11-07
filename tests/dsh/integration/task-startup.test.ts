@@ -29,6 +29,7 @@ async function setup(t: import('node:test').TestContext, configured: Record<stri
       provider: config.provider, requestedModel: 'fixture', policyVersion: 'fixture' } } }), store)
   const preparation = new LispCodingPreparation({ identity: () => ({ sessionId: 'session', root: '/repo' }), enabled: () => enabled,
     activate: async () => { activations++; enabled = true }, deactivate: async () => { enabled = false },
+    resultVersion: async () => undefined,
     choose: async () => { legacyAsks++; return { status: 'unavailable', reason: 'Unexpected second question' } } })
   const lisp = { prepare: async () => ({ taskType: 'build' as const }), enabled: () => enabled, discussing: () => false,
     selectTask: preparation.selectTask.bind(preparation), manualSelected: async () => false }

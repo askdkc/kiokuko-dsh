@@ -31,6 +31,7 @@ import { withImmediateTransaction } from "../../db/transaction.js";
 import { LedgerStore } from "../../ledger/store.js";
 import { KiokukoError } from "../../errors.js";
 import {
+  completionBlocksCloseWithoutReceipt,
   saveTaskCompletionReceipt,
   taskCompletionBlocksClose,
 } from "../task-completion.js";
@@ -166,13 +167,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
         });
         return false;
       } catch {
-        // A missing or corrupt new completion assessment never grants an opted-in
-        // enforce run a verified terminal state. Legacy/shadow close as before.
-        return (
-          database
-            .prepare("SELECT mode FROM dsh_completion_runs WHERE run_id = ?")
-            .get<{ mode: string }>(item.runId)?.mode !== "enforce"
-        );
+        return !completionBlocksCloseWithoutReceipt(database, item.runId);
       }
     });
   const nativeTurnCompleted = (item: TurnRecord): boolean => {
@@ -249,7 +244,7 @@ export function createLifecycle(deps: LifecycleDependencies) {
         terminalTurn: item.turn,
       };
     // Idle alone is not completion. The exact native turn must have finished,
-    // and every registered completion criterion must have current evidence.
+    // and any explicit execution protocol must permit closing.
     if (nativeTurnCompleted(item) && await completionReady(item))
       return {
         ...closeAuthority(item),
@@ -355,17 +350,14 @@ export function createLifecycle(deps: LifecycleDependencies) {
         if (!currentCloseAuthority(database, input.runId, input.authority))
           return false;
         if (input.status === "cancelled")
-          stopCodingWorkflow(database, input.runId, "cancelled");
+          stopCodingWorkflow(database, input.runId, "cancelled", { closingRun: true });
         let completionBlocked: boolean;
         try {
           completionBlocked = taskCompletionBlocksClose(
             saveTaskCompletionReceipt(database, input.runId),
           );
         } catch {
-          completionBlocked =
-            database
-              .prepare("SELECT mode FROM dsh_completion_runs WHERE run_id=?")
-              .get<{ mode: string }>(input.runId)?.mode === "enforce";
+          completionBlocked = completionBlocksCloseWithoutReceipt(database, input.runId);
         }
         if (input.status === "completed" && completionBlocked)
           throw new KiokukoError(

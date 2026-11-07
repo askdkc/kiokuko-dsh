@@ -225,6 +225,24 @@ test('finalization rolls back coding state, task authority and owner release tog
   } finally { await f.cleanup() }
 })
 
+test('cancelling the task still revokes authority if its optional coding record cannot be updated', async () => {
+  const f = await fixture(), tasks = new CoreTasks(f.runtime)
+  try {
+    const task = await tasks.prepare(f.input)
+    assert.ok(task.authority)
+    await f.runtime.withDatabase(db => {
+      initializeCodingWorkflow(db, { ...task, repositoryRoot: task.authority!.repositoryRoot,
+        task: 'Inspect the current coding goal' })
+      db.exec("CREATE TRIGGER prevent_record_update BEFORE UPDATE ON dsh_coding_workflows BEGIN SELECT RAISE(ABORT, 'Record unavailable'); END")
+    })
+    await tasks.finish(task, 'cancelled')
+    const state = await f.state()
+    assert.equal(state.runs[0]?.status, 'cancelled')
+    assert.deepEqual(state.owners, [])
+    await f.runtime.withDatabase(db => assert.throws(() => authorizeTaskLease(db, task.authority!), /stale or stopped/))
+  } finally { await f.cleanup() }
+})
+
 for (const operation of ['abstained', 'none', 'main-model'] as const) test(`unresolved change scope cannot admit work (${operation})`, async () => {
   const { classifyRequestIntent, createRequestIntentContext, requestIntentMessageRefs, bindMainModelRequestIntent, requestIntentReferenceIds } = await import('../../../src/dsh/decisions/request-intent.js')
   const { parseDecisionResult } = await import('../../../src/dsh/decisions/contracts.js')

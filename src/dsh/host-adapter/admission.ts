@@ -70,6 +70,7 @@ import { realpathSync } from 'node:fs'
 import { type DshNativePreStepPayload } from '../composition.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
+import { assertCapabilityCatalogBinding } from '../../akinator/capability-binding.js'
 import {
   DshIntakeGate,
   type DshCapabilityReadContext,
@@ -142,6 +143,7 @@ import {
   findSessionTask,
   readTaskSnapshot,
   recordTaskUnresolved,
+  resumeCompletedCodingTurn,
   taskCanExecute,
 } from '../task-state.js'
 import { continueTaskIntake } from '../existing-task-intake.js'
@@ -630,14 +632,21 @@ export function createAdmission({
           !(await runtime.withDatabase((db) =>
             readCodingWorkflow(db, current.taskId),
           ))
-        if (
+        const previousCoding = current.runStatus === 'completed'
+          ? await runtime.withDatabase(db => readCodingWorkflow(db, current.taskId))
+          : undefined
+        const needsNewRun = current.runStatus === 'completed' && (
+          (!previousCoding && !codingWorkRequested(current.request ?? '')) ||
+          (previousCoding?.state === 'completed' && event.requestIntent?.relation === 'scope_change')
+        )
+        if (!needsNewRun && (
           resumeCanonicalContinuation ||
           !taskCanExecute(current) ||
           (prior?.runId === current.taskId &&
             prior.authority &&
             (prior.authority.revision !== current.revision ||
               prior.authority.generation !== current.generation))
-        ) {
+        )) {
           const refreshed = await resumeExistingRun?.(event)
           if (!refreshed)
             throw new KiokukoError(
@@ -944,6 +953,10 @@ export function createAdmission({
           }
           return selected
         }
+        if (admittedStep) {
+          this.assertCatalog(prior.catalog, event.capabilities)
+          return { admitted: !event.signal.aborted, prepared: prior.prepared, catalog: prior.catalog }
+        }
         // Model routing prepares before native pre-step. Reuse that exact
         // intake result instead of treating its newly active run as a cold
         // resume (which deliberately starts without historical context).
@@ -985,7 +998,7 @@ export function createAdmission({
         const durableOpen =
           durableStatus === "intake" || durableStatus === "active"
         const continuePrevious =
-          resumeCoding ||
+          (resumeCoding && durableOpen) ||
           (selection &&
             (selection.status !== "ready" ||
               (selection.mode === "normal" && previous.failed)))
@@ -1440,13 +1453,14 @@ export function createAdmission({
         { allowDirectory: true },
       )
       if (project === undefined) return undefined
-      const task = findSessionTask(database, {
+      const human = hasHumanInput(event.nativeMessages ?? [])
+      const context = event.requestIntentContext
+      let task = findSessionTask(database, {
         sessionId: event.sessionId,
         repositoryRoot: project.repositoryRoot,
-      })
+      }, { includeLatestTerminal: human && continuesCodingScope(event) && context?.activeTask?.runStatus === 'completed' })
       if (!task) return undefined
-      const context = event.requestIntentContext
-      if (hasHumanInput(event.nativeMessages ?? [])) {
+      if (human) {
         if (
           !event.requestIntent ||
           !context ||
@@ -1489,6 +1503,27 @@ export function createAdmission({
         ...event.capabilities.skills,
         ...event.capabilities.tools,
       ]
+      if (task.runStatus === 'completed' && human && context) {
+        const coding = readCodingWorkflow(database, runId)
+        if ((coding ? ['cancelled', 'superseded'].includes(coding.state) : !codingWorkRequested(task.request ?? '')) ||
+          (coding?.state === 'completed' && event.requestIntent?.relation === 'scope_change')) return undefined
+        assertCapabilityCatalogBinding(run.metadata, capabilityEntries)
+        gate.assertCatalog(event.capabilities, await capabilityCatalog(skills, tools, {
+          agent: event.agent, ...(event.nativeAgent ? { nativeAgent: event.nativeAgent } : {}),
+          cwd: event.cwd, signal: event.signal,
+        }))
+        event.signal.throwIfAborted()
+        const previousTask = task
+        const refs = requestIntentReferenceIds(context)
+        task = withImmediateTransaction(database, () => {
+          const resumed = resumeCompletedCodingTurn(database, previousTask,
+            dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn }), refs)
+          if (coding && taskCanExecute(resumed) && event.requestIntent?.relation === 'scope_change') markCodingScopeChange(database, coding,
+            `request-intent:${event.sessionId}:${event.turn}:${event.requestIntent.evidence.requestDigest}`,
+            event.requestIntent.evidence.requestDigest, refs)
+          return resumed
+        })
+      }
       const { state: intakeState, link: intakeLink } = await continueTaskIntake(
         database,
         {
@@ -1566,7 +1601,7 @@ export function createAdmission({
                 ? run.metadata.requestId
                 : `run:${runId}`,
             task: intake.task,
-          })
+          }, { optional: true })
       }
       const prepared: PreparedAgentTask = {
         memoryOwner: createMemoryOwner(
@@ -1639,17 +1674,26 @@ export function createAdmission({
     const cwd =
       typeof sessionHeader?.cwd === 'string' ? sessionHeader.cwd : undefined
     if (!cwd) return undefined
+    if (previous && previous.turn < input.turn && !previous.closed &&
+      (codingWorkRequested(previous.task, previous.requestIntent) ||
+        await runtime.withDatabase(db => Boolean(readCodingWorkflow(db, previous.runId))))) {
+      const close = await resolveIdleClose(previous.agentId, sessionId, nativeSession, input.agent)
+      if (close?.status === 'completed' && close.runId === previous.runId)
+        await retireSupersededRun(previous, 'completed')
+    }
     const messageRefs = requestIntentMessageRefs(human, task)
     const activeTask = await runtime.withDatabase(async (database) => {
       const project = await resolveProjectWorkspaceReadOnly(database, cwd, {
         allowDirectory: true,
       })
-      return project
+      const task = project
         ? findSessionTask(database, {
             sessionId,
             repositoryRoot: project.repositoryRoot,
-          })
+          }, { includeLatestTerminal: true })
         : undefined
+      return task?.pendingStop || task && ['active', 'intake', 'completed'].includes(task.runStatus)
+        ? task : undefined
     })
     let activeGoal: RequestIntentContext['activeGoal']
     let proposals: NonNullable<RequestIntentContext['proposals']> = []
@@ -1692,11 +1736,12 @@ export function createAdmission({
             ? undefined
             : { ...candidates[0], workspace: project.workspace }
         })
-    const runId = sameOwner ? previous.runId : persistedRun?.runId
+    const runId = activeTask?.runId ?? (sameOwner ? previous.runId : persistedRun?.runId)
     if (runId) {
       const state = await runtime.withDatabase((database) => {
         const workflow = readCodingWorkflow(database, runId)
-        const definition = workflow?.definition
+        const openWorkflow = workflow && !['completed', 'cancelled', 'superseded'].includes(workflow.state) ? workflow : undefined
+        const definition = openWorkflow?.definition
         const frame = readExecutionFrame(database, runId)
         const active: RequestIntentContext['activeGoal'] = definition
           ? {
@@ -1710,11 +1755,11 @@ export function createAdmission({
               outOfScope: [...definition.goal.outOfScope],
               constraints: [...definition.goal.constraints],
             }
-          : workflow
+          : openWorkflow
             ? {
                 runId,
-                workflowRevision: workflow.revision,
-                scopeRevision: workflow.scopeVersion,
+                workflowRevision: openWorkflow.revision,
+                scopeRevision: openWorkflow.scopeVersion,
                 outOfScope: [],
                 constraints: [],
               }

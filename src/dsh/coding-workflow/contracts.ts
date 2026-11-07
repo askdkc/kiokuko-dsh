@@ -11,7 +11,7 @@ export const CodingCriterionSchema = z.object({
 }).strict()
 export const CodingItemSchema = z.object({
   itemId: CodingId, change: text, dependsOn: z.array(CodingId).max(64),
-  goalCriterionIds: z.array(CodingId).min(1, 'This item requires at least one Goal criterion reference').max(64).describe('Final Goal criteria implemented by this item. Every declared Goal criterion must appear in at least one items[].goalCriterionIds; choose the responsible item, never invent coverage.'), criterionIds: z.array(CodingId).min(1).max(64),
+  goalCriterionIds: z.array(CodingId).max(64).default([]).describe('Known links to Goal checks; an empty list leaves the mapping open.'), criterionIds: z.array(CodingId).min(1).max(64),
 }).strict()
 export const CodingGoalSchema = z.object({
   goalId: CodingId, revision, ideal: text, target: text,
@@ -19,14 +19,10 @@ export const CodingGoalSchema = z.object({
   criterionIds: z.array(CodingId).min(1).max(64),
 }).strict()
 const definition = z.object({ goal: CodingGoalSchema, items: z.array(CodingItemSchema).min(1).max(64),
-  criteria: z.array(CodingCriterionSchema).min(2).max(128) }).strict()
-export type CodingCriterionDiagnostic =
-  | { kind: 'goal_item_criterion_collision'; criterionId: string; relatedPath: (string | number)[] }
-  | { kind: 'unknown_goal_criterion_reference' | 'uncovered_goal_criterion'; criterionId: string }
-
+  criteria: z.array(CodingCriterionSchema).min(1).max(128) }).strict()
 export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
-  const reject = (message: string, path: (string | number)[] = [], criterionDiagnostic?: CodingCriterionDiagnostic) =>
-    ctx.addIssue({ code: 'custom', message, path, ...(criterionDiagnostic && { params: { criterionDiagnostic } }) })
+  const reject = (message: string, path: (string | number)[] = []) =>
+    ctx.addIssue({ code: 'custom', message, path })
   const ids = (values: string[]) => {
     const duplicates = [...new Set(values.filter((id, index) => values.indexOf(id) !== index))]
     if (duplicates.length) reject(`Duplicate IDs: ${duplicates.join(', ')}`)
@@ -34,34 +30,19 @@ export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
   }
   const criteria = ids(value.criteria.map(item => item.criterionId))
   const items = ids(value.items.map(item => item.itemId))
-  ids(value.goal.criterionIds)
   ids([value.goal.goalId, ...items, ...criteria])
   const referenced = new Set(value.goal.criterionIds)
   for (const [index, id] of value.goal.criterionIds.entries()) {
     const path = ['goal', 'criterionIds', index]
     if (!criteria.has(id)) reject(`Missing Goal criterion: ${id}; declare it in criteria[].criterionId`, path)
-    if (!value.items.some(item => item.goalCriterionIds.includes(id))) {
-      reject(`Goal criterion has no implementing item: ${id}; add this ID to the responsible items[].goalCriterionIds`, path,
-        { kind: 'uncovered_goal_criterion', criterionId: id })
-    }
   }
   for (const [index, item] of value.items.entries()) {
-    ids(item.dependsOn); ids(item.criterionIds); ids(item.goalCriterionIds)
-    for (const id of item.dependsOn) if (!items.has(id)) reject('Missing dependency')
-    for (const [reference, id] of item.goalCriterionIds.entries()) {
-      if (!value.goal.criterionIds.includes(id)) {
-        reject(`Unknown Goal criterion: ${id}; reference a declared goal.criterionIds value`, ['items', index, 'goalCriterionIds', reference],
-          { kind: 'unknown_goal_criterion_reference', criterionId: id })
-      }
+    for (const [reference, id] of item.dependsOn.entries()) {
+      if (!items.has(id)) reject(`Missing dependency: ${id}`, ['items', index, 'dependsOn', reference])
     }
     for (const [reference, id] of item.criterionIds.entries()) {
       referenced.add(id)
-      if (!criteria.has(id)) reject('Missing item criterion')
-      const goalIndex = value.goal.criterionIds.indexOf(id)
-      if (goalIndex !== -1) {
-        reject(`Final Goal check must be separate from item checks: ${id}`, ['items', index, 'criterionIds', reference],
-          { kind: 'goal_item_criterion_collision', criterionId: id, relatedPath: ['goal', 'criterionIds', goalIndex] })
-      }
+      if (!criteria.has(id)) reject(`Missing item criterion: ${id}`, ['items', index, 'criterionIds', reference])
     }
   }
   if ([...criteria].some(id => !referenced.has(id))) reject('Unreferenced criterion')
@@ -74,13 +55,22 @@ export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
     visiting.delete(id); visited.add(id)
   }
   for (const id of items) visit(id)
-})
+}).transform(value => ({
+  ...value,
+  goal: { ...value.goal, criterionIds: [...new Set(value.goal.criterionIds)] },
+  items: value.items.map(item => ({
+    ...item,
+    dependsOn: [...new Set(item.dependsOn)],
+    criterionIds: [...new Set(item.criterionIds)],
+    goalCriterionIds: [...new Set(item.goalCriterionIds)],
+  })),
+}))
 export type CodingDefinition = z.infer<typeof CodingDefinitionSchema>
 export type CodingCriterion = z.infer<typeof CodingCriterionSchema>
 export const CODING_MINIMUM_DEFINITION_EXAMPLE: CodingDefinition = {
   goal: { goalId: 'goal-example', revision: 1, ideal: 'The requested outcome is observable.', target: 'one-target',
     outOfScope: [], constraints: [], requestBasis: 'The exact current user request.', criterionIds: ['goal-check'] },
-  items: [{ itemId: 'implementation', change: 'Implement the requested behavior and cover every final Goal criterion through goalCriterionIds.', dependsOn: [],
+  items: [{ itemId: 'implementation', change: 'Implement the requested behavior.', dependsOn: [],
     goalCriterionIds: ['goal-check'], criterionIds: ['item-check'] }],
   criteria: [
     { criterionId: 'item-check', revision: 1, outcome: 'The requested behavior is implemented',
@@ -106,6 +96,13 @@ export interface CodingWorkflow extends CodingIdentity {
   choice: CodingChoice; retiredIds: string[]; activeItemId?: string; blocker?: CodingBlocker;
   attempts: Record<string, { fingerprint: string; count: number; retryAt: number; sourceDigest?: string }>;
   protocol?: ProtocolState;
+  annotation?: { id: string; notes: string; evidenceRefs: string[]; unresolvedEvidenceRefs: string[] }
   pendingScopeChange?: { requestDigest: string; evidenceRefs: string[] }
 }
+export const CodingAnnotationSchema = z.object({
+  action: z.literal('annotate'),
+  notes: text,
+  evidenceRefs: z.array(z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)).max(32).optional(),
+}).strict()
+export type CodingAnnotationInput = z.infer<typeof CodingAnnotationSchema>
 export const CODING_WORKFLOW_SERVICE = 'kiokukoCodingWorkflow'

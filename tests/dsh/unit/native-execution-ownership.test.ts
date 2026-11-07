@@ -47,7 +47,11 @@ test('ownership proof distinguishes completed history from holds, enrollment, un
         .run(JSON.stringify({ runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: true }))
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned')
       initializeCodingWorkflow(db, { ...task, repositoryRoot: root, task: 'Explicit enrolled coding work' })
-      assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned', 'terminal ledger cannot bypass unfinished enrolled workflow')
+      assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned', 'an optional unfinished record cannot claim authority over a completed task')
+      const row = db.prepare('SELECT snapshot_json FROM dsh_coding_workflows WHERE run_id=?').get<{snapshot_json: string}>(task.runId)!
+      db.prepare('UPDATE dsh_coding_workflows SET snapshot_json=? WHERE run_id=?')
+        .run(JSON.stringify({ ...JSON.parse(row.snapshot_json), protocol: { phase: 'write-tests' } }), task.runId)
+      assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned', 'an unfinished protected enrollment still owns the native route')
       assert.throws(() => nativeExecutionOwnership(db, 'other-session', 'missing-live-owner'), /missing from authority storage/)
       db.exec('DROP TABLE dsh_coding_workflows')
       assert.throws(() => nativeExecutionOwnership(db, task.sessionId), /no such table/)

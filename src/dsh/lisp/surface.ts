@@ -15,6 +15,9 @@ import { mountApprovalPolicy } from './approval-settings.js'
 import type { ApprovalQuestions } from './approval.js'
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
 import { renderHistoryResult } from './model-result.js'
+import { isDeepStrictEqual } from 'node:util'
+import { savedPageVersion, savedResultVersion, type SavedResultPage } from './inspection.js'
+import type { InspectionReceipt } from './prototype-review.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import { TASK_PREPARE_TOOL } from '../on-demand-intake.js'
 import type { DecisionService } from '../decisions/service.js'
@@ -33,7 +36,7 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { LispManager } from './manager.js'
 import { LispStore } from './store.js'
 import { HotCallInput, HotContractInput, HotDeactivateInput, HotInstallInput, HotStatusInput } from './hot-contracts.js'
-import { LispCodingPreparation } from './coding-preparation.js'
+import { LispCodingPreparation, type PreparationObservation } from './coding-preparation.js'
 import { askLispCodingQuestion } from '../coding-question.js'
 import { createLispCodingChoice, LISP_CODING_SERVICE, type LispCodingInput } from './coding-choice.js'
 import { sessionCodingWorkflow } from '../coding-workflow/store.js'
@@ -379,6 +382,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   if (semanticCompaction) for (const tool of ['lisp_eval', 'lisp_inspect']) disposers.push(semanticCompaction.registerProjector(tool, renderHistoryResult))
   try {
   const sessionBindings = new Map<string, { session: Session; abort: AbortController }>()
+  type PreparationCall = { observe: PreparationObservation; inspection?: InspectionReceipt }
+  const preparationCalls = new WeakMap<object, PreparationCall>()
   const closedSessions = new WeakSet<Session>()
   disposers.push(() => { for (const binding of sessionBindings.values()) binding.abort.abort(); sessionBindings.clear() })
   const owner = (candidate: { id: string } | undefined): { agent: Agent; owner: LispOwner; signal: AbortSignal } => {
@@ -473,10 +478,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if(inheritedLisp&&!inheritedLisp.has(name))continue
       const definition = { name, get description() { return `${description(name)} Current Lisp approval mode: ${approvalPolicy.mode()} (profile).` }, modelFacing: true,
         parameters: lispToolSchema(name), output: { schema: {}, render: (_: unknown, result: unknown) => [{ type: 'text', text: renderResult(result) }] },
-        execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string; rootCallId?: string; token?: symbol; toolSet?: unknown }) => {
+        execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string; rootCallId?: string; token?: symbol; toolSet?: unknown; parent?: unknown }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
             const codingRequest = preparation.binding(binding.agent)
+            const observe = preparation.track(binding.agent, name, parsed, execution.parent)
+            const tracked: PreparationCall | undefined = observe ? { observe } : undefined
+            if (tracked) preparationCalls.set(execution, tracked)
             const admission = development ? rootLispAdmission(execution) : undefined
             const agentSession = binding.agent.session, agentContext = binding.agent.ctx
             const bash = admission ? tools.get('bash', binding.agent) : undefined
@@ -577,10 +585,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
             if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed, ...(parsed.prototype === true ? {codingRequest} : {}) })
-            const result = await manager.execute(binding.owner, name, parsed, execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal, nativeCommands)
+            const signal = execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal
+            const result = await manager.execute(binding.owner, name, parsed, signal, nativeCommands)
             const outcome = parsed.prototype && prototypeProcessFailed ? { ...result as object, ok:false, code:'LISP_PROTOTYPE_PROCESS_FAILED', message:'A managed process failed or timed out; this is not successful prototype evidence.' } : result
             if (name === 'lisp_recover' && (outcome as { ok?: boolean; state?: string }).ok === true) diagnosticOnly.delete(binding.agent)
-            preparation.observed(binding.agent, name, parsed, outcome, codingRequest)
+            if (tracked && !signal.aborted && name === 'lisp_inspect' && outcome && typeof outcome === 'object') {
+              const version = savedPageVersion(outcome)
+              if (version) tracked.inspection = { page: outcome as SavedResultPage, version }
+            }
             return name === 'lisp_status' ? { ...outcome as object, codingPreparation:preparation.status(binding.agent) } : outcome
           }
           catch (error) { return failure(error) }
@@ -681,6 +693,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const preparation = new LispCodingPreparation({
     identity: candidate => { const binding = owner(candidate); return { sessionId: binding.owner.sessionId, root: binding.owner.root } },
     enabled: candidate => manager.enabled.has(owner(candidate).owner.sessionId),
+    resultVersion: async (candidate, operationId) => {
+      const operation = await store.get(owner(candidate).owner, operationId)
+      if (operation?.kind === 'lisp_eval' && operation.state === 'SUCCEEDED' && operation.result !== null)
+        return savedResultVersion(operation.result)
+    },
     selected: candidate => manualMode(candidate),
     activate: async (candidate, signal) => { const binding=owner(candidate); await enable({ ...binding, signal: signal ? AbortSignal.any([binding.signal,signal]) : binding.signal }, true) },
     deactivate: async candidate => { const binding=owner(candidate); if(manager.enabled.has(binding.owner.sessionId))await manager.disable(binding.owner);else await store.decline(binding.owner);unregister(binding.agent);hostFence?.release(binding.owner.sessionId) },
@@ -697,6 +714,26 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (execution.agent) { const reason = preparation.denial(execution.agent, execution.name, execution.arguments, execution.parent); if (reason) return {kind:'deny', reason} }
     return next()
   }, {global:true, prepend:true}))
+  disposers.push((ctx as any).on('tools/execute', (execution: any, next: () => Promise<unknown>) => {
+    if (!execution.agent) return next()
+    return preparation.dispatch(execution.agent, execution.name, execution.arguments, execution.parent, execution.signal, next)
+  }, {global:true}))
+  disposers.push((ctx as any).on('tools/result', (execution: any, result: any) => {
+    const tracked = preparationCalls.get(execution)
+    if (!tracked) return
+    preparationCalls.delete(execution)
+    const delivered = result.isError === false && !execution.signal?.aborted
+    const inspection = delivered && tracked.inspection
+    const block = result.content?.length === 1 ? result.content[0] : undefined
+    let visible: InspectionReceipt | undefined
+    if (inspection && block?.type === 'text' && typeof block.text === 'string') {
+      // Only the page that survives final native rendering is evidence.
+      try {
+        if (isDeepStrictEqual(JSON.parse(block.text), inspection.page)) visible = inspection
+      } catch { /* An incomplete or non-JSON projection cannot confirm coverage. */ }
+    }
+    tracked.observe(delivered ? result.value : undefined, visible)
+  }, {global:true}))
   if (config.enabled) disposers.push((ctx as any).provide(LISP_CODING_SERVICE, { ...createLispCodingChoice({ optional:development,
     taskChoice: (agent, task) => preparation.choiceFor(agent, task) !== undefined,
     ...(questions ? { questions } : {}),
@@ -713,7 +750,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     },
   }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), manualOverride: (agent: LispCodingInput['agent']) => preparation.manualOverride(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
-    answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string) => preparation.answered(agent,task,choice,answerRef) }))
+    answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string, scope:string) => preparation.answered(agent,task,choice,answerRef,scope) }))
   const childOwnership = new NativeChildOwnership(root.get('subagents', false) as any, agents)
   disposers.push(() => childOwnership.dispose())
   const workerRouter = (binding: ReturnType<typeof owner>) => {
@@ -867,7 +904,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         if (['enable', 'enable-task', 'disable'].includes(action)) {
           await runtime.withDatabase(db => {
             const workflow = sessionCodingWorkflow(db, binding.owner.sessionId)
-            if (workflow && (action === 'enable-task' || workflow.definition)) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
+            if (workflow) overrideCodingChoice(db, { runId: workflow.runId, sessionId: binding.owner.sessionId, repositoryRoot: binding.owner.root },
               action === 'disable' ? 'no' : 'yes', routeRef)
           })
         }

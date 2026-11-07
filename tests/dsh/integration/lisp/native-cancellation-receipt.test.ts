@@ -79,7 +79,7 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
     }
     if (scenario === 'prototype') {
       const coding = ctx.get(LISP_CODING_SERVICE) as LispCodingService
-      coding.answered!(agent, 'Implement the fixture', 'yes', 'human:choice')
+      coding.answered!(agent, 'Implement the fixture', 'yes', 'human:choice', 'fixture:1')
       const evaluate = (operationId:string, code:string, inputs: string[] = []) => execute('lisp_eval', {operationId, code, inputs, prototype:true})
       assert.match((await evaluate('bad-prototype', '(error "bad prototype")')).value.value, /bad prototype/u)
       const crashed = await evaluate('crash', '(sb-ext:exit :code 1)')

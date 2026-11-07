@@ -38,7 +38,7 @@ failures or lost context. Token budgets use host usage, not bytes or capacity.
 
 ## Completion contract
 
-Coding: early native Lisp choice is reused when coding_workflow binds Goal/items/checks; cover every goal.criterionIds ID in a responsible items[].goalCriterionIds. Lisp ON coding preparation runs lisp_eval prototype:true and inspects its actual successful saved result before implementation; ON is not evidence. Verify items, then the user entry with fresh host evidence. Pending checks prevent completion; resume exact task/operation IDs.
+Coding: carry out the authorized work and verify the current user entry. Coding records are advisory and observed results are captured by the host. Optionally add notes with coding_workflow_apply annotate. Lisp ON coding preparation requires an actual successful prototype and inspection of its saved result. Resume exact task and operation identities. Report missing evidence as unverified.
 
 Bind behavior, required method, preserved contracts and evidence before editing.
 No unapproved proxy: raster for required geometry, hardcoded output, mocks or

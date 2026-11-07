@@ -736,6 +736,7 @@ export function finishTaskCompletionExecution(
       );
       if (
         coding.definition.goal.criterionIds.includes(id) &&
+        !coding.definition.items.some(item => item.criterionIds.includes(id)) &&
         row.coding_goal_ready !== 1
       )
         continue;
@@ -826,7 +827,9 @@ export function assessTaskCompletion(
       const finalGoal = coding?.definition?.goal.criterionIds.some(
         (id) => criterion.id === `coding:${coding.workflowId}:${id}`,
       );
-      if (finalGoal && execution.coding_goal_ready !== 1)
+      const sharedCheck = coding?.definition?.items.some(item =>
+        item.criterionIds.some(id => criterion.id === `coding:${coding.workflowId}:${id}`))
+      if (finalGoal && !sharedCheck && execution.coding_goal_ready !== 1)
         return {
           criterionId: criterion.id,
           description: criterion.description,
@@ -878,7 +881,8 @@ export function assessTaskCompletion(
     Boolean(
       protocolCompletionReady(database, runId) &&
       coding.definition &&
-      ["yes", "no"].includes(coding.choice.state) &&
+      coding.choice.state !== "cancelled" &&
+      !coding.pendingScopeChange &&
       !["cancelled", "superseded", "blocked"].includes(coding.state),
     );
   if (coding?.definition) {
@@ -907,7 +911,7 @@ export function assessTaskCompletion(
       .every(Boolean);
     for (const id of coding.definition.goal.criterionIds) {
       const criterion = find(id);
-      if (criterion.state !== "satisfied") continue;
+      if (criterion.state !== "satisfied" || coding.definition.items.some(item => item.criterionIds.includes(id))) continue;
       const row = database
         .prepare(
           "SELECT coding_inputs_json FROM dsh_completion_executions WHERE run_id=? AND call_id=?",
@@ -1055,10 +1059,17 @@ export function taskCompletionBlocksClose(
 ): boolean {
   return (
     assessment.managedOperationsReady === false ||
-    (assessment.mode === "enforce" &&
-      (assessment.required > 0 || assessment.workflowReady !== undefined) &&
-      !assessment.verified)
+    (!assessment.verified &&
+      (assessment.coding ? assessment.coding.protocol !== undefined
+        : assessment.mode === "enforce" && assessment.required > 0))
   );
+}
+
+/** A failed optional record write cannot release unresolved operation authority. */
+export function completionBlocksCloseWithoutReceipt(database: SqliteDatabase, runId: string): boolean {
+  if (unresolvedManaged(database, runId)) return true;
+  const coding = readCodingWorkflow(database, runId);
+  return coding ? coding.protocol !== undefined : runMode(database, runId) === "enforce";
 }
 
 /** Include the consumer configuration and runtime alongside selected source paths. */

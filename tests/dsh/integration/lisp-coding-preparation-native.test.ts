@@ -8,13 +8,73 @@ import {DecisionService} from '../../../src/dsh/decisions/service.js'
 import {TypedDecisionsConfig} from '../../../src/dsh/decisions/config.js'
 import {nativeSkillFixture} from '../helpers/skill-native.js'
 import {nativeToolResults} from '../helpers/native-mock.js'
-import {codingPrelude, interpretedPreparation, toolValue} from '../helpers/coding-script.js'
+import {codingPrelude, fixtureDefinition, interpretedPreparation, toolValue} from '../helpers/coding-script.js'
 import {isolateSkillHome} from '../helpers/skill-home.js'
 isolateSkillHome()
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot=process.env.KIOKUKO_SKILL_PACKAGE_ROOT
 const extra={lisp:{enabled:true,executionMode:'development',sbclPath:process.env.KIOKUKO_LISP_SBCL,startupTimeoutMs:60000},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},deepPlanning:{enabled:false},modelAutoMode:{mode:'off'}}
 const result=(q:any,id:string)=>{const r=nativeToolResults(q.messages).find((r:any)=>r.toolCallId===id);assert.ok(r,id);return r}
+
+test('a protected write requires every page of the 4,188-character prototype result', {timeout:120000}, async () => {
+ const f = await nativeSkillFixture({packages, ...(packageRoot ? {packageRoot} : {}), extra, startupChoice:'decision OFF / Lisp ON'})
+ const path = join(f.dir, 'parser.txt')
+ const {mock} = f
+ const write = (id: string) => mock.toolCallResponse(id, 'kioku_write', {path:'parser.txt', content:'42'})
+ let saved: string
+ const page = (id: string, offset: number) => mock.toolCallResponse(id, 'lisp_inspect', {
+   operationId:id, resultOperationId:saved, section:'result', offset,
+ })
+ try {
+   const enabled = (await f.ctx.commands.execute(f.agent, '/kioku-lisp enable', [], new AbortController().signal)).result
+   assert.equal(enabled.kind, 'success', enabled.text)
+   f.responses.push(
+     ...codingPrelude(mock, 'paged', fixtureDefinition('parser.txt')),
+     (q:any) => {
+       assert.equal(toolValue(q, 'paged-propose').choice.state, 'yes')
+       return mock.toolCallResponse('prototype', 'lisp_eval', {operationId:'prototype', prototype:true,
+         code:'(values (make-string 1936 :initial-element #\\A) 10)'})
+     },
+     (q:any) => {
+       const prototype = toolValue(q, 'prototype')
+       assert.equal(prototype.ok, true, JSON.stringify(prototype))
+       saved = prototype.operationId
+       return page('head', 0)
+     },
+     (q:any) => {
+       const head = toolValue(q, 'head')
+       assert.equal(head.totalCharacters, 4188)
+       assert.equal(head.nextOffset, 2000)
+       return page('middle', 2000)
+     },
+     (q:any) => {
+       assert.equal(toolValue(q, 'middle').nextOffset, 4000)
+       return write('gap-write')
+     },
+     async (q:any) => {
+       const denied = result(q, 'gap-write')
+       assert.equal(denied.isError, true)
+       assert.match(JSON.stringify(denied), /LISP_PROTOTYPE_REQUIRED: result_pending/u)
+       await assert.rejects(readFile(path), {code:'ENOENT'})
+       return page('tail', 4000)
+     },
+     (q:any) => {
+       assert.equal(toolValue(q, 'tail').nextOffset, null)
+       const full = ['head', 'middle', 'tail'].map(id => toolValue(q, id).data).join('')
+       assert.equal(full.length, 4188)
+       assert.equal(JSON.parse(full).value.json, 'A'.repeat(1936))
+       return write('reviewed-write')
+     },
+     (q:any) => {
+       const write = result(q, 'reviewed-write')
+       assert.equal(write.isError, false, JSON.stringify(write))
+       return mock.textResponse('The parser was written after inspecting all pages.')
+     },
+   )
+   await f.turn('Implement the parser in parser.txt.')
+   assert.equal(await readFile(path, 'utf8'), '42')
+ } finally { await f.close() }
+})
 for(const explicit of [false,true])test(`ordinary implementation offers Lisp before the first model request (${explicit?'adapter':'public'})`,{timeout:120000},async()=>{
  let asked=0
  const f=await nativeSkillFixture({packages,...(packageRoot ? {packageRoot} : {}),explicit,mode:'compiled',extra,nativeAnswer:async q=>{if(q.questions[0].id.startsWith('task-startup:')){asked++;if(asked===1)assert.equal(f.model.requests.length,0);return answerTaskStartup(q,'decision OFF / Lisp OFF')}if(['taskType','target','expected'].includes(q.questions[0].id))return{answers:[{id:q.questions[0].id,selected:q.questions[0].id==='taskType'?['実装・変更']:[],custom:q.questions[0].id==='taskType'?'':'the current source improvement'}]};throw new Error('unexpected question') }})

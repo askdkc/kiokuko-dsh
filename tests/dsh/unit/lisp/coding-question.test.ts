@@ -35,7 +35,7 @@ test('pinned DSH UI fixture distinguishes hide, ASK_CANCELLED and submitted Skip
 function preparation(){
  const agent={id:'agent'},input={agent,turn:1,task:'Implement parser.ts',taskType:'build' as const,signal:new AbortController().signal}
  let resolve!:(value:any)=>void,activations=0,questions=0,sessionId='session'
- const p=new LispCodingPreparation({identity:()=>({sessionId,root:'/root'}),enabled:()=>false,choose:()=>{questions++;return new Promise(r=>{resolve=r})},activate:async()=>{activations++}})
+ const p=new LispCodingPreparation({identity:()=>({sessionId,root:'/root'}),enabled:()=>false,choose:()=>{questions++;return new Promise(r=>{resolve=r})},activate:async()=>{activations++},resultVersion:async()=>undefined})
  return {agent,input,p,resolve:(value:any)=>resolve(value),counts:()=>({activations,questions}),session:(value:string)=>{sessionId=value}}
 }
 test('cancelled attempt cannot retry, run Lisp or auto Bash; next conversation clears only its request gate',async()=>{

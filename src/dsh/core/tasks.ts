@@ -30,7 +30,7 @@ import type { TaskProfile } from '../../akinator/types.js'
 import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../../memory/retrieval-contracts.js'
 import type { MemoryTimeConstraint } from '../../memory/retrieval-contracts.js'
 import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.js'
-import { initializeTaskCompletion, assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
+import { completionBlocksCloseWithoutReceipt, initializeTaskCompletion, assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../coding-workflow/store.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
 import { codingWorkRequested } from '../coding-workflow/intent.js'
@@ -38,7 +38,7 @@ import { markCodingScopeChange, stopCodingWorkflow, synchronizeCodingWorkflow } 
 import { saveExecutionFrame, updateExecutionFrame } from '../execution-frame.js'
 import { requestIntentReferenceIds, requestIntentTaskType, rebindRequestIntentDecision, requestIntentIsUnresolved, type RequestIntentContext, type RequestIntentDecision } from '../decisions/request-intent.js'
 import { assertMemoryOwner, createMemoryOwner, memoryOwnerKind, type MemoryOwnerBinding } from '../memory-owner.js'
-import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot,
+import { authorizeTaskLease, bindTaskRepository, captureTaskLease, readTaskSnapshot, resumeCompletedCodingTurn,
   taskCanExecute, type TaskLease } from '../task-state.js'
 import { continueTaskIntake } from '../existing-task-intake.js'
 import type { DshLlm } from '../session-memory-finalizer.js'
@@ -110,9 +110,16 @@ function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: Cor
     }
     if (task.authority) authorizeTaskLease(db, task.authority)
     if (!owner) throw new Error('Task completion owner mismatch')
-    if (outcome === 'completed') synchronizeCodingWorkflow(db, task.runId)
-    else if (outcome === 'cancelled') stopCodingWorkflow(db, task.runId, 'cancelled')
-    if (outcome === 'completed' && taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))) throw new Error('Required coding Goal evidence is unresolved')
+    if (outcome === 'completed') {
+      let blocked: boolean
+      try {
+        synchronizeCodingWorkflow(db, task.runId)
+        blocked = taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))
+      } catch {
+        blocked = completionBlocksCloseWithoutReceipt(db, task.runId)
+      }
+      if (blocked) throw new Error('Required completion evidence is unresolved')
+    } else if (outcome === 'cancelled') stopCodingWorkflow(db, task.runId, 'cancelled', { closingRun: true })
     if (run.status === 'active' || run.status === 'intake' && outcome !== 'completed') new LedgerStore(db).updateRunStatusInTransaction(task.runId, outcome)
     else throw new Error('Task is not ready for completion')
     db.prepare("DELETE FROM dsh_execution_owners WHERE dsh_session_id=? AND run_id=? AND start_id=? AND workspace=? AND mode='normal'").run(task.sessionId, task.runId, task.requestId, task.workspace)
@@ -155,7 +162,7 @@ export class CoreTasks {
       const taskId = requestIntentContext.activeTask?.taskId ?? previousOwner?.run_id
       if (!taskId) throw new Error('No source-bound task to resume')
       const taskIdentity = { taskId, sessionId: input.sessionId, repositoryRoot: project.repositoryRoot }
-      const state = readTaskSnapshot(db, taskIdentity)
+      let state = readTaskSnapshot(db, taskIdentity)
       if (requestIntentContext.activeTask && (state.revision !== requestIntentContext.activeTask.revision
         || state.generation !== requestIntentContext.activeTask.generation)) throw new Error('Task continuation revision is stale')
       const run = new LedgerStore(db).readRun(taskId), coding = readCodingWorkflow(db, taskId)
@@ -163,6 +170,12 @@ export class CoreTasks {
         || coding.repositoryRoot !== project.repositoryRoot)) throw new Error('Task continuation identity mismatch')
       if (previousOwner && (previousOwner.run_id !== taskId || previousOwner.mode !== 'normal')) throw new Error('Task has another execution owner')
       assertCapabilityCatalogBinding(run.metadata, input.capabilities)
+      if (state.runStatus === 'completed' && (coding
+        ? !['cancelled', 'superseded'].includes(coding.state) : codingWorkRequested(state.request ?? ''))) {
+        await input.validateCapabilities?.()
+        input.signal.throwIfAborted()
+        state = resumeCompletedCodingTurn(db, state, input.requestId, requestIntentReferenceIds(requestIntentContext))
+      }
       const { state: intakeState, link } = await continueTaskIntake(db, { ...taskIdentity, workspace: project.workspace,
         expectedRevision: state.revision, expectedGeneration: state.generation, capabilities: input.capabilities,
         decisions: this.decisions, requestId: input.requestId, llm: this.llm,
@@ -298,7 +311,7 @@ export class CoreTasks {
         input.signal.throwIfAborted()
         assertPreparation()
         if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
-          if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task})}
+          if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task},{optional:true})}
 
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted,
           ...(authority ? { authority } : {}),

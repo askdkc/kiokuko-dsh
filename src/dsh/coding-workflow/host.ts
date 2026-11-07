@@ -6,13 +6,16 @@ import {
   askLispCodingQuestion,
   parseLispCodingChoice,
 } from '../coding-question.js'
+import { TransactionCommitUncertainError } from '../../db/transaction.js'
 import { KiokukoError } from '../../errors.js'
+import { LedgerStore } from '../../ledger/store.js'
+import { readTaskSnapshot, taskCanExecute } from '../task-state.js'
 import { foregroundNativeCommand } from '../memory-application.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import {
+  CodingAnnotationSchema,
   CodingBlockerSchema,
   CodingDefinitionSchema,
-  type CodingCriterionDiagnostic,
   type CodingIdentity,
   type CodingWorkflow,
 } from './contracts.js'
@@ -27,10 +30,12 @@ import type {
   RequestIntentDecision,
   RequestIntentContext,
 } from '../decisions/request-intent.js'
-import { readCodingWorkflow } from './store.js'
+import { codingObservations } from './observations.js'
+import { assertCodingIdentity, initializeCodingWorkflow, readCodingWorkflow } from './store.js'
 import {
   answerCodingChoice,
-  beginCodingDispatch,
+  annotateCodingWorkflow,
+  assertCodingDispatch,
   codingStatus,
   nextCodingWork,
   proposeCodingWorkflow,
@@ -51,6 +56,7 @@ interface Execution {
 }
 interface HostIdentity extends CodingIdentity {
   agent: any
+  turn?: number | undefined
   task?: string | undefined
   requestIntent?: RequestIntentDecision | undefined
   requestIntentContext?: RequestIntentContext | undefined
@@ -92,9 +98,10 @@ const legacySchema = z.discriminatedUnion('action', [
   applySchema,
   legacyBlockerSchema,
 ])
-type LegacyInput = z.infer<typeof legacySchema>
+const recordSchema = z.union([CodingAnnotationSchema, applySchema])
+type WorkflowInput = z.infer<typeof legacySchema> | z.infer<typeof CodingAnnotationSchema>
 function jsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(z.toJSONSchema(schema))) as Record<
+  return JSON.parse(JSON.stringify(z.toJSONSchema(schema, { io: 'input' }))) as Record<
     string,
     unknown
   >
@@ -109,68 +116,13 @@ function validationCorrection(field: string): string {
   if (field === 'expectedRevision')
     return 'Use the current revision returned by coding_workflow status.'
   if (field === 'definition' || field.startsWith('definition.'))
-    return 'Follow minimumValidInput: put constraints inside definition.goal; use unique goalId/itemId/criterionId values across the whole definition, and separate item checks from final Goal checks.'
+    return 'Follow minimumValidInput: put constraints inside definition.goal; use unique goalId/itemId/criterionId values across the whole definition, and keep known references.'
   if (field === 'blocker' || field.startsWith('blocker.'))
     return 'Supply a blocker object with kind, cause, required recovery, and affected criterion IDs.'
   if (field === 'action')
-    return 'Choose status/next on coding_workflow, propose/revise on coding_workflow_apply, or use coding_workflow_blocker.'
-  return 'Correct the indicated field and retry with the current workflow revision.'
+    return 'Choose status/next on coding_workflow, annotate/propose/revise on coding_workflow_apply, or use coding_workflow_blocker.'
+  return 'Correct this field if the record needs updating. Continue the requested work.'
 }
-const unresolvedGoalReference =
-  'If the intended Goal criterion cannot be determined, use the existing clarification flow or report an input blocker with coding_workflow_blocker.'
-const criterionCorrections = {
-  goal_item_criterion_collision:
-    'Replace the item criterion ID at this field with a distinct ID for its item check. Declare that check in definition.criteria if needed. Preserve the final Goal check and unrelated fields. Keep the valid goalCriterionIds references and do not empty the array or invent coverage.',
-  unknown_goal_criterion_reference:
-    `Keep other valid references. Remove this reference if they already cover the intended Goal checks. Otherwise, use a declared definition.goal.criterionIds value that this item implements and does not already reference. ${unresolvedGoalReference}`,
-  empty_goal_criterion_references:
-    `Restore at least one declared definition.goal.criterionIds value that this item implements. ${unresolvedGoalReference}`,
-  uncovered_goal_criterion:
-    'Preserve the final Goal check. Add its named ID to the responsible definition.items[].goalCriterionIds; do not invent which item implements it.',
-} satisfies Record<CodingCriterionDiagnostic['kind'] | 'empty_goal_criterion_references', string>
-
-interface ValidationIssue {
-  field: string
-  reason: string
-  correction: string
-  kind?: keyof typeof criterionCorrections
-  criterionId?: string
-  relatedField?: string
-}
-
-function formatValidationIssue(issue: z.core.$ZodIssue): ValidationIssue {
-  const field = issue.path.map(String).join('.') || 'input'
-  const reason = issue.message.slice(0, 240)
-  const criterion = issue.code === 'custom'
-    ? issue.params?.criterionDiagnostic as CodingCriterionDiagnostic | undefined
-    : undefined
-  if (criterion) {
-    const relatedField = criterion.kind === 'goal_item_criterion_collision'
-      ? ['definition', ...criterion.relatedPath].join('.')
-      : undefined
-    return {
-      field,
-      reason,
-      kind: criterion.kind,
-      criterionId: criterion.criterionId,
-      ...(relatedField && { relatedField }),
-      correction: criterionCorrections[criterion.kind],
-    }
-  }
-  if (issue.code === 'too_small' && issue.origin === 'array' && issue.minimum === 1
-    && /^definition\.items\.\d+\.goalCriterionIds$/u.test(field)) {
-    const kind = 'empty_goal_criterion_references'
-    return { field, reason, kind, correction: criterionCorrections[kind] }
-  }
-  return {
-    field,
-    reason,
-    correction: issue.message.startsWith('Duplicate IDs:')
-      ? 'Use unique goalId/itemId/criterionId declaration values; keep reference arrays pointing to the intended declarations.'
-      : validationCorrection(field),
-  }
-}
-
 function parseInput<T extends z.ZodTypeAny>(
   schema: T,
   raw: unknown,
@@ -178,10 +130,12 @@ function parseInput<T extends z.ZodTypeAny>(
 ): z.infer<T> {
   const parsed = schema.safeParse(raw)
   if (parsed.success) return parsed.data
-  const issues = parsed.error.issues.map(formatValidationIssue)
+  const issues = parsed.error.issues.map(issue => {
+    const field = issue.path.map(String).join('.') || 'input'
+    return { field, reason: issue.message.slice(0, 240), correction: validationCorrection(field) }
+  })
   const summary = issues
-    .map(({ field, kind, reason, relatedField, correction }) =>
-      `${field}: ${kind ? `[${kind}] ` : ''}${reason}${relatedField ? ` (also at ${relatedField})` : ''}. Correction: ${correction}`)
+    .map(({ field, reason, correction }) => `${field}: ${reason}. Correction: ${correction}`)
     .join('\n')
   throw new KiokukoError(
     'VALIDATION_ERROR',
@@ -217,10 +171,11 @@ export function isCodingWorkflowStatus(
 }
 
 export const CODING_GUIDANCE =
-  'An observational coding_workflow status may return applicable:false when no native task is enrolled; this is not an execution error or a requirement to enroll ordinary conversation. For an explicitly prepared coding task, use coding_workflow status/next to inspect the current revision and pending action. Submit new or revised Goals with coding_workflow_apply (action propose/revise, expectedRevision, definition); register blockers with coding_workflow_blocker. Legacy coding_workflow propose/revise/report_blocker calls remain accepted for compatibility. Preserve the exact request interpretation and evidence references shown by the host. A pending scope change requires a revised Goal before implementation; a same-scope continuation keeps its existing Goal, Lisp choice, and unfinished items. The host shows the Goal/items/criteria and asks once whether to use Lisp for this task. Pending choice blocks implementation, not conversation or reads. Bind checks with task_completion before executing them. Use host-observed selected tests, output/artifact assertions or browser assertions; exit 0 and model claims alone cannot complete this workflow. Fix failures autonomously within existing permissions. Final Goal verification must run after item checks on the current artifact. Report the Goal, evidence, ordinary-use result and remaining blockers.'
+  'Carry out the current user request using the authorized route. The host records observed tool activity. Optionally use coding_workflow status to inspect the record, or coding_workflow_apply annotate with notes and optional evidenceRefs to add context. Work and verification do not require a plan record, IDs, or a revision. Legacy propose/revise remain available. Confirm the requested behavior with current evidence, fix observed failures, and report what remains unverified. A tool result or a note alone is not proof of success.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
-  const definition = value.definition!
+  const definition = value.definition
+  if (!definition) return value.request
   const criterion = (id: string) => {
     const item = definition.criteria.find((item) => item.criterionId === id)!
     return `${item.outcome} / 確認: ${item.procedure} / 期待: ${item.expected}`
@@ -233,7 +188,7 @@ export function codingChoiceDetail(value: CodingWorkflow): string {
         `- ${item.change}\n${item.criterionIds.map((id) => `  ${criterion(id)}`).join('\n')}`,
     ),
     `最終確認: ${definition.goal.criterionIds.map(criterion).join('\n')}`,
-    '選択はこのタスクだけに適用します。未回答では実装を開始しません。取消・Skip は作業を保持してこの試行を中止します。カードの非表示だけでは質問は終了しません。Lisp は通常の開発環境で動き、既存の権限と承認は引き続き適用されます。',
+    '選択はこのタスクだけに適用します。Lisp を使う場合は選択が必要です。取消・Skip は作業を保持してこの試行を中止します。カードを非表示にしても質問は残ります。実行には既存の権限と承認が適用されます。',
   ].join('\n\n')
 }
 export const parseCodingChoice = parseLispCodingChoice
@@ -268,6 +223,7 @@ export function mountCodingWorkflow(
       !resolved ||
       resolved.runId !== identity.runId ||
       resolved.sessionId !== identity.sessionId ||
+      resolved.repositoryRoot !== identity.repositoryRoot ||
       resolved.agent !== identity.agent
     )
       throw new KiokukoError(
@@ -283,10 +239,11 @@ export function mountCodingWorkflow(
       readCodingWorkflow(db, identity.runId),
     )
     if (
-      !value?.definition ||
+      !value ||
       ['cancelled', 'superseded', 'completed'].includes(value.state)
     )
       return
+    assertCodingIdentity(value, identity)
     if (value.choice.state === 'yes' || value.choice.state === 'no')
       host
         .lisp()
@@ -295,6 +252,7 @@ export function mountCodingWorkflow(
           value.request,
           value.choice.state,
           value.choice.answerRef ?? `stored-choice:${value.choice.questionId}`,
+          `${value.workflowId}:${value.scopeVersion}`,
         )
     if (value.choice.state !== 'pending') {
       if (value.choice.state === 'yes') {
@@ -348,6 +306,7 @@ export function mountCodingWorkflow(
         : undefined)
     execution.signal.throwIfAborted()
     current(identity, execution)
+    if (!value.definition && !early) return
     if (!host.questions && !early) return // Durable pending; never invent a default.
     const key = `${value.workflowId}:${value.scopeVersion}`
     const existing = questions.get(key)
@@ -409,6 +368,7 @@ export function mountCodingWorkflow(
           value.request,
           choice,
           saved.choice.answerRef!,
+          `${saved.workflowId}:${saved.scopeVersion}`,
         )
       if (choice === 'no') {
         await host.lisp()?.exclude?.(identity.agent)
@@ -467,16 +427,39 @@ export function mountCodingWorkflow(
     ),
   )
   const executeAction = async (
-    input: LegacyInput,
+    input: WorkflowInput,
     identity: HostIdentity,
     execution: Execution,
   ) => {
     execution.signal.throwIfAborted()
     if (input.action === 'status') {
       current(identity, execution)
-      return host.runtime.withDatabase((db) =>
-        nextCodingWork(db, identity, { readOnly: true }),
-      )
+      return host.runtime.withDatabase(db => ({
+        ...nextCodingWork(db, identity, { readOnly: true }),
+        observations: codingObservations(db, identity),
+      }))
+    }
+    if (input.action === 'annotate') {
+      current(identity, execution)
+      try {
+        const annotation = await host.runtime.withDatabase(db => {
+          if (!readCodingWorkflow(db, identity.runId)) {
+            const task = readTaskSnapshot(db, { ...identity, taskId: identity.runId })
+            const run = new LedgerStore(db).readRun(identity.runId)
+            if (!taskCanExecute(task) || !task.request || run?.dshSessionId !== identity.sessionId)
+              throw new KiokukoError('CONFLICT', 'Annotation requires the current native task')
+            initializeCodingWorkflow(db, { ...identity, task: task.request,
+              requestId: typeof run.metadata.requestId === 'string' ? run.metadata.requestId : `run:${run.runId}` })
+          }
+          const refs = new Set(codingObservations(db, identity, input.evidenceRefs ?? []).map(entry => entry.ref))
+          return annotateCodingWorkflow(db, identity, execution.callId, input, refs)
+        })
+        return { recorded: true, annotation }
+      } catch (error) {
+        if (error instanceof KiokukoError) throw error
+        if (error instanceof TransactionCommitUncertainError) return { recorded: null, reason: 'record_outcome_unknown' }
+        return { recorded: false, reason: 'record_unavailable' }
+      }
     }
     if (input.action === 'propose' || input.action === 'revise') {
       const before = await host.runtime.withDatabase((db) =>
@@ -518,7 +501,7 @@ export function mountCodingWorkflow(
     name: string,
     schema: z.ZodTypeAny,
     parameters: Record<string, unknown>,
-    normalize: (value: any) => LegacyInput,
+    normalize: (value: any) => WorkflowInput,
   ) =>
     codingTool({
       name,
@@ -533,7 +516,9 @@ export function mountCodingWorkflow(
       },
       execute: async (raw: unknown, execution: Execution) => {
         const identity = host.resolve(execution)
-        const input = normalize(parseInput(schema, raw, name))
+        const input = normalize(parseInput(schema === recordSchema
+          ? ((raw as { action?: unknown } | null)?.action === 'annotate' ? CodingAnnotationSchema : applySchema)
+          : schema, raw, name))
         if (!identity && execution.name === name && input.action === 'status')
           return {
             applicable: false,
@@ -558,8 +543,8 @@ export function mountCodingWorkflow(
     ctx.tools.register(
       tool(
         'coding_workflow_apply',
-        applySchema,
-        jsonSchema(applySchema),
+        recordSchema,
+        { type: 'object', ...jsonSchema(recordSchema) },
         (input) => input,
       ),
     ),
@@ -597,37 +582,9 @@ export function mountCodingWorkflow(
           ] === true
         )
           return next()
-        const workflow = await host.runtime.withDatabase((db) =>
-          readCodingWorkflow(db, identity.runId),
-        )
         try {
-          const action = executionRequestAction(
-            identity.requestIntent,
-            identity.requestIntentContext,
-            carrier ?? execution.name,
-          )
-          if (action === 'verify') {
-            if (workflow?.pendingScopeChange)
-              return {
-                kind: 'deny',
-                reason: 'Revise the pending Goal scope before execution.',
-              }
-            return next() // Verification is authorized by the request and still goes through native permissions.
-          }
-        } catch (error) {
-          return {
-            kind: 'deny',
-            reason:
-              error instanceof Error
-                ? error.message
-                : 'Request interpretation is not current',
-          }
-        }
-        if (!workflow) return next()
-        try {
-          const value = await host.runtime.withDatabase((db) =>
-            beginCodingDispatch(db, identity, execution.callId, execution.name),
-          )
+          executionRequestAction(identity.requestIntent, identity.requestIntentContext, carrier ?? execution.name)
+          const value = await host.runtime.withDatabase(db => assertCodingDispatch(db, identity, carrier ?? execution.name))
           if (value) {
             const command = foregroundNativeCommand(
               execution,
@@ -711,7 +668,7 @@ export function mountCodingWorkflow(
       if (identity) {
         await host.runtime.withDatabase((db) =>
           synchronizeCodingWorkflow(db, identity.runId),
-        )
+        ).catch(() => { /* The native result remains available if the record cannot be updated. */ })
       }
     }),
   )

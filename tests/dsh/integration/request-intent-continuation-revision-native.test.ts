@@ -6,6 +6,7 @@ import { interpretedPreparation, toolValue } from '../helpers/coding-script.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import { openConnection } from '../../../src/db/connection.js'
 import { readCodingWorkflow, mutateCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
+import { setTimeout as delay } from 'node:timers/promises'
 
 isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
@@ -14,7 +15,7 @@ const extra = { lisp: { enabled: false }, typedDecisions: { mode: 'off' }, answe
   memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' },
   deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } }
 
-// Seed the incident's boundary state (completed workflow, still-Working task).
+// Seed a verified workflow at the previous native turn's durable boundary.
 // Preparation and all subsequent dispatch/assembly use the real native loop.
 for (const explicit of [true, false]) for (const fault of ['none', 'revision', 'generation', 'owner', 'repository', 'stopped'] as const) {
   test(`completed workflow scope change uses admitted lease (${explicit ? 'adapter' : 'public'}, ${fault})`, { timeout: 60000 }, async () => {
@@ -28,12 +29,17 @@ for (const explicit of [true, false]) for (const fault of ['none', 'revision', '
     try {
       f.responses.push(interpretedPreparation(f.mock, 'first', 'new', 'change', 'build'), f.mock.textResponse('Implementation prepared.'))
       await f.turn('Implement a parser in parser.js. 通常実行で。')
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (withDb(db => db.prepare("SELECT 1 FROM ledger_runs WHERE status='completed'").get())) break
+        await delay(10)
+      }
       const source = withDb(db => {
         const row = db.prepare('SELECT run_id FROM dsh_coding_workflows').get<any>()!
         const workflow = readCodingWorkflow(db, row.run_id)!
         mutateCodingWorkflow(db, workflow, 'fixture-completion', workflow.revision, {}, value => { value.state = 'completed' })
-        const task = db.prepare('SELECT task_state, task_revision, task_generation FROM ledger_runs WHERE run_id=?').get<any>(row.run_id)!
-        assert.equal(task.task_state, 'Working')
+        const task = db.prepare('SELECT status, task_state, task_revision, task_generation FROM ledger_runs WHERE run_id=?').get<any>(row.run_id)!
+        assert.equal(task.status, 'completed')
+        assert.equal(task.task_state, 'Pending')
         return { runId: row.run_id, revision: task.task_revision, generation: task.task_generation }
       })
       let prepared = false, advanced = false, admittedRunId = ''
@@ -64,7 +70,7 @@ for (const explicit of [true, false]) for (const fault of ['none', 'revision', '
         return f.mock.toolCallResponse('current-workflow', 'coding_workflow', { action: 'status' })
       }, (request: any) => {
         assert.equal(toolValue(request, 'current-workflow').runId, admittedRunId)
-        return f.mock.textResponse('Current scope is prepared and requires its own Goal and checks.')
+        return f.mock.textResponse('The current request has its own execution authority.')
       })
       const turn = f.turn('Change the parser so it also accepts empty input. 通常実行で。')
       if (fault === 'none') { await turn; if (observerError) throw observerError }
