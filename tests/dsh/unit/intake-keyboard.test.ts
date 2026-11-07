@@ -93,6 +93,29 @@ test('intake keyboard is scoped, confirms once, preserves drafts, and leaves edi
     descendants(tree).find(node => node.props?.['aria-label'] === '質問を閉じる').props.onClick()
     await Promise.resolve(); await Promise.resolve()
     assert.equal(cancellations, 1)
+
+    slots = []
+    const completion = { ...pending, key: 'intake-completion',
+      questions: [{ id: 'expected', header: 'Kiokuko · 完了条件', question: '完了と判断する成功条件は何ですか？', options: [] }] }
+    const completionWrapper = entry.component({ matched: completion })
+    const renderCompletion = () => { cursor = 0; return completionWrapper.component(completionWrapper.props) }
+    const answerField = (tree: any) => descendants(tree).find(node => node.component === 'textarea')
+    const longAnswer = '確認する。\n'.repeat(3000)
+    tree = renderCompletion()
+    answerField(tree).props.onChange({ target: { value: longAnswer } })
+    tree = renderCompletion()
+    tree.props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } }))
+    await Promise.resolve(); await Promise.resolve()
+    tree = renderCompletion()
+    assert.equal(responses.length, 1, 'Oversized text must stay in the editor')
+    assert.equal(answerField(tree).props.value, longAnswer)
+    assert.match(descendants(tree).find(node => node.props?.role === 'status').props.children, /長すぎ/u)
+    const editedAnswer = longAnswer.slice(0, 6000).trim()
+    answerField(tree).props.onChange({ target: { value: editedAnswer } })
+    tree = renderCompletion()
+    tree.props.onKeyDown(key('Enter', { target: { tagName: 'TEXTAREA' } }))
+    await Promise.resolve(); await Promise.resolve()
+    assert.deepEqual(responses.at(-1), { answers: [{ id: 'expected', selected: [], custom: editedAnswer }] })
   } finally {
     names.forEach((name, index) => { if (previous[index] === undefined) delete globals[name]; else globals[name] = previous[index] })
   }

@@ -109,9 +109,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
       disabled?: boolean
       insert?: Array<{ id?: string; name?: string; inject?: string[]; config?: Config }>
     }>
-    assert.equal(patch.length, 3)
-    assert.equal(patch[0]?.id, 'session-log-download')
-    assert.equal(patch[0]?.disabled, true)
+    assert.equal(patch.length, 2)
+    assert.equal(patch.some(row => row.id === 'session-log-download'), false, 'The bundle must not patch the Web-only exporter')
     assert.equal(patch.find(row => row.id === 'agent-loop')?.disabled, true, 'The bundle must disable the stock factory')
     const inserted = patch.flatMap(row => row.insert ?? [])
     assert.equal(inserted.length, 3)
@@ -214,7 +213,7 @@ test('dsh installs and removes the packed bundle in an isolated profile', {
     assert.equal(installedRows.filter(row => row.id === 'kiokuko-models' && row.name === 'kiokuko-dsh/models' && row.disabled !== true).length, 1)
     assert.equal(installedRows.filter(row => row.id === 'kiokuko-dsh' && row.name === 'kiokuko-dsh' && row.disabled !== true).length, 1)
     assert.equal(installedRows.filter(row => row.id === 'session-log-download'
-      && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled === true).length, 1)
+      && row.name === '@deepseek-ai/dsh-session-log-export' && row.disabled !== true).length, 1)
 
     const remove = await run(process.env.DSH_BIN ?? 'dsh', [
       'plugin', '--profile', 'web', 'remove', 'kiokuko-dsh',

@@ -272,11 +272,9 @@ ordinary directory as its workspace. For an ordinary directory, Kiokuko keeps
 the path binding in its database and does not create `.git`, `.kiokuko.json`,
 or any other metadata file in the workspace.
 
-`kiokuko-dsh` disables the existing `session-log-download` Host row and inserts
-its own row under the stable `kiokuko-dsh` id. Its DSH lazy-CJS client owns the
-Header modal and `/export` command UI while the Host route uses cursor-backed
-streaming export. Removing the bundle restores the stock row without rewriting
-unrelated plugins or settings. Startup also refreshes an existing Kiokuko managed
+The Web session header offers **Export with Kiokuko** for cursor-backed ZIP
+streaming. DSH provides the built-in `/export` command and its own download
+controls independently. Startup also refreshes an existing Kiokuko managed
 block in the startup directory’s `AGENTS.md`, as described below.
 
 ## Bundled standard Skills: canonical source and refresh

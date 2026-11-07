@@ -11,7 +11,7 @@ export const CodingCriterionSchema = z.object({
 }).strict()
 export const CodingItemSchema = z.object({
   itemId: CodingId, change: text, dependsOn: z.array(CodingId).max(64),
-  goalCriterionIds: z.array(CodingId).min(1).max(64).describe('Final Goal criteria implemented by this item. Every declared Goal criterion must appear in at least one items[].goalCriterionIds; choose the responsible item, never invent coverage.'), criterionIds: z.array(CodingId).min(1).max(64),
+  goalCriterionIds: z.array(CodingId).min(1, 'This item requires at least one Goal criterion reference').max(64).describe('Final Goal criteria implemented by this item. Every declared Goal criterion must appear in at least one items[].goalCriterionIds; choose the responsible item, never invent coverage.'), criterionIds: z.array(CodingId).min(1).max(64),
 }).strict()
 export const CodingGoalSchema = z.object({
   goalId: CodingId, revision, ideal: text, target: text,
@@ -20,8 +20,13 @@ export const CodingGoalSchema = z.object({
 }).strict()
 const definition = z.object({ goal: CodingGoalSchema, items: z.array(CodingItemSchema).min(1).max(64),
   criteria: z.array(CodingCriterionSchema).min(2).max(128) }).strict()
+export type CodingCriterionDiagnostic =
+  | { kind: 'goal_item_criterion_collision'; criterionId: string; relatedPath: (string | number)[] }
+  | { kind: 'unknown_goal_criterion_reference' | 'uncovered_goal_criterion'; criterionId: string }
+
 export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
-  const reject = (message: string, path: (string|number)[] = []) => ctx.addIssue({ code: 'custom', message, path })
+  const reject = (message: string, path: (string | number)[] = [], criterionDiagnostic?: CodingCriterionDiagnostic) =>
+    ctx.addIssue({ code: 'custom', message, path, ...(criterionDiagnostic && { params: { criterionDiagnostic } }) })
   const ids = (values: string[]) => {
     const duplicates = [...new Set(values.filter((id, index) => values.indexOf(id) !== index))]
     if (duplicates.length) reject(`Duplicate IDs: ${duplicates.join(', ')}`)
@@ -35,16 +40,28 @@ export const CodingDefinitionSchema = definition.superRefine((value, ctx) => {
   for (const [index, id] of value.goal.criterionIds.entries()) {
     const path = ['goal', 'criterionIds', index]
     if (!criteria.has(id)) reject(`Missing Goal criterion: ${id}; declare it in criteria[].criterionId`, path)
-    if (!value.items.some(item => item.goalCriterionIds.includes(id))) reject(`Goal criterion has no implementing item: ${id}; add this ID to the responsible items[].goalCriterionIds`, path)
+    if (!value.items.some(item => item.goalCriterionIds.includes(id))) {
+      reject(`Goal criterion has no implementing item: ${id}; add this ID to the responsible items[].goalCriterionIds`, path,
+        { kind: 'uncovered_goal_criterion', criterionId: id })
+    }
   }
   for (const [index, item] of value.items.entries()) {
     ids(item.dependsOn); ids(item.criterionIds); ids(item.goalCriterionIds)
     for (const id of item.dependsOn) if (!items.has(id)) reject('Missing dependency')
-    for (const [reference, id] of item.goalCriterionIds.entries()) if (!value.goal.criterionIds.includes(id)) reject(`Unknown Goal criterion: ${id}; reference a declared goal.criterionIds value`, ['items', index, 'goalCriterionIds', reference])
-    for (const id of item.criterionIds) {
+    for (const [reference, id] of item.goalCriterionIds.entries()) {
+      if (!value.goal.criterionIds.includes(id)) {
+        reject(`Unknown Goal criterion: ${id}; reference a declared goal.criterionIds value`, ['items', index, 'goalCriterionIds', reference],
+          { kind: 'unknown_goal_criterion_reference', criterionId: id })
+      }
+    }
+    for (const [reference, id] of item.criterionIds.entries()) {
       referenced.add(id)
       if (!criteria.has(id)) reject('Missing item criterion')
-      if (value.goal.criterionIds.includes(id)) reject('Final Goal check must be separate from item checks')
+      const goalIndex = value.goal.criterionIds.indexOf(id)
+      if (goalIndex !== -1) {
+        reject(`Final Goal check must be separate from item checks: ${id}`, ['items', index, 'criterionIds', reference],
+          { kind: 'goal_item_criterion_collision', criterionId: id, relatedPath: ['goal', 'criterionIds', goalIndex] })
+      }
     }
   }
   if ([...criteria].some(id => !referenced.has(id))) reject('Unreferenced criterion')

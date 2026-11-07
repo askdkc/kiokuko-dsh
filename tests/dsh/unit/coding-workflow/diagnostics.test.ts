@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {CodingDefinitionSchema,CODING_MINIMUM_DEFINITION_EXAMPLE} from '../../../../src/dsh/coding-workflow/contracts.js'
 import {mountCodingWorkflow} from '../../../../src/dsh/coding-workflow/host.js'
+import { KiokukoError } from '../../../../src/errors.js'
 function example(){const d=structuredClone(CODING_MINIMUM_DEFINITION_EXAMPLE);d.goal.criterionIds.push('c-real-run');d.criteria.push({...d.criteria[1]!,criterionId:'c-real-run',procedure:'Check both HTTP ports 5940 and 15940'});return d}
 test('uncovered final checks name every criterion and its repair field without guessing an item',()=>{
  const d=example();d.goal.criterionIds.push('c-second');d.criteria.push({...d.criteria[1]!,criterionId:'c-second'})
@@ -29,4 +30,84 @@ test('actual apply tool returns specific corrections and accepts the repaired re
  const repaired=example();repaired.items[0]!.goalCriterionIds.push('c-real-run')
  await assert.rejects(tool.execute({action:'propose',expectedRevision:1,definition:repaired},{...execution,callId:'fixed'}),/invalid definitions must not touch the database/u)
  }finally{dispose()}
+})
+
+test('a single Goal and item criterion collision names the ID and both indexed paths', () => {
+  const definition = structuredClone(CODING_MINIMUM_DEFINITION_EXAMPLE)
+  const item = definition.items[0]!
+  item.criterionIds[0] = 'goal-check'
+
+  const result = CodingDefinitionSchema.safeParse(definition)
+  assert.equal(result.success, false)
+  const collisions = result.error!.issues.filter(issue =>
+    issue.code === 'custom' && issue.params?.criterionDiagnostic?.kind === 'goal_item_criterion_collision')
+  assert.deepEqual(collisions.map(issue => issue.path), [['items', 0, 'criterionIds', 0]])
+  const [collision] = collisions
+  assert.ok(collision?.code === 'custom')
+  assert.deepEqual(collision.params?.criterionDiagnostic, {
+    kind: 'goal_item_criterion_collision',
+    criterionId: 'goal-check',
+    relatedPath: ['goal', 'criterionIds', 0],
+  })
+
+  item.criterionIds[0] = 'item-check'
+  assert.deepEqual(item.goalCriterionIds, ['goal-check'])
+  assert.equal(CodingDefinitionSchema.safeParse(definition).success, true)
+})
+
+test('apply reports each criterion collision and invalid Goal reference separately', async () => {
+  const definition = example()
+  const item = definition.items[0]!
+  item.criterionIds.push('goal-check', 'goal-check')
+  item.goalCriterionIds.push('c-real-run', 'unknown-goal')
+  definition.items.push({
+    ...item, itemId: 'second-item', criterionIds: ['c-real-run', 'goal-check'], goalCriterionIds: [],
+  })
+  const original = structuredClone(definition)
+  const definitions = new Map<string, any>()
+  const agent = { id: 'agent' }
+  const dispose = mountCodingWorkflow({
+    tools: { register: tool => { definitions.set(tool.name, tool); return () => definitions.delete(tool.name) } },
+    on: () => () => {},
+  }, {
+    runtime: { withDatabase: async () => assert.fail('invalid definitions must not touch the database') } as any,
+    resolve: () => ({ agent, runId: 'run', sessionId: 'session', repositoryRoot: '/isolated' }),
+    lisp: () => undefined,
+  })
+  try {
+    const tool = definitions.get('coding_workflow_apply')
+    await assert.rejects(tool.execute({ action: 'propose', expectedRevision: 1, definition }, {
+      name: tool.name, callId: 'mixed', agent, signal: new AbortController().signal,
+    }), (error: unknown) => {
+      assert.ok(error instanceof KiokukoError)
+      assert.equal(error.code, 'VALIDATION_ERROR')
+      const issues = error.details.issues as {
+        field: string; reason: string; correction: string; kind?: string; criterionId?: string; relatedField?: string
+      }[]
+      const collisions = issues.filter(issue => issue.kind === 'goal_item_criterion_collision')
+      assert.deepEqual(collisions.map(({ field, criterionId, relatedField }) => [field, criterionId, relatedField]), [
+        ['definition.items.0.criterionIds.1', 'goal-check', 'definition.goal.criterionIds.0'],
+        ['definition.items.0.criterionIds.2', 'goal-check', 'definition.goal.criterionIds.0'],
+        ['definition.items.1.criterionIds.0', 'c-real-run', 'definition.goal.criterionIds.1'],
+        ['definition.items.1.criterionIds.1', 'goal-check', 'definition.goal.criterionIds.0'],
+      ])
+      for (const issue of collisions) {
+        assert.match(issue.correction, /Keep .*goalCriterionIds.*do not empty/u)
+        assert.ok(error.message.split('\n').some(line => line.includes(issue.field)
+          && line.includes(issue.kind!) && line.includes(issue.criterionId!) && line.includes(issue.relatedField!)))
+      }
+      const unknown = issues.find(issue => issue.kind === 'unknown_goal_criterion_reference')
+      assert.equal(unknown?.field, 'definition.items.0.goalCriterionIds.2')
+      assert.equal(unknown.criterionId, 'unknown-goal')
+      assert.match(unknown.correction, /Keep other valid references.*Remove this reference.*declared.*goal\.criterionIds.*implements.*does not already reference/u)
+      const empty = issues.find(issue => issue.kind === 'empty_goal_criterion_references')
+      assert.equal(empty?.field, 'definition.items.1.goalCriterionIds')
+      assert.match(empty.reason, /at least one/u)
+      assert.match(empty.correction, /coding_workflow_blocker/u)
+      return true
+    })
+    assert.deepEqual(definition, original)
+  } finally {
+    dispose()
+  }
 })

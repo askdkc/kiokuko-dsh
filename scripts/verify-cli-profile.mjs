@@ -163,6 +163,7 @@ await writeFile(join(root, 'install-report.json'), JSON.stringify({ steps, befor
 if (stage === 'install') { console.log(`Install phase passed: ${root}`); process.exit(0) }
 } else if (stage === 'tui' && !sourceHook) steps.push(...JSON.parse(await readFile(join(root, 'install-report.json'), 'utf8')).steps)
 const dumped = await command('dump-config', ['--profile', 'dsh-cli', '--dump-config'])
+assert.doesNotMatch(dumped.stderr, /patch: entry "session-log-download" not found/, 'The Kiokuko bundle must compose on a CLI profile without the Web exporter')
 const rows = YAML.parse(dumped.stdout, { customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: value => value }] })
 assert.equal(rows.filter(row => row.id === 'kiokuko-dsh' && row.disabled !== true).length, kiokukoEnabled?1:0)
 const replacementHarness=rows.some(row=>row.name==='kiokuko-dsh/harness'&&row.disabled!==true)

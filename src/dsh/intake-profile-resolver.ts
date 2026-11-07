@@ -3,6 +3,7 @@ import { KiokukoError } from '../errors.js'
 import { canonicalContentHash, containsDisallowedTextCharacters, normalizeTextLineEndings } from '../serialization/validate.js'
 import { deriveProfile } from '../akinator/domain.js'
 import type { TaskProfile, TaskType } from '../akinator/types.js'
+import { MAX_TEXT_LENGTH } from '../ledger/types.js'
 
 export interface GroundedIntakeProfileInput {
   readonly task: string
@@ -39,9 +40,9 @@ function boundedText(value: unknown, label: string, maximum: number, multiline =
   return normalized.trim()
 }
 
-function optionalText(value: string | null | undefined, multiline = false): string | null {
+function optionalText(value: string | null | undefined, multiline = false, maximum = 4_000): string | null {
   if (value === undefined || value === null) return null
-  return boundedText(value, 'profile hint', 4_000, multiline)
+  return boundedText(value, 'profile hint', maximum, multiline)
 }
 
 /** Resolve only from the task, canonical cwd, supplied hints, and bounded evidence. */
@@ -55,7 +56,7 @@ export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput):
     // A workspace identifies execution location, not the user's intended target.
     // Preserve missing answers so Akinator can actually clarify the request.
     target: optionalText(hints.target),
-    expected: optionalText(hints.expected, true),
+    expected: optionalText(hints.expected, true, MAX_TEXT_LENGTH),
     constraints: optionalText(hints.constraints, true),
   }, { inferTaskType: !input.deferTaskTypeInference })
   const evidence = input.evidence ?? []

@@ -45,11 +45,11 @@ packed-artifact integrity, and these outcomes without credentials:
    materializes `kiokuko-dsh/client` as a DSH lazy-CJS artifact;
 3. the disposable Profile installs that exact tarball;
 4. `dump-config` contains one active `kiokuko-dsh` row and the stock
-   `session-log-download` row is disabled;
+   `session-log-download` row remains active in Web;
 5. the DSH `web` profile cold-starts, reports the plugin loaded, authenticates,
    and executes and materializes Kiokuko from the composed application bundle;
 6. the profile stops cleanly;
-7. removing the plugin leaves no `kiokuko-dsh` row and restores the active
+7. removing the plugin leaves no `kiokuko-dsh` row and preserves the active
    stock `session-log-download` row.
 
 The test must fail if the DSH CLI is unavailable. `headless`, SDK, ACP, and

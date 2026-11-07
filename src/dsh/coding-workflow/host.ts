@@ -12,6 +12,7 @@ import { canonicalContentHash } from '../../serialization/validate.js'
 import {
   CodingBlockerSchema,
   CodingDefinitionSchema,
+  type CodingCriterionDiagnostic,
   type CodingIdentity,
   type CodingWorkflow,
 } from './contracts.js'
@@ -115,6 +116,61 @@ function validationCorrection(field: string): string {
     return 'Choose status/next on coding_workflow, propose/revise on coding_workflow_apply, or use coding_workflow_blocker.'
   return 'Correct the indicated field and retry with the current workflow revision.'
 }
+const unresolvedGoalReference =
+  'If the intended Goal criterion cannot be determined, use the existing clarification flow or report an input blocker with coding_workflow_blocker.'
+const criterionCorrections = {
+  goal_item_criterion_collision:
+    'Replace the item criterion ID at this field with a distinct ID for its item check. Declare that check in definition.criteria if needed. Preserve the final Goal check and unrelated fields. Keep the valid goalCriterionIds references and do not empty the array or invent coverage.',
+  unknown_goal_criterion_reference:
+    `Keep other valid references. Remove this reference if they already cover the intended Goal checks. Otherwise, use a declared definition.goal.criterionIds value that this item implements and does not already reference. ${unresolvedGoalReference}`,
+  empty_goal_criterion_references:
+    `Restore at least one declared definition.goal.criterionIds value that this item implements. ${unresolvedGoalReference}`,
+  uncovered_goal_criterion:
+    'Preserve the final Goal check. Add its named ID to the responsible definition.items[].goalCriterionIds; do not invent which item implements it.',
+} satisfies Record<CodingCriterionDiagnostic['kind'] | 'empty_goal_criterion_references', string>
+
+interface ValidationIssue {
+  field: string
+  reason: string
+  correction: string
+  kind?: keyof typeof criterionCorrections
+  criterionId?: string
+  relatedField?: string
+}
+
+function formatValidationIssue(issue: z.core.$ZodIssue): ValidationIssue {
+  const field = issue.path.map(String).join('.') || 'input'
+  const reason = issue.message.slice(0, 240)
+  const criterion = issue.code === 'custom'
+    ? issue.params?.criterionDiagnostic as CodingCriterionDiagnostic | undefined
+    : undefined
+  if (criterion) {
+    const relatedField = criterion.kind === 'goal_item_criterion_collision'
+      ? ['definition', ...criterion.relatedPath].join('.')
+      : undefined
+    return {
+      field,
+      reason,
+      kind: criterion.kind,
+      criterionId: criterion.criterionId,
+      ...(relatedField && { relatedField }),
+      correction: criterionCorrections[criterion.kind],
+    }
+  }
+  if (issue.code === 'too_small' && issue.origin === 'array' && issue.minimum === 1
+    && /^definition\.items\.\d+\.goalCriterionIds$/u.test(field)) {
+    const kind = 'empty_goal_criterion_references'
+    return { field, reason, kind, correction: criterionCorrections[kind] }
+  }
+  return {
+    field,
+    reason,
+    correction: issue.message.startsWith('Duplicate IDs:')
+      ? 'Use unique goalId/itemId/criterionId declaration values; keep reference arrays pointing to the intended declarations.'
+      : validationCorrection(field),
+  }
+}
+
 function parseInput<T extends z.ZodTypeAny>(
   schema: T,
   raw: unknown,
@@ -122,25 +178,10 @@ function parseInput<T extends z.ZodTypeAny>(
 ): z.infer<T> {
   const parsed = schema.safeParse(raw)
   if (parsed.success) return parsed.data
-  const issues = parsed.error.issues.map((issue) => {
-    const field = issue.path.map(String).join('.') || 'input'
-    return {
-      field,
-      reason: issue.message.slice(0, 240),
-      correction: issue.message.startsWith('Duplicate IDs:')
-        ? 'Use unique goalId/itemId/criterionId declaration values; keep reference arrays pointing to the intended declarations.'
-        : issue.message.includes('Goal criterion has no implementing item')
-          ? 'Preserve the final Goal check. Add its named ID to the responsible definition.items[].goalCriterionIds; do not invent which item implements it.'
-          : issue.message.includes('Unknown Goal criterion')
-            ? 'Use a declared definition.goal.criterionIds value in this item reference.'
-            : validationCorrection(field),
-    }
-  })
+  const issues = parsed.error.issues.map(formatValidationIssue)
   const summary = issues
-    .map(
-      (issue) =>
-        `${issue.field}: ${issue.reason}. Correction: ${issue.correction}`,
-    )
+    .map(({ field, kind, reason, relatedField, correction }) =>
+      `${field}: ${kind ? `[${kind}] ` : ''}${reason}${relatedField ? ` (also at ${relatedField})` : ''}. Correction: ${correction}`)
     .join('\n')
   throw new KiokukoError(
     'VALIDATION_ERROR',

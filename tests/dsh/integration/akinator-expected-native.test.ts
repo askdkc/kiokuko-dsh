@@ -18,10 +18,17 @@ const unclearRequest = 'kiokuko-dsh の挙動を改善してください。'
 const reportedObservation = 'READMEが更新されていない気がする'
 const successCondition = 'ログの調査で判明した kiokuko-dsh の不具合が修正されている。'
 const observationCondition = 'READMEの記述が実装の現状と一致している。'
+const longCondition = [
+  '実行時の待ち時間が短くなる。',
+  ...Array.from({ length: 500 }, (_, index) => `- 条件 ${index + 1}。既存の入力を使って結果と保存内容を確認する。`),
+  '最後の条件まで確認できる。',
+].join('\n')
 
-for (const scenario of ['reported request', 'unclear request', 'unsupported evidence', 'reported observation'] as const) {
+for (const scenario of ['reported request', 'unclear request', 'long completion answer', 'oversized completion answer', 'unsupported evidence', 'reported observation'] as const) {
   const clear = scenario === 'reported request' || scenario === 'reported observation'
   const task = scenario === 'reported observation' ? reportedObservation : clear ? reportedRequest : unclearRequest
+  const usesLongAnswer = scenario === 'long completion answer' || scenario === 'oversized completion answer'
+  const humanCondition = usesLongAnswer ? longCondition : '実行時の待ち時間が短くなる。'
   test(`native intake gives the main model the first decision about completion (${scenario})`, { timeout: 30_000 }, async () => {
     const order: string[] = []
     let extractionSystem = ''
@@ -54,8 +61,13 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
       nativeAnswer: async request => {
         const question = request.questions[0]
         assert.equal(question.id, 'expected')
+        if (scenario === 'oversized completion answer' && !order.includes('asked user')) {
+          order.push('asked user')
+          return { answers: [{ id: question.id, selected: [], custom: '完了条件を確認する。'.repeat(2500) }] }
+        }
+        if (scenario === 'oversized completion answer') assert.match(question.detail, /長すぎ/)
         order.push('asked user')
-        return { answers: [{ id: question.id, selected: [], custom: '実行時の待ち時間が短くなる。' }] }
+        return { answers: [{ id: question.id, selected: [], custom: humanCondition }] }
       },
     })
     const originalStream = f.model.stream.bind(f.model)
@@ -70,7 +82,7 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
       assert.deepEqual(JSON.parse(request.messages[0].content[0].text), { request: task })
       if (scenario === 'reported observation') extractionSystem = String(request.system)
       order.push('main model')
-      yield* f.mock.textResponse(JSON.stringify(scenario === 'unclear request'
+      yield* f.mock.textResponse(JSON.stringify(scenario === 'unclear request' || usesLongAnswer
         ? { expected: null }
         : scenario === 'reported observation'
           ? { expected: observationCondition, quote: reportedObservation }
@@ -85,6 +97,9 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
         assert.match(JSON.stringify(request.messages), scenario === 'reported observation'
           ? /READMEの記述が実装の現状と一致している/
           : clear ? /不具合が修正されている/ : /実行時の待ち時間が短くなる/)
+        if (usesLongAnswer) assert.ok(request.messages.some((message: any) =>
+          Array.isArray(message.content) && message.content.some((block: any) => block.type === 'text' && block.text.includes(longCondition))),
+        'The resumed request must carry the entire multiline answer')
         return f.mock.toolCallResponse('read-log', 'kioku_read', { path: 'session-log.txt' })
       }, (request: any) => {
         const result = nativeToolResults(request.messages).find(item => item.toolCallId === 'read-log')
@@ -96,7 +111,7 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
       // A reported observation about a named subject states its own outcome.
       if (scenario === 'reported observation')
         assert.match(extractionSystem, /stale, inconsistent, broken, missing or out of date/u)
-      assert.deepEqual(order, ['main model', ...(clear ? [] : ['asked user'])])
+      assert.deepEqual(order, ['main model', ...(clear ? [] : ['asked user']), ...(scenario === 'oversized completion answer' ? ['asked user'] : [])])
       assert.equal(f.responses.length, 0)
     } finally {
       await f.close()

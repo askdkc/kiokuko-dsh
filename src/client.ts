@@ -1,4 +1,6 @@
 import type { MemorySidebarView, SidebarMemory } from './dsh/memory-sidebar.js'
+import { COMPLETION_ANSWER_TOO_LONG, COMPLETION_QUESTION_HEADER } from './dsh/intake-questions.js'
+import { MAX_TEXT_LENGTH } from './ledger/types.js'
 import { mountRecoveryClient } from './recovery-client.js'
 import { mountModelsClient } from './models-client.js'
 interface SnapshotStore<T> {
@@ -170,12 +172,12 @@ declare const Button: unknown
 declare const IconDownloadOutline16: unknown
 declare const MarkdownText: unknown
 
-const SESSION_EXPORT_PATH = '/api/session.export'
+const SESSION_EXPORT_PATH = '/api/kiokuko.session.export'
 const LOCALE_NAMESPACE = 'kiokuko-session-log-download'
 const INITIAL_DOWNLOAD_STATE: SessionLogDownloadState = { bySession: {} }
 
 const en = {
-  'header.action': 'Session log',
+  'header.action': 'Export with Kiokuko',
   'dialog.preparingTitle': 'Exporting Session',
   'dialog.preparingDescription': 'Streaming this Session, its sub-Sessions, and attachments to a ZIP file.',
   'dialog.successTitle': 'Session export complete',
@@ -192,7 +194,7 @@ const en = {
 }
 
 const ja: Record<keyof typeof en, string> = {
-  'header.action': 'Session log',
+  'header.action': 'Kiokuko でログを保存',
   'dialog.preparingTitle': 'Sessionをエクスポート中',
   'dialog.preparingDescription': 'このSession、子Session、添付ファイルをZIPへストリーミングしています。',
   'dialog.successTitle': 'Sessionのエクスポート完了',
@@ -209,7 +211,7 @@ const ja: Record<keyof typeof en, string> = {
 }
 
 const zh: Record<keyof typeof en, string> = {
-  'header.action': 'Session 日志',
+  'header.action': '通过 Kiokuko 导出日志',
   'dialog.preparingTitle': '正在导出 Session',
   'dialog.preparingDescription': '正在将当前 Session、子 Session 和附件流式写入 ZIP 文件。',
   'dialog.successTitle': 'Session 导出完成',
@@ -787,6 +789,11 @@ function IntakeQuestionCard(props: Record<string, unknown>): unknown {
         const q = pending.questions[i]!, value = current.drafts[i]!, opts = reviewing ? question.options : q.options ?? []
         let selected = q.multiSelect ? value.checked : value.selected === null ? [] : [value.selected]
         let custom = value.custom.trim()
+        if (q.id === 'expected' && q.header === COMPLETION_QUESTION_HEADER && custom.length > MAX_TEXT_LENGTH) {
+          if (i !== current.page) page(i)
+          setError(COMPLETION_ANSWER_TOO_LONG)
+          return
+        }
         if (value.ordinal && (Number(value.ordinal) < 1 || Number(value.ordinal) > opts.length || q.multiSelect)) {
           setError(q.multiSelect ? '入力した番号はSpaceでチェックしてください。' : `番号は1〜${opts.length}で入力してください。`); return
         }
@@ -1667,9 +1674,6 @@ export function apply(ctx: DshClientContext): void {
   ctx.effect(() => async () => controller.dispose(), 'kiokuko-dsh: browser download lifecycle')
   ctx.effect(installStyle, 'kiokuko-dsh: browser download style')
   ctx.effect(() => ctx.locale.register(LOCALE_NAMESPACE, { en, ja, zh }) as () => void, 'kiokuko-dsh: browser dictionaries')
-  ctx.on('command/executed', (sessionId, commandName, result) => {
-    if (commandName === 'export' && result.kind === 'success') void controller.download(sessionId)
-  })
   ctx.slots.inject('conversation.session.header.utilities', () => ctx.slots.register({
     name: 'conversation.session.header.utilities',
     id: 'kiokuko-session-log-download',

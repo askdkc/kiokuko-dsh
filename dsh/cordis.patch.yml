@@ -1,8 +1,3 @@
-# DSH rejects changing the name of an existing row. Disable the stock export
-# host and insert Kiokuko under its own stable id; removing this bundle restores
-# the stock row automatically.
-- id: session-log-download
-  disabled: true
 - id: agent-loop
   disabled: true
 - insert:

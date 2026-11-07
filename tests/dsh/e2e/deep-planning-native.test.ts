@@ -252,6 +252,8 @@ test('Deep native: authenticated report transport is Session-bound and leaves na
   const connection = await import(modulePath('client-connection'))
   const fiber = await fixture.ctx.plugin({name:'deep-native-connection',apply(ctx:any){new connection.HostConnectionService(ctx, [], {isAuthenticated:()=>true})}})
   const unmountReport = mountDeepReportSurface(fixture.ctx, fixture.deep)
+  const stockExport = await import(modulePath('session-log-export'))
+  await fixture.ctx.plugin(stockExport)
   const unmountExport = mountDshSessionExportSurface(fixture.ctx, {open:async()=>({status:200,headers:{},body:(async function*(){yield new Uint8Array([1])})()})} as any)
   try {
     await fixture.command('/deep-planning Preserve a zero-budget answer')
@@ -261,7 +263,14 @@ test('Deep native: authenticated report transport is Session-bound and leaves na
     // The native HTTP bridge treats omitted requestBody as streaming, which
     // constructs an invalid GET-with-body before dispatching either route.
     assert.equal(transport.requestBodyMode({method:'GET',url:new URL(url)}),'buffered')
-    assert.equal(transport.requestBodyMode({method:'GET',url:new URL('http://localhost/api/session.export')}),'buffered')
+    const stockExportUrl = 'http://localhost/api/session.export'
+    const kiokukoExportUrl = `http://localhost/api/kiokuko.session.export?sessionId=${fixture.parent.session.id}`
+    assert.equal(transport.requestBodyMode({method:'GET',url:new URL(stockExportUrl)}),'buffered')
+    assert.equal(transport.requestBodyMode({method:'GET',url:new URL(kiokukoExportUrl)}),'buffered')
+    assert.equal((await fixture.command('/export')).result.kind, 'success')
+    const exported = await transport.fetch(new Request(kiokukoExportUrl), {principal:{kind:'owner'}})
+    assert.equal(exported.status, 200)
+    assert.deepEqual(new Uint8Array(await exported.arrayBuffer()), Uint8Array.of(1))
     if(transport.fetch.length>=2)assert.equal((await transport.fetch(new Request(url),{principal:{kind:'remote'}})).status,403,'alpha.3 native bridge rejects a non-owner principal')
     const response = await transport.fetch(new Request(url), {principal:{kind:'owner'}})
     assert.equal(response.status,200)

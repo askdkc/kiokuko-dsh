@@ -59,6 +59,10 @@ test('grounded profile and dsh turn request identity are deterministic', () => {
   assert.equal(profile.profileHints.expected, null)
   const long = resolveGroundedIntakeProfile({ task: `Implement ${'x'.repeat(5_000)}`, cwd: '/repo' })
   assert.equal(long.profileHints.expected, null)
+  const completion = '完了条件を確認する。\n'.repeat(500).trim()
+  assert.equal(resolveGroundedIntakeProfile({
+    task: 'Implement the feature', cwd: '/repo', profileHints: { expected: completion },
+  }).profileHints.expected, completion)
   assert.equal(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }), dshTurnRequestId({ dshSessionId: 'session', turn: 1 }))
   assert.notEqual(dshTurnRequestId({ dshSessionId: 'session', turn: 1 }), dshTurnRequestId({ dshSessionId: 'session', turn: 2 }))
   assert.throws(() => resolveGroundedIntakeProfile({ task: 'task', cwd: 'relative' }), /absolute/u)

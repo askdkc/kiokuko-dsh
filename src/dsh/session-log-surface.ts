@@ -1,15 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { DshSessionLogExportService, dshSessionExportFailure } from './session-log-export.js'
 
-export const DSH_SESSION_EXPORT_PATH = '/api/session.export'
-
-interface CommandRegistry {
-  register(definition: {
-    readonly name: string
-    readonly description: string
-    readonly handler: (invocation: { readonly rawInput: string }) => Promise<{ readonly kind: 'success' | 'error'; readonly text: string }>
-  }): () => unknown
-}
+export const DSH_SESSION_EXPORT_PATH = '/api/kiokuko.session.export'
 
 interface FetchRegistry {
   register(route: {
@@ -61,20 +53,12 @@ export async function dshSessionExportResponse(
   }
 }
 
-/** Mount the existing DSH Web command contract onto the bounded mirror export. */
+/** Mount Kiokuko’s streaming export alongside the stock DSH Web export. */
 export function mountDshSessionExportSurface(ctx: Context, service: DshSessionLogExportService): () => Promise<void> {
-  const commands = ctx.get('commands', false) as CommandRegistry | undefined
   const connection = ctx.get('connection', false) as { readonly fetch?: FetchRegistry } | undefined
-  if (commands === undefined || connection?.fetch === undefined) {
-    throw new Error('kiokuko-dsh Web export requires commands and connection services')
+  if (connection?.fetch === undefined) {
+    throw new Error('kiokuko-dsh Web export requires the connection service')
   }
-  const disposeCommand = commands.register({
-    name: 'export',
-    description: 'Download this Session log as a ZIP archive',
-    handler: invocation => Promise.resolve(invocation.rawInput.trim() === ''
-      ? { kind: 'success', text: 'Session log download requested.' }
-      : { kind: 'error', text: 'The Web /export command does not accept a path.' }),
-  })
   const disposeRoute = connection.fetch.register({
     path: DSH_SESSION_EXPORT_PATH,
     methods: ['GET', 'HEAD'],
@@ -85,6 +69,6 @@ export function mountDshSessionExportSurface(ctx: Context, service: DshSessionLo
   return async () => {
     if (disposed) return
     disposed = true
-    await Promise.allSettled([Promise.resolve(disposeRoute()), Promise.resolve(disposeCommand())])
+    await disposeRoute()
   }
 }
