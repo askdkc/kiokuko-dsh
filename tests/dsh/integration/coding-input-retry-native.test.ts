@@ -13,8 +13,9 @@ isolateSkillHome()
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT
 
+for (const forceColor of [false, true])
 for (const explicit of [false, true]) for (const unavailable of [false, true]) test(
-  `native coding record (${explicit ? 'adapter' : 'public'}, ${unavailable ? 'initial record unavailable' : 'no plan'}): failure and repair`,
+  `native coding record (${explicit ? 'adapter' : 'public'}, ${unavailable ? 'initial record unavailable' : 'no plan'}, FORCE_COLOR ${forceColor ? 'on' : 'unset'}): failure and repair`,
   { timeout: 60000 }, async () => {
   const f = await nativeSkillFixture({ startupChoice: 'decision OFF / Lisp OFF', packages,
     ...(packageRoot ? { packageRoot } : {}), explicit, mode: 'compiled', extra: {
@@ -24,6 +25,7 @@ for (const explicit of [false, true]) for (const unavailable of [false, true]) t
     } })
   const request = 'Implement src/parser.mjs so the command prints 42. 通常実行で。'
   const command = 'node --test --test-reporter=tap parser-output.test.mjs'
+  const repairedSource = "console.log('42')\n"
   const legacy = fixtureDefinition()
   legacy.items[0]!.criterionIds.push(legacy.goal.criterionIds[0]!)
   legacy.items[0]!.goalCriterionIds = []
@@ -39,7 +41,12 @@ import { execFileSync } from 'node:child_process'
 import test from 'node:test'
 
 test('parser prints 42', () => {
-  const output = execFileSync(process.execPath, ['src/parser.mjs'], { encoding: 'utf8' })
+  const env = { ...process.env }
+  delete env.FORCE_COLOR
+  delete env.NO_COLOR
+  delete env.NODE_DISABLE_COLORS
+  if (${forceColor}) env.FORCE_COLOR = '1'
+  const output = execFileSync(process.execPath, ['src/parser.mjs'], { encoding: 'utf8', env })
   assert.equal(output.trim(), '42', 'parser output mismatch')
 })
 `)
@@ -48,13 +55,13 @@ test('parser prints 42', () => {
     const call = (id: string, name: string, args: object) => f.mock.toolCallResponse(id, name, args)
     f.responses.push(
       interpretedPreparation(f.mock, 'prepare', 'new', 'change'),
-      call('initial-write', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(41)\n' }),
+      call('initial-write', 'kioku_write', { path: 'src/parser.mjs', content: "console.log('41')\n" }),
       call('failed-check', 'kioku_exec', { command }),
       (request: any) => {
         const failed = toolValue(request, 'failed-check')
         assert.equal(failed.exitCode, 1, failed.output)
         assert.match(failed.output, /parser output mismatch/u)
-        return call('repair', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' })
+        return call('repair', 'kioku_write', { path: 'src/parser.mjs', content: repairedSource })
       },
       (request: any) => {
         assert.equal(toolValue(request, 'repair').applied, true)
@@ -70,7 +77,9 @@ test('parser prints 42', () => {
         assert.equal(state.definition, undefined)
         assert.notEqual(state.assessment?.verified, true, 'observed executions are not formal verification on their own')
         assert.equal(state.applicable, !unavailable)
-        assert.ok(state.observations.some((entry: any) => entry.tool === 'kioku_exec' && entry.exitCode === 1))
+        const failedRef = toolValue(request, 'failed-check').receipt.evidenceRef
+        assert.ok(state.observations.some((entry: any) =>
+          entry.ref === failedRef && entry.tool === 'kioku_exec' && entry.exitCode === 1), JSON.stringify(state.observations))
         assert.ok(state.observations.some((entry: any) => entry.tool === 'kioku_write' && entry.ref.startsWith('native:')),
           'status projects the current turn’s native tool events as well as durable owned receipts')
         const ref = toolValue(request, 'passed-check').receipt.evidenceRef
@@ -96,7 +105,7 @@ test('parser prints 42', () => {
       },
     )
     await f.turn(request)
-    assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), 'console.log(42)\n')
+    assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), repairedSource)
     const db = openConnection(path)
     try {
       const run = db.prepare('SELECT status FROM ledger_runs').get<{status: string}>()
