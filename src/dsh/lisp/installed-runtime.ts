@@ -21,9 +21,9 @@ async function sourceKey(library: string): Promise<string> {
     sources[file] = createHash('sha256').update(await readFile(join(library, file))).digest('hex')
   return digest({ format: 1, platform: process.platform, arch: process.arch, sources })
 }
-async function binaryHash(path: string): Promise<{ hash: string; bytes: number }> {
+async function binaryHash(path: string, privateFile = false): Promise<{ hash: string; bytes: number }> {
   const info = await lstat(path)
-  if (!info.isFile() || info.nlink !== 1 || !(info.mode & 0o111) || info.size > 1024 * 1024 * 1024) throw new Error('Invalid executable file')
+  if (!info.isFile() || (privateFile && info.nlink !== 1) || !(info.mode & 0o111) || info.size > 1024 * 1024 * 1024) throw new Error('Invalid executable file')
   const hash = createHash('sha256'); let bytes = 0
   for await (const chunk of createReadStream(path)) {
     bytes += chunk.length
@@ -39,7 +39,8 @@ async function verifiedRuntime(directory: string, key: string): Promise<Installe
   try {
     if (!(await lstat(directory)).isDirectory() || await realpath(directory) !== directory) throw new Error('Invalid directory')
     const manifestPath = join(directory, 'manifest.json'), info = await lstat(manifestPath)
-    if (!info.isFile() || info.nlink !== 1 || info.size > 4096) throw new Error('Invalid manifest')
+    // Package managers can hard-link both files when reusing cached install output.
+    if (!info.isFile() || info.size > 4096) throw new Error('Invalid manifest')
     const manifest = Manifest.parse(JSON.parse(await readFile(manifestPath, 'utf8')))
     const executable = join(directory, 'kiokuko-lisp'), actual = await binaryHash(executable)
     if (manifest.key !== key || manifest.hash !== actual.hash || manifest.bytes !== actual.bytes) throw new Error('Digest mismatch')
@@ -75,7 +76,7 @@ export async function buildInstalledLisp(library: string, sbclPath = 'sbcl', sig
     const check = await runLispSetup(layout, config, 'check-executable', signal)
     if (check.trim() !== 'KIOKU-EXECUTABLE/1') throw new LispError('COMPILE_FAILED', 'Lisp 実行ファイルの動作確認に失敗しました。', recovery)
     if (await sourceKey(canonical) !== key) throw new LispError('COMPILE_INPUT_CHANGED', 'ビルド中に Lisp ソースが変更されました。', recovery)
-    const executable = join(layout.cache, 'kiokuko-lisp'), info = await binaryHash(executable)
+    const executable = join(layout.cache, 'kiokuko-lisp'), info = await binaryHash(executable, true)
     // The image contains only public bundled code. Like other package assets,
     // it must be readable when an administrator installs for another user.
     const publish = join(base, 'publish'); await mkdir(publish, { mode: 0o755 })

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { appendFile, cp, mkdir, mkdtemp, readFile, realpath, rename, rm } from 'node:fs/promises'
+import { appendFile, cp, link, mkdir, mkdtemp, readFile, realpath, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,6 +32,12 @@ test('installed executable: relocation, no external SBCL, dynamic compilation an
     assert.equal((await buildInstalledLisp(library, '/no-external-sbcl')).reused, true)
     const moved = join(base, 'relocated-lisp')
     await rename(library, moved)
+    // pnpm can import cached postinstall output as hard links from its store.
+    const installed = join(moved, '.native', built.key)
+    const linkedExecutable = join(base, 'store-executable')
+    await link(join(installed, 'manifest.json'), join(base, 'store-manifest.json'))
+    await link(join(installed, 'kiokuko-lisp'), linkedExecutable)
+    assert.equal((await installedLispRuntime(moved))?.key, built.key)
     const config = LispConfig.parse({ enabled: true, executionMode: 'protected', sbclPath: '/no-external-sbcl', startupTimeoutMs: 60000 })
     manager = new LispManager({ dataRoot: join(base, 'data'), library: moved, config, store: new LispStore(async fn => fn(db)) })
     await manager.start()
@@ -55,7 +61,7 @@ test('installed executable: relocation, no external SBCL, dynamic compilation an
     await manager.dispose(); manager = undefined
     const runtime = await installedLispRuntime(moved)
     assert.ok(runtime)
-    await appendFile(runtime.executable, 'corrupt')
+    await appendFile(linkedExecutable, 'corrupt')
     await assert.rejects(installedLispRuntime(moved), { code: 'INSTALLED_RUNTIME_INVALID' })
     await appendFile(join(moved, 'tools.lisp'), '\n;; changed source\n')
     await assert.rejects(installedLispRuntime(moved), { code: 'INSTALLED_RUNTIME_STALE' })
