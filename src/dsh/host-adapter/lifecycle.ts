@@ -145,6 +145,8 @@ export function createLifecycle(deps: LifecycleDependencies) {
       try {
         synchronizeCodingWorkflow(database, item.runId);
         const assessment = saveTaskCompletionReceipt(database, item.runId);
+        // The native child will deliver a settlement turn after its work.
+        if (assessment.nativeChildrenPending) return false;
         if (!taskCompletionBlocksClose(assessment)) return true;
         const unresolved = assessment.criteria.filter(
           (criterion) => criterion.state !== "satisfied",

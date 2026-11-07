@@ -279,6 +279,11 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
           .catch(error => { throw new Error(`${error.message}: ${JSON.stringify({ workerErrors, started, ended, events: parent.agent.session.snapshotEvents().filter((event:any)=>['tool/result','agent/error'].includes(event.type)).map((event:any)=>event.data) })}`) })
         assert.equal(ended.length, 0, 'both children must start before either finishes')
         await waitBounded(parent.agent.whenIdle(), 'Continuable launch did not return before child completion')
+        if (mode === 'lisp-workers') {
+          const owner = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT status FROM ledger_runs WHERE dsh_session_id=?')
+            .get<{ status: string }>(parent.agent.session.id))
+          assert.equal(owner?.status, 'active', 'the idle parent still owns the running Lisp workers')
+        }
         const ids = await continuableSessionIds(parent.agent, ctx.subagents)
         assert.equal(ids.length, 2, 'both continuable launches must return child ids')
         assert.equal(new Set(ids).size, 2)

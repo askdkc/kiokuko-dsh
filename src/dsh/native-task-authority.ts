@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
+import { withImmediateTransaction } from '../db/transaction.js'
 import { KiokukoError } from '../errors.js'
 import type { DshCoreRuntime } from './core-runtime.js'
 import type { ExecutionIdentity, ExecutionReceipt } from './owned-execution.js'
@@ -139,7 +140,7 @@ export class NativeTaskAuthority {
     const operationId=`native-child:${childId}`
     const receipt:ExecutionReceipt={version:1,operationId,runId:proof.lease.taskId,sessionId:proof.identity.sessionId,generation:proof.identity.generation,
       kind:'native_child',repositoryRoot:proof.lease.repositoryRoot,cwd:proof.lease.repositoryRoot,targets:[],state,evidenceRef:operationId,persistence:'saved',taskAuthority:proof.lease}
-    await this.options.runtime.withDatabase(db=>{
+    await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
       if(authorize)authorizeTaskLease(db,proof.lease)
       if(state==='completed') {
         try { authorizeTaskLease(db,proof.lease); receipt.authority='current' }
@@ -148,7 +149,7 @@ export class NativeTaskAuthority {
       db.prepare(`INSERT INTO dsh_owned_operations(operation_id,run_id,session_id,generation,request_digest,state,receipt_json,updated_at) VALUES(?,?,?,?,?,?,?,?)
         ON CONFLICT(operation_id) DO UPDATE SET state=excluded.state,receipt_json=excluded.receipt_json,updated_at=excluded.updated_at`)
         .run(operationId,receipt.runId,receipt.sessionId,receipt.generation,JSON.stringify(proof.lease),state,JSON.stringify(receipt),new Date().toISOString())
-    })
+    }))
     if(state==='completed')proof.completed=true
   }
   private async observeNaturalCompletion(childId:string, proof:Proof, activation:{result:Promise<unknown>;dispose():Promise<void>}):Promise<void> {

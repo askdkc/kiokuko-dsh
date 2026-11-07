@@ -37,6 +37,7 @@ import {
 } from "./execution-command.js";
 import { readCodingWorkflow } from "./coding-workflow/store.js";
 import { recordCodingAttempt } from "./coding-workflow/service.js";
+import { hasUnsettledNativeChildren } from "./native-execution-ownership.js";
 
 export const CompletionConfig = z
   .object({ mode: z.enum(["shadow", "enforce"]).default("shadow") })
@@ -131,6 +132,7 @@ export type CompletionAssessment = {
   criteria: CriterionAssessment[];
   workflowReady?: boolean;
   managedOperationsReady?: boolean;
+  nativeChildrenPending?: true;
   coding?: {
     workflowId: string;
     state: string;
@@ -876,6 +878,7 @@ export function assessTaskCompletion(
     },
   );
   const managedOperationsReady = !unresolvedManaged(database, runId);
+  const nativeChildrenPending = hasUnsettledNativeChildren(database, runId);
   const workflowReady =
     !coding ||
     Boolean(
@@ -942,8 +945,10 @@ export function assessTaskCompletion(
   return {
     mode: runMode(database, runId),
     managedOperationsReady,
+    ...(nativeChildrenPending ? { nativeChildrenPending: true } : {}),
     verified:
       managedOperationsReady &&
+      !nativeChildrenPending &&
       workflowReady &&
       assessments.length > 0 &&
       assessments.every((item) => item.state === "satisfied"),
@@ -1059,6 +1064,7 @@ export function taskCompletionBlocksClose(
 ): boolean {
   return (
     assessment.managedOperationsReady === false ||
+    assessment.nativeChildrenPending === true ||
     (!assessment.verified &&
       (assessment.coding ? assessment.coding.protocol !== undefined
         : assessment.mode === "enforce" && assessment.required > 0))
@@ -1067,7 +1073,7 @@ export function taskCompletionBlocksClose(
 
 /** A failed optional record write cannot release unresolved operation authority. */
 export function completionBlocksCloseWithoutReceipt(database: SqliteDatabase, runId: string): boolean {
-  if (unresolvedManaged(database, runId)) return true;
+  if (hasUnsettledNativeChildren(database, runId) || unresolvedManaged(database, runId)) return true;
   const coding = readCodingWorkflow(database, runId);
   return coding ? coding.protocol !== undefined : runMode(database, runId) === "enforce";
 }

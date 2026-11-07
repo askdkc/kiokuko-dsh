@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getDshDatabasePath } from '../../../src/dsh/paths.js'
 import { openConnection } from '../../../src/db/connection.js'
@@ -23,7 +23,7 @@ for (const explicit of [false, true]) for (const unavailable of [false, true]) t
       deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' },
     } })
   const request = 'Implement src/parser.mjs so the command prints 42. 通常実行で。'
-  const command = "node -e \"require('node:assert/strict').equal(require('node:child_process').execFileSync(process.execPath,['src/parser.mjs'],{encoding:'utf8'}).trim(),'42')\""
+  const command = 'node --test --test-reporter=tap parser-output.test.mjs'
   const legacy = fixtureDefinition()
   legacy.items[0]!.criterionIds.push(legacy.goal.criterionIds[0]!)
   legacy.items[0]!.goalCriterionIds = []
@@ -33,6 +33,16 @@ for (const explicit of [false, true]) for (const unavailable of [false, true]) t
     try { db.exec(sql) } finally { db.close() }
   }
   try {
+    await writeFile(join(f.dir, 'parser-output.test.mjs'), `
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import test from 'node:test'
+
+test('parser prints 42', () => {
+  const output = execFileSync(process.execPath, ['src/parser.mjs'], { encoding: 'utf8' })
+  assert.equal(output.trim(), '42', 'parser output mismatch')
+})
+`)
     if (unavailable) changeRecordAvailability(`CREATE TRIGGER test_record_unavailable
       BEFORE INSERT ON dsh_coding_workflows BEGIN SELECT RAISE(ABORT, 'test record unavailable'); END`)
     const call = (id: string, name: string, args: object) => f.mock.toolCallResponse(id, name, args)
@@ -40,9 +50,21 @@ for (const explicit of [false, true]) for (const unavailable of [false, true]) t
       interpretedPreparation(f.mock, 'prepare', 'new', 'change'),
       call('initial-write', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(41)\n' }),
       call('failed-check', 'kioku_exec', { command }),
-      call('repair', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' }),
-      call('passed-check', 'kioku_exec', { command }),
-      call('observed', 'coding_workflow', { action: 'status' }),
+      (request: any) => {
+        const failed = toolValue(request, 'failed-check')
+        assert.equal(failed.exitCode, 1, failed.output)
+        assert.match(failed.output, /parser output mismatch/u)
+        return call('repair', 'kioku_write', { path: 'src/parser.mjs', content: 'console.log(42)\n' })
+      },
+      (request: any) => {
+        assert.equal(toolValue(request, 'repair').applied, true)
+        return call('passed-check', 'kioku_exec', { command })
+      },
+      (request: any) => {
+        const passed = toolValue(request, 'passed-check')
+        assert.equal(passed.exitCode, 0, passed.output)
+        return call('observed', 'coding_workflow', { action: 'status' })
+      },
       (request: any) => {
         const state = toolValue(request, 'observed')
         assert.equal(state.definition, undefined)
@@ -51,10 +73,11 @@ for (const explicit of [false, true]) for (const unavailable of [false, true]) t
         assert.ok(state.observations.some((entry: any) => entry.tool === 'kioku_exec' && entry.exitCode === 1))
         assert.ok(state.observations.some((entry: any) => entry.tool === 'kioku_write' && entry.ref.startsWith('native:')),
           'status projects the current turn’s native tool events as well as durable owned receipts')
-        assert.ok(state.observations.some((entry: any) => entry.tool === 'kioku_exec' && entry.exitCode === 0))
-        const evidence = state.observations.find((entry: any) => entry.tool === 'kioku_exec' && entry.exitCode === 0)
+        const ref = toolValue(request, 'passed-check').receipt.evidenceRef
+        assert.ok(state.observations.some((entry: any) =>
+          entry.ref === ref && entry.tool === 'kioku_exec' && entry.exitCode === 0), JSON.stringify(state.observations))
         if (unavailable) changeRecordAvailability('DROP TRIGGER test_record_unavailable')
-        return call('note', 'coding_workflow_apply', { action: 'annotate', notes: 'The command passed after fixing the output.', evidenceRefs: [evidence.ref] })
+        return call('note', 'coding_workflow_apply', { action: 'annotate', notes: 'The command passed after fixing the output.', evidenceRefs: [ref] })
       },
       call('noted', 'coding_workflow', { action: 'status' }),
       (request: any) => {

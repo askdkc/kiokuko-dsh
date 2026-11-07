@@ -1,6 +1,16 @@
 import type { SqliteDatabase } from '../db/adapter.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
 
+/** A live or unconfirmed native child still needs its parent task authority. */
+export function hasUnsettledNativeChildren(db: SqliteDatabase, runId: string): boolean {
+  return db.prepare(`
+    SELECT 1 FROM dsh_owned_operations
+    WHERE run_id=? AND state IN ('started', 'unknown')
+      AND json_extract(receipt_json, '$.kind')='native_child'
+    LIMIT 1
+  `).get(runId) !== undefined
+}
+
 /** Safety authority only. Missing/invalid storage is an error, not absence.
  * Successfully completed history may remain in the ledger without owning new
  * native work. Pending/held/ignored/failed work and uncertain effects remain owned. */

@@ -23,6 +23,7 @@ import type { DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
 import { TASK_STARTUP_OPTIONS } from '../../../src/dsh/task-startup.js'
 import { canonicalContentHash } from '../../../src/serialization/validate.js'
+import { assessTaskCompletion } from '../../../src/dsh/task-completion.js'
 
 // Module lifecycle tests explicitly disable optional inference; native request-intent
 // suites exercise the enabled independent assessment and its unavailable boundary.
@@ -141,7 +142,7 @@ const requireIntakeChoice: DshModule<CoreModuleHost> = {
   async mount({ host, defer }) { defer(host.beforeTask(async () => ({ taskType: null }))); return { stopIngress() {}, async drain() {}, async dispose() {} } },
 }
 
-test('mounted core keeps memory advisory and exposes a session-bound diagnostic after interrupted completion', async () => {
+test('mounted core keeps memory and Goal verification advisory after normal completion', async () => {
   const f = await fixture({ask: async r => ({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})}), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
   const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
@@ -173,8 +174,13 @@ test('mounted core keeps memory advisory and exposes a session-bound diagnostic 
     assert.equal(diagnostic.verification, 'unobserved')
     assert.ok(!JSON.stringify(diagnostic).includes('code migration expectations must include'))
     const stored = openConnection(join(f.root, 'memory.sqlite3'))
-    assert.equal(stored.prepare('SELECT status FROM ledger_runs').get()?.status, 'active')
-    stored.close()
+    try {
+      const run = stored.prepare('SELECT run_id, status FROM ledger_runs').get<{ run_id: string; status: string }>()!
+      assert.equal(run.status, 'completed')
+      const completion = assessTaskCompletion(stored, run.run_id)
+      assert.ok(completion.required > 0)
+      assert.equal(completion.verified, false)
+    } finally { stored.close() }
   } finally { await handle.dispose(); await f.cleanup() }
 })
 
