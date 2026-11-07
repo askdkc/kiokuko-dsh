@@ -15,6 +15,7 @@ import { createDshIntakeAnswerer } from '../../../src/dsh/user-interaction.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
 import { DshRuntime } from '../../../src/dsh/runtime.js'
 import { layaConfig, layaReply, layaV1Reply, serveLaya } from '../helpers/laya.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentReferenceIds, unresolvedRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
 
 for (const kind of ['typesafe', 'nimble', 'laya-v1', 'laya-strict'] as const) test(`full gate ${kind}: a simple factual question enters without asking for its purpose`, { skip: process.platform === 'win32' && kind.startsWith('laya') }, async t => {
   const { TypedDecisionsConfig } = await import('../../../src/dsh/decisions/config.js')
@@ -79,6 +80,31 @@ async function makeFixture(): Promise<{ root: string; databasePath: string }> {
   }
   return { root, databasePath }
 }
+
+test('resolved native work defaults to its canonical workspace while preserving explicit targets and unresolved intent', async () => {
+  const f = await makeFixture()
+  const runtime = new DshRuntime({ repositoryRoot: f.root, databasePath: f.databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  const capabilities = await catalog()
+  const task = 'READMEの説明漏れを修正してください。'
+  const context = createRequestIntentContext({ task, workspaceDirectory: realpathSync(f.root),
+    messageRefs: [{ id: 'user-request', digest: 'a'.repeat(64) }] })!
+  const resolved = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'document', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  try {
+    for (const [index, scenario] of ['workspace', 'explicit', 'unresolved', 'unknown change scope', 'answer'].entries()) {
+      const requestIntent = scenario === 'unresolved' ? unresolvedRequestIntent(context, 'unclear')
+        : scenario === 'unknown change scope' ? { ...resolved, changeScope: 'unknown' as const }
+          : scenario === 'answer' ? { ...resolved, action: 'answer' as const } : resolved
+      const result = await new DshIntakeGate(runtime).prepare({ ...event(f.root, capabilities), sessionId: `workspace-target-${index}`, task,
+        requestIntent, requestIntentContext: context,
+        profileHints: { taskType: scenario === 'answer' ? 'chat' : 'writing', expected: 'READMEに機能が説明されている。',
+          ...(scenario === 'explicit' ? { target: 'README.md' } : {}) } })
+      assert.equal(result.prepared.intake.profile.target, scenario === 'workspace' ? realpathSync(f.root)
+        : scenario === 'explicit' ? 'README.md' : null, scenario)
+      assert.equal(result.admitted, !['unresolved', 'unknown change scope'].includes(scenario), scenario)
+    }
+  } finally { await runtime.close(); await rm(f.root, { recursive: true, force: true }) }
+})
 
 async function catalog() {
   const provider = createStandardSkillProvider()

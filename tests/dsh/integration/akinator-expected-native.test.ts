@@ -15,13 +15,16 @@ isolateSkillHome()
 const packageRoot = process.env.KIOKUKO_TEST_PLUGIN_PACKAGE_ROOT
 const reportedRequest = 'このログの内容からkiokuko-dshの問題点を調査し、必要な修正をじっし'
 const unclearRequest = 'kiokuko-dsh の挙動を改善してください。'
+const reportedObservation = 'READMEが更新されていない気がする'
 const successCondition = 'ログの調査で判明した kiokuko-dsh の不具合が修正されている。'
+const observationCondition = 'READMEの記述が実装の現状と一致している。'
 
-for (const scenario of ['reported request', 'unclear request', 'unsupported evidence'] as const) {
-  const clear = scenario === 'reported request'
-  const task = clear ? reportedRequest : unclearRequest
+for (const scenario of ['reported request', 'unclear request', 'unsupported evidence', 'reported observation'] as const) {
+  const clear = scenario === 'reported request' || scenario === 'reported observation'
+  const task = scenario === 'reported observation' ? reportedObservation : clear ? reportedRequest : unclearRequest
   test(`native intake gives the main model the first decision about completion (${scenario})`, { timeout: 30_000 }, async () => {
     const order: string[] = []
+    let extractionSystem = ''
     const decisions = new DecisionService(TypedDecisionsConfig.parse({ provider: 'openai' }), config =>
       new OpenAIDecisionProvider(config.openai, async () => 'fixture-key', async (_url, init) => {
         const body = JSON.parse(String(init?.body))
@@ -65,10 +68,13 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
       assert.equal(request.model, 'qwen3-coder')
       assert.deepEqual(request.tools, [])
       assert.deepEqual(JSON.parse(request.messages[0].content[0].text), { request: task })
+      if (scenario === 'reported observation') extractionSystem = String(request.system)
       order.push('main model')
       yield* f.mock.textResponse(JSON.stringify(scenario === 'unclear request'
         ? { expected: null }
-        : { expected: successCondition, quote: '問題点を調査し、必要な修正をじっし' }))
+        : scenario === 'reported observation'
+          ? { expected: observationCondition, quote: reportedObservation }
+          : { expected: successCondition, quote: '問題点を調査し、必要な修正をじっし' }))
     }
     try {
       await writeFile(join(f.dir, 'session-log.txt'), 'Fixture log was read.')
@@ -76,7 +82,9 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
         const value = toolValue(request, 'prepare')
         assert.equal(value.prepared, true)
         assert.equal(value.originalTask, task)
-        assert.match(JSON.stringify(request.messages), clear ? /不具合が修正されている/ : /実行時の待ち時間が短くなる/)
+        assert.match(JSON.stringify(request.messages), scenario === 'reported observation'
+          ? /READMEの記述が実装の現状と一致している/
+          : clear ? /不具合が修正されている/ : /実行時の待ち時間が短くなる/)
         return f.mock.toolCallResponse('read-log', 'kioku_read', { path: 'session-log.txt' })
       }, (request: any) => {
         const result = nativeToolResults(request.messages).find(item => item.toolCallId === 'read-log')
@@ -85,6 +93,9 @@ for (const scenario of ['reported request', 'unclear request', 'unsupported evid
         return f.mock.textResponse('The log was read.')
       })
       await f.turn(task)
+      // A reported observation about a named subject states its own outcome.
+      if (scenario === 'reported observation')
+        assert.match(extractionSystem, /stale, inconsistent, broken, missing or out of date/u)
       assert.deepEqual(order, ['main model', ...(clear ? [] : ['asked user'])])
       assert.equal(f.responses.length, 0)
     } finally {

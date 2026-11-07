@@ -66,6 +66,45 @@ for(const type of ['research','writing'] as const)test(`Core cold ${type} admiss
 
 const packages=process.env.KIOKUKO_DSH_PACKAGE_ROOT??join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules')
 const available=existsSync(join(packages,'@deepseek-ai/dsh-tools/lib/index.js'))
+
+test('adapter resumes incomplete stored intake with the current clarification and the native main model', { timeout: 30_000 }, async () => withIsolatedSkillHome(async () => {
+  const f = await nativeSkillFixture({ packages, explicit: true, intakeAnswers: false, startupChoice: 'decision OFF / Lisp OFF',
+    extra: { lisp: { enabled: false }, typedDecisions: { mode: 'off' }, answerReview: { mode: 'off' }, memoryReuse: { mode: 'off' },
+      memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, modelAutoMode: { mode: 'off' }, toolExposure: { mode: 'full' } },
+    nativeAnswer: async request => { assert.fail(`Already supplied: ${JSON.stringify(request.questions)}`) } })
+  const host = f.adapter!.host
+  // A previous headless create can leave a valid ToDo task with incomplete intake.
+  // Reopen that saved state through the normal adapter preparation boundary.
+  const creator = new DshTaskWorkflow({ runtime: host.runtime!, agents: f.ctx.agents, sessions: f.ctx.sessions,
+    skills: f.ctx.skills, tools: f.ctx.tools, emit() {} })
+  const clarification = 'READMEの導入手順を報告してください。'
+  let modelCalls = 0
+  const originalStream = f.model.stream.bind(f.model)
+  f.model.stream = async function* (request: any) {
+    if (request.purpose !== 'akinator-expected') { yield* originalStream(request); return }
+    modelCalls++
+    assert.deepEqual(JSON.parse(request.messages[0].content[0].text), { request: '調査してください。', evidence: [clarification] })
+    yield* f.mock.textResponse(JSON.stringify({ expected: 'READMEの導入手順が報告されている。', quote: clarification }))
+  }
+  try {
+    const created = await creator.operate(f.agent, { operation: 'create', taskType: 'research', request: '調査してください。' }, signal())
+    f.responses.push(async (request: any) => {
+      const event = await host.mapPreStep!({ agent: f.agent, messages: request.messages, turn: 1, step: 1, signal: signal() })
+      const context = event.requestIntentContext!
+      const requestIntent = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'research', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+      const result = await host.intakeGate!.prepare({ ...event, requestIntent })
+      assert.equal(result.prepared.run.runId, created.taskId)
+      assert.equal(result.prepared.intake.profile.expected, 'READMEの導入手順が報告されている。')
+      assert.equal(result.prepared.intake.status, 'ready')
+      return f.mock.textResponse('補足を同じタスクに反映しました。')
+    })
+    await f.turn(clarification)
+    assert.equal(modelCalls, 1)
+    assert.equal(f.responses.length, 0)
+    assert.equal((await creator.snapshot(f.agent)).task!.state, 'ToDo', 'clarification grants no start permission')
+  } finally { creator.dispose(); await f.close() }
+}))
+
 for(const host of ['core','adapter'] as const)for(const type of ['research','writing'] as const)test(`native ${host} ${type} explicit create/start admits the same task with cold host state`,{skip:!available,timeout:30000},async()=>withIsolatedSkillHome(async()=>{
   const f=await nativeSkillFixture({packages,explicit:host==='adapter',extra:{lisp:{enabled:false},typedDecisions:{mode:'off'},answerReview:{mode:'off'},memoryReuse:{mode:'off'},
     memoryReview:{mode:'off'},memoryEvolution:{mode:'off'},memoryIndexReasoning:{mode:'off'},semanticCompaction:{mode:'off'},modelAutoMode:{mode:'off'},toolExposure:{mode:'full'}}})

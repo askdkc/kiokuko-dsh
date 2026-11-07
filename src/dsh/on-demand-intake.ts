@@ -14,7 +14,7 @@ import {
 import { abortable } from './boundary-worker.js'
 import type { AuxiliaryRecovery } from './auxiliary-recovery.js'
 import { filterRequestMemory } from './request-memory.js'
-import { MemorySnapshotStale } from './memory-request-fence.js'
+import { MemorySnapshotStale, type MemoryDispatchGuard } from './memory-request-fence.js'
 import { createDshIntakeAnswerer, type DshUserQuestions } from './intake-questions.js'
 import { applyAnswer, deriveProfile, evaluateProfile, isTrivialConversation } from '../akinator/domain.js'
 import type { AkinatorQuestion, TaskProfile } from '../akinator/types.js'
@@ -59,6 +59,7 @@ import {
 } from './decisions/request-intent.js'
 import {
   memoryOwnerKind,
+  MemoryOwnerChanged,
   type MemoryOwnerIdentity,
   type MemoryOwnerKind,
 } from './memory-owner.js'
@@ -1070,7 +1071,7 @@ export class OnDemandIntake {
         state.memoryOwner,
       )??Promise.resolve())
       state.answerContextReady = this.host.answerContext !== undefined
-      } catch {state.input.signal.throwIfAborted();await this.deferMemory(state)}
+      } catch (error) {state.input.signal.throwIfAborted();if(error instanceof MemoryOwnerChanged)throw error;await this.deferMemory(state)}
       this.assertCurrent(state)
       state.status = 'answer'
       return true
@@ -2028,7 +2029,7 @@ export class OnDemandIntake {
             input,
             messages,
             this.ownerIdentity(state),
-          )).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state);return filterRequestMemory(messages,new Map())})
+          )).catch(async error=>{state.input.signal.throwIfAborted();if(error instanceof MemoryOwnerChanged)throw error;await this.deferMemory(state);return filterRequestMemory(messages,new Map())})
         : messages
     if(state?.memoryDeferred)projected=filterRequestMemory(projected,new Map())
     return this.guidance(
@@ -2049,7 +2050,7 @@ export class OnDemandIntake {
       await this.memoryCheck(state,input=>this.host.answerContext?.beforeRequest(
         input,
         this.ownerIdentity(state),
-      )??Promise.resolve()).catch(async()=>{state.input.signal.throwIfAborted();await this.deferMemory(state)})
+      )??Promise.resolve()).catch(async error=>{state.input.signal.throwIfAborted();if(error instanceof MemoryOwnerChanged)throw error;await this.deferMemory(state)})
     }
   }
   async fence(
@@ -2059,7 +2060,9 @@ export class OnDemandIntake {
       purpose?: string
       messages?: readonly unknown[]
     },
-  ): Promise<void> {
+    omitMemory = false,
+  ): Promise<void | MemoryDispatchGuard> {
+    if (request.sessionId !== agent.session?.id || request.purpose === 'compaction') return
     const state = agent.session && this.#turns.get(agent.session.id)
     const requireRebuild = () => {
       if (Array.isArray(request.messages) && filterRequestMemory(request.messages, new Map()).length !== request.messages.length)
@@ -2079,13 +2082,14 @@ export class OnDemandIntake {
       state.status === 'answer' &&
       this.pending(agent)
     ) {
-      await this.memoryCheck(state,input=>this.host.answerContext?.fence(
+      return await this.memoryCheck(state,input=>this.host.answerContext?.fence(
         input,
         request,
         this.ownerIdentity(state),
+        omitMemory,
       )??Promise.resolve()).catch(async error => {
         state.input.signal.throwIfAborted()
-        if (error instanceof MemorySnapshotStale) throw error
+        if (error instanceof MemorySnapshotStale || error instanceof MemoryOwnerChanged) throw error
         await this.deferMemory(state)
         requireRebuild()
       })

@@ -68,6 +68,7 @@ import type { SkillDiscoverySummary, SkillDiscoveryMode } from '../skills/types.
 import { canonicalDirectory } from '../repository/detect-root.js';
 import { initializeTaskCompletion, type CompletionMode } from './task-completion.js';
 import { codingWorkRequested } from './coding-workflow/intent.js';
+import { resolveNativeIntakeTarget } from './intake-target.js';
 import { initializeCodingWorkflowInTransaction } from './coding-workflow/store.js';
 import { prepareEmbeddingSearchRuntime } from '../embedding/runtime.js';
 import type { EmbeddingRuntime } from '../embedding/types.js';
@@ -885,7 +886,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
   const hints = input.profileHints ?? {};
   const profileHints = {
     taskType: hints.taskType ?? null,
-    target: hints.target ?? null,
+    target: resolveNativeIntakeTarget(hints.target, executionContext.canonicalCwd, input.sessionOwnership ? input.requestIntent : undefined),
     expected: hints.expected ?? null,
     constraints: hints.constraints ?? null,
   };

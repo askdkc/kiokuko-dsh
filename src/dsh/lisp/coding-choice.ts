@@ -6,7 +6,7 @@ import { LISP_CODING_SERVICE } from '../lisp-service-key.js'
 import { LispCodingCancelled, normalizeLispCodingAnswer } from '../coding-question.js'
 export type { LispCodingQuestionResult } from '../coding-question.js'
 import { codingIntent } from '../coding-workflow/intent.js'
-import type { RequestIntentDecision } from '../decisions/request-intent.js'
+import { requestIntentIsUnresolved, requestIntentTaskType, type RequestIntentDecision } from '../decisions/request-intent.js'
 
 export { LISP_CODING_SERVICE }
 export interface LispCodingInput {
@@ -48,7 +48,9 @@ export function createLispCodingChoice(input: {
   const taskChoices = new WeakMap<object, string>()
   const prepare = async (request: LispCodingInput): Promise<LispCodingResult> => {
     request.signal.throwIfAborted()
-    let taskType = request.taskType ?? (conversations.has(request.agent) ? 'chat' : null)
+    let taskType = request.taskType
+      ?? (!requestIntentIsUnresolved(request.requestIntent) ? requestIntentTaskType(request.requestIntent) : undefined)
+      ?? (conversations.has(request.agent) ? 'chat' : null)
     if (taskType === null) {
       if (!input.questions) throw new ExecutionSelectionPending()
       taskType = normalizeTaskType(await createDshIntakeAnswerer(input.questions).ask({

@@ -4,7 +4,7 @@ import type { ToolExposureContext } from '../tool-exposure-diagnostics.js'
 import { failureDiagnostic } from '../failure-diagnostic.js'
 import type { NativeWorkerRouting } from '../native-worker-routing.js'
 import { isNativeSubagent } from '../native-subagent.js'
-import { MemoryRequestFence, MemorySnapshotStale } from '../memory-request-fence.js'
+import { MemoryRequestFence, MemorySnapshotStale, type MemoryDispatchGuard } from '../memory-request-fence.js'
 import {observeCorrectionInput} from '../correction-context.js'
 import {recordCorrectionObservation} from '../correction-decision.js'
 import { assertMemoryOwner } from '../memory-owner.js'
@@ -28,7 +28,7 @@ import { projectToolsForLean, projectToolsForMinimal, resolveToolExposureMode, p
 import type { NativeModelCatalog } from '../native-model-catalog.js'
 import type { DshUserQuestionAgent } from '../user-interaction.js'
 import { KiokukoError } from '../../errors.js'
-import { filterExplainedMemory, retiredExplanationCalls, pruneExplainedMemorySurface, currentRequestMemory, pruneDshMemorySurface, filterRequestMemory } from '../request-memory.js'
+import { filterExplainedMemory, retiredExplanationCalls, pruneExplainedMemorySurface, currentRequestMemory, pruneDshMemorySurface, reconcileDshMemorySurface, filterRequestMemory } from '../request-memory.js'
 import type { DshNativePreStepPayload } from '../composition.js'
 import type { DshCoreRuntime } from '../core-runtime.js'
 import type { ModelAutoCoordinator } from '../model-auto/coordinator.js'
@@ -384,25 +384,39 @@ export function createRouting({
         return assembly
       },
     })
-    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async () => {
-      await demand?.fence(agent, request)
+    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async function validateMemory(): Promise<void | MemoryDispatchGuard> {
+      const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory)
       const item = agent.session ? currentSession(agent.session.id) : undefined
       if (!demand?.pending(agent) && item && item.prepared.memoryOwner?.kind === 'execution' && !item.closed && item.turn === memoryFence.turn && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
+        const session = agent.session, turn = item.turn, generation = item.prepareGeneration
+        const assertCurrent = () => {
+          if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
+          if (agent.session !== session || currentSession(item.sessionId) !== item || item.closed || item.turn !== turn || item.prepareGeneration !== generation)
+            throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+        }
         let allowed: ReadonlyMap<string,string> = new Map()
         if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.prepared.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
         assertMemoryOwner(item.prepared.memoryOwner, { agentId: agent.id, sessionId: item.sessionId, turn: memoryFence.turn, requestDigest: canonicalContentHash(item.task), runId: item.runId }, 'execution')
-        allowed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+        const readMemory = await runtime.withDatabase(db => () => currentRequestMemory(db, item.prepared))
+        allowed = readMemory()
+        assertCurrent()
+        if (memoryFence.withoutMemory) allowed = new Map()
         if(item.prepared.corrections){
           const receipt=observeCorrectionInput(item.prepared.corrections,allowed,request.messages)
           item.prepared={...item.prepared,corrections:receipt}
           try {await runtime.withDatabase(db=>recordCorrectionObservation(db,receipt))}catch {if(request.signal instanceof AbortSignal)request.signal.throwIfAborted()}
         }
-        const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
+        const readRetired=await runtime.withDatabase(db=>()=>retiredExplanationCalls(db,session!.id))
+        const retired=readRetired()
+        assertCurrent()
         if (JSON.stringify(filterExplainedMemory(request.messages,retired))!==JSON.stringify(request.messages)) {
           pruneExplainedMemorySurface(agent.session!,retired)
           if (item.memoryRebuildAttempts === 0) {
             await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
             item.memoryRebuildAttempts++
+            const refreshed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+            assertCurrent()
+            reconcileDshMemorySurface(agent.session!, refreshed)
           }
           throw new MemorySnapshotStale()
         }
@@ -411,12 +425,26 @@ export function createRouting({
           if (item.memoryRebuildAttempts === 0) {
             await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
             item.memoryRebuildAttempts++
+            const refreshed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+            assertCurrent()
+            reconcileDshMemorySurface(agent.session!, refreshed)
           }
           throw new MemorySnapshotStale()
         }
-        noteScopedMemory(request, allowed, item.prepared.context?.items ?? [])
+        return { check: () => {
+          assertCurrent()
+          const latest = memoryFence.withoutMemory ? new Map<string, string>() : readMemory()
+          if (filterRequestMemory(request.messages, latest).length !== request.messages.length
+            || JSON.stringify(filterExplainedMemory(request.messages, readRetired())) !== JSON.stringify(request.messages)) throw new MemorySnapshotStale()
+          noteScopedMemory(request, latest, item.prepared.context?.items ?? [])
+        }, rebuild: validateMemory }
       }
-    }, next))
+      return conversationGuard
+    }, next, async () => {
+      if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
+      if (request.sessionId !== agent.session?.id) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+      pruneDshMemorySurface(agent.session!, new Map())
+    }, request.signal instanceof AbortSignal ? request.signal : undefined))
     routingDisposers.set(agent, () => { nativeToolSurface?.dispose(); releaseToolSurfaceRecording(); disposeRouting(); disposeMemory(); disposeMemoryFence(); disposeRetry(); disposeClaim() })
   }
   const routingCreatedDisposer = onNativeEvent(ctx, 'agent/created', (event: { agent: RoutableAgent }) => {

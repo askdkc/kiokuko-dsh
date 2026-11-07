@@ -1,4 +1,6 @@
 import { nativeRequestProposals } from '../request-proposals.js'
+import { readTaskCorrections } from '../correction-context.js'
+import { timeConstraintForRequest } from '../../memory/retrieval-contracts.js'
 import { isNativeSubagent } from '../native-subagent.js'
 import {
   recordDiagnosticAdmission,
@@ -1399,15 +1401,33 @@ export function createAdmission({
     item: TurnRecord,
     signal: AbortSignal,
   ): Promise<void> => {
-    signal.throwIfAborted()
+    const nativeSession = item.nativeSession, prepared = item.prepared
+    const assertCurrent = () => {
+      signal.throwIfAborted()
+      if (currentSession(item.sessionId) !== item || item.closed || item.nativeSession !== nativeSession
+        || (item.nativeAgent as { session?: object } | undefined)?.session !== nativeSession || item.prepared !== prepared)
+        throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+    }
+    assertCurrent()
+    const selected = await runtime.withDatabase(async db => {
+      if (item.authority) authorizeTaskLease(db, item.authority)
+      const timeConstraint = memoryRetrievalConfig.mode === 'off' ? undefined : timeConstraintForRequest(item.task, memoryRetrievalConfig, Date.now())
+      const selected = await readTaskCorrections(db, { project: prepared.project, runId: item.runId, task: item.task,
+        profile: prepared.intake.profile, signal, decisions,
+        runtime: { memoryRetrieval: memoryRetrievalConfig, ...(timeConstraint ? { timeConstraint } : {}) } })
+      assertCurrent()
+      if (item.authority) authorizeTaskLease(db, item.authority)
+      return selected
+    })
+    assertCurrent()
+    const { deliveryEmpty: _previousEmpty, ...policy } = prepared.memoryPolicy
     item.prepared = {
       ...item.prepared,
-      context: null,
+      ...selected,
       memoryPolicy: {
-        memoryReasoningRequired: false,
-        contextWithheld: false,
-        withheldReason: null,
-        deliveryEmpty: true,
+        ...policy,
+        memoryReasoningRequired: selected.context !== null,
+        ...(selected.context === null ? { deliveryEmpty: true as const } : {}),
       },
     }
   }
@@ -1478,6 +1498,8 @@ export function createAdmission({
           expectedGeneration: task.generation,
           capabilities: capabilityEntries,
           signal: event.signal,
+          decisions, llm, requestId: dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn }),
+          requestIntent: event.requestIntent, evidence: [event.task],
           answerer: userQuestions
             ? createDshIntakeAnswerer(userQuestions)
             : undefined,

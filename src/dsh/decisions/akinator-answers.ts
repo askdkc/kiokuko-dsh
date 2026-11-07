@@ -13,7 +13,7 @@ export async function answerAkinatorQuestion(
   workspaceDirectory?: string, mainModel?: AkinatorExpectedModel,
 ): Promise<AkinatorAnswer> {
   if (question.id === 'expected') {
-    const expected = mainModel && await inferAkinatorExpected(mainModel, task, signal)
+    const expected = mainModel && await inferAkinatorExpected(mainModel, task, signal, evidence)
     return expected === undefined ? { status: 'ask' } : { status: 'answered', value: expected, source: 'main-model' }
   }
   if (!service || (await service.bind(requestId, signal)).mode === 'off') return { status: 'disabled' }

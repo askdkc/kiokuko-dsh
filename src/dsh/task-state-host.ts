@@ -283,7 +283,8 @@ export class DshTaskWorkflow {
       task: request,
       cwd: owner.repositoryRoot,
       deferTaskTypeInference: true,
-      profileHints: { taskType },
+      // The explicit create operation is already bound to this native session.
+      profileHints: { taskType, target: taskType === 'chat' ? null : owner.repositoryRoot },
     });
     let intake = { task: request, profile: grounded.profileHints, questionCount: 0 };
     let evaluation = evaluateProfile(intake.profile, intake.questionCount);

@@ -76,6 +76,23 @@ test('explicit command creates every task type in its existing ledger/intake and
   } finally { await f.cleanup() }
 })
 
+test('explicit task creation does not ask which repository was already selected', async () => {
+  const f = await fixture(), asked: string[] = []
+  const service = new DshTaskWorkflow({ ...f.options, questions: { async ask(request) {
+    const question = request.questions[0]
+    asked.push(question.id)
+    assert.equal(question.id, 'expected')
+    return { answers: [{ id: question.id, selected: [], custom: '原因と該当箇所が分かる。' }] }
+  } } })
+  try {
+    const created = await service.operate(f.agent, { operation: 'create', taskType: 'research', request: 'このリポジトリの不具合を調査する。' }, signal())
+    assert.equal(created.state, 'ToDo')
+    assert.deepEqual(asked, ['expected'])
+    const profile = await f.runtime.withDatabase(db => JSON.parse(db.prepare('SELECT profile_json FROM akinator_sessions').get<{profile_json: string}>()!.profile_json))
+    assert.equal(profile.target, f.root)
+  } finally { service.dispose(); await f.cleanup() }
+})
+
 test('structured stop returns durable pending state without awaiting its own native turn; evidence and CAS remain authoritative', async () => {
   const f = await fixture()
   let release!: () => void

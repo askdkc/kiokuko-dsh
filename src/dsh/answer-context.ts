@@ -1,5 +1,5 @@
 import { noteScopedMemory } from './memory-sidebar.js'
-import { MemorySnapshotStale } from './memory-request-fence.js'
+import { MemorySnapshotStale, type MemoryDispatchGuard } from './memory-request-fence.js'
 import { retainedEvents } from './context-projection.js'
 import type { TaskType } from '../akinator/types.js'
 import { randomUUID } from 'node:crypto'
@@ -11,12 +11,13 @@ import { captureProjectManifestSnapshot, resolveProjectFingerprint } from '../re
 import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as RetrievalConfig } from '../memory/retrieval-contracts.js'
 import type { DshCoreRuntime } from './core-runtime.js'
 import type { DemandAgent, DemandInput } from './on-demand-intake.js'
-import { currentContextMemory, filterExplainedMemory, filterRequestMemory, pruneDshMemorySurface, pruneExplainedMemorySurface, retiredExplanationCalls } from './request-memory.js'
+import { currentContextMemory, filterExplainedMemory, filterRequestMemory, pruneDshMemorySurface, pruneExplainedMemorySurface, reconcileDshMemorySurface, retiredExplanationCalls } from './request-memory.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from './plugin-source.js'
-import { assertMemoryOwner, createMemoryOwner, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
+import { assertMemoryOwner, createMemoryOwner, MemoryOwnerChanged, type MemoryOwnerIdentity, type MemoryOwnerKind } from './memory-owner.js'
 
 interface AnswerContext {
   readonly agent: DemandAgent
+  readonly session: NonNullable<DemandAgent['session']>
   readonly cwd: string
   readonly turn: number
   readonly task: string
@@ -45,6 +46,7 @@ export class DshAnswerContext {
   async prepare(input: DemandInput, task: string, taskType: TaskType | null = null, requestedOwner: MemoryOwnerKind = 'conversation'): Promise<void> {
     const session = input.agent.session
     if (!session) throw new Error('Answer context requires its exact native session')
+    const previous = this.#contexts.get(session.id)
     input.signal.throwIfAborted()
     const cwd = this.options.cwd?.(input.agent) ?? this.options.root
     const instructions = await this.options.instructions?.(input, task, taskType) ?? []
@@ -72,47 +74,66 @@ export class DshAnswerContext {
         context = result.value
       }
       input.signal.throwIfAborted()
-      const previous = this.#contexts.get(session.id)
       const sameOwner = previous?.agent === input.agent && previous.turn === input.turn
         && previous.owner.kind === owner.kind && previous.owner.requestDigest === owner.requestDigest
-      return { agent: input.agent, cwd, turn: input.turn, task, project, context, instructions,
+      return { agent: input.agent, session, cwd, turn: input.turn, task, project, context, instructions,
         instructionId: previous && sameOwner && canonicalContentHash(previous.instructions) === canonicalContentHash(instructions) ? previous.instructionId : randomUUID(),
         owner, taskType,
         rebuildAttempts: sameOwner ? previous.rebuildAttempts : 0 }
     })
     input.signal.throwIfAborted()
+    if (input.agent.session !== session || this.#contexts.get(session.id) !== previous
+      || (this.options.cwd?.(input.agent) ?? this.options.root) !== cwd) throw new MemoryOwnerChanged()
     this.#contexts.set(session.id, value)
   }
-  private async current(input: DemandInput, identity: MemoryOwnerIdentity): Promise<{ allowed: ReadonlyMap<string, string>; retired: ReadonlySet<string> }> {
+  private assertCurrent(input: DemandInput, identity: MemoryOwnerIdentity, expected?: AnswerContext): AnswerContext {
+    input.signal.throwIfAborted()
     const agent = input.agent, session = agent.session
-    if (!session) throw new Error('Answer context native session is unavailable')
+    if (!session) throw new MemoryOwnerChanged('Answer context native session is unavailable')
     const state = this.#contexts.get(session.id)
-    if (!state || state.agent !== agent || state.agent.session !== session) throw new Error('Answer context native identity changed')
-    if (input.turn !== state.turn) throw new Error('Answer context turn changed')
-    if ((this.options.cwd?.(agent) ?? this.options.root) !== state.cwd) throw new Error('Answer context native workspace changed')
+    if (!state || expected && state !== expected || state.agent !== agent || state.session !== session) throw new MemoryOwnerChanged('Answer context native identity changed')
+    if (input.turn !== state.turn) throw new MemoryOwnerChanged('Answer context turn changed')
+    if ((this.options.cwd?.(agent) ?? this.options.root) !== state.cwd) throw new MemoryOwnerChanged('Answer context native workspace changed')
     assertMemoryOwner(state.owner, identity, state.owner.kind)
-    if (state.owner.kind === 'none') return { allowed: new Map(), retired: await this.runtime.withDatabase(db => retiredExplanationCalls(db, session.id)) }
-    return this.runtime.withDatabase(async db => {
+    return state
+  }
+  private async current(input: DemandInput, identity: MemoryOwnerIdentity) {
+    const state = this.assertCurrent(input, identity), session = state.session
+    const value = await this.runtime.withDatabase(async db => {
       const currentProject = await resolveProjectWorkspaceReadOnly(db, state.cwd, { allowDirectory: true })
       if (currentProject?.workspace !== state.project.workspace || currentProject.repositoryId !== state.project.repositoryId
-        || currentProject.repositoryRoot !== state.project.repositoryRoot) throw new Error('Answer context workspace changed')
-      const items = state.context?.items ?? []
-      const fingerprint = items.some(item => item.origin !== 'project')
-        ? resolveProjectFingerprint(db, currentProject, captureProjectManifestSnapshot(currentProject), { readOnly: true }) : undefined
-      return { allowed: currentContextMemory(db, state.project.workspace, items, fingerprint, state.context ?? undefined), retired: retiredExplanationCalls(db, session.id) }
+        || currentProject.repositoryRoot !== state.project.repositoryRoot) throw new MemoryOwnerChanged('Answer context workspace changed')
+      const read = () => {
+        this.assertCurrent(input, identity, state)
+        const items = state.context?.items ?? []
+        const fingerprint = items.some(item => item.origin !== 'project')
+          ? resolveProjectFingerprint(db, currentProject, captureProjectManifestSnapshot(currentProject), { readOnly: true }) : undefined
+        return { allowed: state.owner.kind === 'none' ? new Map<string, string>() : currentContextMemory(db, state.project.workspace, items, fingerprint, state.context ?? undefined),
+          retired: retiredExplanationCalls(db, session.id) }
+      }
+      return { ...read(), read }
     })
+    this.assertCurrent(input, identity, state)
+    return value
   }
   async beforeRequest(input: DemandInput, identity: MemoryOwnerIdentity): Promise<void> {
     const agent = input.agent, session = agent.session
     if (!session || !this.#contexts.has(session.id)) return
-    const { allowed, retired } = await this.current(input, identity)
+    let { allowed, retired } = await this.current(input, identity)
+    const state = this.assertCurrent(input, identity)
+    if (state.owner.kind === 'conversation' && state.rebuildAttempts === 0
+      && state.context?.items.some(item => !allowed.has(`memory:memory:${item.entryId}`))) {
+      await this.rebuildConversation(input, state, identity)
+      ;({ allowed, retired } = await this.current(input, identity))
+      reconcileDshMemorySurface(session, allowed)
+    }
     pruneDshMemorySurface(session, allowed)
     pruneExplainedMemorySurface(session, retired)
   }
   async project(input: DemandInput, messages: readonly unknown[], identity: MemoryOwnerIdentity): Promise<readonly unknown[]> {
     const state = this.#contexts.get(input.agent.session!.id)
-    if (state?.turn !== input.turn) throw new Error('Answer context turn changed')
-    if (canonicalContentHash(humanTask(input.messages)) !== identity.requestDigest) throw new Error('Answer context request changed')
+    if (state?.turn !== input.turn) throw new MemoryOwnerChanged('Answer context turn changed')
+    if (canonicalContentHash(humanTask(input.messages)) !== identity.requestDigest) throw new MemoryOwnerChanged('Answer context request changed')
     input.signal.throwIfAborted()
     const { allowed, retired } = await this.current(input, identity)
     pruneDshMemorySurface(input.agent.session!, allowed)
@@ -144,7 +165,7 @@ export class DshAnswerContext {
     const context = await this.runtime.withDatabase(async db => {
       const project = await resolveProjectWorkspaceReadOnly(db, state.cwd, { allowDirectory: true })
       if (!project || project.workspace !== state.project.workspace || project.repositoryId !== state.project.repositoryId
-        || project.repositoryRoot !== state.project.repositoryRoot) throw new KiokukoError('CONFLICT', 'Answer context workspace changed')
+        || project.repositoryRoot !== state.project.repositoryRoot) throw new MemoryOwnerChanged('Answer context workspace changed')
       const memoryRetrieval = MemoryRetrievalConfig.parse(this.options.memoryRetrieval)
       const timeConstraint = timeConstraintForRequest(humanTask(input.messages), memoryRetrieval, Date.now())
       const result = await queryScopedContextGated(db, {
@@ -155,26 +176,40 @@ export class DshAnswerContext {
       input.signal.throwIfAborted()
       return result.value
     })
+    this.assertCurrent(input, identity, state)
     const owner = createMemoryOwner('conversation', identity)
     const updated = { ...state, context, owner, rebuildAttempts: state.rebuildAttempts + 1 }
     this.#contexts.set(input.agent.session!.id, updated)
   }
-  async fence(input: DemandInput, request: { sessionId?: string; purpose?: string; messages?: readonly unknown[] }, identity: MemoryOwnerIdentity): Promise<void> {
+  async fence(input: DemandInput, request: { sessionId?: string; purpose?: string; messages?: readonly unknown[] }, identity: MemoryOwnerIdentity, omitMemory = false): Promise<void | MemoryDispatchGuard> {
     const agent = input.agent
     if (request.sessionId !== agent.session?.id || request.purpose === 'compaction' || !Array.isArray(request.messages)) return
-    if (canonicalContentHash(humanTask(input.messages)) !== identity.requestDigest) throw new KiokukoError('CONFLICT', 'memory_owner_request_changed')
-    let { allowed, retired } = await this.current(input, identity)
+    if (canonicalContentHash(humanTask(input.messages)) !== identity.requestDigest) throw new MemoryOwnerChanged('memory_owner_request_changed')
+    let { allowed, retired, read } = await this.current(input, identity)
+    input.signal.throwIfAborted()
+    if (omitMemory) allowed = new Map()
     const changed = () => filterRequestMemory(request.messages!, allowed).length !== request.messages!.length
       || JSON.stringify(filterExplainedMemory(request.messages!, retired)) !== JSON.stringify(request.messages)
     if (!changed()) {
-      noteScopedMemory(request, allowed, this.#contexts.get(agent.session!.id)?.context?.items ?? [])
-      return
+      return {
+        check: () => {
+          const latest = read()
+          allowed = omitMemory ? new Map() : latest.allowed; retired = latest.retired
+          if (changed()) throw new MemorySnapshotStale()
+          noteScopedMemory(request, allowed, this.#contexts.get(agent.session!.id)?.context?.items ?? [])
+        },
+        rebuild: () => this.fence(input, request, identity, omitMemory),
+      }
     }
     pruneDshMemorySurface(agent.session!, allowed)
     pruneExplainedMemorySurface(agent.session!, retired)
     const state = this.#contexts.get(agent.session!.id)!
-    if (state.owner.kind === 'conversation' && state.rebuildAttempts === 0) {
+    if (!omitMemory && state.owner.kind === 'conversation' && state.rebuildAttempts === 0) {
       await this.rebuildConversation(input, state, identity)
+      const refreshed = await this.current(input, identity)
+      input.signal.throwIfAborted()
+      reconcileDshMemorySurface(agent.session!, refreshed.allowed)
+      pruneExplainedMemorySurface(agent.session!, refreshed.retired)
       throw new MemorySnapshotStale()
     }
     throw new MemorySnapshotStale()

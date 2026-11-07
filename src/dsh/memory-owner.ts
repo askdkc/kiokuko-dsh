@@ -4,6 +4,11 @@ import type { RequestIntentDecision } from './decisions/request-intent.js'
 
 export type MemoryOwnerKind = 'conversation' | 'execution' | 'none'
 
+/** Identity failures are never optional-memory outages. */
+export class MemoryOwnerChanged extends KiokukoError {
+  constructor(message = 'memory_owner_changed') { super('CONFLICT', message) }
+}
+
 export interface MemoryOwnerBinding {
   readonly kind: MemoryOwnerKind
   readonly agentId: string
@@ -47,6 +52,6 @@ export function assertMemoryOwner(owner: MemoryOwnerBinding, identity: MemoryOwn
   if (expectedKind !== undefined && owner.kind !== expectedKind
     || owner.agentId !== identity.agentId || owner.sessionId !== identity.sessionId || owner.turn !== identity.turn
     || owner.requestDigest !== identity.requestDigest || owner.runId !== identity.runId) {
-    throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+    throw new MemoryOwnerChanged()
   }
 }

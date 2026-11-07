@@ -6,6 +6,18 @@ import { DecisionService } from '../../../../src/dsh/decisions/service.js'
 import { createLispCodingChoice } from '../../../../src/dsh/lisp/coding-choice.js'
 import { DecisionError } from '../../../../src/dsh/decisions/contracts.js'
 import { resolveGroundedIntakeProfile } from '../../../../src/dsh/intake-profile-resolver.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentReferenceIds } from '../../../../src/dsh/decisions/request-intent.js'
+
+test('Lisp preparation reuses an already interpreted verification action instead of asking the task category', async () => {
+  const task = 'この実装の動作を確認してください。'
+  const context = createRequestIntentContext({ task, workspaceDirectory: '/repo', messageRefs: [{ id: 'current-user', digest: 'c'.repeat(64) }] })!
+  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'verify', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  const coding = createLispCodingChoice({ enabled: () => false, decided: async () => false,
+    questions: { async ask() { assert.fail('The requested verification action is already known') } },
+    async enable() { assert.fail('Verification does not select a coding mode') }, async decline() {} })
+  assert.deepEqual(await coding.prepare({ agent: { id: 'agent' }, turn: 1, task, taskType: null, requestIntent,
+    signal: new AbortController().signal }), { taskType: 'review' })
+})
 
 for (const task of ['検索機能を実装して', 'ログイン画面を追加して', 'Build a compiler', 'Implement search', 'Create a login component', 'Could you build a compiler?', '検索機能を実装してくれますか？']) test(`explicit single implementation reaches classification: ${task}`, () => {
   const batch = buildAkinatorClassificationBatch(task)

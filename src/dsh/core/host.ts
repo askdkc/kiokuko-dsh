@@ -9,6 +9,7 @@ import { hasRequestInput } from '../request-input.js'
 import {
   MemoryRequestFence,
   MemorySnapshotStale,
+  type MemoryDispatchGuard,
 } from '../memory-request-fence.js'
 import { retainedEvents } from '../context-projection.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
@@ -49,7 +50,7 @@ import {
   currentContextMemory,
   filterRequestMemory,
   pruneDshMemorySurface,
-  rebuildRequestMemory,
+  reconcileDshMemorySurface,
 } from '../request-memory.js'
 import { capabilityCatalogDigest } from '../../akinator/capability-binding.js'
 import { memoryApplicationMode } from '../../memory/application.js'
@@ -2115,8 +2116,8 @@ export async function mountCore(
         const fence = agent.ctx.on(
           'llm/stream',
           (request: any, next: () => AsyncIterable<unknown>) =>
-            memoryFence.stream(async () => {
-              await demand?.fence(agent, request)
+            memoryFence.stream(async function validateMemory(): Promise<void | MemoryDispatchGuard> {
+              const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory)
               const current = active.get(agent.session.id)
               if (
                 !demand?.pending(agent) &&
@@ -2126,6 +2127,12 @@ export async function mountCore(
                 request.sessionId === agent.session.id &&
                 request.purpose !== 'compaction'
               ) {
+                const session = agent.session, task = current.task
+                const assertCurrent = () => {
+                  if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
+                  if (agent.session !== session || active.get(session.id) !== current || current.turn !== memoryFence.turn)
+                    throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+                }
                 if (current.task.memoryOwner?.kind !== 'execution')
                   throw new KiokukoError('CONFLICT', 'memory_owner_changed')
                 assertMemoryOwner(
@@ -2139,7 +2146,7 @@ export async function mountCore(
                   },
                   'execution',
                 )
-                const allowed = await runtime.withDatabase((db) =>
+                const readMemory = await runtime.withDatabase((db) => () =>
                   currentContextMemory(
                     db,
                     current.task.workspace,
@@ -2148,6 +2155,9 @@ export async function mountCore(
                     current.task.context ?? undefined,
                   ),
                 )
+                let allowed = readMemory()
+                assertCurrent()
+                if (memoryFence.withoutMemory) allowed = new Map()
                 if (current.task.corrections) {
                   const receipt = observeCorrectionInput(
                     current.task.corrections,
@@ -2164,9 +2174,11 @@ export async function mountCore(
                       request.signal.throwIfAborted()
                   }
                 }
-                const retired = await runtime.withDatabase((db) =>
-                  retiredExplanationCalls(db, agent.session.id),
+                const readRetired = await runtime.withDatabase((db) => () =>
+                  retiredExplanationCalls(db, session.id),
                 )
+                const retired = readRetired()
+                assertCurrent()
                 if (
                   filterRequestMemory(request.messages, allowed).length !==
                     request.messages.length ||
@@ -2233,14 +2245,32 @@ export async function mountCore(
                       }
                     },
                   )
+                  assertCurrent()
+                  if (current.task.runId !== task.runId) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
                   current.task = { ...current.task, ...refreshed }
                   current.contextDelivered = false
                   current.memoryRebuildAttempts++
+                  const refreshedAllowed = await runtime.withDatabase(db => currentContextMemory(db,
+                    current.task.workspace, current.task.context?.items ?? [], undefined, current.task.context ?? undefined))
+                  requestSignal.throwIfAborted()
+                  assertCurrent()
+                  reconcileDshMemorySurface(agent.session, refreshedAllowed)
                   throw new MemorySnapshotStale()
                 }
-                noteScopedMemory(request, allowed, current.task.context?.items ?? [])
+                return { check: () => {
+                  assertCurrent()
+                  const latest = memoryFence.withoutMemory ? new Map<string, string>() : readMemory()
+                  if (filterRequestMemory(request.messages, latest).length !== request.messages.length
+                    || JSON.stringify(filterExplainedMemory(request.messages, readRetired())) !== JSON.stringify(request.messages)) throw new MemorySnapshotStale()
+                  noteScopedMemory(request, latest, current.task.context?.items ?? [])
+                }, rebuild: validateMemory }
               }
-            }, next),
+              return conversationGuard
+            }, next, async () => {
+              if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
+              if (request.sessionId !== agent.session.id) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+              pruneDshMemorySurface(agent.session, new Map())
+            }, request.signal instanceof AbortSignal ? request.signal : undefined),
         )
         routedAgents.set(agent, () => {
           fence()

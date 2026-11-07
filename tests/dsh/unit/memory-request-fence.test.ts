@@ -41,3 +41,55 @@ test('validation failures stop before dispatch, provider failures are never memo
   await assert.rejects(collect(fence.stream(async()=>{},provider)),MemorySnapshotStale)
   assert.equal(sent,1)
 })
+
+test('a second race performs one memory-free rebuild and still validates before dispatch', async () => {
+  const fence = new MemoryRequestFence(), signal = new AbortController().signal
+  fence.begin({ turn: 1, step: 1 })
+  let sent = 0, omitted = 0
+  const provider = async function* () { sent++; yield 'response' }
+  const validate = async () => { if (!fence.withoutMemory) throw new MemorySnapshotStale() }
+  for (const code of ['DSH_MEMORY_SNAPSHOT_STALE', 'DSH_MEMORY_CONTEXT_OMITTED']) {
+    const [chunk] = await collect(fence.stream(validate, provider, async () => { omitted++ }))
+    assert.equal(chunk.reason.failure.code, code)
+    assert.deepEqual(fence.retry({ turn: 1, step: 1, signal, failure: structuredClone(chunk.reason.failure) }), { kind: 'retry' })
+  }
+  assert.equal(sent, 0); assert.equal(omitted, 1)
+  await assert.rejects(collect(fence.stream(async () => { throw new Error('identity changed') }, provider)), /identity changed/)
+  assert.equal(sent, 0)
+  assert.deepEqual(await collect(fence.stream(validate, provider)), ['response'])
+  assert.equal(sent, 1)
+  fence.begin({ turn: 1, step: 2 })
+  assert.equal(fence.withoutMemory, false, 'a later step can use memory again')
+})
+
+test('failed omission and partial provider output never enter another memory retry', async () => {
+  const fence = new MemoryRequestFence(), signal = new AbortController().signal
+  fence.begin({ turn: 1, step: 1 })
+  const invalid = async () => { throw new MemorySnapshotStale() }
+  const [first] = await collect(fence.stream(invalid, async function* () {}))
+  fence.retry({ turn: 1, step: 1, signal, failure: first.reason.failure })
+  await assert.rejects(collect(fence.stream(invalid, async function* () { assert.fail('must not dispatch') }, async () => { throw new Error('surface unavailable') })), /surface unavailable/)
+  assert.equal(fence.withoutMemory, false)
+  let dispatched = 0
+  const partial = async function* () { dispatched++; yield 'partial response'; throw new MemorySnapshotStale() }
+  await assert.rejects(collect(fence.stream(async () => {}, partial)), MemorySnapshotStale)
+  assert.equal(dispatched, 1)
+  assert.equal(fence.retry({ turn: 1, step: 1, signal, failure: { code: 'DSH_MEMORY_SNAPSHOT_STALE' } }), undefined)
+})
+
+test('native Stop during validation or omission prevents dispatch and further retries', async () => {
+  for (const phase of ['validation', 'omission']) {
+    const controller = new AbortController(), fence = new MemoryRequestFence()
+    fence.begin({ turn: 1, step: 1, signal: controller.signal })
+    const provider = async function* () { assert.fail('Stop must prevent provider dispatch') }
+    if (phase === 'validation') {
+      await assert.rejects(collect(fence.stream(async () => { await Promise.resolve(); controller.abort(new Error('stopped')) }, provider, undefined, controller.signal)), /stopped/)
+    } else {
+      const invalid = async () => { throw new MemorySnapshotStale() }
+      const [first] = await collect(fence.stream(invalid, provider))
+      fence.retry({ turn: 1, step: 1, signal: controller.signal, failure: first.reason.failure })
+      await assert.rejects(collect(fence.stream(invalid, provider, async () => { await Promise.resolve(); controller.abort(new Error('stopped')) }, controller.signal)), /stopped/)
+      assert.equal(fence.withoutMemory, false)
+    }
+  }
+})

@@ -90,6 +90,18 @@ export function rebuildRequestMemory(messages: readonly unknown[], allowed: Read
   return [...retained, ...guidance, ...snapshots]
 }
 
+/** Commit a refreshed projection to the surface that native retries actually read. */
+export function reconcileDshMemorySurface(session: Parameters<typeof pruneDshMemorySurface>[0], allowed: ReadonlyMap<string, string>): void {
+  pruneDshMemorySurface(session, allowed)
+  const messages = retainedEvents(session).filter(event => event.type === 'user/message').map(event => event.data)
+  const retained = new Set(messages)
+  for (const message of rebuildRequestMemory(messages, allowed)) {
+    if (retained.has(message)) continue
+    if (typeof session.append !== 'function') throw new Error('Native memory rebuild requires the Session append API')
+    session.append('user/message', message, { surfaceOp: 'append' })
+  }
+}
+
 /** DSH builds frozen requests directly from this surface. Retire only owned
  * memory nodes using its append-only replacement API; preserve the audit log. */
 export function pruneDshMemorySurface(session: Parameters<typeof retainedEvents>[0] & { append?: Function }, allowed: ReadonlyMap<string,string>): void {

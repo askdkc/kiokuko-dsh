@@ -10,6 +10,7 @@ import { authorizeTaskLease, captureTaskLease, readTaskSnapshot, transitionTask 
 import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
 import { claimExecutionOwner } from '../../../src/dsh/orchestration/execution-owner.js'
 import { withImmediateTransaction } from '../../../src/db/transaction.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 
 async function fixture() {
   const root = realpathSync(await mkdtemp(join(tmpdir(), 'kiokuko-core-tasks-')))
@@ -29,6 +30,20 @@ async function fixture() {
     async restart() { await runtime.close(); runtime = createRuntime(); await runtime.start() },
     async cleanup() { await runtime.close(); await rm(root, { recursive: true, force: true }) } }
 }
+
+test('Core preparation reuses the selected workspace for an interpreted request', async () => {
+  const f = await fixture()
+  const task = 'READMEの説明漏れを修正してください。'
+  const context = createRequestIntentContext({ task, workspaceDirectory: f.input.cwd, messageRefs: [{ id: 'current-user', digest: 'a'.repeat(64) }] })!
+  const requestIntent = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'document', evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  try {
+    const prepared = await new CoreTasks(f.runtime, { async ask(question) { assert.fail(`Already known: ${question.id}`) } }).prepare({ ...f.input, task,
+      requestIntent, requestIntentContext: context, profileHints: { expected: 'READMEに実装済みの機能が説明されている。' } })
+    assert.equal(prepared.admitted, true)
+    assert.equal(prepared.profile.target, f.input.cwd)
+    assert.equal(prepared.profile.taskType, 'writing')
+  } finally { await f.cleanup() }
+})
 
 test('task finalization preserves identity, terminal outcomes and a later request owner', async () => {
   const f = await fixture(), tasks = new CoreTasks(f.runtime)

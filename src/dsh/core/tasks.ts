@@ -16,6 +16,7 @@ import { DshRunIntakeService } from '../run-intake-service.js'
 import { getAkinatorStateService } from '../../akinator/service.js'
 import { hasBlockingRequiredCapability, resolveCapabilities, deriveMemoryPolicy } from '../../akinator/capabilities.js'
 import { resolveGroundedIntakeProfile } from '../intake-profile-resolver.js'
+import { resolveNativeIntakeTarget } from '../intake-target.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
 import { checkpointDshMemory, type ScopedCheckpointInput, type ScopedRecallResult } from '../../memory/scoped-memory.js'
 import { LedgerStore } from '../../ledger/store.js'
@@ -165,6 +166,7 @@ export class CoreTasks {
       const { state: intakeState, link } = await continueTaskIntake(db, { ...taskIdentity, workspace: project.workspace,
         expectedRevision: state.revision, expectedGeneration: state.generation, capabilities: input.capabilities,
         decisions: this.decisions, requestId: input.requestId, llm: this.llm,
+        requestIntent: intent, evidence: [input.task],
         signal: input.signal, answerer: this.answerer, agent: input.agent, validateCapabilities: input.validateCapabilities })
       const intake = intakeState.session
       const admitted = intakeState.status !== 'needs_answer' && taskCanExecute(readTaskSnapshot(db, taskIdentity))
@@ -231,7 +233,8 @@ export class CoreTasks {
       (!input.profileHints?.taskType &&
         (input.deferTaskTypeInference || classification.deferInference))
     const grounded = resolveGroundedIntakeProfile({ task: input.task, cwd, deferTaskTypeInference,
-      profileHints: { ...input.profileHints, ...(classification.taskType ? { taskType: classification.taskType } : {}) } })
+      profileHints: { ...input.profileHints, target: resolveNativeIntakeTarget(input.profileHints?.target, cwd, requestIntent),
+        ...(classification.taskType ? { taskType: classification.taskType } : {}) } })
     return this.runtime.withDatabase(async db => {
       for (const id of legacyModuleRequirements(db, input.sessionId)) {
         if (!this.moduleIds.includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
