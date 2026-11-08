@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
 import { TASK_WORKFLOW_SERVICE, type DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
 import { readTaskSnapshot, taskCanExecute, type TaskSnapshot } from '../../../src/dsh/task-state.js'
@@ -146,15 +147,16 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           oldRefs = bound.requiredReferences
           return native.toolCallResponse('clarify-preparation', 'prepare_requested_work', { taskType: 'writing' })
         })
-      if (!answeredScenario) responses.push((request: any) => {
+      if (!answeredScenario) responses.push(async (request: any) => {
           const prepared = resultFor(request, 'clarify-preparation')
           assert.equal(prepared.isError, false, resultText(prepared))
           const value = JSON.parse(resultText(prepared))
           assert.equal(value.prepared, false)
-          assert.equal(value.status, answeredScenario ? 'clarification_answer_queued'
-            : scenario === 'stale' ? 'clarification_context_changed' : 'awaiting_clarification')
+          assert.equal(value.status, 'awaiting_clarification')
           assert.equal(asked.length, 1)
           if (scenario === 'stale') {
+            const deadline = Date.now() + 2500
+            while (readCurrent().revision === working!.revision && Date.now() < deadline) await delay(5)
             assert.equal(readCurrent().revision, working!.revision + 1)
             checked = true
             return native.textResponse('The previous question no longer matches current task authority.')
@@ -170,12 +172,20 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           checked = true
           return native.textResponse('Waiting for clarification before making any changes.')
         })
-      if (answeredScenario) responses.push((request: any) => {
+      if (answeredScenario) {
+        const acceptAnswer = async (request: any) => {
         const prepared = resultFor(request, 'clarify-preparation')
         assert.equal(prepared.isError, false, resultText(prepared))
         const value = JSON.parse(resultText(prepared))
-        assert.equal(value.status, 'clarification_answer_queued')
+        assert.equal(value.status, 'awaiting_clarification')
         assert.equal(value.answer, undefined)
+        if (!request.messages.some((message: any) => message.source?.kind === 'user' && JSON.stringify(message.content).includes(clarifiedAnswer))) {
+          const deadline = Date.now() + 2500
+          while (!agent.inbox.nextStep.some((message: any) => JSON.stringify(message.content).includes(clarifiedAnswer)) && Date.now() < deadline) await delay(5)
+          assert.ok(agent.inbox.nextStep.some((message: any) => JSON.stringify(message.content).includes(clarifiedAnswer)))
+          responses.unshift(acceptAnswer)
+          return native.textResponse('The independent inspection is complete. The answer can be used at the next step.')
+        }
         assert.equal(agent.inbox.nextTurn.length, 0, 'the foreground answer is not a next-turn command')
         assert.equal(agent.inbox.nextStep.length, 0, 'the answer is consumed before model generation')
         const bound = boundIntent(request)
@@ -189,7 +199,8 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
           && event.data.source?.kind === 'user' && JSON.stringify(event.data.content).includes(clarifiedAnswer)
           && JSON.stringify(event.data.content).includes(requested)), 'clarification preserves the original request and actual answer as genuine user input')
         return native.toolCallResponse('answered-preparation', 'prepare_requested_work', { taskType: 'writing' })
-      }, (request: any) => {
+        }
+        responses.push(acceptAnswer, (request: any) => {
         const prepared = resultFor(request, 'answered-preparation')
         assert.equal(prepared.isError, false, resultText(prepared)); assert.equal(JSON.parse(resultText(prepared)).prepared, true)
         assert.equal(JSON.parse(resultText(prepared)).requestIntent.changeScope, 'document')
@@ -204,7 +215,8 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         assert.equal(database(db => db.prepare('SELECT run_id FROM dsh_owned_operations').get()!.run_id), working!.runId)
         checked = true
         return native.textResponse('The clarified document update was completed in the same task.')
-      })
+        })
+      }
       agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: firstRequest }] }))
       if (scenario === 'stopped' || scenario === 'stale-stopped' || scenario === 'stale') {
         await Promise.race([questionReady, agent.whenIdle().then(() => { assert.ok(release, `semantic clarification must ask the native user: ${errors.map(String).join('; ')}`) })])

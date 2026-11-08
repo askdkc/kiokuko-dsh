@@ -8,7 +8,7 @@ import { KiokukoError } from '../errors.js'
 import { TASK_TYPES, TERMINAL_RUN_STATUSES, type RunStatus, type TaskType } from '../ledger/types.js'
 import { canonicalContentHash, type JsonValue } from '../serialization/validate.js'
 import { executeIdempotentInTransaction } from './intake-idempotency.js'
-import { assessTaskCompletion } from './task-completion.js'
+import { saveTaskCompletionReceipt } from './task-completion.js'
 
 export const TASK_STATES = ['ToDo', 'Working', 'Pending', 'Done', 'Ignore'] as const
 export type TaskState = typeof TASK_STATES[number]
@@ -179,8 +179,8 @@ export function transitionTask(db: SqliteDatabase, identity: TaskIdentity, raw: 
         WHERE run_id=? AND evidence_ref=? AND generation=? AND kind=? AND verified=1`).get(identity.taskId, ref, current.generation, kind))
       if (input.operation === 'complete' && !proves('verification')) conflict('Completion requires current host-observed verification evidence')
       if (input.operation === 'complete') {
-        const assessment = assessTaskCompletion(db, identity.taskId)
-        if ((assessment.coding || assessment.required > 0) && !assessment.verified)
+        const assessment = saveTaskCompletionReceipt(db, identity.taskId)
+        if ((assessment.evidenceRequired || assessment.coding || assessment.required > 0) && !assessment.verified)
           conflict('Current task completion criteria are not verified')
       }
       if (current.state === 'Working' && ['wait','ignore'].includes(input.operation) && !proves('stopped'))

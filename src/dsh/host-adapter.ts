@@ -1,3 +1,4 @@
+import { clarificationClaims } from './clarification-claims.js'
 import { createToolExposureDiagnostics } from './tool-exposure-diagnostics.js';
 import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
@@ -362,33 +363,6 @@ export function recoveryMessage(
     ],
     source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: "instructions" },
   });
-}
-
-function boundedMessageText(value: unknown): string | undefined {
-  const content = objectRecord(value)?.content;
-  if (!Array.isArray(content)) return undefined;
-  const block = content
-    .map(objectRecord)
-    .find(
-      (candidate) =>
-        candidate?.type === "text" && typeof candidate.text === "string",
-    );
-  return typeof block?.text === "string"
-    ? block.text.slice(0, 2_000)
-    : undefined;
-}
-
-function boundedUtf8Text(value: string, maximumBytes: number): string {
-  if (Buffer.byteLength(value, "utf8") <= maximumBytes) return value;
-  let result = "";
-  let bytes = 0;
-  for (const point of value) {
-    const size = Buffer.byteLength(point, "utf8");
-    if (bytes + size > maximumBytes) break;
-    result += point;
-    bytes += size;
-  }
-  return result;
 }
 
 export function eventContinuationId(data: unknown): string | undefined {
@@ -790,6 +764,7 @@ export function createDshHostAdapter(
     cancelBoundarySession: (sessionId) =>
       boundaryWorker.cancelSession(sessionId),
     isSelectionBlocked: (agent) => routing.isSelectionBlocked(agent),
+    markSelectionPending: (agent) => routing.markSelectionPending(agent),
     closeTurn: (input) => runLifecycle.closeTurn(input),
     capabilityCatalog,
     sessionEventSource,
@@ -854,6 +829,10 @@ export function createDshHostAdapter(
               dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
               [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory,
               { llm, agent: input.agent }),
+            clarificationClaims: clarificationClaims(runtime),
+            stopClarification: async (agent, expected, signal) => taskWorkflow?.operate(agent as any, {
+              operation: 'wait', expected, reason: 'Native Stop while awaiting clarification',
+            }, signal),
             diagnostic: createIntakeDiagnosticSink(runtime),
             recovery: runtime.auxiliaryRecovery,
             assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -1135,7 +1114,7 @@ export function createDshHostAdapter(
         )
       : undefined;
   if (demand) lifecycleMemory.connectIntake(demand);
-  const taskWorkflow =
+  const taskWorkflow: DshTaskWorkflow | undefined =
     demand && agents && sessions && skills?.snapshot && tools?.schemas
       ? new DshTaskWorkflow({
           runtime,
@@ -1561,7 +1540,6 @@ export function createDshHostAdapter(
     sessions,
     skills,
     tools,
-    userQuestions,
     gate,
     executionSupport,
     answerReview,
@@ -1570,9 +1548,6 @@ export function createDshHostAdapter(
     capabilityCatalog,
     closeTurn: (input) => runLifecycle.closeTurn(input),
     sessionEventSource,
-    boundedUtf8Text,
-    boundedMessageText,
-    recoveryMessage,
   });
   const {
     boundaryWorker,
@@ -1866,7 +1841,6 @@ export function createDshHostAdapter(
       const nativeAgent = agents?.get(
         agent?.id ?? currentSession(sessionId)?.agentId ?? sessionId,
       );
-      if (nativeAgent && demand?.awaitingClarification(nativeAgent)) return;
       if (!nativeAgent || !isGenericNativeChild(nativeAgent))
         boundaryWorker.kick(sessionId, agent);
     },

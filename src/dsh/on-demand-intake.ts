@@ -1,3 +1,5 @@
+import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarification-claims.js'
+import { observeNativeUserCancellation } from './native-cancellation-observer.js'
 import { isCodingWorkflowStatus } from './coding-workflow/host.js'
 import { symbols } from '@deepseek-ai/cordis'
 import { hasRequestInput, isRequestInput } from './request-input.js'
@@ -109,6 +111,8 @@ function parsePreparationRequest(
 export interface DemandAgent {
   readonly ctx?: unknown
   readonly id: string
+  readonly status?: string
+  followup?(message: any): unknown
   cancel?(cause: { kind: 'user' }, options?: { keepInbox?: boolean }): void
   /** Admit a foreground question reply at the next step without scheduling a new turn. */
   inject?(message: any): unknown
@@ -155,6 +159,8 @@ interface Dependencies {
     input: DemandInput,
     observation: IntakeDiagnosticObservation,
   ) => Promise<void>
+  readonly clarificationClaims?: ReturnType<typeof clarificationClaims>
+  readonly stopClarification?: (agent: DemandAgent, expected: Pick<TaskSnapshot, 'taskId' | 'revision' | 'generation'>, signal: AbortSignal) => Promise<unknown>
   readonly questions?: DshUserQuestions
   readonly answerIntake?: (input: DemandInput, task: string, question: AkinatorQuestion, context?: RequestIntentContext) => Promise<AkinatorAnswer>
 
@@ -236,6 +242,7 @@ interface Turn {
   nativeIntakeSources?: Partial<Record<keyof TaskProfile, 'decision' | 'main-model' | 'human'>>
   /** An issued source question fences effects until real preparation, not model inference. */
   clarificationPending?: boolean
+  clarificationStopped?: boolean
   /** Only project context actually produced for this exact captured turn. */
   answerContextReady?: boolean
   memoryDeferred?: boolean
@@ -424,15 +431,21 @@ export class OnDemandIntake {
     object,
     Map<string, ClarificationContext>
   >()
+  readonly #clarificationAdmissions = new WeakMap<DemandAgent, Map<string, number>>()
   readonly #clarifications = new Map<
     string,
     {
       agent: DemandAgent
       turn: number
       key: string
-      status: 'waiting' | 'queued'
+      status: 'waiting' | 'queued' | 'unresolved'
       result?: unknown
       operation?: Promise<unknown> | undefined
+      controller: AbortController
+      background: boolean
+      disposeStop: (() => void) | undefined
+      answerId: string | undefined
+      revalidate: ((signal: AbortSignal) => Promise<boolean>) | undefined
     }
   >()
   readonly #executions = new WeakMap<
@@ -693,8 +706,20 @@ export class OnDemandIntake {
     return (await this.host.startupGate?.(input, task)) === true
   }
 
+  private assertClarificationSource(input: DemandInput): void {
+    const known = this.#clarificationContexts.get(input.agent)
+    const admissions = this.#clarificationAdmissions.get(input.agent)
+    if (humanMessages(input.messages).some(message => {
+      const id = humanId(message)
+      const admittedTurn = admissions?.get(id)
+      return id.startsWith(CLARIFICATION_REPLY_PREFIX) && (!known?.has(id) ||
+        admittedTurn !== undefined && admittedTurn !== input.turn)
+    })) throw new Error('The queued clarification no longer belongs to a live request. The user can restate the pending decision.')
+  }
+
   /** Availability only: never capture a turn or publish execution intent before turn/start. */
   async prepareNativeCapabilities(input: DemandInput): Promise<void> {
+    this.assertClarificationSource(input)
     if (!this.host.prepareNativeCoding) return
     input = {
       ...input,
@@ -742,9 +767,21 @@ export class OnDemandIntake {
       ...input,
       signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
     }
+    this.assertClarificationSource(input)
     const sessionId = input.agent.session!.id
     this.host.recovery?.active(sessionId)
     const previous = this.#turns.get(sessionId)
+    const queued = this.#clarifications.get(sessionId)
+    if (queued?.background && queued.answerId && humanMessages(input.messages).some(message => humanId(message) === queued.answerId)) {
+      const answerId = queued.answerId
+      if (!await queued.revalidate?.(input.signal) || this.#clarifications.get(sessionId) !== queued) {
+        this.cancelClarification(sessionId)
+        throw new Error('Clarification no longer matches the current task or execution authority')
+      }
+      const admitted = this.#clarificationAdmissions.get(input.agent) ?? new Map()
+      admitted.set(answerId, input.turn)
+      this.#clarificationAdmissions.set(input.agent, admitted)
+    }
     if (previous) {
       if (
         previous.input.agent !== input.agent ||
@@ -788,6 +825,7 @@ export class OnDemandIntake {
         // A host-driven next turn may carry no new human message. Leave its
         // active execution bound to the host instead of creating an empty intake.
         if (previous.status === 'closed') {
+          this.cancelClarification(sessionId)
           await this.host.validate(input)
           input.signal.throwIfAborted()
           await this.host.advance?.(input)
@@ -818,6 +856,13 @@ export class OnDemandIntake {
       return false
     }
     this.host.answerContext?.retire(input.agent)
+    const question = this.#clarifications.get(sessionId)
+    if (question?.background) {
+      if (question.status === 'queued' && this.isClarificationContinuation(input)) {
+        question.disposeStop?.()
+        this.#clarifications.delete(sessionId)
+      } else this.cancelClarification(sessionId)
+    }
     // Install the pending state synchronously, before any host or classifier awaits.
     const controller = new AbortController()
     const state: Turn = {
@@ -953,8 +998,10 @@ export class OnDemandIntake {
           state.requestIntent,
           state.requestIntentContext,
         )
-      )
-        this.#clarifications.delete(sessionId)
+      ) {
+        if (pendingClarification.background) this.cancelClarification(sessionId)
+        else this.#clarifications.delete(sessionId)
+      }
       state.memoryOwner = memoryOwnerKind(
         state.requestIntent,
         state.intent.taskType,
@@ -1112,7 +1159,7 @@ export class OnDemandIntake {
       this.assertCurrent(state)
       // An auxiliary abstention is not a missing user requirement. The main
       // model can inspect the current workspace and the original request.
-      if (automatic?.status !== 'answered' && !missingScope) break
+      if (automatic?.status !== 'answered' && (!missingScope || state.input.agent.followup)) break
       // With decisions explicitly OFF, preserve ordinary conversation behavior;
       // unresolved action references still receive concrete clarification.
       if ((!automatic || automatic.status === 'disabled') && evaluation.question.id === 'taskType') {
@@ -1457,7 +1504,7 @@ export class OnDemandIntake {
       })
       state.status = 'prepared'
       delete state.clarificationPending
-      this.#clarifications.delete(state.input.agent.session!.id)
+      this.cancelClarification(state.input.agent.session!.id)
       delete state.confirmationResume
     })()
     this.watch(operation)
@@ -1488,10 +1535,24 @@ export class OnDemandIntake {
       delete state.preparation
     }
   }
+  private cancelClarification(sessionId: string): void {
+    const pending = this.#clarifications.get(sessionId)
+    this.#clarifications.delete(sessionId)
+    if (pending?.answerId) {
+      this.#clarificationContexts.get(pending.agent)?.delete(pending.answerId)
+      this.#nativeConfirmations.get(pending.agent)?.delete(pending.answerId)
+    }
+    pending?.controller.abort(new Error('Clarification source is no longer current'))
+    pending?.disposeStop?.()
+  }
+
   /** A question is a waiting state, never an execution grant. */
   awaitingClarification(agent: DemandAgent): boolean {
     const pending = agent.session && this.#clarifications.get(agent.session.id)
-    if (this.#stopped || pending?.agent !== agent) return false
+    if (this.#stopped || !agent.session) return false
+    const turn = this.#turns.get(agent.session.id)
+    if (turn?.input.agent === agent && turn.clarificationStopped) return true
+    if (pending?.agent !== agent) return false
     const boundary = agent.session
       ?.snapshotEvents?.()
       .filter((event) => event.type === 'turn/end')
@@ -1505,7 +1566,7 @@ export class OnDemandIntake {
         data.reason?.kind ?? '',
       )
     ) {
-      this.#clarifications.delete(agent.session!.id)
+      this.cancelClarification(agent.session!.id)
       return false
     }
     return true
@@ -1516,11 +1577,13 @@ export class OnDemandIntake {
     reason: RequestClarification,
   ): Promise<unknown> {
     this.assertCurrent(state)
-    const signal = AbortSignal.any([
-      executionSignal,
-      state.input.signal,
-      state.controller.signal,
-    ])
+    executionSignal.throwIfAborted()
+    const agent = state.input.agent
+    const background = typeof agent.followup === 'function' && typeof agent.status === 'string'
+    const controller = new AbortController()
+    const signal = AbortSignal.any(background
+      ? [state.nativeSignal, controller.signal]
+      : [executionSignal, state.input.signal, controller.signal])
     const context = state.requestIntentContext
     const sessionId = state.input.agent.session!.id
     // Compose from the decision the caller actually bound. Falling back to
@@ -1670,14 +1733,15 @@ export class OnDemandIntake {
         nextAction: 'submit_current_request_intent',
       }
     const key = canonicalContentHash({
+      sessionId, turn: state.input.turn,
       context: context ?? null,
       task: state.task,
       requestEvidence: [...state.requestContents],
       question,
     })
     const previous = this.#clarifications.get(sessionId)
-    if (previous?.agent === state.input.agent && previous.key === key)
-      return previous.operation ?? previous.result
+    if (previous?.agent === agent && (previous.key === key || previous.status === 'waiting' && previous.background))
+      return previous.background ? previous.result : previous.operation ?? previous.result
     const id = `request-clarification-${key.slice(0, 20)}`
     const result = {
       prepared: false,
@@ -1701,18 +1765,35 @@ export class OnDemandIntake {
           }
         : {}),
       permissions: 'unchanged_native_policy',
-      nextAction: this.host.questions && state.input.agent.inject ? 'wait_for_user' : 'ask_user_once',
+      nextAction: this.host.questions && agent.inject
+        ? background ? 'continue_independent_work_or_wait' : 'wait_for_user'
+        : 'ask_user_once',
+      ...(background ? { blockedScope: 'effects_depending_on_current_request',
+        allowedActions: ['read', 'search', 'inspect', 'plan'] } : {}),
     }
     const pending = {
       agent: state.input.agent,
       turn: state.input.turn,
       key,
-      status: 'waiting' as 'waiting' | 'queued',
+      status: 'waiting' as 'waiting' | 'queued' | 'unresolved',
       result: result as unknown,
       operation: undefined as Promise<unknown> | undefined,
+      controller, background,
+      disposeStop: undefined as (() => void) | undefined,
+      answerId: undefined as string | undefined,
+      revalidate: undefined as ((signal: AbortSignal) => Promise<boolean>) | undefined,
     }
     state.clarificationPending = true
     this.#clarifications.set(sessionId, pending)
+    if (background) pending.disposeStop = observeNativeUserCancellation(agent, () => {
+      state.clarificationStopped = true
+      this.cancelClarification(sessionId)
+      const task = context?.activeTask
+      if (task?.state === 'Working' && this.host.stopClarification) {
+        const { taskId, revision, generation } = task
+        this.watch(this.host.stopClarification(agent, { taskId, revision, generation }, this.#lifecycle.signal).catch(() => undefined))
+      }
+    })
     await this.diagnose(state, {
       kind: 'question',
       questionRef: id,
@@ -1725,8 +1806,41 @@ export class OnDemandIntake {
             : 'clarification_required',
     })
     if (!this.host.questions || !state.input.agent.inject) return result
+    const assertQuestionCurrent = () => {
+      signal.throwIfAborted()
+      if (!background) return this.assertCurrent(state)
+      const latest = agent.session?.snapshotEvents?.().filter(event => event.type === 'turn/start').at(-1)
+      if (this.#stopped || this.#clarifications.get(sessionId) !== pending ||
+        this.#turns.get(sessionId) !== state || agent.session !== state.session ||
+        (latest && eventTurn(latest) !== state.input.turn) ||
+        state.status === 'stale' || (state.status === 'closed' && !state.recoveryAfterFinish))
+        throw new Error('Clarification source is no longer current')
+    }
+    const questionInput = { ...state.input, signal }
+    const relevantContext = (value: RequestIntentContext) => background
+      ? canonicalContentHash({ ...value, proposals: value.proposals.filter(proposal =>
+          context?.proposals.some(original => original.id === proposal.id)) })
+      : canonicalContentHash(value)
+    pending.revalidate = async currentSignal => {
+      currentSignal.throwIfAborted()
+      if (controller.signal.aborted) return false
+      if (!context || !this.host.requestContext) return true
+      const latest = await this.host.requestContext({ ...state.input, signal: currentSignal }, state.task)
+      currentSignal.throwIfAborted()
+      return latest !== undefined && relevantContext(latest) === relevantContext(context)
+    }
+    const identity = { sessionId, agentId: agent.id, turn: state.input.turn, questionId: id }
+    const claims = background ? this.host.clarificationClaims : undefined
+    let claimed = false
     const operation = (async () => {
       try {
+        assertQuestionCurrent()
+        if (claims) {
+          claimed = await claims.claim(identity)
+          assertQuestionCurrent()
+          if (!claimed) return pending.result = { ...result, status: 'clarification_unresolved',
+            nextAction: 'continue_independent_work', detail: 'An earlier question for this turn has no current live answer. It will not be sent again.' }
+        }
         const response = await abortable(
           this.host.questions!.ask({
             agent: state.input.agent,
@@ -1749,24 +1863,24 @@ export class OnDemandIntake {
           signal,
         )
         signal.throwIfAborted()
-        this.assertCurrent(state)
+        assertQuestionCurrent()
         if (
           this.#clarifications.get(sessionId) !== pending ||
           pending.status !== 'waiting'
         )
           return result
-        await this.host.validate(state.input)
+        await this.host.validate(questionInput)
         signal.throwIfAborted()
-        this.assertCurrent(state)
+        assertQuestionCurrent()
         const current = this.host.requestContext
-          ? await this.host.requestContext(state.input, state.task)
-          : (await this.host.interpret?.(state.input, state.task))?.context
+          ? await this.host.requestContext(questionInput, state.task)
+          : (await this.host.interpret?.(questionInput, state.task))?.context
         signal.throwIfAborted()
-        this.assertCurrent(state)
+        assertQuestionCurrent()
         if (
           context &&
           (!current ||
-            canonicalContentHash(current) !== canonicalContentHash(context))
+            relevantContext(current) !== relevantContext(context))
         ) {
           if (current) {
             state.requestIntentContext = current
@@ -1799,15 +1913,15 @@ export class OnDemandIntake {
           const corrected = await abortable(this.host.questions!.ask({agent:state.input.agent,signal,
             questions:[{id:answerQuestionId,question:answerQuestion}]}),signal)
           signal.throwIfAborted()
-          this.assertCurrent(state)
+          assertQuestionCurrent()
           if (this.#clarifications.get(sessionId) !== pending || pending.status !== 'waiting') return result
-          await this.host.validate(state.input)
+          await this.host.validate(questionInput)
           const afterCorrection = this.host.requestContext
-            ? await this.host.requestContext(state.input,state.task)
-            : (await this.host.interpret?.(state.input,state.task))?.context
+            ? await this.host.requestContext(questionInput,state.task)
+            : (await this.host.interpret?.(questionInput,state.task))?.context
           signal.throwIfAborted()
-          this.assertCurrent(state)
-          if (context && (!afterCorrection || canonicalContentHash(afterCorrection) !== canonicalContentHash(context))) {
+          assertQuestionCurrent()
+          if (context && (!afterCorrection || relevantContext(afterCorrection) !== relevantContext(context))) {
             if (afterCorrection) {
               state.requestIntentContext = afterCorrection
               state.requestIntent = unresolvedRequestIntent(afterCorrection,'clarification_context_changed')
@@ -1824,7 +1938,9 @@ export class OnDemandIntake {
         // Preserve native sources and answers once, then recapture the reply.
         // Only the exact affirmative selection below creates a scoped receipt;
         // a free-text correction is fresh user evidence, never an admission.
-        const answerMessageId = randomUUID()
+        const answerMessageId = background ? CLARIFICATION_REPLY_PREFIX + randomUUID() : randomUUID()
+        if (claims && !await claims.settle(identity, answerMessageId)) return result
+        assertQuestionCurrent()
         const reply = clarificationReply(clarification, {
           id: answerMessageId,
           questionId: answerQuestionId,
@@ -1834,7 +1950,7 @@ export class OnDemandIntake {
         })
         const content = reply.content
         signal.throwIfAborted()
-        this.assertCurrent(state)
+        assertQuestionCurrent()
         if (confirmCurrent && answerQuestionId === id && decision && context && !answer.custom?.trim() &&
           answer.selected.length === 1 && answer.selected[0] === confirmLabel) {
           const receipts = this.#nativeConfirmations.get(state.input.agent) ?? new Map()
@@ -1845,18 +1961,14 @@ export class OnDemandIntake {
         }
         replies.set(answerMessageId, reply.context)
         this.#clarificationContexts.set(state.input.agent, replies)
-        state.input.agent.inject!({
+        const message = {
           id: answerMessageId,
           role: 'user',
           source: { kind: 'user' },
           content: [{ type: 'text', text: content }],
-        })
-        await this.diagnose(state, {
-          kind: 'answer',
-          questionRef: answerQuestionId,
-          answerRef: answerMessageId,
-        })
+        }
         pending.status = 'queued'
+        pending.answerId = answerMessageId
         pending.result = {
           ...result,
           questionId: answerQuestionId,
@@ -1867,6 +1979,17 @@ export class OnDemandIntake {
           detail:
             'The answer will be captured as native user input before the next model step in this turn. Do not ask it again, process a second copy, or reuse old references; use the refreshed host context.',
         }
+        assertQuestionCurrent()
+        try {
+          if (background && !this.turnIsOpen(state)) agent.followup!(message)
+          else agent.inject!(message)
+        } catch (error) {
+          this.cancelClarification(sessionId)
+          throw error
+        }
+        await this.diagnose(state, {
+          kind: 'answer', questionRef: answerQuestionId, answerRef: answerMessageId,
+        })
         return pending.result
       } catch (error) {
         if (signal.aborted) {
@@ -1876,11 +1999,11 @@ export class OnDemandIntake {
         }
         // Dismissal remains unapproved. A failed surface or host read can be
         // retried explicitly instead of retaining a dead pending question.
-        if ((error as { code?: unknown })?.code === 'ASK_CANCELLED')
+        if ((error as { code?: unknown })?.code === 'ASK_CANCELLED' && !background)
           return result
-        if (this.#clarifications.get(sessionId) === pending)
+        if (!background && this.#clarifications.get(sessionId) === pending)
           this.#clarifications.delete(sessionId)
-        return {
+        return pending.result = {
           ...result,
           status: 'clarification_unavailable',
           nextAction: 'retry_preparation',
@@ -1889,10 +2012,18 @@ export class OnDemandIntake {
         }
       } finally {
         pending.operation = undefined
+        if (background && pending.status !== 'queued') {
+          pending.disposeStop?.()
+          pending.status = 'unresolved'
+          if (claimed) await claims?.settle(identity).catch(() => undefined)
+          if (pending.result === result) pending.result = { ...result, status: 'clarification_unresolved',
+            nextAction: 'continue_independent_work', detail: 'No current answer was accepted. Effects depending on this decision remain pending.' }
+        }
       }
     })()
     pending.operation = operation
-    return this.watch(operation)
+    this.watch(operation)
+    return background ? result : operation
   }
   private async bindIntent(
     state: Turn,
@@ -2202,6 +2333,9 @@ export class OnDemandIntake {
   /** Refresh only authority facts after a committed control operation; retain the exact human request. */
   taskStateChanged(task: TaskSnapshot): void {
     const state = this.#turns.get(task.sessionId)
+    const authority = state?.requestIntentContext?.activeTask
+    if (authority && (authority.taskId !== task.taskId || authority.revision !== task.revision ||
+      authority.generation !== task.generation || task.pendingStop)) this.cancelClarification(task.sessionId)
     if (
       !state ||
       ['closed', 'stale'].includes(state.status) ||
@@ -2405,6 +2539,7 @@ export class OnDemandIntake {
     if (state?.input.agent.session === session && state.input.turn === turn) {
       const boundary=[...(state.input.agent.session.snapshotEvents?.()??[])].reverse().find(e=>e.type==='turn/end'&&(e.data as any)?.turn===turn)
       state.recoveryAfterFinish=(boundary?.data as any)?.reason?.kind==='completed'
+      if (!state.recoveryAfterFinish && this.#clarifications.get(session.id)?.background) this.cancelClarification(session.id)
       state.status = 'closed'
       state.controller.abort(new Error('Native turn ended'))
       this.host.answerContext?.retire(state.input.agent)
@@ -2703,8 +2838,9 @@ export class OnDemandIntake {
             if (state.clarificationPending && (
               execution.name === 'bash' || isLispNativeCommand(execution, actual.execute) ||
               (isLispImplementation(actual.execute) && this.pendingLispEffect(execution)) ||
-              (state.nativeUnowned && unownedNativeTool(execution) &&
-                !nativeEvidenceRead(execution) && execution.name !== 'skill')
+              (!isLispImplementation(actual.execute) && !nativeEvidenceRead(execution) &&
+                execution.name !== 'skill' && execution.name !== TASK_PREPARE_TOOL &&
+                !(execution.name === 'run_code' && preparationCarrier(execution.arguments)))
             )) return denied('The current request is awaiting clarification. Native commands cannot bypass that question; resolve it and prepare the exact request first.')
             if (
               state.confirmationResume &&
@@ -2734,17 +2870,6 @@ export class OnDemandIntake {
                 ? denied('Native tool policy cancelled this call')
                 : decision
             }
-            // A pending question is a waiting state, never an execution grant:
-            // no tool may continue the previous request before the user answers.
-            // Only preparation may run, because it consumes that answer.
-            if (
-              this.awaitingClarification(state.input.agent) &&
-              execution.name !== TASK_PREPARE_TOOL &&
-              !(execution.name === 'run_code' && preparationCarrier(execution.arguments))
-            )
-              return denied(
-                'Waiting for the answer to the clarification question; no work runs until the user replies.',
-              )
             // Evidence gathering does not decide the request's action or scope.
             // In particular, an inherited owner must not turn a read into an
             // immutable research preparation before the main model can interpret it.
@@ -2759,7 +2884,7 @@ export class OnDemandIntake {
                 state.requestIntent,
                 state.requestIntentContext,
               )
-              if (clarification) return denied(clarification)
+              if (clarification && !state.clarificationPending) return denied(clarification)
               this.#executions.set(execution, {
                 turn: state,
                 execute: actual.execute,
@@ -3221,10 +3346,10 @@ export class OnDemandIntake {
     state.controller.abort(new Error('Native agent disposed'))
     state.status = 'closed'
     this.#turns.delete(agent.session!.id)
-    this.#clarifications.delete(agent.session!.id)
+    this.cancelClarification(agent.session!.id)
   }
   stop(): void {
-    this.#clarifications.clear()
+    for (const sessionId of this.#clarifications.keys()) this.cancelClarification(sessionId)
     this.#stopped = true
     this.#lifecycle.abort(new Error('On-demand intake stopped'))
   }

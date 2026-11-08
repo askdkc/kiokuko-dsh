@@ -83,6 +83,27 @@ export function createRouting({
   const systemSkillNames = new WeakMap<object, ReadonlySet<string>>()
   const ownedModelToolDefinitions = new Map<string, { readonly execute: unknown }>()
   const selectionBlocked = new WeakSet<object>()
+  const selectionDiagnostics = new WeakMap<object, ReadonlyMap<string, unknown>>()
+  const registry = tools as (NativeTools & { get?(name: string, agent: object): { execute?: unknown } | undefined }) | undefined
+  const markSelectionPending = (agent: object) => {
+    selectionBlocked.add(agent)
+    const definitions = new Map<string, unknown>()
+    for (const name of ['read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'skill',
+      'job_list', 'job_output', 'todo_write', 'lisp_status', 'coding_workflow']) {
+      const execute = registry?.get?.(name, agent)?.execute
+      if (typeof execute === 'function') definitions.set(name, execute)
+    }
+    selectionDiagnostics.set(agent, definitions)
+  }
+  const disposeSelectionGuard = tools?.guard((input) => {
+    const execution = input as { agent?: object; name: string; arguments?: { action?: string } }
+    const agent = execution.agent
+    if (!agent || !selectionBlocked.has(agent)) return undefined
+    const execute = selectionDiagnostics.get(agent)?.get(execution.name)
+    if (execute && registry?.get?.(execution.name, agent)?.execute === execute &&
+      (execution.name !== 'coding_workflow' || execution.arguments?.action === 'status')) return undefined
+    return 'EXECUTION_SELECTION_PENDING: Continue permitted reading and planning. Effects remain pending until the execution route is selected.'
+  })
   const manualModelChanges = new Map<string, Promise<void>>()
   const assemblyClaims = new WeakMap<object, { turn: number; messages: unknown[] }>()
   const markModelUnavailable = (agent: RoutableAgent): Promise<void> => Promise.resolve()
@@ -298,7 +319,7 @@ export function createRouting({
         const event = await mapPreStep({ agent, messages, turn, step: 0, signal })
         admitted = await prepareTurn(event)
       } catch (error) {
-        if (error instanceof ExecutionSelectionPending) { selectionBlocked.add(agent); reportToolExposureFallback('pre_step_selection_pending', diagnosticContext()) }
+        if (error instanceof ExecutionSelectionPending) { markSelectionPending(agent); reportToolExposureFallback('pre_step_selection_pending', diagnosticContext()) }
         else if (messages.some(message => reviewMessageId(message) !== undefined)) {
           // The claimed input is an automatic reconsideration. If it is no
           // longer authorized it is simply skipped; it is not a user request,
@@ -316,7 +337,7 @@ export function createRouting({
       const item = agent.session ? currentSession(agent.session.id) : undefined
       if (!item || item.closed) return await nativeWorkers.head(agent, signal)
       const selection = getSelection(item.runId)?.value
-      if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') selectionBlocked.add(agent)
+      if (selection && selection.status !== 'ready' && !selection.discussion && item.prepared.intake.profile.taskType !== 'chat') markSelectionPending(agent)
       const reviewModel = answerReview.model(agent as ReviewAgent)
       if (reviewModel) return reviewModel
       const headModel = !selectionBlocked.has(agent) ? await nativeWorkers.head(agent, signal) : undefined
@@ -455,6 +476,7 @@ export function createRouting({
     install: installRouting,
     markModelUnavailable,
     isSelectionBlocked: (agent: object): boolean => selectionBlocked.has(agent),
+    markSelectionPending,
     systemSkillsFor: (agent: object): ReadonlySet<string> | undefined => systemSkillNames.get(agent),
     modelToolDefinitionsChanged: (definitions: readonly DshToolDefinition[]): void => {
       ownedModelToolDefinitions.clear()
@@ -463,6 +485,7 @@ export function createRouting({
     recordManualChange: (sessionId: string, pending: Promise<void>): void => { manualModelChanges.set(sessionId, pending) },
     dispose: (): void => {
       routingCreatedDisposer()
+      disposeSelectionGuard?.()
       for (const dispose of routingDisposers.values()) dispose()
       routingDisposers.clear()
     },

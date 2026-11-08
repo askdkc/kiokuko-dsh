@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, mkdir, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -129,7 +129,7 @@ for (const explicit of [false, true]) for (const changes of [1, 3]) test(`${expl
       reflections++
       yield* f.mock.textResponse(JSON.stringify({ lessons: reflections === 1 ? [{
         hypothesis: 'RECOVERED_RACECODE: parser file writing completed once.',
-        applicability: 'This repository parser only; verification is still pending.',
+        applicability: 'This repository parser only.',
         nextAction: 'Check the written parser file.', verifyWith: 'Run parser assertions.', evidenceRefs: [evidence.evidenceRefs[0]],
       }] : [] }))
       return
@@ -156,13 +156,26 @@ for (const explicit of [false, true]) for (const changes of [1, 3]) test(`${expl
         assert.ok(!JSON.stringify(request.messages).includes('RACECODE original parser guidance.'))
         if (changes === 1) assert.ok(JSON.stringify(request.messages).includes(memory.body), 'refreshed execution correction reaches the provider')
         else assert.ok(!request.messages.some((m: any) => m.source?.sections?.some((s: any) => s.name.startsWith('memory:memory:'))))
-        return f.mock.textResponse('The file is written; verification remains pending.')
+        release()
+        if (changes !== 3) return f.mock.textResponse('The file is written; verification remains pending.')
+        return f.mock.toolCallResponse('criteria', 'task_completion', { action: 'status' })
       })
+    if (changes === 3) {
+      await writeFile(join(f.dir, 'src/parser.test.mjs'), `import { value } from './parser.mjs';
+import assert from 'node:assert/strict'; import test from 'node:test'; test('parser value', () => assert.equal(value, 42));\n`)
+      const command = 'node --test --test-reporter=tap src/parser.test.mjs'
+      for (const id of ['regression', 'user-entry']) f.responses.push(f.mock.toolCallResponse(`bind-${id}`, 'task_completion', {
+        action: 'bind', criterionId: id, method: { kind: 'native_command', command, cwd: '.',
+          sourcePaths: ['src/parser.mjs', 'src/parser.test.mjs'], assertion: 'selected_tests_pass' },
+      }))
+      for (const id of ['regression', 'user-entry']) f.responses.push(f.mock.toolCallResponse(`verify-${id}`, 'kioku_exec', { command }))
+      f.responses.push(f.mock.textResponse('The parser was written and verified.'))
+    }
     await f.turn('Implement the RACECODE parser in src/parser.mjs. 通常実行で。')
     assert.equal(updates, changes === 1 ? 1 : 2)
     assert.equal(writes, 1, 'a memory rebuild never reexecutes the completed file write')
     assert.equal(f.responses.length, 0)
-    release(); releaseWrite()
+    releaseWrite()
     if (changes === 3) {
       const deadline = Date.now() + 10000
       while (readRepositoryLearning(db, f.dir).revision === 0 && Date.now() < deadline) await delay(10)

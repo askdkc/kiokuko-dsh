@@ -25,6 +25,8 @@ export interface NativeSessions {
 export interface NativeAgent {
   readonly id: string
   readonly status?: string
+  readonly cancel?: (...args: any[]) => unknown
+  readonly inbox?: { nextTurn: readonly unknown[]; nextStep: readonly unknown[] }
   readonly session?: { readonly id: string; readonly header?: { readonly cwd?: string; readonly parentSession?: string; readonly origin?: string; readonly delegationDepth?: number }; snapshotEvents?: () => readonly DshLogEvent[] }
   readonly inject?: (message: unknown) => void
   readonly steer?: (message: unknown) => void

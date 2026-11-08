@@ -324,6 +324,9 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
         const identities: Record<string, string> = { runId: value.runId, sessionId: value.sessionId,
           requestId: value.requestId, workflowId: value.workflowId, questionId: value.choice.questionId }
         for (const [key, id] of Object.entries(identities).sort((a, b) => b[1].length - a[1].length)) serialized = serialized.replaceAll(id, `workflow-${key}`)
+        for (const [index, criterion] of (value.assessment?.criteria ?? []).entries()) {
+          if (criterion.criterionId.startsWith('request-')) serialized = serialized.replaceAll(criterion.criterionId, `request-criterion-${index}`)
+        }
       }
       return JSON.parse(serialized)
     }

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { nativeSkillFixture } from '../helpers/skill-native.js'
 import { interpretedPreparation, toolValue } from '../helpers/coding-script.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
@@ -27,7 +28,15 @@ for (const explicit of [true, false]) for (const fault of ['none', 'revision', '
     }
     let stop = () => {}
     try {
-      f.responses.push(interpretedPreparation(f.mock, 'first', 'new', 'change', 'build'), f.mock.textResponse('Implementation prepared.'))
+      await writeFile(join(f.dir, 'parser.js'), 'process.stdout.write("42\\n")\n')
+      f.responses.push(interpretedPreparation(f.mock, 'first', 'new', 'change', 'build'),
+        f.mock.toolCallResponse('proof-status', 'task_completion', { action: 'status' }),
+        (request: any) => f.mock.toolCallResponse('proof-bind', 'task_completion', { action: 'bind',
+          criterionId: toolValue(request, 'proof-status').criteria[0].criterionId,
+          method: { kind: 'native_command', command: 'node parser.js', cwd: '.', sourcePaths: ['parser.js'],
+            assertion: 'output_matches', expectedOutput: '42' } }),
+        f.mock.toolCallResponse('proof-execute', 'kioku_exec', { command: 'node parser.js' }),
+        (request: any) => { assert.equal(toolValue(request, 'proof-execute').exitCode, 0); return f.mock.textResponse('The parser is verified.') })
       await f.turn('Implement a parser in parser.js. 通常実行で。')
       for (let attempt = 0; attempt < 100; attempt++) {
         if (withDb(db => db.prepare("SELECT 1 FROM ledger_runs WHERE status='completed'").get())) break

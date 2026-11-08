@@ -4,7 +4,6 @@ import { onNativeEvent } from './native-events.js'
 import type { NativeAgent, NativeAgents, NativeSessions, NativeSkills, NativeTools } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
 import type { DshSkillPrompts } from '../skill-prompts.js'
-import type { DshUserQuestions } from '../user-interaction.js'
 import type { DshIntakeGate, DshCapabilityReadContext } from '../intake-gate.js'
 import type { DshExecutionSupport } from '../execution-support.js'
 import type { AnswerReviewCoordinator } from '../answer-review/coordinator.js'
@@ -12,14 +11,16 @@ import type { ReviewAgent } from '../answer-review/contracts.js'
 import type { DshSessionLogMirror, DshMirrorEventSession } from '../session-log-mirror.js'
 import type { DshRunLifecycle } from '../session-bridge.js'
 import { dshTurnBoundarySeq, type DshSessionEventSource } from '../session-memory-finalizer.js'
-import { abortable, DshBoundaryWorker } from '../boundary-worker.js'
+import { DshBoundaryWorker } from '../boundary-worker.js'
 import { DshCompletionReporter } from '../completion-report.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { projectDshContext } from '../context-projection.js'
-import { readPendingOutbox, replacePendingOutboxMessageInTransaction, retryableBoundaryErrorCode, type DshBoundaryJob } from '../turn-process.js'
-import { claimAutomaticContinuationInTransaction, claimLoopRecoveryQuestionInTransaction, resetLoopGuardForUserInTransaction } from '../loop-guard.js'
-import { boundaryFailureCopy } from '../user-interaction.js'
+import { replacePendingOutboxMessageInTransaction, type DshBoundaryJob } from '../turn-process.js'
+import { claimAutomaticContinuationInTransaction } from '../loop-guard.js'
+import { continuationMessage, continuationProgress } from '../continuation-evidence.js'
+import { assessTaskCompletion } from '../task-completion.js'
+import { saveSessionNotice } from '../plugin-records.js'
 import { KiokukoError } from '../../errors.js'
 import { isNativeSubagent } from '../native-subagent.js'
 
@@ -32,7 +33,6 @@ interface BoundaryDependencies {
   readonly sessions: NativeSessions | undefined
   readonly skills: NativeSkills | undefined
   readonly tools: NativeTools | undefined
-  readonly userQuestions: DshUserQuestions | undefined
   readonly gate: DshIntakeGate
   readonly executionSupport: DshExecutionSupport
   readonly answerReview: AnswerReviewCoordinator
@@ -41,57 +41,24 @@ interface BoundaryDependencies {
   readonly capabilityCatalog: (skills: NativeSkills | undefined, tools: NativeTools | undefined, context: DshCapabilityReadContext) => Promise<unknown>
   readonly closeTurn: DshRunLifecycle['closeTurn']
   readonly sessionEventSource: (session: object | undefined) => DshSessionEventSource
-  readonly boundedUtf8Text: (value: string, bytes: number) => string
-  readonly boundedMessageText: (value: unknown) => string | undefined
-  readonly recoveryMessage: (id: string, answer: string) => unknown
 }
 
 export function createBoundaries(deps: BoundaryDependencies) {
   const { isGenericNativeChild } = deps
-  const { ctx, runtime, now, agents, sessions, skills, tools, userQuestions, gate, executionSupport,
+  const { ctx, runtime, now, agents, sessions, skills, tools, gate, executionSupport,
     answerReview, sessionMirror, currentSession,
-    capabilityCatalog, closeTurn, sessionEventSource,
-    boundedUtf8Text, boundedMessageText, recoveryMessage } = deps
+    capabilityCatalog, closeTurn, sessionEventSource } = deps
   const boundaryAgents = new Map<string, object>()
-  const boundarySignals = new Map<string, AbortSignal>()
-
-  const askForRecoveryInstruction = async (input: {
-    readonly item: TurnRecord
-    readonly questionId: string
-    readonly title: string
-    readonly detail: string
-    readonly header?: string
-  }): Promise<string | undefined> => {
-    const agent = input.item.nativeAgent ?? agents?.get(input.item.agentId)
-    const signal = boundarySignals.get(input.item.sessionId) ?? new AbortController().signal
-    if (userQuestions === undefined || agent === undefined) return undefined
-    try {
-      const result = await abortable(userQuestions.ask({
-        questions: [{
-          id: input.questionId,
-          header: input.header ?? 'Kiokuko stopped',
-          question: input.title,
-          detail: input.detail,
-        }],
-        agent,
-        signal,
-      }), signal)
-      signal.throwIfAborted()
-      const answer = result.answers[0]
-      if (answer === undefined || answer.id !== input.questionId) return undefined
-      const value = answer.custom?.trim() || answer.selected[0]?.trim()
-      return value === undefined || value.length === 0 ? undefined : boundedUtf8Text(value, 8 * 1024)
-    } catch {
-      signal.throwIfAborted()
-      // A broken/dismissed question surface must never become another retry
-      // loop. The durable waiting_user state remains the recovery boundary.
-      return undefined
-    }
-  }
-  const recoveryDetail = (reason: string, recoveryInstruction?: string): string => [
-    reason,
-    recoveryInstruction ?? 'Enter the actual current handling status and the concrete instruction to execute next. If work should stop, say so explicitly.',
-  ].join('\n')
+  const reportBlocked = (item: TurnRecord, id: string, reason: string) =>
+    runtime.withDatabase(database => saveSessionNotice(database, {
+      id: `continuation-blocked:${id}`,
+      runId: item.runId,
+      sessionId: item.sessionId,
+      rootPath: item.cwd,
+      kind: 'status',
+      text: reason,
+      anchorSeq: 0,
+    }))
 
   const boundaryWorker = new DshBoundaryWorker({
     runtime,
@@ -109,8 +76,7 @@ export function createBoundaries(deps: BoundaryDependencies) {
       }
       boundaryAgents.set(sessionId, nativeAgent)
     },
-    process: async (job: DshBoundaryJob, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
+    process: async (job: DshBoundaryJob) => {
       const item = currentSession(job.dshSessionId)
       if (item?.closed || item?.runId !== undefined && item.runId !== job.runId) return { kind: 'superseded' }
       if (item === undefined || item.turn < job.nativeTurn) throw Object.assign(
@@ -120,38 +86,8 @@ export function createBoundaries(deps: BoundaryDependencies) {
         return { kind: 'completed', nextKind: 'delivery' }
       }
       if (job.kind === 'ask_akinator') {
-        const pending = await runtime.withDatabase((database) => readPendingOutbox(database, item.sessionId)
-          .find((candidate) => candidate.receiptId === job.receiptId))
-        const validationFact = boundedMessageText(pending?.message)
-        const answer = await askForRecoveryInstruction({
-          item,
-          questionId: `validation-${job.receiptId.slice(0, 16)}`,
-          title: 'Kiokuko validation repeatedly failed and needs your instruction.',
-          detail: recoveryDetail(validationFact ?? 'The same validation constraint was rejected repeatedly.'),
-        })
-        if (answer === undefined) {
-          await sessionMirror.markWaitingUser(item.sessionId)
-          return { kind: 'waiting_user' }
-        }
-        await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-          resetLoopGuardForUserInTransaction(database, {
-            runId: item.runId,
-            dshSessionId: item.sessionId,
-            resolution: 'manual_user',
-            ...(now === undefined ? {} : { now: now() }),
-          })
-          const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-          if (outbox !== undefined) {
-            replacePendingOutboxMessageInTransaction(
-              database,
-              job.receiptId,
-              recoveryMessage(outbox.continuationId, answer),
-              'loop-recovery',
-              now?.() ?? new Date().toISOString(),
-            )
-          }
-        }))
-        return { kind: 'completed', nextKind: 'delivery' }
+        await reportBlocked(item, job.jobId, 'The previous continuation could not pass validation. The affected operation remains pending.')
+        return { kind: 'blocked' }
       }
       if (job.kind === 'classify_boundary' || job.kind === 'confirmation' || job.kind === 'final_verification' || job.kind === 'advisory') {
         // Orchestration removed: these durable kinds have no producer anymore.
@@ -180,66 +116,36 @@ export function createBoundaries(deps: BoundaryDependencies) {
       await sessions.flush(nativeSession)
       try { await sessionMirror.checkpointAfterNativeFlush(nativeSession as DshMirrorEventSession) } catch { /* non-vetoing cache */ }
     },
-    beforeDelivery: async (job, outbox, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
+    beforeDelivery: async (job, outbox) => {
       const item = currentSession(job.dshSessionId)
       if (item === undefined) throw Object.assign(
         new Error('kiokuko-dsh delivery is waiting for its exact live run binding'),
         { code: 'BOUNDARY_BINDING_UNAVAILABLE' })
       if (item.closed || item.runId !== job.runId) return 'superseded'
-      if (outbox.messageForm === 'loop-recovery') return 'deliver'
       if (executionSupport.paused(item.sessionId)) return 'waiting_user'
-      const guarded = await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
+      if (outbox.messageForm === 'loop-recovery') return 'deliver'
+      const decision = await runtime.withDatabase(database => withImmediateTransaction(database, () => {
+        const assessment = assessTaskCompletion(database, item.runId)
+        if (assessment.managedOperationsReady === false || assessment.nativeChildrenPending) return 'blocked'
         const claim = claimAutomaticContinuationInTransaction(database, {
-          claimId: outbox.continuationId,
+          claimId: canonicalContentHash({ policy: 2, id: outbox.continuationId }),
           runId: item.runId,
           dshSessionId: item.sessionId,
-          instructionDigest: canonicalContentHash(boundedMessageText(outbox.message) ?? 'continuation'),
+          instructionDigest: canonicalContentHash(outbox.message),
+          progressDigest: continuationProgress(database, item.runId, item.repositoryRoot, assessment),
           ...(now === undefined ? {} : { now: now() }),
         })
-        const shouldAsk = claim.decision === 'wait_user'
-          && claimLoopRecoveryQuestionInTransaction(
-            database,
-            claim.claimId,
-            now?.() ?? new Date().toISOString(),
-          )
-        return { claim, shouldAsk }
+        if (claim.decision === 'replan') {
+          replacePendingOutboxMessageInTransaction(database, job.receiptId,
+            continuationMessage(outbox.continuationId, 'The previous continuation did not change the observed result. Inspect the current evidence and try a different authorized approach. Report what remains incomplete if no independent work is possible.'),
+            'continuation', now?.() ?? new Date().toISOString())
+        }
+        return claim.decision
       }))
-      if (guarded.claim.decision === 'deliver') return 'deliver'
-      if (!guarded.shouldAsk) {
-        await sessionMirror.markWaitingUser(item.sessionId)
-        return 'waiting_user'
-      }
-      const answer = await askForRecoveryInstruction({
-        item,
-        questionId: `loop-${guarded.claim.claimId.slice(0, 16)}`,
-        title: 'Kiokuko stopped before a fourth identical automatic continuation.',
-        detail: recoveryDetail([
-          `The same instruction was automatically continued ${guarded.claim.ordinal - 1} times without progress.`,
-          boundedMessageText(outbox.message),
-        ].filter((value): value is string => value !== undefined).join('\n')),
-      })
-      if (answer === undefined) {
-        await sessionMirror.markWaitingUser(item.sessionId)
-        return 'waiting_user'
-      }
-      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-        resetLoopGuardForUserInTransaction(database, {
-          runId: item.runId,
-          dshSessionId: item.sessionId,
-          resolution: 'user_answer',
-          claimId: guarded.claim.claimId,
-          ...(now === undefined ? {} : { now: now() }),
-        })
-        replacePendingOutboxMessageInTransaction(
-          database,
-          job.receiptId,
-          recoveryMessage(outbox.continuationId, answer),
-          'loop-recovery',
-          now?.() ?? new Date().toISOString(),
-        )
-      }))
-      return 'deliver'
+      if (decision === 'deliver' || decision === 'replan') return 'deliver'
+      if (decision === 'blocked')
+        await reportBlocked(item, job.jobId, 'Automatic continuation is pending because the observed result did not change or an earlier operation is unsettled.')
+      return decision === 'wait_user' ? 'waiting_user' : decision
     },
     dispatch: async (job, outbox) => {
       const item = currentSession(job.dshSessionId)
@@ -250,54 +156,12 @@ export function createBoundaries(deps: BoundaryDependencies) {
       }
       nativeAgent.followup(outbox.message)
     },
-    onWaitingUser: async (job, error, signal) => {
-      boundarySignals.set(job.dshSessionId, signal)
+    onBlocked: async (job, error) => {
       const item = currentSession(job.dshSessionId)
       if (item === undefined || item.closed || item.runId !== job.runId) return false
-      await sessionMirror.markWaitingUser(item.sessionId)
-      const failureCode = typeof error === 'object' && error !== null && typeof (error as { code?: unknown }).code === 'string'
-        ? (error as { code: string }).code : 'BOUNDARY_JOB_FAILED'
-      const retryable = retryableBoundaryErrorCode(failureCode)
-      const copy = boundaryFailureCopy(undefined, job.attemptCount, retryable)
-      const answer = await askForRecoveryInstruction({
-        item,
-        questionId: `boundary-${job.jobId.slice(0, 16)}`,
-        header: copy.header,
-        title: copy.title,
-        detail: recoveryDetail(
-          `Last boundary error: ${(error instanceof Error ? error.message : String(error)).slice(0, 2_000)}`,
-          copy.recoveryInstruction,
-        ),
-      })
-      if (answer === undefined) return false
-      // A user message cannot repair an integrity/permission fault or make an
-      // unsupported stage executable. Only a named transient may be retried.
-      if (!retryable || !/(?:retry|recovered|再試行|解消|修復)/iu.test(answer)) return false
-      await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-        resetLoopGuardForUserInTransaction(database, {
-          runId: item.runId,
-          dshSessionId: item.sessionId,
-          resolution: 'manual_user',
-          ...(now === undefined ? {} : { now: now() }),
-        })
-        const outbox = readPendingOutbox(database, item.sessionId).find((candidate) => candidate.receiptId === job.receiptId)
-        if (outbox !== undefined) {
-          replacePendingOutboxMessageInTransaction(
-            database,
-            job.receiptId,
-            recoveryMessage(outbox.continuationId, answer),
-            'loop-recovery',
-            now?.() ?? new Date().toISOString(),
-          )
-        }
-        database.prepare(`
-          UPDATE dsh_boundary_jobs
-             SET status = 'pending', attempt_count = 0, available_at = ?,
-                 last_error_code = NULL, last_error_message = NULL, updated_at = ?
-           WHERE job_id = ? AND status = 'waiting_user' AND last_error_code = ?
-        `).run(now?.() ?? new Date().toISOString(), now?.() ?? new Date().toISOString(), job.jobId, failureCode)
-      }))
-      return true
+      const reason = error instanceof Error ? error.message : String(error)
+      await reportBlocked(item, job.jobId, `Continuation delivery is pending. ${reason.slice(0, 2000)}`)
+      return false
     },
   })
 
@@ -377,6 +241,6 @@ export function createBoundaries(deps: BoundaryDependencies) {
     boundaryWorker,
     deliverCompletionReport,
     boundarySessionStartDisposer,
-    clear: () => { boundaryAgents.clear(); boundarySignals.clear() },
+    clear: () => boundaryAgents.clear(),
   }
 }

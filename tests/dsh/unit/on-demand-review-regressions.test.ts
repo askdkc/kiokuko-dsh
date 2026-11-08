@@ -3545,6 +3545,72 @@ test('an unavailable assessment can recover on the next explicit preparation wit
   assert.equal(f.admissions.length, 1)
 })
 
+test('a live native question does not occupy the model step or authorize effects', { timeout: 3000 }, async (t) => {
+  const task = 'Inspect the requested artifact.'
+  const message = human('pending-artifact', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  let answer!: (value: any) => void
+  let shown!: (id: string) => void
+  const response = new Promise<any>(resolve => { answer = resolve })
+  const questionId = new Promise<string>(resolve => { shown = resolve })
+  const replies: unknown[] = []
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    interpret: async () => intent,
+    requestContext: async () => intent.context,
+    questions: { ask(request) { shown(request.questions[0]!.id); return response } },
+  })
+  Object.assign(f.agent, { status: 'running', inject: (reply: unknown) => replies.push(reply),
+    followup: () => assert.fail('an open turn receives its answer at the next step') })
+  webTool(t, f, 'read')
+  await f.capture([message])
+  const args = { requestIntent: { relation: 'unknown', action: 'unknown',
+    evidenceRefs: requestIntentReferenceIds(intent.context) } }
+  const pending = f.execute(TASK_PREPARE_TOOL, args)
+  const id = await questionId
+  try {
+    const result = await Promise.race([pending, new Promise<undefined>(resolve => setTimeout(resolve, 100))])
+    assert.equal(result?.value.status, 'awaiting_clarification')
+    assert.equal((await f.execute('read', { path: 'src/parser.ts' })).isError, false)
+    assert.equal((await f.execute(TASK_PREPARE_TOOL, args)).value.questionId, id)
+    assert.equal(replies.length, 0)
+  } finally {
+    answer({ answers: [{ id, selected: [], custom: 'Inspect src/parser.ts.' }] })
+    await f.intake.drain()
+  }
+  assert.equal(replies.length, 1)
+})
+
+for (const stop of [false, true]) test(`an idle question ${stop ? 'cannot resume after Stop' : 'continues its original request once'}`, { timeout: 3000 }, async t => {
+  const task = 'Inspect the requested artifact.'
+  const message = human('idle-artifact', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  let answer!: (value: any) => void
+  let questionId = ''
+  const response = new Promise<any>(resolve => { answer = resolve })
+  const followups: unknown[] = []
+  const f = await fixture(t, {
+    nativeOwnership: async () => 'unowned',
+    interpret: async () => intent,
+    requestContext: async () => intent.context,
+    questions: { ask(request) { questionId = request.questions[0]!.id; return response } },
+  })
+  Object.assign(f.agent, { status: 'idle', cancel() {}, followup: (reply: unknown) => followups.push(reply),
+    inject: () => assert.fail('an ended turn cannot receive a step injection') })
+  await f.capture([message])
+  const args = { requestIntent: { relation: 'unknown', action: 'unknown',
+    evidenceRefs: requestIntentReferenceIds(intent.context) } }
+  const pending = await f.execute(TASK_PREPARE_TOOL, args)
+  assert.equal(pending.value.status, 'awaiting_clarification')
+  const end = { ...event('turn/end', 1), data: { turn: 1, reason: { kind: 'completed' } } }
+  f.events.push(end)
+  f.intake.finish(f.agent.session!, 1)
+  if (stop) (f.agent as any).cancel({ kind: 'user' })
+  answer({ answers: [{ id: questionId, selected: [], custom: 'Inspect src/parser.ts.' }] })
+  await f.intake.drain()
+  assert.equal(followups.length, stop ? 0 : 1)
+})
+
 test('question transport failure is explicit and retryable, without a pending clarification lock', async (t) => {
   const task = 'Inspect the requested artifact.',
     message = human('retry-question', task)

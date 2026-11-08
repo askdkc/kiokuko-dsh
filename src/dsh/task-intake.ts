@@ -905,7 +905,7 @@ export async function prepareAgentTask(database: SqliteDatabase, input: PrepareA
     akinatorMemory: memoryConfig, memoryScope: scope,
     deferTaskTypeInference: input.deferTaskTypeInference === true,
     onRunCreatedInTransaction: ({ database: transactionDatabase, runId, workspace, dshSessionId, now }) => {
-      if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode);
+      if (input.completionMode) initializeTaskCompletion(transactionDatabase, runId, input.completionMode, input.requestIntent);
       if (input.sessionOwnership && codingWorkRequested(input.task, input.requestIntent, profileHints.taskType)) {
         initializeCodingWorkflow(transactionDatabase, { runId, sessionId: dshSessionId, requestId,
           repositoryRoot: project.repositoryRoot, task: input.task }, { optional: true });

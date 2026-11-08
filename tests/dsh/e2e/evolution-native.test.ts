@@ -60,7 +60,7 @@ test('native result DTOs survive text-only logs without automatic episode extrac
     await ctx.sessions.flush(agent.session)
     await adapter.host.checkpointSessionMirror!(agent.session)
     const close=await adapter.host.resolveSessionClose!(agent.session.id,agent.session)
-    assert.equal(close, undefined, 'prepared ordinary work was already closed by its native completion')
+    assert.equal(close?.status, 'cancelled', 'disposing the session cannot complete verification using a synthetic tool result')
     await adapter.host.memoryFinalizer!.whenIdle()
     const events=agent.session.snapshotEvents()
     assert.equal(events.filter((e:any)=>e.type===EVOLUTION_OBSERVATION_EVENT).length,0)

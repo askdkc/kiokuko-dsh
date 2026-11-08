@@ -3,8 +3,7 @@ import { mountNativeTools } from './native-tools.js'
 import { intentFixtureDecisions } from './intent-decision-fixture.js'
 import { recordRepeatedStage } from './repeated-memory-report.js'
 import assert from 'node:assert/strict'
-import { execFile, execFileSync } from 'node:child_process'
-import { promisify } from 'node:util'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -15,7 +14,7 @@ import { registerRepositoryAndLocation } from '../../../src/repository/binding.j
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
 import { nativeMock } from './native-mock.js'
-import { interpretedPreparation } from './coding-script.js'
+import { interpretedPreparation, toolValue } from './coding-script.js'
 import { mockModelRoutes, modelSelectionAnswer, openaiModels } from './model-selection.js'
 import type { FinalizationInputMode } from '../../../src/dsh/efficiency.js'
 import type { DshMemoryFinalizer } from '../../../src/dsh/session-memory-finalizer.js'
@@ -84,15 +83,6 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   for (const plugin of [llm,session,projection,systemPrompt,tools,agents,skills]) { if (plugin === tools) await mountNativeTools(ctx, tools, packages, fibers); else fibers.push(await ctx.plugin(plugin.default, plugin === systemPrompt ? { persona: '' } : undefined)) }
   fibers.push(await ctx.plugin(loop.default, { agents: [] }))
   ctx.llm.registerAdapter(['mock'], provider)
-  const disposeApplicationVerifier = ctx.tools.register(tools.defineTool({ name: 'bash', description: 'Run only the disposable fixture regression verifier.',
-    parameters: { command: { type: 'string', required: true } },
-    output: { schema: { type: 'object', additionalProperties: false, properties: { exitCode: { type: 'number', required: true } } },
-      render: (_args: unknown, value: any) => [{ type: 'text', text: JSON.stringify(value) }] },
-    execute: async (args: any) => {
-      assert.equal(args.command, applicationCommand)
-      await promisify(execFile)(process.execPath, ['fixtures/verify.mjs'], { cwd: root, timeout: 5000 })
-      return { exitCode: 0 }
-    } }))
   // Use native process-tool names so verification intent exercises the real
   // effect contract; arbitrary extension names have no verification authority.
   const disposeTool = ctx.tools.register(tools.defineTool({ name: 'exec', description: 'Validate a disposable fixture schema and checksum.',
@@ -181,10 +171,12 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   // Scripted agents must use the same native disposition protocol as real agents.
   // Inspect the tool result delivered to the model, never write review rows directly.
   let applicationCall = 0
-  const withMemoryReview = (step: any, readonly: boolean, verifyNow: boolean): any => {
-    let resultId = '', verified = false
-    const call = (name: string, args: object) => mock.toolCallResponse(resultId = `application-${activeRound}-${++applicationCall}`, name, args)
-    const start = () => { script.unshift(inspect); return call('task_memory_review', { action: 'status' }) }
+  const withMemoryReview = (step: any): any => {
+    const resultId = `application-${activeRound}-${++applicationCall}`
+    const start = () => {
+      script.unshift(inspect)
+      return mock.toolCallResponse(resultId, 'task_memory_review', { action: 'status' })
+    }
     const inspect = (request: any): any => {
       const result = request.messages.flatMap((message: any) => message.role === 'tool' && message.toolCallId === resultId
         ? [message]
@@ -195,11 +187,6 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
       assert.equal(status.supported, false, `Legacy execution-memory review must be informational: ${JSON.stringify(status)}`)
       assert.equal(status.ready, true, `The optional review must not hold normal execution: ${JSON.stringify(status)}`)
       assert.deepEqual(status.pending, [], 'No automatic memory disposition may be pending')
-      if (verifyNow && !verified) {
-        verified = true
-        script.unshift(start)
-        return call('bash', { command: applicationCommand })
-      }
       return typeof step === 'function' ? step(request) : step
     }
     return start
@@ -223,8 +210,18 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     // Bind the scripted main-model interpretation to this turn's host evidence;
     // legacy taskType alone leaves ownership unresolved without a decision provider.
     script.push(interpretedPreparation(mock, `prepare-${number}`, 'new', 'verify', readonly ? 'debug' : 'review'))
-    if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'exec', { fixture: (number - 1) % 3, procedure: PROCEDURE }), false, false))
-    script.push(withMemoryReview(mock.textResponse(response), readonly, true))
+    if (!readonly) script.push(withMemoryReview(mock.toolCallResponse(`verify-${number}`, 'exec', { fixture: (number - 1) % 3, procedure: PROCEDURE })))
+    const statusId = `completion-status-${number}`, executionId = `completion-execute-${number}`
+    script.push(withMemoryReview(mock.toolCallResponse(statusId, 'task_completion', { action: 'status' })),
+      (request: any) => mock.toolCallResponse(`completion-bind-${number}`, 'task_completion', { action: 'bind',
+        criterionId: toolValue(request, statusId).criteria[0].criterionId,
+        method: { kind: 'native_command', command: applicationCommand, cwd: '.',
+          sourcePaths: [...applicationPaths, 'fixtures/verify.mjs'], assertion: 'selected_tests_pass' } }),
+      mock.toolCallResponse(executionId, 'kioku_exec', { command: applicationCommand }),
+      withMemoryReview((request: any) => {
+        assert.equal(toolValue(request, executionId).exitCode, 0)
+        return mock.textResponse(response)
+      }))
     agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: task }] }))
     roundStage = 'native-final-response'
     await waitFor(() => {
@@ -357,5 +354,5 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
     }
   }
   return { round, database, adapter, provider, setAuxiliaryHook: (hook: typeof auxiliaryHook) => { auxiliaryHook = hook },
-    close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); disposeApplicationVerifier(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
+    close: async () => { composition.stopIngress(); await adapter.dispose(); await composition.dispose(); disposeTool(); for (const fiber of fibers.reverse()) await fiber?.dispose?.() } }
 }

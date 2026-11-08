@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { DecisionBatch } from '../../../src/dsh/decisions/contracts.js'
 import { TASK_WORKFLOW_SERVICE, type DshTaskWorkflow } from '../../../src/dsh/task-state-host.js'
 import { readTaskSnapshot, type TaskSnapshot } from '../../../src/dsh/task-state.js'
@@ -157,11 +158,19 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           assert.equal(asked.length, 1, `clarification ask count: ${JSON.stringify(asked.map(request => request.questions))}`); unchanged()
           return f.mock.textResponse('Waiting for the exact requested clarification.')
         })
-      if (answered) f.responses.push((request: any) => {
+      if (answered) {
+        const acceptAnswer = async (request: any) => {
         const prepared = JSON.parse(resultText(resultFor(request, 'ask-before-change')))
         assert.equal(prepared.prepared, false)
-        assert.equal(prepared.status, 'clarification_answer_queued')
+        assert.equal(prepared.status, 'awaiting_clarification')
         assert.equal(prepared.answer, undefined, 'the tool result must not expose a second copy of the answer')
+        if (!request.messages.some((message: any) => message.source?.kind === 'user' && JSON.stringify(message.content).includes(answer))) {
+          const deadline = Date.now() + 2500
+          while (!f.agent.inbox.nextStep.some((message: any) => JSON.stringify(message.content).includes(answer)) && Date.now() < deadline) await delay(5)
+          assert.ok(f.agent.inbox.nextStep.some((message: any) => JSON.stringify(message.content).includes(answer)))
+          f.responses.unshift(acceptAnswer)
+          return f.mock.textResponse('The independent inspection is complete. The answer can be used at the next step.')
+        }
         assert.deepEqual(f.agent.inbox.nextTurn.map((message: any) => message.id), queued ? [queuedId] : [], 'a foreground question answer must not be replayed as a next-turn command')
         assert.equal(f.agent.inbox.nextStep.length, 0, 'the reply is consumed before the next model request')
         const bound = boundIntent(request)
@@ -174,7 +183,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           && JSON.stringify(event.data.content).includes(ambiguousRequest)), 'actual user answer and original request must both reach fresh native capture')
         unchanged()
         return f.mock.toolCallResponse('resume-same-work', 'prepare_requested_work', { taskType: 'writing' })
-      }, (request: any) => {
+        }
+        f.responses.push(acceptAnswer, (request: any) => {
         const prepared = resultFor(request, 'resume-same-work')
         assert.equal(prepared.isError, false, resultText(prepared))
         const value = JSON.parse(resultText(prepared))
@@ -189,7 +199,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         assert.equal(database(db => db.prepare('SELECT run_id FROM dsh_owned_operations').get()!.run_id), working!.runId)
         unchanged(); wrote = true
         return f.mock.textResponse('The clarified document edit is complete.')
-      })
+        })
+      }
       if (queued) f.responses.push(() => {
         assert.equal(wrote, true, 'the answer is handled before unrelated queued input')
         assert.ok(f.agent.session.snapshotEvents().some((event: any) => event.type === 'user/message' && event.data.id === queuedId))

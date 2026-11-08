@@ -7,6 +7,7 @@ import {
   failBoundaryJobInTransaction,
   markOutboxDispatchedInTransaction,
   readPendingOutbox,
+  reserveOutboxDelivery,
   nextBoundaryWakeAt,
   type DshBoundaryCompletion,
   type DshBoundaryJob,
@@ -26,9 +27,9 @@ export interface DshBoundaryWorkerOptions {
     job: DshBoundaryJob,
     item: DshContinuationOutboxItem,
     signal: AbortSignal,
-  ) => 'deliver' | 'waiting_user' | 'superseded' | PromiseLike<'deliver' | 'waiting_user' | 'superseded'>
+  ) => 'deliver' | 'waiting_user' | 'blocked' | 'superseded' | PromiseLike<'deliver' | 'waiting_user' | 'blocked' | 'superseded'>
   /** Best-effort notification after retries are durably exhausted. Never retried by this worker. */
-  readonly onWaitingUser?: (job: DshBoundaryJob, error: unknown, signal: AbortSignal) => boolean | PromiseLike<boolean>
+  readonly onBlocked?: (job: DshBoundaryJob, error: unknown, signal: AbortSignal) => boolean | PromiseLike<boolean>
   readonly bindNativeAgent?: (sessionId: string, nativeAgent: object) => void
   readonly shouldProcessSession?: (sessionId: string) => boolean
   readonly now?: () => string
@@ -47,7 +48,7 @@ export class DshBoundaryWorker {
   readonly #flush: DshBoundaryWorkerOptions['flush']
   readonly #dispatch: DshBoundaryWorkerOptions['dispatch']
   readonly #beforeDelivery: DshBoundaryWorkerOptions['beforeDelivery']
-  readonly #onWaitingUser: DshBoundaryWorkerOptions['onWaitingUser']
+  readonly #onBlocked: DshBoundaryWorkerOptions['onBlocked']
   readonly #now: () => string
   readonly #bindNativeAgent: DshBoundaryWorkerOptions['bindNativeAgent']
   readonly #shouldProcessSession: DshBoundaryWorkerOptions['shouldProcessSession']
@@ -64,7 +65,7 @@ export class DshBoundaryWorker {
     this.#flush = options.flush
     this.#dispatch = options.dispatch
     this.#beforeDelivery = options.beforeDelivery
-    this.#onWaitingUser = options.onWaitingUser
+    this.#onBlocked = options.onBlocked
     this.#bindNativeAgent = options.bindNativeAgent
     this.#shouldProcessSession = options.shouldProcessSession
     this.#now = options.now ?? (() => new Date().toISOString())
@@ -144,7 +145,9 @@ export class DshBoundaryWorker {
           if (outbox === undefined || outbox.status === 'observed' || outbox.status === 'superseded') {
             completion = { kind: 'superseded' }
           } else {
-            const gate = await abortable(this.#beforeDelivery?.(job, outbox, signal) ?? 'deliver', signal)
+            const gate = outbox.status === 'dispatched' || outbox.deliveryReserved
+              ? 'blocked'
+              : await abortable(this.#beforeDelivery?.(job, outbox, signal) ?? 'deliver', signal)
             if (gate !== 'deliver') {
               completion = { kind: gate }
             } else {
@@ -171,17 +174,20 @@ export class DshBoundaryWorker {
                 ])
               } finally { if (timeout !== undefined) clearTimeout(timeout) }
               signal.throwIfAborted()
-              const delivered = await this.#runtime.withDatabase(async database => {
+              const fresh = await this.#runtime.withDatabase(database => withImmediateTransaction(database, () => {
                 const owned = database.prepare(`SELECT job_id FROM dsh_boundary_jobs
                   WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?`).get(job.jobId, job.ownerNonce)
-                const fresh = readPendingOutbox(database, job.dshSessionId).find(item => item.receiptId === job.receiptId)
-                if (!owned || !fresh || signal.aborted) return false
-                // No await between the last authoritative check and native enqueue.
+                const candidate = readPendingOutbox(database, job.dshSessionId).find(item => item.receiptId === job.receiptId)
+                if (!owned || !candidate || signal.aborted) return undefined
+                return reserveOutboxDelivery(database, candidate.continuationId, this.#now()) ? candidate : undefined
+              }))
+              signal.throwIfAborted()
+              if (fresh) {
                 await this.#dispatch(job, fresh)
-                markOutboxDispatchedInTransaction(database, fresh.continuationId, this.#now())
-                return true
-              })
-              completion = { kind: delivered ? 'completed' : 'superseded' }
+                await this.#runtime.withDatabase(database =>
+                  markOutboxDispatchedInTransaction(database, fresh.continuationId, this.#now()))
+              }
+              completion = { kind: fresh ? 'completed' : 'blocked' }
             }
           }
         } else {
@@ -202,10 +208,10 @@ export class DshBoundaryWorker {
           // is the recovery mechanism on the next kick/startup.
         }
         if (failure?.kind === 'retry') this.#scheduleRetry(job.dshSessionId, failure.retryAt)
-        if (failure?.kind === 'waiting_user') {
+        if (failure?.kind === 'blocked') {
           clearInterval(heartbeat)
           try {
-            if (await abortable(this.#onWaitingUser?.(job, error, signal) ?? false, signal)) this.kick(job.dshSessionId)
+            if (await abortable(this.#onBlocked?.(job, error, signal) ?? false, signal)) this.kick(job.dshSessionId)
           } catch { /* durable wait is authoritative */ }
         }
         return

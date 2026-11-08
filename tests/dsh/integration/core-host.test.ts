@@ -142,7 +142,7 @@ const requireIntakeChoice: DshModule<CoreModuleHost> = {
   async mount({ host, defer }) { defer(host.beforeTask(async () => ({ taskType: null }))); return { stopIngress() {}, async drain() {}, async dispose() {} } },
 }
 
-test('mounted core keeps memory and Goal verification advisory after normal completion', async () => {
+test('mounted core keeps memory advisory and requires current Goal verification', async () => {
   const f = await fixture({ask: async r => ({answers:r.questions.map((q:any)=>({id:q.id,selected:['使わない']}))})}), commands: any[] = []
   f.services.commands = { register(command: any) { commands.push(command); return () => commands.splice(commands.indexOf(command), 1) } }
   const handle = await mountFixtureCore(f.ctx, { repositoryRoot: f.root, databasePath: join(f.root, 'memory.sqlite3') })
@@ -151,6 +151,9 @@ test('mounted core keeps memory and Goal verification advisory after normal comp
     const workspace = db.prepare('SELECT workspace FROM repositories LIMIT 1').get<{workspace:string}>()!.workspace
     recordEntry(db, { workspace, kind: 'lesson', title: 'code migration expectations', body: 'code migration expectations must include the next migration.', createdBy: 'fixture' })
     db.close()
+    const continuations: any[] = []
+    Object.assign(f.agent, { status: 'idle', cancel() {}, inbox: { nextTurn: [], nextStep: [] },
+      followup: (message: unknown) => continuations.push(message) })
     let mutated = false
     f.services.tools.register({ name: 'Edit', execute() { mutated = true } })
     const messages = [{ role: 'user', content: 'Implement code migration expectations' }]
@@ -158,6 +161,11 @@ test('mounted core keeps memory and Goal verification advisory after normal comp
     await f.prepare('build')
     const coding=await f.execute('coding_workflow',{action:'status'})
     await f.execute('coding_workflow',{action:'propose',expectedRevision:coding.revision,definition:fixtureDefinition()})
+    const completion = await f.execute('task_completion', { action: 'status' })
+    await writeFile(join(f.root, 'check.mjs'), "import test from 'node:test'; test('parser check', () => {});\n")
+    await f.execute('task_completion', { action: 'bind', criterionId: completion.criteria[0].criterionId,
+      method: { kind: 'native_command', command: 'node --test --test-reporter=tap check.mjs', cwd: '.', sourcePaths: ['check.mjs'],
+        assertion: 'selected_tests_pass' } })
     const execution = { callId: 'write', name: 'Edit', arguments: {}, agent: f.agent, signal: new AbortController().signal }
     await f.execute('Edit', {})
     assert.equal(mutated, true, 'an unresolved decision never rejects the call')
@@ -176,7 +184,9 @@ test('mounted core keeps memory and Goal verification advisory after normal comp
     const stored = openConnection(join(f.root, 'memory.sqlite3'))
     try {
       const run = stored.prepare('SELECT run_id, status FROM ledger_runs').get<{ run_id: string; status: string }>()!
-      assert.equal(run.status, 'completed')
+      assert.equal(run.status, 'active')
+      assert.equal(continuations.length, 1)
+      assert.match(continuations[0].content[0].text, /task_completion status/u)
       const completion = assessTaskCompletion(stored, run.run_id)
       assert.ok(completion.required > 0)
       assert.equal(completion.verified, false)

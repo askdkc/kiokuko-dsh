@@ -23,7 +23,7 @@ const lispString = (value: string) => `"${value.replace(/\\/gu, '\\\\').replace(
 const extra = { lisp: { enabled: true, startupTimeoutMs: 60000 }, answerReview: { mode: 'off' }, typedDecisions: { mode: 'off' },
   memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' }, deepPlanning: { enabled: false }, modelAutoMode: { mode: 'off' } }
 
-for (const choice of ['使わない', '使う'] as const) test(`native coding session ${choice}: real artifact, item evidence, fresh user-entry Goal`, { skip: !installed, timeout: 120000 }, async () => {
+for (const choice of ['使わない', '使う'] as const) test(`native coding session ${choice}: automatic verification of the real artifact and public entry`, { skip: !installed, timeout: 120000 }, async () => {
   const questions: any[] = []
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit: true, mode: 'full', extra, nativeAnswer: async request => {
     const question = request.questions[0]
@@ -58,8 +58,15 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
       return f.mock.toolCallResponse('bind-'+id, 'task_completion', { action: 'bind', criterionId: `coding:${workflow.workflowId}:${id}`,
         method: { kind: 'native_command', command: choice === '使う' ? "'node' '--test' '--test-reporter=tap' 'src/parser.test.mjs'" : command, cwd: '.', sourcePaths: ['src/parser.mjs', 'src/parser.test.mjs'], assertion: 'selected_tests_pass' } })
     })
-    for (const id of ['item-check', 'goal-check']) call(id, choice === '使う' ? 'lisp_eval' : 'kioku_exec', choice === '使う'
-      ? { operationId: id, code: '(kioku.process:run "node" (list "--test" "--test-reporter=tap" "src/parser.test.mjs"))' } : { command })
+    const checkTool = choice === '使う' ? 'lisp_eval' : 'kioku_exec'
+    const checkArgs = (operationId: string) => choice === '使う'
+      ? { operationId, code: '(kioku.process:run "node" (list "--test" "--test-reporter=tap" "src/parser.test.mjs"))' } : { command }
+    f.responses.push(f.mock.textResponse('The file is written. The bound checks still need to run.'))
+    f.responses.push((request: any) => {
+      assert.ok(request.messages.some((message: any) => message.source?.name === 'completion-verification'), 'automatic verification reaches the native model')
+      return f.mock.toolCallResponse('item-check', checkTool, checkArgs('item-check'))
+    })
+    call('goal-check', checkTool, checkArgs('goal-check'))
     call('completed', 'coding_workflow', { action: 'status' })
     f.responses.push((request: any) => {
       const failed = nativeToolResults(request.messages).filter(value => value.isError)
@@ -79,7 +86,11 @@ for (const choice of ['使わない', '使う'] as const) test(`native coding se
     assert.equal(questions.filter(question=>/^(?:task-startup:|lisp-early-|coding-lisp-)/u.test(question.id)).length,1, 'unrelated execution-mode questions do not reopen the Lisp choice')
     const db = openConnection(join(f.dir, 'state.sqlite3'))
     try {
+      const deadline = Date.now() + 10000
+      while (db.prepare('SELECT status FROM ledger_runs').get<any>().status !== 'completed' && Date.now() < deadline)
+        await new Promise(resolve => setTimeout(resolve, 10))
       assert.equal(db.prepare('SELECT status FROM ledger_runs').get<any>().status, 'completed')
+      assert.equal(f.responses.length, 0, 'the automatic turn ran the outstanding checks')
       const snapshot = JSON.parse(db.prepare('SELECT snapshot_json FROM dsh_coding_workflows').get<any>().snapshot_json)
       assert.equal(snapshot.choice.state, choice === '使う' ? 'yes' : 'no')
       const receipts = db.prepare('SELECT receipt_json FROM dsh_owned_operations').all<any>().map(value => JSON.parse(value.receipt_json))

@@ -70,7 +70,7 @@ export function apply(ctx) {
             const section = options.messages.flatMap(message => message.source?.sections ?? []).filter(value => value.name === 'on-demand-intake').at(-1)?.text
             const json = section?.split('Current request references and same-session work (host-bound, advisory only):\n')[1]?.split('\n')[0]
             assert.ok(json, 'Preparation requires current host references')
-            args = { requestIntent: { relation: 'new', action: 'verify', changeScope: 'unknown', evidenceRefs: JSON.parse(json).references } }
+            args = { requestIntent: { relation: 'new', action: 'operate', changeScope: 'unknown', evidenceRefs: JSON.parse(json).references } }
           }
           assert.ok(options.tools.some(tool => tool.name === name), `Expected exposed ${name}`)
           record({ type: 'fixture-tool-call', id, name, args })

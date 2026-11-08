@@ -581,7 +581,7 @@ export class DshTaskWorkflow {
                 verified: true,
               });
               input.evidence.push(ref);
-            } else if (!assessment.coding && assessment.required === 0) {
+            } else if (!assessment.evidenceRequired && !assessment.coding && assessment.required === 0) {
               const observed = observedTaskCompletionEvidence(
                 db,
                 task,

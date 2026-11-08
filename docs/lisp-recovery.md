@@ -1,5 +1,7 @@
 # Bounded live condition/restart recovery
 
+If a protected Lisp worker fails to start or recover, the model can continue with permitted reading, search, and planning. Use `lisp_status` and `lisp_inspect` to diagnose the worker and inspect saved receipts. The selected route and its effect guards remain in force while the worker or an operation is unresolved.
+
 `kioku.recovery:select-restart` is opt-in recovery inside an explicit Common Lisp
 `handler-bind`. The handler runs before unwinding, so the named restart keeps its
 lexical state. The host sends only the supplied JSON context, condition type and

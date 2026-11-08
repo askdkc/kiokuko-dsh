@@ -131,6 +131,7 @@ test('baseline initialization creates the complete DSH schema with clean integri
         'dsh_answer_reviews',
         'dsh_auxiliary_recovery',
         'dsh_boundary_jobs',
+        'dsh_clarification_claims',
         'dsh_coding_admissions',
         'dsh_coding_operations',
         'dsh_coding_workflows',

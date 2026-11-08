@@ -37,6 +37,7 @@ import {
 } from "./execution-command.js";
 import { readCodingWorkflow } from "./coding-workflow/store.js";
 import { recordCodingAttempt } from "./coding-workflow/service.js";
+import type { RequestIntentDecision } from "./decisions/request-intent.js";
 import { hasUnsettledNativeChildren } from "./native-execution-ownership.js";
 
 export const CompletionConfig = z
@@ -129,6 +130,7 @@ export type CompletionAssessment = {
   mode: CompletionMode;
   verified: boolean;
   required: number;
+  evidenceRequired?: true;
   criteria: CriterionAssessment[];
   workflowReady?: boolean;
   managedOperationsReady?: boolean;
@@ -178,12 +180,32 @@ export function initializeTaskCompletion(
   database: SqliteDatabase,
   runId: string,
   mode: CompletionMode,
+  intent?: RequestIntentDecision,
 ): void {
-  database
-    .prepare(
-      "INSERT OR IGNORE INTO dsh_completion_runs(run_id,mode,created_at) VALUES(?,?,?)",
-    )
-    .run(runId, mode, new Date().toISOString());
+  const evidenceRequired = intent !== undefined && intent.relation !== "unknown" &&
+    (intent.action === "verify" || intent.action === "change" && intent.changeScope === "implementation");
+  database.prepare(`
+    INSERT INTO dsh_completion_runs(run_id,mode,created_at,evidence_required) VALUES(?,?,?,?)
+    ON CONFLICT(run_id) DO UPDATE SET evidence_required=max(evidence_required,excluded.evidence_required)
+  `).run(runId, mode, new Date().toISOString(), Number(evidenceRequired));
+}
+
+function requiresCurrentEvidence(database: SqliteDatabase, runId: string): boolean {
+  return database.prepare("SELECT evidence_required FROM dsh_completion_runs WHERE run_id=?")
+    .get<{ evidence_required: number }>(runId)?.evidence_required === 1;
+}
+
+/** Closing revokes the execution lease. Retain the generation which supplied
+ * the closing proof, and re-evaluate its source on read. Resumes use the new lease. */
+function verificationGeneration(database: SqliteDatabase, runId: string): number | undefined {
+  if (!requiresCurrentEvidence(database, runId)) return undefined;
+  return database.prepare(`
+    SELECT CASE WHEN r.status = 'completed' OR r.task_state = 'Done'
+                THEN coalesce(p.verified_generation, r.task_generation)
+                ELSE r.task_generation END AS generation
+      FROM ledger_runs r LEFT JOIN dsh_completion_receipts p ON p.run_id = r.run_id
+     WHERE r.run_id = ?
+  `).get<{ generation: number }>(runId)?.generation;
 }
 
 function runMode(database: SqliteDatabase, runId: string): CompletionMode {
@@ -199,10 +221,10 @@ function criteriaForRun(
   runId: string,
 ): { criteria: CompletionCriterion[]; repositoryRoot: string } {
   const coding = readCodingWorkflow(database, runId);
-  if (coding)
+  if (coding?.definition)
     return {
       repositoryRoot: coding.repositoryRoot,
-      criteria: (coding.definition?.criteria ?? []).map((item) => ({
+      criteria: coding.definition.criteria.map((item) => ({
         id: `coding:${coding.workflowId}:${item.criterionId}`,
         description: `${item.outcome} / ${item.procedure} / ${item.expected}`,
         revision: item.revision,
@@ -210,35 +232,34 @@ function criteriaForRun(
       })),
     };
   const row = database
-    .prepare(
-      "SELECT workspace FROM ledger_runs WHERE run_id = ?",
-    )
-    .get<{ workspace: string | null }>(runId);
+    .prepare("SELECT title, task_generation AS generation FROM ledger_runs WHERE run_id = ?")
+    .get<{ title: string | null; generation: number }>(runId);
   if (!row)
     throw new KiokukoError("NOT_FOUND", "Task completion run does not exist");
   const frame = readExecutionFrame(database, runId);
-  return {
-    repositoryRoot: frame?.workspace ?? "",
-    criteria: (frame?.conditions ?? [])
-      .filter(
-        (item) => item.field === "completion" && item.approval !== "proposed",
-      )
-      .map((item, index) => ({
-        id: `condition-${canonicalContentHash({
-          runId,
-          revision: frame!.revision,
-          index,
-          text: item.text,
-          source: item.source,
-        }).slice(0, 24)}`,
-        description: item.text,
-        revision: frame!.revision,
-        approval: item.approval as "explicit" | "approved",
-      })),
-  };
+  const generation = verificationGeneration(database, runId) ?? row.generation;
+  const repositoryRoot = coding?.repositoryRoot ?? frame?.workspace ?? "";
+  const required = requiresCurrentEvidence(database, runId);
+  const criteria: CompletionCriterion[] = (frame?.conditions ?? [])
+    .filter((item) => item.field === "completion" && item.approval !== "proposed")
+    .map((item, index) => ({
+      id: `condition-${canonicalContentHash({
+        runId, revision: frame!.revision, index, text: item.text, source: item.source,
+      }).slice(0, 24)}`,
+      description: item.text,
+      revision: frame!.revision,
+      approval: item.approval as "explicit" | "approved",
+    }));
+  if (!criteria.length && required && row.title && repositoryRoot)
+    criteria.push({
+      id: `request-${canonicalContentHash([runId, generation, row.title]).slice(0, 24)}`,
+      description: `Verify the requested outcome: ${row.title.slice(0, 3000)}`,
+      revision: generation,
+      approval: "explicit",
+    });
+  return { repositoryRoot, criteria };
 }
 
-/** Advice reads the same immutable criterion contract as binding; it cannot supply execution proof. */
 export function taskCompletionBindingGuide(
   database: SqliteDatabase,
   runId: string,
@@ -282,7 +303,7 @@ function validateMethod(
   repositoryRoot: string,
 ): void {
   const coding = readCodingWorkflow(database, runId);
-  if (coding && method.assertion === "exit_zero")
+  if ((coding || requiresCurrentEvidence(database, runId)) && method.assertion === "exit_zero")
     throw new KiokukoError(
       "VALIDATION_ERROR",
       "Coding criteria require selected tests or observable output/artifact assertions, not exit 0 alone",
@@ -877,13 +898,13 @@ export function assessTaskCompletion(
       };
     },
   );
-  const managedOperationsReady = !unresolvedManaged(database, runId);
+  const managedOperationsReady = !unsettledOperations(database, runId);
   const nativeChildrenPending = hasUnsettledNativeChildren(database, runId);
   const workflowReady =
     !coding ||
     Boolean(
       protocolCompletionReady(database, runId) &&
-      coding.definition &&
+      (coding.definition || !coding.protocol) &&
       coding.choice.state !== "cancelled" &&
       !coding.pendingScopeChange &&
       !["cancelled", "superseded", "blocked"].includes(coding.state),
@@ -944,6 +965,7 @@ export function assessTaskCompletion(
   }
   return {
     mode: runMode(database, runId),
+    ...(requiresCurrentEvidence(database, runId) ? { evidenceRequired: true } : {}),
     managedOperationsReady,
     ...(nativeChildrenPending ? { nativeChildrenPending: true } : {}),
     verified:
@@ -1009,10 +1031,12 @@ export function saveTaskCompletionReceipt(
     return assessment;
   database
     .prepare(
-      `INSERT INTO dsh_completion_receipts(run_id,assessment_json,updated_at) VALUES(?,?,?)
-    ON CONFLICT(run_id) DO UPDATE SET assessment_json=excluded.assessment_json,updated_at=excluded.updated_at`,
+      `INSERT INTO dsh_completion_receipts(run_id,assessment_json,updated_at,verified_generation) VALUES(?,?,?,?)
+    ON CONFLICT(run_id) DO UPDATE SET assessment_json=excluded.assessment_json,updated_at=excluded.updated_at,
+      verified_generation=coalesce(excluded.verified_generation, dsh_completion_receipts.verified_generation)`,
     )
-    .run(runId, JSON.stringify(assessment), new Date().toISOString());
+    .run(runId, JSON.stringify(assessment), new Date().toISOString(),
+      assessment.verified ? verificationGeneration(database, runId) ?? null : null);
   return assessment;
 }
 
@@ -1066,14 +1090,21 @@ export function taskCompletionBlocksClose(
     assessment.managedOperationsReady === false ||
     assessment.nativeChildrenPending === true ||
     (!assessment.verified &&
-      (assessment.coding ? assessment.coding.protocol !== undefined
-        : assessment.mode === "enforce" && assessment.required > 0))
+      (assessment.evidenceRequired === true ||
+        (assessment.coding ? assessment.coding.protocol !== undefined
+          : assessment.mode === "enforce" && assessment.required > 0)))
   );
+}
+
+function unsettledOperations(database: SqliteDatabase, runId: string): boolean {
+  return unresolvedManaged(database, runId) || database.prepare(`
+    SELECT 1 FROM dsh_owned_operations WHERE run_id=? AND state IN ('started','unknown') LIMIT 1
+  `).get(runId) !== undefined;
 }
 
 /** A failed optional record write cannot release unresolved operation authority. */
 export function completionBlocksCloseWithoutReceipt(database: SqliteDatabase, runId: string): boolean {
-  if (hasUnsettledNativeChildren(database, runId) || unresolvedManaged(database, runId)) return true;
+  if (requiresCurrentEvidence(database, runId) || hasUnsettledNativeChildren(database, runId) || unsettledOperations(database, runId)) return true;
   const coding = readCodingWorkflow(database, runId);
   return coding ? coding.protocol !== undefined : runMode(database, runId) === "enforce";
 }
@@ -1086,10 +1117,13 @@ export function completionSourceDigest(
   paths: string[],
 ): string {
   const workflow = readCodingWorkflow(database, runId);
+  const generation = verificationGeneration(database, runId);
+  const authority = generation === undefined ? {} : { generation };
   if (!workflow)
     return canonicalContentHash({
       commandIdentityVersion: EXECUTION_COMMAND_VERSION,
       source: applicationSourceDigest(root, paths),
+      ...authority,
     });
   const configuration = [
     "package.json",
@@ -1103,6 +1137,7 @@ export function completionSourceDigest(
       ...new Set([...paths, ...configuration]),
     ]),
     scopeVersion: workflow.scopeVersion,
+    ...authority,
     runtime: {
       node: process.version,
       executable: process.execPath,

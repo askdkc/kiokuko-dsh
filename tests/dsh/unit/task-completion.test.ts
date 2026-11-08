@@ -1,3 +1,6 @@
+import { LedgerStore } from '../../../src/ledger/store.js'
+import { continuationProgress } from '../../../src/dsh/continuation-evidence.js'
+import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -7,7 +10,7 @@ import { openConnection } from '../../../src/db/connection.js'
 import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, finishTaskCompletionExecution,
-  parseNodeTapSummary, saveTaskCompletionReceipt, selectedNodeTestCommand, taskCompletionBlocksClose } from '../../../src/dsh/task-completion.js'
+  completionSourceDigest, initializeTaskCompletion, parseNodeTapSummary, saveTaskCompletionReceipt, selectedNodeTestCommand, taskCompletionBlocksClose } from '../../../src/dsh/task-completion.js'
 
 const command = 'node --test --test-reporter=tap src/check.test.ts'
 const tap = (pass: number, skipped = 0) => `TAP version 13\n# tests ${pass + skipped}\n# pass ${pass}\n# fail 0\n# cancelled 0\n# skipped ${skipped}\n# todo 0\n# duration_ms 3\n`
@@ -41,6 +44,54 @@ test('completion mode is frozen at run creation and shadow preserves legacy clos
     assert.equal(assessTaskCompletion(legacy.database, legacy.runId).mode, 'shadow')
     assert.equal(legacy.database.prepare('SELECT * FROM dsh_completion_runs').all().length, 0)
   } finally { await enforce.cleanup(); await shadow.cleanup(); await legacy.cleanup() }
+})
+
+test('source-bound verification requires observed proof even in shadow mode', () => {
+  const missing = { mode: 'shadow' as const, verified: false, required: 0, criteria: [], evidenceRequired: true as const }
+  assert.equal(taskCompletionBlocksClose(missing), true)
+  assert.equal(taskCompletionBlocksClose({ ...missing, verified: true }), false)
+})
+
+test('a bound verification request in shadow stays open until its current check passes', async () => {
+  const f = await fixture('shadow')
+  try {
+    const task = 'Verify parser output'
+    const message = { id: 'verify-original', role: 'user', content: [{ type: 'text', text: task }] }
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'verify',
+      evidenceRefs: requestIntentReferenceIds(context) }, context)
+    assert.ok(decision)
+    initializeTaskCompletion(f.database, f.runId, 'shadow', decision)
+    const ledger = new LedgerStore(f.database)
+    if (ledger.readRun(f.runId)?.status === 'intake') ledger.updateRunStatus(f.runId, 'active')
+    assert.equal(taskCompletionBlocksClose(assessTaskCompletion(f.database, f.runId)), true)
+    for (const [index, criterion] of f.criteria.entries()) {
+      const callId = `observed-${index}`
+      bindTaskCriterion(f.database, { runId: f.runId, callId: `bind-${index}`,
+        criterionId: criterion.criterionId, method: f.method, approved: true })
+      assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId, command,
+        repositoryRoot: f.root }), true)
+      finishTaskCompletionExecution(f.database, { runId: f.runId, callId, result: {
+        value: { exitCode: 0 }, content: [{ type: 'text', text: tap(1) }],
+      } })
+    }
+    const verified = saveTaskCompletionReceipt(f.database, f.runId)
+    assert.equal(taskCompletionBlocksClose(verified), false)
+    const progress = continuationProgress(f.database, f.runId, f.root, verified)
+    f.database.prepare('UPDATE dsh_completion_executions SET source_digest = ? WHERE run_id = ?')
+      .run('a'.repeat(64), f.runId)
+    assert.equal(continuationProgress(f.database, f.runId, f.root, verified), progress,
+      'a changed revision inside the verification digest alone is not progress')
+    // Restore the exact source digest before observing the terminal transition.
+    const source = completionSourceDigest(f.database, f.runId, f.root, f.method.sourcePaths)
+    f.database.prepare('UPDATE dsh_completion_executions SET source_digest = ? WHERE run_id = ?').run(source, f.runId)
+    ledger.updateRunStatus(f.runId, 'completed')
+    assert.equal(assessTaskCompletion(f.database, f.runId).verified, true,
+      'closing revokes execution without invalidating the closing proof')
+    await writeFile(join(f.root, 'src/check.test.ts'), 'changed target')
+    assert.notEqual(continuationProgress(f.database, f.runId, f.root, verified), progress)
+    assert.equal(taskCompletionBlocksClose(assessTaskCompletion(f.database, f.runId)), true)
+  } finally { await f.cleanup() }
 })
 
 test('only an approved, pre-bound exact command at the source revision supplies proof', async () => {

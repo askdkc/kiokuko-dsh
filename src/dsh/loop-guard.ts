@@ -1,10 +1,7 @@
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
-import type { DshBoundaryJob } from './turn-process.js'
 
-export const DSH_AUTOMATIC_CONTINUATION_LIMIT = 3
-
-export type DshLoopGuardDecision = 'deliver' | 'wait_user'
+export type DshLoopGuardDecision = 'deliver' | 'replan' | 'wait_user' | 'blocked'
 
 export interface DshLoopGuardClaim {
   readonly claimId: string
@@ -13,18 +10,6 @@ export interface DshLoopGuardClaim {
   readonly generation: number
   readonly recovered: boolean
   readonly replayed: boolean
-}
-
-export interface DshBoundaryEffectClaim {
-  readonly decision: DshLoopGuardDecision
-  readonly ordinal: number
-}
-
-interface LoopStateRow extends Record<string, unknown> {
-  instructionDigest: string | null
-  generation: number
-  automaticCount: number
-  status: 'active' | 'waiting_user'
 }
 
 interface LoopClaimRow extends Record<string, unknown> {
@@ -46,16 +31,6 @@ function digest(value: string, label: string): string {
   return value
 }
 
-function omitUndefined(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => item === undefined ? null : omitUndefined(item))
-  if (typeof value !== 'object' || value === null) return value
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([, child]) => child !== undefined)
-      .map(([key, child]) => [key, omitUndefined(child)]),
-  )
-}
-
 export function claimAutomaticContinuationInTransaction(
   database: SqliteDatabase,
   input: {
@@ -63,6 +38,7 @@ export function claimAutomaticContinuationInTransaction(
     readonly runId: string
     readonly dshSessionId: string
     readonly instructionDigest: string
+    readonly progressDigest: string
     readonly now?: string
   },
 ): DshLoopGuardClaim {
@@ -70,11 +46,14 @@ export function claimAutomaticContinuationInTransaction(
   const runId = identity(input.runId, 'runId')
   const dshSessionId = identity(input.dshSessionId, 'dshSessionId')
   const instructionDigest = digest(input.instructionDigest, 'instructionDigest')
+  const progressDigest = digest(input.progressDigest, 'progressDigest')
   const existingClaim = database.prepare(`
-    SELECT decision, ordinal, generation, resolution
+    SELECT decision, ordinal, generation, resolution, run_id AS runId, dsh_session_id AS sessionId
       FROM dsh_loop_guard_claims WHERE claim_id = ?
-  `).get<LoopClaimRow>(claimId)
+  `).get<LoopClaimRow & { runId: string; sessionId: string }>(claimId)
   if (existingClaim !== undefined) {
+    if (existingClaim.runId !== runId || existingClaim.sessionId !== dshSessionId)
+      throw new KiokukoError('CONFLICT', 'Continuation claim belongs to a different run or session')
     return Object.freeze({
       claimId,
       decision: existingClaim.resolution === 'user_answer' ? 'deliver' : existingClaim.decision,
@@ -86,70 +65,38 @@ export function claimAutomaticContinuationInTransaction(
   }
 
   const now = input.now ?? new Date().toISOString()
-  let state = database.prepare(`
-    SELECT instruction_digest AS instructionDigest, generation,
-           automatic_count AS automaticCount, status
-      FROM dsh_loop_guard_states
-     WHERE run_id = ? AND dsh_session_id = ?
-  `).get<LoopStateRow>(runId, dshSessionId)
-  if (state === undefined) {
-    database.prepare(`
-      INSERT INTO dsh_loop_guard_states (
-        run_id, dsh_session_id, instruction_digest, generation,
-        automatic_count, status, blocked_claim_id, created_at, updated_at
-      ) VALUES (?, ?, ?, 0, 0, 'active', NULL, ?, ?)
-    `).run(runId, dshSessionId, instructionDigest, now, now)
-    state = { instructionDigest, generation: 0, automaticCount: 0, status: 'active' }
-  }
-
-  const sameInstruction = state.instructionDigest === instructionDigest
-  const generation = sameInstruction ? state.generation : state.generation + 1
-  const previousCount = sameInstruction ? state.automaticCount : 0
-  const ordinal = Math.min(previousCount + 1, DSH_AUTOMATIC_CONTINUATION_LIMIT + 1)
-  const decision: DshLoopGuardDecision = previousCount >= DSH_AUTOMATIC_CONTINUATION_LIMIT
-    ? 'wait_user'
-    : 'deliver'
-  const automaticCount = decision === 'deliver' ? ordinal : DSH_AUTOMATIC_CONTINUATION_LIMIT
-
+  database.prepare(`
+    INSERT OR IGNORE INTO dsh_loop_guard_states (
+      run_id, dsh_session_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?)
+  `).run(runId, dshSessionId, now, now)
+  const state = database.prepare(`
+    SELECT generation, automatic_count AS automaticCount FROM dsh_loop_guard_states
+    WHERE run_id = ? AND dsh_session_id = ?
+  `).get<{ generation: number; automaticCount: number }>(runId, dshSessionId)!
+  const { generation } = state
+  const previous = database.prepare(`
+    SELECT max(CASE WHEN decision IN ('replan','blocked') THEN 2 ELSE 1 END) AS attempts
+    FROM dsh_loop_guard_claims
+    WHERE run_id = ? AND dsh_session_id = ? AND generation = ?
+      AND policy_version = 2 AND progress_digest = ?
+  `).get<{ attempts: number | null }>(runId, dshSessionId, generation, progressDigest)?.attempts
+  const decision = previous === 2 ? 'blocked' : previous === 1 ? 'replan' : 'deliver'
+  const ordinal = state.automaticCount + 1
   database.prepare(`
     UPDATE dsh_loop_guard_states
-       SET instruction_digest = ?, generation = ?, automatic_count = ?,
-           status = ?, blocked_claim_id = ?, updated_at = ?
+       SET instruction_digest = ?, automatic_count = ?, status = ?, blocked_claim_id = ?, updated_at = ?
      WHERE run_id = ? AND dsh_session_id = ?
-  `).run(
-    instructionDigest,
-    generation,
-    automaticCount,
-    decision === 'deliver' ? 'active' : 'waiting_user',
-    decision === 'wait_user' ? claimId : null,
-    now,
-    runId,
-    dshSessionId,
-  )
+  `).run(instructionDigest, ordinal, decision === 'blocked' ? 'blocked' : 'active',
+    decision === 'blocked' ? claimId : null, now, runId, dshSessionId)
   database.prepare(`
     INSERT INTO dsh_loop_guard_claims (
-      claim_id, run_id, dsh_session_id, instruction_digest,
-      generation, ordinal, decision, resolution, created_at, question_asked_at, resolved_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)
-  `).run(claimId, runId, dshSessionId, instructionDigest, generation, ordinal, decision, now)
+      claim_id, run_id, dsh_session_id, instruction_digest, generation, ordinal,
+      decision, created_at, progress_digest, policy_version, reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)
+  `).run(claimId, runId, dshSessionId, instructionDigest, generation, ordinal, decision, now, progressDigest,
+    decision === 'deliver' ? 'new_observation' : 'no_progress')
   return Object.freeze({ claimId, decision, ordinal, generation, recovered: false, replayed: false })
-}
-
-/** Claim the one allowed UI question before crossing the external question boundary. */
-export function claimLoopRecoveryQuestionInTransaction(
-  database: SqliteDatabase,
-  claimIdValue: string,
-  now = new Date().toISOString(),
-): boolean {
-  const claimId = digest(claimIdValue, 'claimId')
-  const changed = database.prepare(`
-    UPDATE dsh_loop_guard_claims
-       SET question_asked_at = ?
-     WHERE claim_id = ? AND decision = 'wait_user'
-       AND question_asked_at IS NULL AND resolution IS NULL
-    RETURNING claim_id AS claimId
-  `).get<{ claimId: string }>(now, claimId)
-  return changed !== undefined
 }
 
 export function resetLoopGuardForUserInTransaction(
@@ -185,64 +132,4 @@ export function resetLoopGuardForUserInTransaction(
            automatic_count = 0, status = 'active', blocked_claim_id = NULL, updated_at = ?
      WHERE run_id = ? AND dsh_session_id = ?
   `).run(now, runId, dshSessionId)
-}
-
-export function claimBoundaryEffectInTransaction(
-  database: SqliteDatabase,
-  job: DshBoundaryJob,
-  progressDigestValue: string,
-  now = new Date().toISOString(),
-): DshBoundaryEffectClaim {
-  const progressDigest = digest(progressDigestValue, 'progressDigest')
-  const row = database.prepare(`
-    SELECT progress_digest AS progressDigest, progress_count AS progressCount,
-           progress_claim_attempt AS progressClaimAttempt, progress_waiting AS progressWaiting
-      FROM dsh_boundary_jobs
-     WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
-  `).get<{
-    progressDigest: string | null
-    progressCount: number
-    progressClaimAttempt: number | null
-    progressWaiting: number
-  }>(job.jobId, job.ownerNonce)
-  if (row === undefined) throw new KiokukoError('CONFLICT', 'Boundary effect lease changed before progress claim')
-  if (row.progressClaimAttempt === job.attemptCount) {
-    return Object.freeze({
-      decision: row.progressWaiting === 1 ? 'wait_user' : 'deliver',
-      ordinal: row.progressWaiting === 1 ? DSH_AUTOMATIC_CONTINUATION_LIMIT + 1 : row.progressCount,
-    })
-  }
-  const previousCount = row.progressDigest === progressDigest ? row.progressCount : 0
-  const ordinal = Math.min(previousCount + 1, DSH_AUTOMATIC_CONTINUATION_LIMIT + 1)
-  const decision: DshLoopGuardDecision = previousCount >= DSH_AUTOMATIC_CONTINUATION_LIMIT
-    ? 'wait_user'
-    : 'deliver'
-  database.prepare(`
-    UPDATE dsh_boundary_jobs
-       SET progress_digest = ?, progress_count = ?, progress_claim_attempt = ?,
-           progress_waiting = ?, updated_at = ?
-     WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
-  `).run(
-    progressDigest,
-    decision === 'deliver' ? ordinal : DSH_AUTOMATIC_CONTINUATION_LIMIT,
-    job.attemptCount,
-    decision === 'wait_user' ? 1 : 0,
-    now,
-    job.jobId,
-    job.ownerNonce,
-  )
-  return Object.freeze({ decision, ordinal })
-}
-
-export function resetBoundaryEffectGuardInTransaction(
-  database: SqliteDatabase,
-  job: DshBoundaryJob,
-  now = new Date().toISOString(),
-): void {
-  database.prepare(`
-    UPDATE dsh_boundary_jobs
-       SET progress_digest = NULL, progress_count = 0,
-           progress_claim_attempt = NULL, progress_waiting = 0, updated_at = ?
-     WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
-  `).run(now, job.jobId, job.ownerNonce)
 }

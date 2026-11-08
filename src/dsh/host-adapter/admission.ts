@@ -1,3 +1,5 @@
+import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
+import { isVerificationContinuation, acceptsVerificationContinuation } from '../verification-continuation.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { readTaskCorrections } from '../correction-context.js'
 import { timeConstraintForRequest } from '../../memory/retrieval-contracts.js'
@@ -212,6 +214,7 @@ interface AdmissionDependencies {
   ) => Promise<void>
   readonly cancelBoundarySession: (sessionId: string) => void
   readonly isSelectionBlocked: (agent: object) => boolean
+  readonly markSelectionPending: (agent: object) => void
   readonly closeTurn: (input: DshRunClose) => Promise<void>
   readonly capabilityCatalog: (
     skills: NativeSkills | undefined,
@@ -287,6 +290,7 @@ export function createAdmission({
   retireSupersededRun,
   cancelBoundarySession,
   isSelectionBlocked,
+  markSelectionPending,
   closeTurn,
   capabilityCatalog,
   sessionEventSource,
@@ -1235,13 +1239,28 @@ export function createAdmission({
       // auxiliary database failure cannot delay or rewrite its decision.
       const downstream = await next()
       if (downstream.kind !== 'enter') return downstream
+      const pendingSelection = (decision: typeof downstream) => ({
+        ...decision,
+        messages: [...decision.messages, { role: 'user' as const,
+          content: [{ type: 'text' as const, text: 'Execution selection is pending. Continue permitted independent reading and planning. Keep the current route and permissions until the user selects how to execute.' }],
+          source: { kind: KIOKUKO_DSH_SOURCE_KIND, form: 'instructions' } }],
+      })
       if (event.nativeAgent && isSelectionBlocked(event.nativeAgent))
-        return { kind: 'reject' }
+        return pendingSelection(downstream)
       const nativeMessages = Object.freeze([...(event.nativeMessages ?? [])])
       await captureInitialInput(event.sessionId, event.turn, nativeMessages)
       const humanPresent =
         nativeMessages.some(isHumanMessage) ||
         downstream.messages.some(isHumanMessage)
+      const verification = nativeMessages.find(isVerificationContinuation)
+      if (verification && !humanPresent) {
+        const item = currentSession(event.sessionId)
+        if (!item?.authority || item.closed || item.nativeAgent !== event.nativeAgent ||
+          item.nativeSession !== event.nativeSession ||
+          (item.turn !== event.turn - 1 && item.turn !== event.turn) ||
+          !acceptsVerificationContinuation(verification, item.authority, event.turn))
+          return { kind: 'reject' }
+      }
       const seenContinuations = new Set<string>()
       let nativeDecision: DshPreStepDecision = {
         ...downstream,
@@ -1373,8 +1392,10 @@ export function createAdmission({
           ],
         }
       } catch (error) {
-        if (error instanceof ExecutionSelectionPending)
-          return { kind: 'reject' }
+        if (error instanceof ExecutionSelectionPending) {
+          if (event.nativeAgent) markSelectionPending(event.nativeAgent)
+          return pendingSelection(nativeDecision)
+        }
         if (
           !humanPresent &&
           nativeMessages.some(
@@ -1582,7 +1603,7 @@ export function createAdmission({
                 : `run:${runId}`,
             runId,
           })
-        initializeTaskCompletion(database, runId, completionMode)
+        initializeTaskCompletion(database, runId, completionMode, event.requestIntent)
         if (
           executionMode === 'normal' &&
           !readCodingWorkflow(database, runId) &&

@@ -1,3 +1,4 @@
+import { continueVerification } from '../verification-continuation.js';
 import type { SqliteDatabase } from "../../db/adapter.js";
 import {
   readTaskSnapshot,
@@ -247,13 +248,23 @@ export function createLifecycle(deps: LifecycleDependencies) {
       };
     // Idle alone is not completion. The exact native turn must have finished,
     // and any explicit execution protocol must permit closing.
-    if (nativeTurnCompleted(item) && await completionReady(item))
-      return {
-        ...closeAuthority(item),
-        runId: item.runId,
-        status: "completed",
-        terminalTurn: item.turn,
-      };
+    if (nativeTurnCompleted(item)) {
+      if (await completionReady(item))
+        return {
+          ...closeAuthority(item),
+          runId: item.runId,
+          status: "completed",
+          terminalTurn: item.turn,
+        };
+      const agent = item.nativeAgent as NativeAgent | undefined;
+      const authority = item.authority;
+      if (agent && authority && agent.session === item.nativeSession)
+        await continueVerification({
+          runtime, agent, authority, turn: item.turn,
+          current: () => currentSession(item.sessionId) === item && !item.closed &&
+            !executionSupport.paused(item.sessionId) && !deps.awaitingClarification?.(agent),
+        }).catch(() => { /* Completion remains pending on uncertain delivery. */ });
+    }
     return undefined;
   };
   const resolveSessionRunId = (session: { id: string }): string | undefined => {

@@ -1,3 +1,5 @@
+import { clarificationClaims } from '../clarification-claims.js'
+import { acceptsVerificationContinuation, continueVerification, isVerificationContinuation } from '../verification-continuation.js'
 import { noteScopedMemory } from '../memory-sidebar.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
@@ -215,6 +217,10 @@ export const CoreConfig = z
 export type CoreConfig = z.input<typeof CoreConfig>
 interface NativeAgent {
   id: string
+  status?: string
+  cancel?: (...args: any[]) => unknown
+  followup?: (message: any) => void
+  inbox?: { nextTurn: readonly unknown[]; nextStep: readonly unknown[] }
   ctx?: {
     on(
       name: string,
@@ -582,6 +588,10 @@ export async function mountCore(
         dshTurnRequestId({ dshSessionId: input.agent.session!.id, turn: input.turn }), task, question, input.signal,
         [question.id === 'target' ? context?.activeGoal?.target : undefined, context?.activeTask?.request].filter((value): value is string => typeof value === 'string'), context?.workspaceDirectory,
         { llm, agent: input.agent }),
+      clarificationClaims: clarificationClaims(runtime),
+      stopClarification: (agent, expected) => taskWorkflow.operate(agent as any, {
+        operation: 'wait', expected, reason: 'Native Stop while awaiting clarification',
+      }, lifecycle.signal),
       diagnostic: createIntakeDiagnosticSink(runtime),
       recovery: runtime.auxiliaryRecovery,
       assess: (input, context, decision, recoveryAttempt, userConfirmed) =>
@@ -849,7 +859,7 @@ export async function mountCore(
     },
     { onlyWhenDeferred: config.intakeMode === 'eager' },
   )
-  const taskWorkflow = new DshTaskWorkflow({
+  const taskWorkflow: DshTaskWorkflow = new DshTaskWorkflow({
     runtime,
     decisions,
     llm,
@@ -936,14 +946,22 @@ export async function mountCore(
       answerReview.hold(current.agent as ReviewAgent)
     )
       return
-    if (
-      reason === 'completed' &&
-      !current.failed &&
-      (await runtime.withDatabase((db) =>
-        taskCompletionBlocksClose(assessTaskCompletion(db, current.task.runId)),
-      ))
-    )
-      return
+    if (reason === 'completed' && !current.failed) {
+      const blocked = await runtime.withDatabase(db =>
+        taskCompletionBlocksClose(assessTaskCompletion(db, current.task.runId)))
+      if (active.get(sessionId) !== current || current.finishing) return current.finishing
+      if (blocked) {
+        const authority = current.task.authority
+        const turn = current.turn
+        if (authority) await continueVerification({
+          runtime, authority, turn, agent: current.agent,
+          current: () => !stopped && active.get(sessionId) === current &&
+            current.turn === turn && current.task.authority === authority &&
+            !demand.awaitingClarification(current.agent),
+        }).catch(() => { /* Completion remains pending if the reservation or delivery is uncertain. */ })
+        return
+      }
+    }
     current.finishing = (async () => {
       await sessions.flush(current.agent.session)
       const outcome =
@@ -2315,6 +2333,22 @@ export async function mountCore(
           (async () => {
             if (stopped) return { kind: 'reject' }
             bind(payload.agent)
+            const verification = payload.messages.find(isVerificationContinuation)
+            if (verification && !hasRequestInput(payload.messages)) {
+              const current = active.get(payload.agent.session.id)
+              if (!current?.task.authority || current.agent !== payload.agent ||
+                !acceptsVerificationContinuation(verification, current.task.authority, payload.turn) ||
+                current.turn !== payload.turn - 1 && current.turn !== payload.turn) return { kind: 'reject' }
+              await runtime.withDatabase(db => authorizeTaskLease(db, current.task.authority!))
+              payload.signal.throwIfAborted()
+              if (active.get(payload.agent.session.id) !== current) return { kind: 'reject' }
+              current.turn = payload.turn
+              if (current.task.memoryOwner) current.task = {
+                ...current.task, memoryOwner: createMemoryOwner(current.task.memoryOwner.kind,
+                  { ...current.task.memoryOwner, turn: payload.turn }),
+              }
+              return withTaskGuidance(await next(), current)
+            }
             const reviewMessages = payload.messages.filter(
               (message) => message?.source?.form === ANSWER_REVIEW_FORM,
             )

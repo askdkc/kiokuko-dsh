@@ -144,9 +144,10 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         const result = resultFor(request, 'uncertain-next-prepare')
         assert.equal(result.isError, false, text(result))
         assert.equal(JSON.parse(text(result)).prepared, false)
-        assert.equal(JSON.parse(text(result)).status, 'awaiting_clarification')
-        assert.equal(JSON.parse(text(result)).nextAction, 'wait_for_user')
-        assert.equal(clarificationQuestions, 2, 'one question per distinct native user request; no same-request repeat')
+        const value = JSON.parse(text(result))
+        assert.equal(value.status, uncertain === 'whole-intent' ? 'request_interpretation_required' : 'awaiting_clarification')
+        assert.equal(value.nextAction, uncertain === 'whole-intent' ? 'submit_current_request_intent' : 'continue_independent_work_or_wait')
+        assert.equal(clarificationQuestions, uncertain === 'whole-intent' ? 1 : 2, 'only concrete missing information triggers a question')
         assert.deepEqual(authority(readCurrent()), authority(working!))
         rejected = true
         return f.mock.textResponse('Wait for the user to clarify the concrete target and action before changing the active work.')

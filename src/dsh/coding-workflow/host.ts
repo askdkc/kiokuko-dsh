@@ -171,7 +171,7 @@ export function isCodingWorkflowStatus(
 }
 
 export const CODING_GUIDANCE =
-  'Carry out the current user request using the authorized route. The host records observed tool activity. Optionally use coding_workflow status to inspect the record, or coding_workflow_apply annotate with notes and optional evidenceRefs to add context. Work and verification do not require a plan record, IDs, or a revision. Legacy propose/revise remain available. Confirm the requested behavior with current evidence, fix observed failures, and report what remains unverified. A tool result or a note alone is not proof of success.'
+  'Carry out the current user request using the authorized route. The host records observed tool activity. Optionally use coding_workflow status to inspect the record, or coding_workflow_apply annotate with notes and optional evidenceRefs to add context. Work and verification do not require a plan record, IDs, or a revision. Legacy propose/revise remain available. For implementation, repair and verification, use task_completion status and bind the missing check to current sources. Run it using the selected execution route. Fix observed failures and report any unmet condition. A tool result or a note alone is not proof of success.'
 
 export function codingChoiceDetail(value: CodingWorkflow): string {
   const definition = value.definition

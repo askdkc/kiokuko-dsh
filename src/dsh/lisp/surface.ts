@@ -596,7 +596,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
               const version = savedPageVersion(outcome)
               if (version) tracked.inspection = { page: outcome as SavedResultPage, version }
             }
-            return name === 'lisp_status' ? { ...outcome as object, codingPreparation:preparation.status(binding.agent) } : outcome
+            return name === 'lisp_status' ? {
+              ...outcome as object,
+              codingPreparation: preparation.status(binding.agent),
+              ...(diagnosticOnly.has(binding.agent) ? { continuation: {
+                effects: 'blocked', next: ['inspect_receipts', 'read', 'search', 'plan', 'recover'],
+              } } : {}),
+            } : outcome
           }
           catch (error) { return failure(error) }
         } }
@@ -646,17 +652,35 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       return true
     }
     const prepare = () => manager.prepare(binding.owner, binding.signal, true)
-    const status = await (development && isLispConversation(candidate) ? modeOnly(binding, prepare) : prepare()) as { state: string; generation?: string; resumed?: boolean }
+    // Until preparation returns a live worker, only the protected diagnostic
+    // route is available. A startup error must not retain earlier readiness.
+    diagnosticOnly.add(binding.agent)
+    type WorkerStatus = { state: string; generation?: string; resumed?: boolean; preparationError?: string }
+    let status: WorkerStatus
+    try {
+      status = await (development && isLispConversation(candidate) ? modeOnly(binding, prepare) : prepare()) as WorkerStatus
+    } catch (error) {
+      binding.signal.throwIfAborted()
+      if (!(error instanceof LispError) || !['STARTUP_FAILED', 'STARTUP_TIMEOUT', 'WORKER_EXITED', 'STOP_UNCONFIRMED', 'TASK_REQUIRED', 'CODING_CHOICE_PENDING'].includes(error.code))
+        throw error
+      status = {
+        state: error.code === 'CODING_CHOICE_PENDING' ? 'EXECUTION_SELECTION_PENDING' :
+          error.code === 'STOP_UNCONFIRMED' || error.code === 'TASK_REQUIRED' ? error.code : 'RECOVERY_REQUIRED',
+        preparationError: error.code,
+      }
+    }
     binding.signal.throwIfAborted()
     if (['READY', 'EVALUATING'].includes(status.state)) diagnosticOnly.delete(binding.agent)
     else diagnosticOnly.add(binding.agent)
     register(binding.agent)
     const prompt = binding.agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
     if (prompt) { const previous = runtimePrompts.get(candidate.id); const remove = prompt.section({ name: 'kiokuko:lisp-runtime', order: -89999,
-      text: `Current Lisp generation: ${status.generation ?? 'none'}. State: ${status.state}.` + (status.resumed
+      text: `Current Lisp generation: ${status.generation ?? 'none'}. State: ${status.state}.`
+        + (diagnosticOnly.has(binding.agent) ? ` ${status.preparationError ?? 'Lisp effects are unavailable'}. Continue permitted independent reading and planning. Inspect the original receipts before recovery. Keep the selected execution route.` : '')
+        + (status.resumed
         ? ' Lisp was automatically restarted after normal suspension. Definitions, variables and object references from older generations are gone. Recreate needed helpers; never replay completed file or process effects. Compare the generation of previous tool results before reusing state.' : '') }); runtimePrompts.set(candidate.id, () => { previous?.(); remove() }) }
     // Keep the model and the existing protected dispatch guards available for diagnosis.
-    return ['READY', 'EVALUATING', 'RECOVERY_REQUIRED', 'STOP_UNCONFIRMED', 'RECONCILIATION_REQUIRED', 'SUSPENDED'].includes(status.state)
+    return true
   }
   disposers.push((ctx as any).on('agent/status', (event: { agent: Agent; status: string }) => {
     if (!manager.enabled.has(event.agent.session.id) || agents.get(event.agent.id) !== event.agent || sessions.get(event.agent.session.id) !== event.agent.session) return

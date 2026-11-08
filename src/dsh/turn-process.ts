@@ -17,6 +17,7 @@ export interface DshContinuationOutboxItem {
   readonly message: unknown
   readonly messageForm: 'continuation' | 'loop-recovery'
   readonly status: 'pending' | 'dispatched' | 'observed' | 'superseded'
+  readonly deliveryReserved: boolean
 }
 
 export interface DshBoundaryJob {
@@ -39,6 +40,7 @@ interface OutboxRow extends Record<string, unknown> {
   messageJson: string
   messageForm: DshContinuationOutboxItem['messageForm']
   status: DshContinuationOutboxItem['status']
+  deliveryReservedAt: string | null
 }
 
 interface BoundaryJobRow extends Record<string, unknown> {
@@ -85,7 +87,7 @@ export function readPendingOutbox(database: SqliteDatabase, sessionId: string): 
     SELECT continuation_id AS continuationId, receipt_id AS receiptId,
            run_id AS runId, dsh_session_id AS dshSessionId,
            causal_revision AS causalRevision, message_json AS messageJson,
-           message_form AS messageForm, status
+           message_form AS messageForm, status, delivery_reserved_at AS deliveryReservedAt
       FROM dsh_continuation_outbox
      WHERE dsh_session_id = ? AND status IN ('pending', 'dispatched')
      ORDER BY created_at, continuation_id
@@ -99,7 +101,17 @@ export function readPendingOutbox(database: SqliteDatabase, sessionId: string): 
     message: JSON.parse(row.messageJson) as unknown,
     messageForm: row.messageForm,
     status: row.status,
+    deliveryReserved: row.deliveryReservedAt !== null,
   })))
+}
+
+/** The caller commits this reservation before calling the native inbox. */
+export function reserveOutboxDelivery(database: SqliteDatabase, continuationId: string, now: string): boolean {
+  return database.prepare(`
+    UPDATE dsh_continuation_outbox SET delivery_reserved_at = ?, updated_at = ?
+    WHERE continuation_id = ? AND status = 'pending' AND delivery_reserved_at IS NULL
+    RETURNING continuation_id
+  `).get(now, now, digest(continuationId, 'continuationId')) !== undefined
 }
 
 export function markOutboxDispatchedInTransaction(database: SqliteDatabase, continuationId: string, now = new Date().toISOString()): void {
@@ -142,7 +154,7 @@ export function supersedeBoundaryJobsAtOrBeforeRevisionInTransaction(
        SELECT receipt_id FROM dsh_turn_receipts
         WHERE dsh_session_id = ? AND contract_revision <= ?
      )
-       AND status IN ('pending', 'processing', 'waiting_user', 'failed_retryable')
+       AND status IN ('pending', 'processing', 'waiting_user', 'blocked', 'failed_retryable')
   `).run(now, identity(sessionId, 'dshSessionId'), positiveInteger(revision, 'revision'))
 }
 
@@ -192,7 +204,7 @@ export function claimBoundaryJobInTransaction(
 
 export type DshBoundaryCompletion =
   | { readonly kind: 'completed'; readonly nextKind?: string }
-  | { readonly kind: 'waiting_user' }
+  | { readonly kind: 'waiting_user' | 'blocked' }
   | { readonly kind: 'superseded' }
 
 export function completeBoundaryJobInTransaction(
@@ -229,18 +241,18 @@ export function failBoundaryJobInTransaction(
   job: DshBoundaryJob,
   error: unknown,
   now = new Date().toISOString(),
-): { readonly kind: 'retry'; readonly retryAt: string } | { readonly kind: 'waiting_user' } {
+): { readonly kind: 'retry'; readonly retryAt: string } | { readonly kind: 'blocked' } {
   const item = typeof error === 'object' && error !== null ? error as { code?: unknown } : undefined
   const code = typeof item?.code === 'string' ? item.code.slice(0, 128) : 'BOUNDARY_JOB_FAILED'
   const message = (error instanceof Error ? error.message : String(error)).slice(0, 2_000)
   if (!retryableBoundaryErrorCode(code) || job.attemptCount >= DSH_BOUNDARY_JOB_MAX_ATTEMPTS) {
     database.prepare(`
       UPDATE dsh_boundary_jobs
-         SET status = 'waiting_user', owner_nonce = NULL, lease_expires_at = NULL,
+         SET status = 'blocked', owner_nonce = NULL, lease_expires_at = NULL,
              last_error_code = ?, last_error_message = ?, updated_at = ?
        WHERE job_id = ? AND status = 'processing' AND owner_nonce = ?
     `).run(code, message, now, job.jobId, job.ownerNonce)
-    return Object.freeze({ kind: 'waiting_user' })
+    return Object.freeze({ kind: 'blocked' })
   }
   const retryAt = new Date(Date.parse(now) + Math.min(60_000, 250 * 2 ** Math.min(job.attemptCount, 8))).toISOString()
   database.prepare(`
@@ -262,6 +274,6 @@ export function replacePendingOutboxMessageInTransaction(
   const messageJson = boundedJson(message, DSH_TURN_HANDOFF_MAX_BYTES, 'continuation message')
   database.prepare(`
     UPDATE dsh_continuation_outbox SET message_json = ?, message_form = ?, updated_at = ?
-     WHERE receipt_id = ? AND status = 'pending'
+     WHERE receipt_id = ? AND status = 'pending' AND delivery_reserved_at IS NULL
   `).run(messageJson, messageForm, now, digest(receiptIdValue, 'receiptId'))
 }

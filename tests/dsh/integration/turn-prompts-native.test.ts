@@ -9,7 +9,7 @@ import { TypedDecisionsConfig } from '../../../src/dsh/decisions/config.js'
 import { OpenAIDecisionProvider } from '../../../src/dsh/decisions/openai.js'
 
 isolateSkillHome()
-test('ordinary native chat asks mode once, clarifies a vague request, and leaves ordinary answers free of memory prompts', { timeout: 20000 }, async () => {
+test('ordinary native chat asks mode once and leaves vague requests with the main model', { timeout: 20000 }, async () => {
   const asked: string[] = []
   const f = await nativeSkillFixture({
     packages: process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules'),
@@ -34,14 +34,14 @@ test('ordinary native chat asks mode once, clarifies a vague request, and leaves
     await f.turn('Explain how parsers work.')
     await waitForReflection(1)
     f.responses.push(async function* (request: any) {
-      assert.match(JSON.stringify(request.messages), /src\/parser.ts/)
-      assert.match(JSON.stringify(request.messages), /Empty input returns an empty result/)
-      yield* f.mock.textResponse('The clarified target is src/parser.ts.')
+      assert.match(JSON.stringify(request.messages), /Fix it/)
+      assert.equal(asked.length, 0, 'an auxiliary intake abstention does not interrupt main-model investigation')
+      yield* f.mock.textResponse('I need to inspect the current context to identify the requested fix.')
     })
     await f.turn('Fix it')
     await waitForReflection(2)
     assert.equal(f.startupQuestions.length, 1)
-    assert.deepEqual(asked, ['target', 'expected'])
+    assert.deepEqual(asked, [])
   } finally { await f.close() }
 })
 

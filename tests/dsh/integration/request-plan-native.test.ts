@@ -415,7 +415,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                       )
                       assert.ok(blocked)
                       assert.equal(blocked.isError, true)
-                      assert.match(resultText(blocked), /Waiting for the answer/)
+                      assert.match(resultText(blocked), /awaiting clarification/iu)
                       return toolCall('missing-scope-plan', 'prepare_requested_work', {
                         requestIntent: { ...repairedPreparation.requestIntent, changeScope: 'unknown' },
                       })

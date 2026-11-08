@@ -109,11 +109,11 @@ test('parser prints 42', () => {
     const db = openConnection(path)
     try {
       const run = db.prepare('SELECT status FROM ledger_runs').get<{status: string}>()
-      assert.equal(run?.status, 'completed')
+      assert.equal(run?.status, 'active', 'repair is usable, but its declared completion checks remain unverified')
       const snapshot = JSON.parse(db.prepare('SELECT snapshot_json FROM dsh_coding_workflows').get<{snapshot_json: string}>()!.snapshot_json)
       assert.equal(snapshot.request, request)
       assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_owned_operations').get()?.n, 4)
-      assert.equal(db.prepare("SELECT 1 FROM dsh_completion_runs WHERE mode='enforce'").get(), undefined)
+      assert.equal(db.prepare("SELECT evidence_required FROM dsh_completion_runs WHERE mode='shadow'").get()?.evidence_required, 1)
     } finally { db.close() }
   } finally { await f.close() }
 })

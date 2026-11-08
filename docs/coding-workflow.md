@@ -38,7 +38,11 @@ Run the bound command through `kioku_exec` or the selected Lisp process API. The
 
 A shared criterion uses one current observation for both roles. A distinct final Goal check retains its requirement for an execution after the item checks. Related source paths, package/configuration/lockfiles, runtime identity, criterion revisions and scope determine freshness. Add generated/installed artifact paths to `sourcePaths` when they affect the behavior. No-op suites, zero explicit cases, skips, missing output, unsuccessful child processes, interruption and untrusted results remain unmet or unknown. A nonempty test case still needs meaningful assertions: the host cannot prove an arbitrary test's specification quality.
 
-Ordinary task completion and coding verification are reported separately. A task can close with an incomplete record or unverified checks. Explicitly bound execution protocols still enforce their evidence requirements.
+Implementation, repair, and verification tasks need current host-observed evidence before the run can close, including in shadow mode. Work can begin before checks or optional records are registered. If no plan defined a check, use the request-derived criterion shown by `task_completion status`. A failed memory or annotation write is reported separately from the execution result.
+
+If a needed decision is still open, the host can display the question while the model continues permitted reading, search, and planning. Effects depending on the answer stay pending. Stop cancels the question and prevents late answers from resuming the request.
+
+A completed native turn can resume to run an outstanding check with an approved execution method. Unbound checks remain visible in `task_completion status`. Observed changes in the source or verification result allow progress to continue. When the same result repeats, the host prompts one replan and then reports the remaining blocker. A delivery or operation with an unknown result must be reconciled using its original record before any retry.
 
 ## Recovery and verification
 

@@ -30,7 +30,7 @@ import type { TaskProfile } from '../../akinator/types.js'
 import { MemoryRetrievalConfig, timeConstraintForRequest, type MemoryRetrievalConfig as MemoryRetrievalConfiguration } from '../../memory/retrieval-contracts.js'
 import type { MemoryTimeConstraint } from '../../memory/retrieval-contracts.js'
 import { reportMemoryRetrievalObservation } from '../memory-retrieval-observer.js'
-import { completionBlocksCloseWithoutReceipt, initializeTaskCompletion, assessTaskCompletion, taskCompletionBlocksClose } from '../task-completion.js'
+import { completionBlocksCloseWithoutReceipt, initializeTaskCompletion, saveTaskCompletionReceipt, taskCompletionBlocksClose } from '../task-completion.js'
 import { initializeCodingWorkflow, readCodingWorkflow } from '../coding-workflow/store.js'
 import { readAkinatorSession, readRunIntakeLink } from '../../akinator/store.js'
 import { codingWorkRequested } from '../coding-workflow/intent.js'
@@ -114,7 +114,7 @@ function finishCoreTask(db: SqliteDatabase, task: CoreTaskIdentity, outcome: Cor
       let blocked: boolean
       try {
         synchronizeCodingWorkflow(db, task.runId)
-        blocked = taskCompletionBlocksClose(assessTaskCompletion(db, task.runId))
+        blocked = taskCompletionBlocksClose(saveTaskCompletionReceipt(db, task.runId))
       } catch {
         blocked = completionBlocksCloseWithoutReceipt(db, task.runId)
       }
@@ -188,6 +188,7 @@ export class CoreTasks {
       if (hasBlockingRequiredCapability(resolution)) throw new Error('Resumed task lacks required capabilities')
       if (admitted && !previousOwner) claimExecutionOwner(db, { sessionId: input.sessionId, workspace: project.workspace,
         mode: 'normal', startId: typeof run.metadata.requestId === 'string' ? run.metadata.requestId : input.requestId, runId: taskId })
+      if (admitted) initializeTaskCompletion(db, taskId, 'shadow', intent)
       const owner = readExecutionOwner(db, input.sessionId)
       if (admitted && intent.relation === 'scope_change' && coding) markCodingScopeChange(db,
         { runId: taskId, sessionId: input.sessionId, repositoryRoot: coding.repositoryRoot },
@@ -310,7 +311,7 @@ export class CoreTasks {
         const memory=selected.context
         input.signal.throwIfAborted()
         assertPreparation()
-        if(admitted){initializeTaskCompletion(db,identity.runId,'shadow');saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
+        if(admitted){initializeTaskCompletion(db,identity.runId,'shadow',requestIntent);saveExecutionFrame(db,identity.runId,updateExecutionFrame(undefined,project.repositoryRoot,input.task))
           if(codingWorkRequested(input.task,requestIntent,state.session.profile.taskType))initializeCodingWorkflow(db,{...identity,repositoryRoot:project.repositoryRoot,task:input.task},{optional:true})}
 
         return Object.freeze({ ...identity, cwd, profile: state.session.profile, admitted,
@@ -365,7 +366,7 @@ export class CoreTasks {
   async finishRecovered(task: CoreTaskIdentity & { admitted: boolean }, outcome: CoreTaskOutcome): Promise<void> {
     await this.runtime.withDatabase(db => withImmediateTransaction(db,()=>{
       const {run}=assertCoreTaskIdentity(db,task,'recovery')
-      if (run.status==='active' && taskCompletionBlocksClose(assessTaskCompletion(db,task.runId))) return
+      if (run.status==='active' && taskCompletionBlocksClose(saveTaskCompletionReceipt(db,task.runId))) return
       finishCoreTask(db,task,outcome)
     }))
   }

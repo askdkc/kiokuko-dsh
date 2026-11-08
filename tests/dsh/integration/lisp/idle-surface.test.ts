@@ -6,9 +6,9 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
-import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { LispConfig, LispError } from '../../../../src/dsh/lisp/contracts.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
-import { CompiledLispCache } from '../../../../src/dsh/lisp/compiled-cache.js'
+import { LispWorker } from '../../../../src/dsh/lisp/worker.js'
 
 for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFences ? 'host fence' : 'root fence'}) retain the session heap across idle and reopening`, {
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires protected SBCL' : false, timeout: 90000,
@@ -42,6 +42,16 @@ for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFence
     assert.equal((await command.handler({ rawInput: 'enable', agent, signal: new AbortController().signal })).kind, 'success')
     const firstGeneration = (await state()).generation
     const firstPid = (await state()).runtimePid
+    const failedStartup = t.mock.method(surface.manager, 'prepare', async () => {
+      throw new LispError('STARTUP_FAILED', 'injected worker startup failure')
+    })
+    try {
+      assert.equal(await step(), 'model-ready', 'the model can diagnose a failed worker')
+      assert.match(guard({ agent, name: 'lisp_eval' }), /RECOVERY_REQUIRED/u)
+      assert.equal(guard({ agent, name: 'lisp_status' }), undefined)
+      assert.match(guard({ agent, name: 'bash' }), /Lisp/u)
+    } finally { failedStartup.mock.restore() }
+    assert.equal(await step(), 'model-ready')
     await surface.manager.execute(owner, 'lisp_eval', {operationId:'session-definition',code:'(defparameter *session-value* 42)'})
     await listeners.get('agent/status')!({ agent, status: 'running' })
     await new Promise(resolve => setTimeout(resolve, 1100))
@@ -84,15 +94,18 @@ for (const hostFences of [false,true]) test(`native lifecycle hooks (${hostFence
     // cancels the admission and must not register a dead agent afterward.
     let entered!: () => void, release!: () => void
     const entering = new Promise<void>(resolve => { entered = resolve }), gate = new Promise<void>(resolve => { release = resolve })
-    const ensure = CompiledLispCache.prototype.ensure
-    t.mock.method(CompiledLispCache.prototype, 'ensure', async function(this: CompiledLispCache, ...args: Parameters<typeof ensure>) {
-      entered(); await gate; return ensure.apply(this, args)
+    const start = LispWorker.prototype.start
+    t.mock.method(LispWorker.prototype, 'start', async function(this: LispWorker) {
+      await start.call(this)
+      entered()
+      await gate
     })
     agent = { ...agent, id: 'starting', session: { id: 'starting', header: { cwd: base } } }
     currentAgent = agent; currentSession = agent.session
+    workingLispTask(db, { ...owner, sessionId: 'starting', agentId: 'starting' })
     const beforeStartup = registrations
     const starting = command.handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
-    await entering
+    await Promise.race([entering, starting.then((result: unknown) => assert.fail(JSON.stringify(result)))])
     currentAgent = undefined; currentSession = undefined
     const disposal = listeners.get('session/disposed')!(agent.session)
     release()
