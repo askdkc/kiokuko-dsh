@@ -77,5 +77,26 @@ test('replacement child owns a persistent runtime, never parent authority or den
   assert.equal(surface.manager.enabled.has(impostor.agent.id),false,'Durable lineage alone is not live runtime ownership')
   await child.dispose();assert.equal(surface.manager.enabled.has(parent.agent.id),true)
   assert.equal(stopped.has(workers[0]!),true,'Session disposal stops its own runtime')
+  const continued=await parent.agent.ctx.agents.create({sessionId:sessions.SessionId('continued-worker'),
+    parentAgent:parent.agent,meta:{cwd:root,origin:'subagent',parentSession:'settled-creator',delegationDepth:2}})
+  let revoked=false
+  ctx.provide('subagents',{rootOf(candidate:any){
+    if(candidate!==continued.agent||revoked)throw new Error('No current native activation')
+    return parent.agent
+  }})
+  try {
+    await service.project(continued.agent,assembly)
+    const evaluate=(callId:string,signal=new AbortController().signal)=>executeNativeTool(ctx,packages,{name:'lisp_eval',
+      arguments:{operationId:callId,code:'42'},agent:continued.agent,callId,signal})
+    const status=()=>executeNativeTool(ctx,packages,{name:'lisp_status',arguments:{},
+      agent:continued.agent,callId:revoked?'revoked-status':'current-status',signal:new AbortController().signal})
+    assert.equal((await status()).value?.state,'READY','A continuation uses its current native tree root after its creator settles')
+    assert.equal((await evaluate('current-eval')).value?.ok,true)
+    const cancelled=await evaluate('cancelled-eval',AbortSignal.abort())
+    assert.equal(cancelled.isError,true)
+    revoked=true
+    assert.match(JSON.stringify(await status()),/worker Lisp dispatch is no longer current/u)
+    assert.match(JSON.stringify(await evaluate('revoked-eval')),/worker Lisp dispatch is no longer current/u)
+  }finally{await continued.dispose()}
  }finally{surface?.stop();await surface?.dispose();for(const f of fibers.reverse())await f.dispose();await ctx.fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

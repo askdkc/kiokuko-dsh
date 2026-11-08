@@ -514,6 +514,106 @@ for(const interrupted of [false,true])test(`assembled replay state survives ${in
   }finally{await f.close()}
 })
 
+test('runtime context is delivered once across unchanged tool steps and turns', async () => {
+  const f = await fixture(true)
+  let handle: any, steps = 0
+  try {
+    f.ctx.systemPrompt.context({ name: 'fixture:policy', order: 0, text: 'Mode: read-only.' })
+    f.ctx.tools.register({
+      name: 'context_probe', description: 'Inspect unchanged context.', parameters: { type: 'object' },
+      output: { schema: { type: 'string' }, render: () => [{ type: 'text', text: 'observed' }] },
+      execute: async () => 'observed',
+    })
+    f.ctx.on('llm/stream', async function* (request, next) {
+      const contexts = request.messages.filter(message => message.role === 'user' && message.source?.kind === 'runtime-context')
+      assert.equal(contexts.length, 1, 'Every request retains exactly one unchanged runtime snapshot')
+      if (++steps > 3) { yield* next(); return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `context-${steps}` as any, name: 'context_probe', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    })
+    handle = await f.ctx.agents.create({ sessionId: SessionId('runtime-context-unchanged') })
+    const send = async () => {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Inspect the current policy.' }], source: { kind: 'user' } }))
+      await handle.agent.whenIdle()
+      assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1).data.reason.kind, 'completed')
+    }
+    await send(); await send()
+    assert.equal(steps, 5)
+    assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'user/message' && event.data.source.kind === 'runtime-context').length, 1)
+  } finally { await handle?.dispose(); await f.close() }
+})
+
+test('runtime context changes, clears once, and is restored after compaction and resume', async () => {
+  const f = await fixture(true)
+  let handle: any, mode = 'read-only'
+  let disposeContext = f.ctx.systemPrompt.context({ name: 'fixture:policy', order: 0, text: () => `Mode: ${mode}.` })
+  try {
+    handle = await f.ctx.agents.create({ sessionId: SessionId('runtime-context-lifecycle') })
+    const send = async () => {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Inspect current context.' }], source: { kind: 'user' } }))
+      await handle.agent.whenIdle()
+      assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1).data.reason.kind, 'completed')
+    }
+    const snapshots = () => handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'user/message' && event.data.source.kind === 'runtime-context')
+    await send(); await send()
+    assert.equal(snapshots().length, 1)
+    mode = 'workspace-write'; await send(); await send()
+    assert.equal(snapshots().length, 2)
+    assert.match(snapshots().at(-1).data.content[0].text, /workspace-write/)
+    disposeContext(); await send(); await send()
+    assert.equal(snapshots().length, 3)
+    assert.equal(snapshots().at(-1).data.content[0].text, 'Current runtime context: none. Earlier runtime-context snapshots no longer apply.')
+    disposeContext = f.ctx.systemPrompt.context({ name: 'fixture:policy', order: 0, text: 'Mode: read-only.' })
+    await send()
+    const retained = snapshots().at(-1)
+    handle.agent.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Compacted policy.' }], source: { kind: 'user' } }), {
+      surfaceOp: { op: 'replace', startSeq: retained.seq, endSeq: retained.seq }, sourceEventSeqs: [retained.seq],
+    })
+    await send(); await send()
+    assert.equal(snapshots().length, 5, 'Compaction requires one replacement snapshot, not permanent suppression or repeated delivery')
+    const sessionId = handle.agent.session.id
+    const seed = structuredClone(handle.agent.session.snapshotEvents())
+    await handle.dispose()
+    handle = await f.ctx.agents.create({ sessionId, seed })
+    await send()
+    assert.equal(snapshots().length, 5, 'Resume reuses the snapshot still retained in the native surface')
+  } finally { disposeContext(); await handle?.dispose(); await f.close() }
+})
+
+for (const timing of ['admission', 'retry'] as const) test(`runtime context survives compaction during ${timing} without replaying input`, async () => {
+  const f = await fixture(true)
+  let handle: any, attempts = 0
+  try {
+    f.ctx.systemPrompt.context({ name: 'fixture:policy', order: 0, text: 'Mode: read-only.' })
+    handle = await f.ctx.agents.create({ sessionId: SessionId(`context-compaction-${timing}`) })
+    const compact = () => {
+      const event = handle.agent.session.snapshotEvents().findLast((event: any) => event.type === 'user/message' && event.data.source.kind === 'runtime-context')
+      handle.agent.session.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'Compacted snapshot.' }], source: { kind: 'plugin:kiokuko-dsh', form: 'snapshot' } }), {
+        surfaceOp: { op: 'replace', startSeq: event.seq, endSeq: event.seq }, sourceEventSeqs: [event.seq],
+      })
+    }
+    const send = async () => {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Inspect policy.' }], source: { kind: 'user' } }))
+      await handle.agent.whenIdle()
+      assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1).data.reason.kind, 'completed')
+    }
+    await send()
+    if (timing === 'admission') f.ctx.on('agent/pre-step', async (_event, next) => { const decision = await next(); compact(); return decision })
+    else {
+      f.ctx.on('llm/stream', async function* (_request, next) {
+        if (++attempts === 1) { yield { type: 'finish', reason: { kind: 'error', failure: { code: 'CONTEXT_LENGTH', message: 'Compact before retry.' } } }; return }
+        yield* next()
+      })
+      f.ctx.on('agent/request-error', async () => { compact(); return { kind: 'retry' } })
+    }
+    await send()
+    const request = f.requests.at(-1) as any
+    assert.equal(request.messages.filter((message: any) => message.source?.kind === 'runtime-context').length, 1)
+    assert.equal(handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'user/message' && event.data.source.kind === 'user').length, 2)
+  } finally { await handle?.dispose(); await f.close() }
+})
+
 test('admission receives assembled context and commits the host-updated snapshot once',async()=>{
   const f=await fixture();let admitted=0,pendingKinds:string[]=[]
   try{

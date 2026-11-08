@@ -5,7 +5,7 @@ export function assertionForCriterion(evidence:string):'selected_tests_pass'|'ou
 export const COMPLETION_BINDING_GUIDE={
   native_command:{requiredFields:['kind','command','cwd','sourcePaths','assertion'],
     sourcePaths:'At least one repository-relative current implementation/test path; include an asserted artifact. No absolute path or parent traversal.',
-    conditions:{selected_tests_pass:'Observe complete Node TAP output from the exact bound command: use node --test --test-reporter=tap with the selected test files. Spec reporter output cannot establish coverage. Binding or exit 0 alone is not proof.',
+    conditions:{selected_tests_pass:'Run the bound selected tests with Node TAP or Vitest TAP/JSON. The host needs a complete report with actual test cases. Binding or exit 0 alone is not proof.',
       output_matches:'Requires expectedOutput and exact observed output.',artifact_matches:'Requires artifactPath, artifactSha256 and artifactPath in sourcePaths.',
       exit_zero:'Only when the current non-coding criterion permits it; never sufficient for a coding criterion.'}},
 } as const
@@ -13,7 +13,7 @@ const corrections:Record<string,string>={
   action:'Use status to read current criteria, or bind to propose a check.',
   criterionId:'Copy the exact current criterionId from task_completion status. A local coding Goal criterionId is accepted only within the current workflow; foreign or stale namespaces are never rewritten.',
   'method.kind':'Use native_command for the current approved route.',
-  'method.command':'Supply the exact authorized foreground command matching the intended check procedure; bind does not execute it.',
+  'method.command':'Supply the authorized command for the intended check. For Lisp process calls, bind the program and literal arguments passed to Lisp. Bind does not execute it.',
   'method.cwd':'Supply an existing working directory inside the current repository; use . for its root.',
   'method.sourcePaths':COMPLETION_BINDING_GUIDE.native_command.sourcePaths,
   'method.assertion':'Match this criterion’s required evidence: selected_tests→selected_tests_pass, output→output_matches, artifact→artifact_matches. Do not weaken the criterion.',

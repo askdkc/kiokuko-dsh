@@ -7,7 +7,7 @@ import { nativeStopReceipt } from './native-stop-receipt.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { rememberLispImplementation, isLispConversation, rootLispAdmission, withRootLispAdmission, withLispNativeCommand, isLispNativeCommand, isLispNativeCommandFence, type LispNativeCommands } from '../lisp-tool-identity.js'
+import { rememberLispImplementation, isLispConversation, rootLispAdmission, withRootLispAdmission, withLispNativeCommand, withLispOwnedCommand, isLispNativeCommand, isLispNativeCommandFence, type LispNativeCommands } from '../lisp-tool-identity.js'
 import { assertProtocolRoute } from '../guardrail/service.js'
 import { isOwnedExecutionCall } from '../owned-execution.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -162,12 +162,15 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
   let ownerForOwned:(binding:LispOwner)=>{signal:AbortSignal}
-  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string, taskLease?:TaskLease):Promise<any> => {
+  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[]):Promise<any> => {
     const agent=agents.get(owner.agentId)
     if(!agent||agent.session.id!==owner.sessionId||sessions.get(owner.sessionId)!==agent.session||realpathSync(agent.session.header.cwd)!==owner.root)fail('SESSION_MISMATCH','Owned tool caller changed.')
     const binding=ownerForOwned(owner)
-    const execute = () => dispatchHostTool({callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
-      ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})})
+    const invocation = {callId:callId??`lisp-owned-${crypto.randomUUID()}`,name,arguments:args,agent,parent:Symbol('lisp-owned'),signal:signal?AbortSignal.any([binding.signal,signal]):binding.signal,
+      ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})}
+    const dispatch = () => dispatchHostTool(invocation)
+    const execute = () => argv && name === 'kioku_exec' && typeof args.command === 'string'
+      ? withLispOwnedCommand(invocation, args.command, argv, dispatch) : dispatch()
     const result=await (taskLease ? withTaskAuthority(taskLease, execute) : execute()) as any
     if (lispHostToolWasNotDispatched(result)) managedAdmissionDenied(new LispError(
       'OWNED_EXECUTION_NOT_DISPATCHED', result.error?.message ?? JSON.stringify(result.content),
@@ -217,8 +220,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if(!development || request.kind !== 'verify'){await memoryVerification.beforeCall(owner,request);return createLispCiAdapter(ownerQuestions, undefined, authorizeEffect)(owner,request,signal,scratchRoot)}
       const ciAdapter=createLispCiAdapter(ownerQuestions,async(file,args,options)=>{
         const quote=(value:string)=>"'"+value.replaceAll("'","'\\''")+"'"
-        const value=await ownedCall(owner,'kioku_exec',{command:[file,...args].map(quote).join(' '),cwd:options.cwd,timeoutMs:options.timeoutMs},options.signal,undefined,
-          request.kind === 'verify' ? await manager.taskAuthority.authorizeEffect(owner) : undefined)
+        const argv = [file, ...args]
+        const value=await ownedCall(owner,'kioku_exec',{command:argv.map(quote).join(' '),cwd:options.cwd,timeoutMs:options.timeoutMs},options.signal,undefined,
+          request.kind === 'verify' ? await manager.taskAuthority.authorizeEffect(owner) : undefined, argv)
         return {code:value.exitCode??1,stdout:value.output??'',stderr:'',receipt:value.receipt}
       }, authorizeEffect)
       return ciAdapter(owner,request,signal,scratchRoot)
@@ -246,10 +250,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', '添付入力のセッションを確認できません。')
       return attachmentInput(agent.session, agent.ctx.get('attachments', false) as LispAttachmentStore | undefined, path, signal)
     },
-    toolCall: async (owner, name, args, signal,callId,taskLease) => {
+    toolCall: async (owner, name, args, signal,callId,taskLease,argv) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'ホスト呼び出しの主体を確認できません。')
-      if (development) return ownedCall(owner,name,args,signal,callId,taskLease)
+      if (development) return ownedCall(owner,name,args,signal,callId,taskLease,argv)
       if ((PROTOCOL_OWNED_TOOLS as readonly string[]).includes(name)) {
         const effect = PROTOCOL_OWNED_EFFECTS.has(name)
         if (effect && (!taskLease || !callId)) fail('TASK_REQUIRED', 'Protected owned effects require the original task lease and call identity.')
@@ -553,7 +557,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   return next()
                 }, {global:true, prepend:true})
                 let result: any
-                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child)) }
+                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child), [input.program, ...input.argv]) }
                 catch (error) { throw invalidDirectory ?? error }
                 finally { removeDispatchWitness() }
                 if (invalidDirectory) throw invalidDirectory
@@ -783,21 +787,34 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }), manualSelected: (agent: LispCodingInput['agent']) => manualMode(agent), manualOverride: (agent: LispCodingInput['agent']) => preparation.manualOverride(agent), selectTask: (input: LispCodingInput, choice:'yes'|'no', answerRef:string) => preparation.selectTask(input,choice,answerRef), prepareNative: (input: LispCodingInput) => preparation.prepare(input), choiceFor: (agent: LispCodingInput['agent'], task: string) => preparation.choiceFor(agent, task),
     cancelled: (agent: LispCodingInput['agent'], task: string) => preparation.cancelled(agent,task),
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string, scope:string, protectedWorkflow = true) => preparation.answered(agent,task,choice,answerRef,scope,!development || protectedWorkflow) }))
+  const subagentRuntime = () => root.get('subagents', false) as { rootOf?(agent: Agent): Agent } | undefined
   const childOwnership = new NativeChildOwnership(root.get('subagents', false) as any, agents)
   disposers.push(() => childOwnership.dispose())
-  const workerRouter = (binding: ReturnType<typeof owner>) => {
+  const workerRouter = (binding: ReturnType<typeof owner>, creating = false): (() => boolean) => {
+    const backend = subagentRuntime()
+    const live = (agent: Agent) => agent !== binding.agent && agents.get(agent.id) === agent
+      && sessions.get(agent.session.id) === agent.session && manager.enabled.get(agent.session.id) === binding.owner.root
+    const activeRoot = () => {
+      try { return subagentRuntime()?.rootOf?.(binding.agent) } catch { return undefined }
+    }
+    const router = activeRoot()
+    if (router) return () => live(router) && activeRoot() === router
+    // DSH publishes a new activation after agent/created. Only the startup
+    // callback can use launch ownership before the runtime can resolve it.
+    if (backend?.rootOf && !creating) return () => false
     const parentId = binding.agent.session.header.parentSession, parent = parentId ? agents.get(parentId) : undefined
-    return () => !!parent && agents.get(parent.id) === parent && sessions.get(parent.session.id) === parent.session
-      && (agents.isOwnedBy ? agents.isOwnedBy(binding.agent.id, parent) : childOwnership.owns(binding.agent, parent)) && manager.enabled.get(parent.session.id) === binding.owner.root
+    return () => !!parent && live(parent)
+      && (agents.isOwnedBy ? agents.isOwnedBy(binding.agent.id, parent) : childOwnership.owns(binding.agent, parent))
   }
-  const admitWorker = async (candidate: {id:string}, signal?: AbortSignal) => {
+  const admitWorker = async (candidate: {id:string}, signal?: AbortSignal, phase?: 'creating' | 'published') => {
     const binding = owner(candidate)
     if (!config.enabled || !isNativeSubagent(binding.agent)) return
-    const liveParent = workerRouter(binding)
+    const liveParent = workerRouter(binding, phase === 'creating')
     if (!liveParent() || !tools.schemas(binding.agent).some(tool => LISP_TOOLS.includes(tool.name as LispTool))) return
     // The router shares the execution preference, never its process,
     // heap or task lease. Each work session owns a persistent runtime.
     hostFence?.protect(binding.owner.sessionId)
+    if (phase === 'published') register(binding.agent)
     try {
       const status = await manager.enableSessionWorker(binding.owner, binding.agent.status === 'running',
         signal ? AbortSignal.any([binding.signal, signal]) : binding.signal) as {state:string}
@@ -881,7 +898,13 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   // Bind before DSH captures the first step's executable tool set. Prompt-only
   // registration is too late: the model can see tools that cannot dispatch.
   disposers.push((ctx as any).on('agent/created', async (event: {agent: Agent; signal?: AbortSignal}) => {
-    if (isNativeSubagent(event.agent)) { childOwnership.created(event.agent); await admitWorker(event.agent, event.signal) }
+    if (isNativeSubagent(event.agent)) { childOwnership.created(event.agent); await admitWorker(event.agent, event.signal, 'creating') }
+  }, {global:true}))
+  // Cold continuations bypass startActivation. The native runtime publishes
+  // their new owner before waking the agent and snapshotting its tools.
+  disposers.push((ctx as any).on('subagent/start', (event: {id: string}) => {
+    const agent = agents.get(event.id)
+    if (agent && isNativeSubagent(agent)) return admitWorker(agent, undefined, 'published')
   }, {global:true}))
   // Native children deliberately bypass parent intake. Give their exact root
   // Lisp dispatch its own command capability after native guards/approvals;
@@ -892,14 +915,14 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     const binding = owner(execution.agent), liveParent = workerRouter(binding)
     const definition = fence!.definitions.get(`${binding.agent.id}:${execution.name}`) as {execute?:unknown} | undefined
     if (!definition || tools.get(execution.name, binding.agent) !== definition || !await manager.isSessionWorker(binding.owner)) return next()
-    const execute = definition.execute, argumentsDigest = canonicalContentHash(execution.arguments)
+    const execute = definition.execute, argumentsDigest = canonicalContentHash(execution.arguments), context = binding.agent.ctx
     const name = execution.name, callId = execution.callId, rootCallId = execution.rootCallId
     const current = () => {
       try {
         const now = owner(execution.agent)
         return execution.agent === binding.agent && execution.name === name && execution.callId === callId && execution.rootCallId === rootCallId
           && !execution.signal?.aborted && !binding.signal.aborted && now.signal === binding.signal
-          && now.owner.root === binding.owner.root && liveParent() && execution.parent === undefined
+          && !fence!.stopped && binding.agent.ctx === context && now.owner.root === binding.owner.root && liveParent() && execution.parent === undefined
           && manager.enabled.get(binding.owner.sessionId) === binding.owner.root
           && tools.get(execution.name, binding.agent) === definition && definition.execute === execute
           && canonicalContentHash(execution.arguments) === argumentsDigest

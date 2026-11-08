@@ -34,17 +34,31 @@ export function rootLispAdmission(execution: object): RootLispAdmission | undefi
 }
 
 interface CommandExecution { name: string; callId: string; agent?: unknown; parent?: unknown; arguments: unknown; signal: AbortSignal }
-interface NativeCommandScope { execution: CommandExecution; execute: unknown; digest: string; admission: RootLispAdmission }
+interface NativeCommandScope {
+  execution: CommandExecution; execute: unknown; digest: string; admission: RootLispAdmission
+  argv?: readonly string[]
+  observation?: Promise<unknown>
+}
 const commands = new AsyncLocalStorage<NativeCommandScope>()
 /** A host-only, exact-call bridge. Arbitrary nested tools cannot inherit the exception. */
-export function withLispNativeCommand<T>(execution: CommandExecution, execute: unknown, admission: RootLispAdmission, run: () => Promise<T>): Promise<T> {
-  return commands.run({ execution, execute, admission, digest: canonicalContentHash(execution.arguments) }, run)
+export function withLispNativeCommand<T>(execution: CommandExecution, execute: unknown, admission: RootLispAdmission, run: () => Promise<T>, argv?: readonly string[]): Promise<T> {
+  const scope: NativeCommandScope = { execution, execute, admission, digest: canonicalContentHash(execution.arguments), ...(argv ? { argv: [...argv] } : {}) }
+  return commands.run(scope, async () => {
+    const result = await run()
+    await scope.observation
+    return result
+  })
 }
-export function isLispNativeCommand(execution: CommandExecution, execute: unknown): boolean {
+export function currentLispNativeCommand(execution: CommandExecution): NativeCommandScope | undefined {
   const scope = commands.getStore(), expected = scope?.execution
   return !!scope && !!expected && scope.admission.current() && !execution.signal.aborted && !expected.signal.aborted
     && execution.name === expected.name && execution.callId === expected.callId && execution.agent === expected.agent
-    && execution.parent === expected.parent && scope.execute === execute && scope.digest === canonicalContentHash(execution.arguments)
+    && execution.parent === expected.parent && scope.digest === canonicalContentHash(execution.arguments)
+    ? scope : undefined
+}
+export function isLispNativeCommand(execution: CommandExecution, execute: unknown): boolean {
+  const scope = currentLispNativeCommand(execution)
+  return !!scope && scope.execute === execute
 }
 
 /** CLI denial fences receive only a frozen name/arguments/agent projection.
@@ -56,6 +70,19 @@ export function isLispNativeCommandFence(execution: Pick<CommandExecution, 'name
   return !!expected && isLispNativeCommand(expected, execute)
     && execution.name === expected.name && execution.agent === expected.agent
     && canonicalContentHash(execution.arguments) === canonicalContentHash(expected.arguments)
+}
+
+type OwnedCommand = Pick<CommandExecution, 'name' | 'callId' | 'agent'>
+const ownedCommands = new AsyncLocalStorage<OwnedCommand & { command: string; argv: readonly string[] }>()
+
+/** Supply argv to completion matching for the exact owned call, without granting tool access. */
+export function withLispOwnedCommand<T>(execution: OwnedCommand, command: string, argv: readonly string[], run: () => Promise<T>): Promise<T> {
+  return ownedCommands.run({ name: execution.name, callId: execution.callId, agent: execution.agent, command, argv: [...argv] }, run)
+}
+export function lispOwnedCommandArgv(execution: OwnedCommand, command: string): readonly string[] | undefined {
+  const scope = ownedCommands.getStore()
+  return scope?.name === execution.name && scope.callId === execution.callId && scope.agent === execution.agent
+    && scope.command === command ? scope.argv : undefined
 }
 
 /** A capability created by the Lisp surface from the admitted root execution. */

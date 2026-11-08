@@ -1715,6 +1715,7 @@ export async function mountCore(
         agents,
         sessions,
         resolveParent: resolveParentOwned,
+        onLifecycle: (name, listener) => (ctx as any).on(name, listener, { global: true }),
       })
       disposers.push(() => nativeTaskAuthority.dispose())
       const resolveOwned = (execution: any) =>
@@ -1747,7 +1748,8 @@ export async function mountCore(
       disposers.push(
         mountTaskCompletion(
           { tools, on: ctx.on.bind(ctx) as any },
-          { runtime, resolve: resolveOwned, approve: async () => true },
+          { runtime, resolve: resolveOwned, approve: async () => true,
+            workingDirectory: session => get('workingDirectory')?.get(session) },
         ),
       )
       disposers.push(

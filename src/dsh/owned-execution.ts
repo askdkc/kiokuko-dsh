@@ -21,6 +21,7 @@ import { observeProcessResult } from './execution-result.js'
 import { parseTestSummary, type TapSummary } from './node-tap-summary.js'
 import {ExecutionJournal} from './execution-journal.js'
 import {shellArguments} from './execution-command.js'
+import { lispOwnedCommandArgv } from './lisp-tool-identity.js'
 import { assertCodingDispatch, assertCodingCommandRetry } from './coding-workflow/service.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
 import { executionRequestAction } from './coding-workflow/intent.js'
@@ -184,13 +185,14 @@ export class OwnedExecutionService {
       saveTaskCompletionReceipt(db,identity.runId)
     })}catch{/* Missing auxiliary evidence never rejects development. */}
   }
-  private async evidence(identity: ExecutionIdentity, receipt: ExecutionReceipt, command: string, lease: TaskLease, execute: () => Promise<unknown>): Promise<unknown> {
+  private async evidence(identity: ExecutionIdentity, receipt: ExecutionReceipt, command: string, lease: TaskLease, execute: () => Promise<unknown>, lispArgv?: readonly string[]): Promise<unknown> {
     let completion = false, memory = false
     let sourcePaths:string[]=[]
     await this.checkAuthority(identity, lease)
     try { await this.host.runtime.withDatabase(db => {
       this.assertAuthority(identity, lease, db)
-      completion = beginTaskCompletionExecution(db,{runId:identity.runId,callId:receipt.operationId,command,repositoryRoot:identity.repositoryRoot,cwd:receipt.cwd})
+      completion = beginTaskCompletionExecution(db,{runId:identity.runId,callId:receipt.operationId,command,repositoryRoot:identity.repositoryRoot,cwd:receipt.cwd,
+        ...(lispArgv ? { lispArgv } : {})})
       if(completion){const method=db.prepare(`SELECT b.method_json FROM dsh_completion_executions e JOIN dsh_completion_bindings b
         ON b.run_id=e.run_id AND b.method_digest=e.method_digest WHERE e.run_id=? AND e.call_id=? LIMIT 1`).get<{method_json:string}>(identity.runId,receipt.operationId)
         if(method)sourcePaths=JSON.parse(method.method_json).sourcePaths}
@@ -366,7 +368,7 @@ export class OwnedExecutionService {
     await this.persist(receipt,digest)
     const done = (async () => {
       try {
-        operation.value = name === 'kioku_exec' ? await this.command(identity,receipt,input as z.infer<typeof commandInput>,signal,lease!)
+        operation.value = name === 'kioku_exec' ? await this.command(identity,receipt,input as z.infer<typeof commandInput>,signal,lease!,execution)
           : await this.file(identity,receipt,name,input as z.infer<typeof fileInput>,signal,lease)
         receipt.state = 'completed'
       } catch (error) { if (error instanceof ManagedDispatchDenied && managed) {
@@ -463,7 +465,7 @@ export class OwnedExecutionService {
       throw error
     }
   }
-  private async command(identity:ExecutionIdentity,receipt:ExecutionReceipt,input:z.infer<typeof commandInput>,signal:AbortSignal,lease:TaskLease):Promise<unknown> {
+  private async command(identity:ExecutionIdentity,receipt:ExecutionReceipt,input:z.infer<typeof commandInput>,signal:AbortSignal,lease:TaskLease,execution:NativeExecution):Promise<unknown> {
     let launchAttempted = false
     try {
     receipt.cwd = await realpath(path.resolve(identity.repositoryRoot,input.cwd ?? '.'))
@@ -513,7 +515,7 @@ export class OwnedExecutionService {
       const preview = safeText(output).slice(-24000); receipt.displayedBytes = Buffer.byteLength(preview)
       // Evidence consumes the full output here, before the public preview.
       return result
-    }).then(result => ({exitCode:receipt.exitCode,output:safeText((result as ReturnType<typeof observeProcessResult>).content[0]!.text).slice(-24000)}))
+    }, lispOwnedCommandArgv(execution, input.command)).then(result => ({exitCode:receipt.exitCode,output:safeText((result as ReturnType<typeof observeProcessResult>).content[0]!.text).slice(-24000)}))
     } catch (error) {
       // Before the only launch boundary, cancellation proves that no child ran.
       // Once launch was attempted, preserve unknown outcomes and reconcile them.

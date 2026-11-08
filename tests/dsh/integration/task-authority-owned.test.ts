@@ -238,6 +238,60 @@ test('natural native child settlement records exact idle teardown without cancel
   }
 })
 
+test('a published native continuation keeps its original lease and is stopped with the task', async () => {
+  const f = await fixture(), agents = new Map<string, any>(), sessions = new Map<string, any>()
+  const parent = f.identity.agent
+  parent.session = { id: f.identity.sessionId, header: { cwd: f.root } }
+  agents.set(parent.id, parent)
+  sessions.set(parent.session.id, parent.session)
+  const listeners = new Map<string, (event: any) => void>()
+  let resident: any
+  const publish = (id: string, runId: string) => {
+    const agent = { id, status: 'running', cancel() { this.status = 'idle' }, async whenIdle() {},
+      session: { id, header: { cwd: f.root, origin: 'subagent', parentSession: parent.session.id, delegationDepth: 1 } } }
+    const event = { id, runId, parentSessionId: parent.session.id, provider: 'spawn', local: true }
+    resident = agent
+    agents.set(id, agent)
+    sessions.set(id, agent.session)
+    listeners.get('subagent/start')!(event)
+    return { agent, event }
+  }
+  const backend = {
+    async startActivation(spec: any) { publish(spec.childId, 'first'); return { childId: spec.childId } },
+    rootOf(agent: any) {
+      if (agent === parent || agent === resident) return parent
+      throw new Error('No active runtime owner')
+    },
+  }
+  const authority = new NativeTaskAuthority({ runtime: f.runtime, repositoryRoot: f.root, backend,
+    agents: { get: id => agents.get(id), list: () => [...agents.values()] }, sessions, resolveParent: f.host.resolve,
+    onLifecycle: (name, listener) => { listeners.set(name, listener); return () => { listeners.delete(name) } },
+  })
+  const service = new OwnedExecutionService({ ...f.host, resolve: execution => authority.resolve(execution) })
+  const write = (agent: any, id: string) => service.execute('kioku_write', { path: `${id}.txt`, content: 'yes' },
+    { agent, name: 'kioku_write', arguments: { path: `${id}.txt`, content: 'yes' }, callId: id, signal: new AbortController().signal })
+  try {
+    const { childId } = await backend.startActivation({ provider: 'spawn', delivery: 'parent', parent })
+    const first = resident
+    first.status = 'idle'
+    resident = undefined
+    agents.delete(childId)
+    sessions.delete(childId)
+    listeners.get('subagent/end')!({ id: childId, runId: 'first', stopReason: 'end_turn' })
+    const { agent: resumed } = publish(childId, 'resumed')
+    assert.equal((await write(resumed, 'resumed') as { applied: boolean }).applied, true)
+    await assert.rejects(write(first, 'old-activation'), /runtime identity changed/)
+    f.state('Pending')
+    f.state('Working')
+    await assert.rejects(write(resumed, 'stale-task'), /stale/)
+    assert.equal(await stopTaskNativeChildren(f.runtime, f.taskIdentity), true)
+    assert.equal(resumed.status, 'idle')
+    await assert.rejects(write(resumed, 'stopped'), /No current/)
+    assert.deepEqual(f.db.prepare("SELECT state FROM dsh_owned_operations WHERE operation_id LIKE 'native-child:%'")
+      .all<{ state: string }>().map(row => row.state), ['completed', 'completed'])
+  } finally { authority.dispose(); await service.close(); await f.cleanup() }
+})
+
 test('native settlement never marks teardown failures, replacement children or unloaded observations complete', async () => {
   for(const boundary of ['teardown-failure','replacement','unload'] as const) {
     const f=await fixture(),agents=new Map<string,any>(),sessions=new Map<string,any>(),settled=deferred<unknown>(),observed=deferred<void>()

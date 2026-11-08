@@ -154,6 +154,8 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     let childRequests = 0
     let finishChildren!: () => void
     const childrenFinished = new Promise<void>(resolve => { finishChildren = resolve })
+    let finishContinuation!: () => void
+    const continuationFinished = new Promise<void>(resolve => { finishContinuation = resolve })
     let firstSpliced!: () => void
     const firstNoticeSpliced = new Promise<void>(resolve => { firstSpliced = resolve })
     ctx.on('session/event', (nativeSession: any, event: any) => {
@@ -163,7 +165,11 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     })
     ctx.on('subagent/start', (info: any) => { started.push({ ...info, header: ctx.sessions.get(info.id)?.header }) })
     ctx.on('agent/error',(event:any)=>workerErrors.push(String(event.error)))
-    ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
+    ctx.on('subagent/end', (info: any) => {
+      ended.push(info)
+      if (ended.length === (parallel ? 2 : 1)) finishChildren()
+      if (ended.length === 3) finishContinuation()
+    })
     let parentRequests = 0
     class ScriptedAdapter extends llm.LlmAdapter {
       async listModels(provider: string) { return [{ provider, id: 'mock', name: 'mock' }] }
@@ -192,10 +198,20 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
             assert.equal(result.generation,workerGenerations.get(options.sessionId),'Worker heap persists across model steps')
             assert.equal(result.value.json,value+2,'Sibling heaps remain private')
             chunks=mock.toolCallResponse('worker-command','lisp_eval',{operationId:'worker-command',code:`(kioku.process:result-stdout (kioku.process:run "node" (list "-e" "process.stdout.write('worker-${value}')")))`})
-          }else{
+          }else if(step===4){
             const result=toolValue(options,'worker-command');assert.equal(result.ok,true,JSON.stringify(result))
             assert.equal(result.value.json,`worker-${value}`,'Worker invokes its own admitted native command bridge')
             chunks=mock.textResponse(`CHILD_COMPLETE:${value+2}`)
+          }else if(step===5){
+            chunks=mock.toolCallResponse('continued-eval','lisp_eval',{operationId:'continued-eval',
+              code:`(kioku.process:result-stdout (kioku.process:run "node" (list "-e" "process.stdout.write('continued-review')")))`})
+          }else if(step===6){
+            const result=toolValue(options,'continued-eval');assert.equal(result.value?.json,'continued-review',JSON.stringify(result))
+            chunks=mock.toolCallResponse('continued-status','lisp_status',{})
+          }else{
+            const status=toolValue(options,'continued-status');assert.equal(status.state,'READY',JSON.stringify(status))
+            assert.notEqual(status.generation,workerGenerations.get(options.sessionId))
+            chunks=mock.textResponse('CONTINUED_COMPLETE')
           }
           for(const chunk of chunks)yield chunk
           return
@@ -384,6 +400,28 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       assert.equal(notices.length, 2)
       assert.ok(notices.every((notice: any) => JSON.stringify(notice).includes('CHILD_COMPLETE')))
       assert.deepEqual(new Set(notices.map((notice: any) => notice.source.senderSessionId)), new Set(await continuableSessionIds(parent.agent, ctx.subagents)))
+    }
+    if (mode === 'lisp-workers') {
+      const child = started[0]!
+      assert.equal(ctx.agents.get(child.id), undefined, 'The completed activation must be gone before continuing')
+      await ctx.subagents.sendMessage(parent.agent, child.id, [{ type: 'text', text: 'Continue the worker review.' }],
+        { delivery: 'queue', signal: new AbortController().signal })
+      await waitBounded(continuationFinished, 'The continued worker did not settle')
+      const resumed = ended[2]
+      assert.equal(resumed?.id, child.id)
+      assert.notEqual(resumed?.runId, child.runId)
+      assert.match(JSON.stringify(resumed?.lastAssistantMessage), /CONTINUED_COMPLETE/u,
+        JSON.stringify({ resumed, workerErrors, results: workerResults.slice(-2) }))
+      await waitBounded((async () => {
+        for (let attempt = 0; attempt < 300; attempt++) {
+          const row = await adapter!.host.runtime!.withDatabase(db => db.prepare(
+            'SELECT state FROM dsh_owned_operations WHERE operation_id=?',
+          ).get<{state:string}>(`native-child:${child.id}:${resumed.runId}`))
+          if (row?.state === 'completed') return
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        throw new Error('The continued activation did not save its own terminal receipt')
+      })(), 'The continued activation did not save its own terminal receipt')
     }
   } finally {
     releaseChildren?.()

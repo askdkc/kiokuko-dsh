@@ -5,6 +5,27 @@ export const EXECUTION_COMMAND_VERSION = 3
 export function executionCommand(command:string):string {
   return JSON.stringify({version:EXECUTION_COMMAND_VERSION,raw:command})
 }
+
+/** A host-dispatched Lisp command has an argv. Bind plain literal words to
+ * that argv without treating shell expansion or control syntax as equivalent. */
+export function matchesLiteralCommand(command: string, argv: readonly string[]): boolean {
+  const word = /([A-Za-z0-9_./:@%+,=-]+)|'([^'\r\n]*)'|"([^"\\$`!\r\n]*)"/gu
+  const words = [...command.matchAll(word)]
+  if (words.length !== argv.length || !words.length) return false
+  let end = 0
+  for (const [index, match] of words.entries()) {
+    const gap = command.slice(end, match.index)
+    if (!(index === 0 ? /^[ \t]*$/u : /^[ \t]+$/u).test(gap)) return false
+    const value = match[1] ?? match[2] ?? match[3]
+    if (value !== argv[index]) return false
+    if (index === 0 && match[1] && (match[1].includes('=') || reservedWords.has(match[1]))) return false
+    end = match.index + match[0].length
+  }
+  return /^[ \t]*$/u.test(command.slice(end))
+}
+
+const reservedWords = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time', 'coproc'])
+
 export function shellArguments(command:string):string[]|undefined {
   if(/[;&|><`$\n\r*?\[\]{}()~#]/u.test(command) || /[^\S \t]/u.test(command))return undefined
   const args:string[]=[];let token='',quote='',started=false
@@ -48,8 +69,7 @@ export function mayRepeatCommand(left: string, right: string): boolean {
   if (left === right) return true
   const a = shellArguments(left), b = shellArguments(right)
   if (!a || !b) return false
-  const reserved = new Set(['!', 'if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until', 'do', 'done', 'in', 'function', 'time', 'coproc'])
   // A quote change here can FIX the shell syntax rather than repeat a command.
-  if ([a[0], b[0]].some(word => !word || word.includes('=') || reserved.has(word))) return false
+  if ([a[0], b[0]].some(word => !word || word.includes('=') || reservedWords.has(word))) return false
   return JSON.stringify(a) === JSON.stringify(b)
 }

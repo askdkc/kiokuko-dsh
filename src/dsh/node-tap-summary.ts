@@ -18,6 +18,48 @@ export function parseTestSummary(output: string, completeHostOutput = false): Ta
   return parseNodeTapSummary(output, completeHostOutput)
 }
 
+/** Vitest's TAP reporter declares a plan at every level and closes suites with braces. */
+export function parseVitestTapSummary(output: string): TapSummary | undefined {
+  const lines = output.trimEnd().split(/\r?\n/u)
+  const start = lines.indexOf('TAP version 13')
+  if (start < 0) return
+  const summary: TapSummary = { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 }
+  const suites: { planned: number; seen: number }[] = []
+  let needsPlan = true
+  for (const line of lines.slice(start + 1)) {
+    if (needsPlan) {
+      const plan = /^( *)1\.\.([1-9]\d*)$/u.exec(line)
+      const planned = Number(plan?.[2])
+      if (plan?.[1]?.length !== suites.length * 4 || !Number.isSafeInteger(planned)) return
+      suites.push({ planned, seen: 0 })
+      needsPlan = false
+      continue
+    }
+    const suite = suites.at(-1)!
+    const indent = ' '.repeat((suites.length - 1) * 4)
+    if (suites.length > 1 && line === indent.slice(4) + '}') {
+      if (suite.seen !== suite.planned) return
+      suites.pop()
+      continue
+    }
+    if (line.startsWith(indent + '    # ')) continue
+    const result = /^( *)(not ok|ok) (\d+) - (.+)$/u.exec(line)
+    if (result?.[1]?.length !== indent.length || ++suite.seen > suite.planned || Number(result[3]) !== suite.seen) return
+    const name = result[4]!
+    const status = / # (SKIP|TODO)(?: \{)?$/u.exec(name)?.[1]
+    if (name.endsWith(' {')) {
+      if (status || result[2] !== 'ok') return
+      needsPlan = true
+    } else {
+      if (suites.length === 1) return // A file without test cases cannot establish coverage.
+      summary.tests++
+      summary[status === 'SKIP' ? 'skipped' : status === 'TODO' ? 'todo' : result[2] === 'ok' ? 'pass' : 'fail']++
+    }
+  }
+  const root = suites[0]
+  if (!needsPlan && suites.length === 1 && root!.seen === root!.planned && summary.tests > 0) return summary
+}
+
 /** Node counts an assertion-free test file as a passing implicit file test. */
 export function hasExplicitTestCases(output: string): boolean {
   return [...output.matchAll(/^\s*# Subtest: (.+)\s*$/gmu)]

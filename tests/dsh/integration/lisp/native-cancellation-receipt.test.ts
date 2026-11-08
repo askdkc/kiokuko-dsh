@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -16,6 +16,9 @@ import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { LISP_CODING_SERVICE, type LispCodingService } from '../../../../src/dsh/lisp/coding-choice.js'
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import { executeNativeTool, mountNativeTools } from '../../helpers/native-tools.js'
+import { mountTaskCompletion } from '../../../../src/dsh/task-completion-host.js'
+import { migrateDatabase } from '../../../../src/db/migrate.js'
+import { prepareAgentTask } from '../../../../src/dsh/task-intake.js'
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
 // New hosts must retain proof. Older supported hosts exercise the conservative fallback.
@@ -25,6 +28,7 @@ const cases = [false, true].flatMap(jobs => (supportsHostReceipts ? [true, false
 })))
 cases.push({ jobs: true, retained: false, scenario: 'workdir', title: 'missing native workdir never dispatches or blocks the next Lisp command' })
 cases.push({ jobs: true, retained: false, scenario: 'prototype', title: 'human Lisp recovery reopens a failed protected prototype on the same task' })
+cases.push({ jobs: true, retained: false, scenario: 'completion', title: 'Lisp native Bash verifies the bound command in a subdirectory' })
 for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 30000 }, async () => {
   const [cordis, prompt, tools, scope, sessions] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-session'].map(load))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'native-receipt-'))), root = join(base, 'repo')
@@ -33,7 +37,13 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
   const session = sessions.Session.create('receipt-session', [], { version: 4, id: 'receipt-session', createdAt: 1, isSeeded: false, cwd: root })
   session.append('turn/start', { turn: 1 })
   const agent: any = { id: 'receipt-agent', session }, owner = { sessionId: session.id, agentId: agent.id, root }
-  workingLispTask(db, owner)
+  migrateDatabase(db)
+  const runId = scenario === 'completion'
+    ? (await prepareAgentTask(db, { requestId: 'lisp-completion', dshSessionId: session.id, cwd: root,
+      task: 'Verify the fixture\n完了条件: Selected tests pass', completionMode: 'enforce',
+      profileHints: { taskType: 'research', target: '.', expected: 'verification', constraints: null },
+      capabilities: [], skillDiscoveryMode: 'off' })).run.runId
+    : workingLispTask(db, owner).taskId
   const runtime: any = { executionJournalDirectory: join(base, 'journal'), withDatabase: async (fn: any) => fn(db) }
   const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
   let deliver!: (value: any) => void, release!: () => void
@@ -58,14 +68,68 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
     }
     if (jobs) fibers.push(await ctx.plugin((await load('dsh-jobs-local')).default, {}))
     fibers.push(await ctx.plugin(await load('dsh-tool-bash'), {}))
+    if (scenario === 'completion') {
+      const unmount = mountTaskCompletion(ctx, { runtime,
+        resolve: execution => execution.agent === agent
+          ? { runId, sessionId: session.id, repositoryRoot: root, agent } : undefined,
+        approve: async () => true })
+      fibers.push({ dispose: unmount })
+    }
     local = scope.createScope(ctx, agent); agent.ctx = local.ctx
-    intake = new OnDemandIntake({ validate: async () => {}, nativeOwnership: async () => 'unowned', existing: async () => false,
-      classify: async () => ({ deferInference: true }), prepare: async () => { throw new Error('no implicit preparation') }, ready: () => false })
+    const prepared = scenario === 'completion'
+    intake = new OnDemandIntake({ validate: async () => {}, nativeOwnership: async () => prepared ? 'owned' : 'unowned',
+      existing: async () => prepared, replay: async () => prepared, classify: async () => ({ deferInference: true }),
+      prepare: async () => { throw new Error('no implicit preparation') }, ready: () => prepared })
     intake.mount(ctx, ctx.tools)
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL!, startupTimeoutMs: 60000 }))
     assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal })).kind, 'success')
     await intake.capture({ agent, turn: 1, step: 0, messages: [{ id: 'human', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Verify this isolated fixture.' }] }], signal })
     assert.equal((await execute('lisp_eval', { operationId: 'warm', code: '(+ 20 22)' })).value.ok, true)
+    if (scenario === 'completion') {
+      await mkdir(join(root, 'selected'))
+      await writeFile(join(root, 'selected', 'check.test.mjs'), "import test from 'node:test'; test('selected case', () => {});\n")
+      const status = async () => {
+        const result = await execute('task_completion', { action: 'status' })
+        assert.equal(result.isError, false, JSON.stringify(result))
+        return result.value
+      }
+      const bind = async (command: string, source = 'check.test.mjs') => {
+        const result = await execute('task_completion', { action: 'bind', criterionId: (await status()).criteria[0].criterionId,
+          method: { kind: 'native_command', command, cwd: 'selected', sourcePaths: [`selected/${source}`], assertion: 'selected_tests_pass' } })
+        assert.equal(result.value?.approved, true, JSON.stringify(result))
+      }
+      const run = async (operationId: string, code: string) => {
+        const result = await execute('lisp_eval', { operationId, code })
+        assert.equal(result.value?.value?.json?.code, 0, JSON.stringify(result))
+        assert.equal(result.value.value.json.receipt.route, 'native')
+      }
+      const nodeCommand = 'env -u NODE_TEST_CONTEXT node --test --test-reporter=tap check.test.mjs'
+      const nodeEval = '(kioku.process:run "env" (list "-u" "NODE_TEST_CONTEXT" "node" "--test" "--test-reporter=tap" "check.test.mjs") :directory "selected")'
+      assert.match(JSON.stringify(await execute('bash', { command: nodeCommand, workdir: 'selected' })), /LISP_ROUTE_REQUIRED/u)
+      await bind(`${nodeCommand} && true`)
+      await run('different-command', nodeEval)
+      assert.equal((await status()).criteria[0].reason, 'command_not_observed')
+      await bind(nodeCommand)
+      await run('bound-command', nodeEval)
+      assert.equal((await status()).criteria[0].state, 'satisfied', JSON.stringify(await status()))
+      await writeFile(join(root, 'selected', 'check.test.mjs'), '// source changed\n')
+      assert.equal((await status()).criteria[0].state, 'stale')
+
+      if (process.env.KIOKUKO_DSH_RUNTIME_MODE !== 'historical') {
+        const cli = await realpath(join(packages, '@deepseek-ai/dsh'))
+        await symlink(join(cli, '../../node_modules'), join(root, 'selected/node_modules'), 'dir')
+        const file = 'vitest.spec.mjs'
+        await writeFile(join(root, 'selected', file),
+          "import { describe, test, expect } from 'vitest'; describe('suite', () => test('observed case', () => expect(42).toBe(42)));\n")
+        await bind('npx --no-install vitest run --reporter=tap vitest.spec.mjs', file)
+        await run('bound-vitest-tap', '(kioku.process:run "npx" (list "--no-install" "vitest" "run" "--reporter=tap" "vitest.spec.mjs") :directory "selected")')
+        assert.equal((await status()).criteria[0].state, 'satisfied', JSON.stringify(await status()))
+        await bind('./node_modules/.bin/vitest run --reporter=json --includeTaskLocation vitest.spec.mjs', file)
+        await run('bound-vitest-json', '(kioku.test:vitest "vitest.spec.mjs" :directory "selected")')
+        assert.equal((await status()).criteria[0].state, 'satisfied', JSON.stringify(await status()))
+      }
+      return
+    }
     if (scenario === 'workdir') {
       const command = `(kioku.process:run ${JSON.stringify(process.execPath)} '("--version")`
       const missing = await execute('lisp_eval', { operationId: 'missing', code: `${command} :directory "missing-dir")` })

@@ -26,14 +26,17 @@ import {
   hasExplicitTestCases,
   parseNodeTapSummary,
   parseTestSummary,
+  parseVitestTapSummary,
   selectedNodeTestCommand,
   type TapSummary,
 } from "./node-tap-summary.js";
 import { isHostExecutionResult } from "./execution-result.js";
+import { parseVitestReport } from "./vitest-summary.js";
 import {
   executionCommand,
   EXECUTION_COMMAND_VERSION,
   hasShellPipeline,
+  matchesLiteralCommand,
 } from "./execution-command.js";
 import { readCodingWorkflow } from "./coding-workflow/store.js";
 import { recordCodingAttempt } from "./coding-workflow/service.js";
@@ -497,6 +500,7 @@ export function beginTaskCompletionExecution(
     command: string;
     repositoryRoot: string;
     cwd?: string;
+    lispArgv?: readonly string[];
   },
 ): boolean {
   const source = criteriaForRun(database, input.runId);
@@ -513,7 +517,8 @@ export function beginTaskCompletionExecution(
     const method = CompletionMethodSchema.parse(JSON.parse(row.method_json));
     return (
       method.kind === "native_command" &&
-      executionCommand(method.command) === executionCommand(input.command) &&
+      (executionCommand(method.command) === executionCommand(input.command) ||
+        (input.lispArgv !== undefined && matchesLiteralCommand(method.command, input.lispArgv))) &&
       realpathSync(path.resolve(source.repositoryRoot, method.cwd)) ===
         realpathSync(input.cwd ?? input.repositoryRoot) &&
       source.criteria.some(
@@ -677,21 +682,29 @@ export function finishTaskCompletionExecution(
             .join("\n")
         : "";
   const coding = readCodingWorkflow(database, input.runId);
-  const tap =
-    method.assertion === "selected_tests_pass" &&
-    (!coding || hasExplicitTestCases(content))
-      ? parseTestSummary(content, isHostExecutionResult(input.result))
-      : undefined;
+  const result = input.result;
+  const observed = isHostExecutionResult(result);
+  const outputAvailable = !observed || result.value.outputComplete !== false;
+  let tap: TapSummary | undefined;
+  if (method.assertion === "selected_tests_pass" && outputAvailable) {
+    if (!coding || hasExplicitTestCases(content)) tap = parseTestSummary(content, observed);
+    if (!tap && observed && result.value.outputComplete === true) {
+      tap = parseVitestTapSummary(content);
+      if (!tap && /(?:^|[\s/'"])vitest(?:\.mjs)?(?=['"\s]|$)/u.test(method.command)
+        && /(?:^|[\s'"])--reporter=json(?=['"\s]|$)/u.test(method.command)) {
+        const report = parseVitestReport(content);
+        if (report && report.summary.tests > 0 && (!report.failed || report.summary.fail > 0)) tap = report.summary;
+      }
+    }
+  }
   const observable =
     method.assertion === "output_matches"
       ? content.replace(/\r\n/gu, "\n").trimEnd() ===
           method.expectedOutput!.replace(/\r\n/gu, "\n").trimEnd() &&
-        isHostExecutionResult(input.result)
+        observed && outputAvailable
       : method.assertion === "artifact_matches"
         ? artifactMatches(source.repositoryRoot, method)
         : true;
-  const result = input.result;
-  const observed = isHostExecutionResult(result);
   const completeObservation = observed && result.value.processStarted === true
     && result.value.processStopped === true && result.value.outputComplete === true;
   const outcome =

@@ -119,6 +119,32 @@ test('22 continuations do not copy the native request and preserve additional in
   assert.equal(repeatedBatch.length, 1)
 })
 
+for (const mode of ['system', 'no-system', 'deferred'] as const) {
+  test(`on-demand stable guidance has one owner (${mode})`, async () => {
+    const live = session()
+    const sections: { text: string }[] = []
+    const intake = new OnDemandIntake({} as any, { onlyWhenDeferred: mode === 'deferred' })
+    intake.mount({ on: () => () => {} }, {
+      get: () => undefined, guard: () => () => {}, register: () => () => {},
+    }, mode === 'no-system' ? undefined : { section: section => { sections.push(section); return () => {} } })
+    const context = createRequestIntentContext({ task: 'Inspect parser.ts without editing it', messageRefs: [{ id: 'current', digest: 'a'.repeat(64) }] })
+    const turn: any = { input: { agent: { session: { id: `guidance-${mode}`, snapshotEvents: live.snapshotEvents } }, turn: 1 }, requestIntentContext: context }
+    try {
+      const first = intake.guidance([], turn)[0] as any
+      const dynamic = first.content[0].text as string
+      const stable = 'The original user request may be answered now without selecting a task category.'
+      const rendered = [...sections.map(section => section.text), dynamic].join('\n')
+      assert.equal(rendered.split(stable).length - 1, 1, 'Stable guidance is delivered exactly once')
+      assert.equal(dynamic.includes(stable), mode !== 'system')
+      assert.match(dynamic, /"requiredReferences":\["message:[a-f0-9]{64}"/, 'Current request reference is preserved')
+      assert.ok(dynamic.includes('advisory only'), 'Reference data is not execution permission')
+      assert.equal((intake.guidance([], turn)[0] as any).id, first.id)
+      live.append([first])
+      assert.deepEqual(intake.guidance([], turn), [])
+    } finally { await intake.dispose() }
+  })
+}
+
 // Identity, not matching prose, controls retries of the host's own current injection.
 test('on-demand retries keep one owned origin while preserving human resends, foreign sources and tool state', () => {
   const live = session()

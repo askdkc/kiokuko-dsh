@@ -1,8 +1,8 @@
 import { isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
-import { z } from 'zod'
 import { hasExplicitTestCases, parseNodeTapSummary, type TapSummary } from '../node-tap-summary.js'
+import { parseVitestReport } from '../vitest-summary.js'
 
 type TestRunner = 'node' | 'vitest'
 interface SourceLocation { file: string; line: number; column: number }
@@ -14,19 +14,6 @@ interface Failure extends Partial<SourceLocation> {
 interface Report { summary: TapSummary; failures: Failure[]; failuresOmitted: number; hasCases: boolean; failed: boolean }
 const MAX_FAILURES = 8
 const LOG_CHARS = 24_000
-const count = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
-const vitestReport = z.object({
-  numTotalTests: count, numPassedTests: count, numFailedTests: count,
-  numPendingTests: count, numTodoTests: count, success: z.boolean(),
-  testResults: z.array(z.object({
-    name: z.string(), status: z.enum(['passed', 'failed']), message: z.string(),
-    assertionResults: z.array(z.object({
-      fullName: z.string(), status: z.string(), failureMessages: z.array(z.string()),
-      location: z.object({ line: count, column: count }).optional(),
-    })),
-  })),
-})
-
 function location(text: string): SourceLocation | undefined {
   const match = /^(.+):(\d+):(\d+)$/u.exec(text)
   return match ? { file: match[1]!, line: Number(match[2]), column: Number(match[3]) } : undefined
@@ -71,30 +58,12 @@ function nodeReport(output: string): Report | undefined {
     hasCases: hasExplicitTestCases(output), failed: summary.fail > 0 || summary.cancelled > 0 }
 }
 
-function parseVitest(output: string): z.infer<typeof vitestReport> | undefined {
-  let report: z.infer<typeof vitestReport> | undefined
-  for (const line of output.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed.startsWith('{') || !trimmed.includes('"numTotalTests"')) continue
-    let value: unknown
-    try { value = JSON.parse(trimmed) } catch { continue }
-    const parsed = vitestReport.safeParse(value)
-    if (!parsed.success) continue
-    if (report) return undefined
-    report = parsed.data
-  }
-  return report
-}
-
 function vitestResult(output: string): Report | undefined {
-  const report = parseVitest(output)
+  const report = parseVitestReport(output)
   if (!report) return
-  const { numTotalTests: tests, numPassedTests: pass, numFailedTests: fail, numPendingTests: skipped, numTodoTests: todo } = report
-  if (tests !== pass + fail + skipped + todo) return
   const failures: Failure[] = []
-  let failureCount = 0, observedCases = 0, observedFailures = 0
+  let failureCount = 0
   for (const file of report.testResults) {
-    observedCases += file.assertionResults.length
     let failedAssertions = 0
     for (const item of file.assertionResults) {
       if (item.status !== 'failed') continue
@@ -107,14 +76,12 @@ function vitestResult(output: string): Report | undefined {
           ...(message ? { message } : {}), ...(assertionLocation ? { assertionLocation } : {}) })
       }
     }
-    observedFailures += failedAssertions
     if (file.status !== 'failed' || failedAssertions) continue
     failureCount++
     if (failures.length < MAX_FAILURES) failures.push({ name: file.name, file: file.name, message: file.message })
   }
-  if (observedCases !== tests || observedFailures !== fail) return
-  return { summary: { tests, pass, fail, skipped, todo, cancelled: 0 }, failures,
-    failuresOmitted: failureCount - failures.length, hasCases: tests > 0, failed: !report.success || failureCount > 0 }
+  return { summary: report.summary, failures, failuresOmitted: failureCount - failures.length,
+    hasCases: report.summary.tests > 0, failed: report.failed }
 }
 
 const shorten = (text: string, limit: number) => text.length > limit ? `${text.slice(0, limit)}…` : text

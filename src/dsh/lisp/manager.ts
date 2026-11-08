@@ -55,7 +55,7 @@ export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
-  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>, signal?:AbortSignal,callId?:string, taskLease?:TaskLease) => Promise<unknown>
+  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>, signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[]) => Promise<unknown>
   toolCatalog?: (owner:LispOwner)=>{name:string;parameters:unknown;adapterVersion:number}[]
   packagesCall?: (owner: LispOwner, request: PackageRequest, signal: AbortSignal) => Promise<PackageResult>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
@@ -684,7 +684,8 @@ export class LispManager {
       }
       const lease = await this.taskAuthority.authorizeEffect(state.owner, 'owned')
       context.signal.throwIfAborted()
-      const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:[input.program,...input.argv].map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease)) as any
+      const argv = [input.program, ...input.argv]
+      const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:argv.map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease,argv)) as any
       // A launched job must remain cancellable even if task authority changed
       // while its start acknowledgement was in flight.
       this.retainOwned(state,value)

@@ -472,6 +472,7 @@ export class OnDemandIntake {
     }
   >()
   readonly #disposers: (() => void)[] = []
+  #guidanceInSystemPrompt = false
   readonly #pending = new Set<Promise<unknown>>()
   readonly #controlTools = new Map<string, Definition['execute']>()
   readonly #controlExecutions = new WeakMap<
@@ -2262,7 +2263,7 @@ export class OnDemandIntake {
         )}\nInclude every requiredReferences entry in requestIntent.evidenceRefs. Add a proposal evidenceRef only when the current user request actually adopts or refers to that proposal; do not copy all proposals automatically. Use only these exact references. The original human message remains unchanged.`
       : ''
     const text =
-      ON_DEMAND_GUIDANCE +
+      (this.#guidanceInSystemPrompt ? '' : ON_DEMAND_GUIDANCE) +
       intentText +
       (state?.nativeIntake ? `\nAkinator answers for this exact request (scope clarification, not execution permission):\n${JSON.stringify({ profile: state.nativeIntake, sources: state.nativeIntakeSources })}` : '') +
       (state?.memoryDeferred?`\nOptional memory is quarantined and excluded from this request. Native permissions still apply. Deferred checks: ${JSON.stringify(this.host.recovery?.status(state.session.id)??[state.auxiliaryReceipt])}`:'')+
@@ -2572,16 +2573,17 @@ export class OnDemandIntake {
     this.#startupSkillReader = tools.get('skill')?.execute
     // Trust the validated host registry, not a later same-name replacement.
     this.#startupQuestionTool = tools.get('ask_user_question')?.execute
-    if (systemPrompt && !this.options.onlyWhenDeferred)
-      this.#disposers.push(
-        systemPrompt.section({
-          name: 'kiokuko:on-demand-intake',
-          order: -99999,
-          text:
-            'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' +
-            ON_DEMAND_GUIDANCE,
-        }),
-      )
+    if (systemPrompt && !this.options.onlyWhenDeferred) {
+      const dispose = systemPrompt.section({
+        name: 'kiokuko:on-demand-intake',
+        order: -99999,
+        text:
+          'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' +
+          ON_DEMAND_GUIDANCE,
+      })
+      this.#guidanceInSystemPrompt = true
+      this.#disposers.push(() => { dispose(); this.#guidanceInSystemPrompt = false })
+    }
     const definition = {
       name: TASK_PREPARE_TOOL,
       modelFacing: true,

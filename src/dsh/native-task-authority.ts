@@ -10,14 +10,17 @@ import { captureExecutionTaskLease, withTaskAuthority } from './task-authority-c
 
 type Agent = { id: string; status?: string; cancel?(reason: unknown): void; whenIdle?(): Promise<void>; session?: { id: string; header?: { cwd?: string; parentSession?: unknown; origin?: string; delegationDepth?: number } } }
 type Execution = TaskAuthorityExecution & { agent?: any }
-interface Backend { startActivation(spec: any): Promise<any> }
+interface Backend { startActivation(spec: any): Promise<any>; rootOf?(agent: Agent): Agent }
+type ActivationEvent = { id: string; runId: string; parentSessionId: string; provider: string; local: boolean }
 interface Options {
   runtime: DshCoreRuntime; repositoryRoot: string; backend: Backend | undefined
   agents: { get(id: string): object | undefined; list?(): readonly Agent[] } | undefined
   sessions: { get(id: string): object | undefined } | undefined
   resolveParent(execution: Execution): ExecutionIdentity | undefined
+  onLifecycle?(name: 'subagent/start', listener: (event: ActivationEvent) => void): () => void
+  onLifecycle?(name: 'subagent/end', listener: (event: ActivationEvent & { stopReason: string }) => void): () => void
 }
-type Proof = { parent: Agent; identity: ExecutionIdentity; lease: TaskLease; child?: Agent; live: boolean; completed?: boolean; launch?: Promise<any>; stopRequested?: boolean; stop?: Promise<boolean> }
+type Proof = { parent: Agent; root?: { agent: Agent; identity: ExecutionIdentity }; identity: ExecutionIdentity; lease: TaskLease; child?: Agent; live: boolean; completed?: boolean; launch?: Promise<any>; stopRequested?: boolean; stop?: Promise<boolean>; activation?: string; ended?: boolean; continuation?: string; settlement?: Promise<void> }
 
 /** A caller may leave a stop wait; the host must still track its cleanup. */
 function waitForStop<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -43,10 +46,13 @@ export async function stopTaskNativeChildren(runtime: DshCoreRuntime, task: {tas
     })).catch(()=>false)
 }
 
-/** Only a native launch reserved by this host grants child authority. Session
- * header ancestry alone is untrusted; reload deliberately requires a new launch. */
+/** A host-reserved launch grants authority to its native activation and to
+ * published continuations in the same live tree and task. */
 export class NativeTaskAuthority {
   private readonly proofs = new Map<string, Proof>()
+  private readonly active = new Map<string, Proof>()
+  private readonly continuations: [string, Proof][] = []
+  private readonly disposeLifecycle: (() => void)[] = []
   private readonly original: Backend['startActivation'] | undefined
   private readonly wrapper: Backend['startActivation'] | undefined
   private stopped = false
@@ -60,10 +66,13 @@ export class NativeTaskAuthority {
       const parent = (spec.parent ?? spec.request?.parent) as Agent | undefined
       if (!parent || !host.local(parent)) return original.call(this, spec)
       host.exact(parent)
+      const rootAgent = backend.rootOf?.(parent)
       const execution: Execution = { agent: parent }
       const identity = host.resolve(execution) ?? options.resolveParent(execution)
       if (!identity) throw new KiokukoError('CONFLICT', 'No admitted task owns this native child launch')
       const pinned = Object.freeze({ ...identity })
+      const rootIdentity = rootAgent === parent ? pinned : rootAgent && options.resolveParent({ agent: rootAgent })
+      const root = rootAgent && rootIdentity ? { agent: rootAgent, identity: Object.freeze({ ...rootIdentity }) } : undefined
       const lease = await options.runtime.withDatabase(db => captureExecutionTaskLease(db, {
         taskId: pinned.runId, sessionId: pinned.workflowSessionId ?? pinned.sessionId, repositoryRoot: pinned.repositoryRoot,
       }, execution))
@@ -74,7 +83,7 @@ export class NativeTaskAuthority {
       spec.signal?.throwIfAborted()
       const childId = spec.childId ?? randomUUID()
       if (host.proofs.has(childId)) throw new KiokukoError('CONFLICT', 'Native child identity already reserved')
-      const proof: Proof = { parent, identity: pinned, lease, live: true }
+      const proof: Proof = { parent, ...(root ? { root } : {}), identity: pinned, lease, live: true }
       host.proofs.set(childId, proof)
       proof.launch = withTaskAuthority(lease, async () => {
        try {
@@ -100,6 +109,53 @@ export class NativeTaskAuthority {
       return proof.launch
     }
     backend.startActivation = this.wrapper
+    if (backend.rootOf && options.onLifecycle) {
+      this.disposeLifecycle.push(
+        options.onLifecycle('subagent/start', event => this.start(event)),
+        options.onLifecycle('subagent/end', event => this.end(event)),
+      )
+    }
+  }
+  private start(event: ActivationEvent): void {
+    const original = this.proofs.get(event.id)
+    if (this.stopped || !original?.live || original.stopRequested || !original.root
+      || !event.local || !['spawn', 'fork'].includes(event.provider)
+      || event.parentSessionId !== original.parent.session?.id) return
+    const child = this.options.agents?.get(event.id) as Agent | undefined
+    if (!child || child.session?.id !== event.id || !isNativeSubagent(child) || !this.local(child)
+      || child.session.header?.parentSession !== event.parentSessionId) return
+    try {
+      this.exact(child)
+      this.exact(original.root.agent)
+      if (this.options.backend?.rootOf?.(child) !== original.root.agent) return
+    } catch { return }
+    if (!original.activation) {
+      original.activation = event.runId
+      original.child = child
+      this.active.set(event.id, original)
+      return
+    }
+    const previous = this.active.get(event.id)
+    if (!previous?.ended || previous.stopRequested || previous.child === child || previous.activation === event.runId) return
+    // A new activation gets its own stop receipt, but keeps the original
+    // task lease. Resuming a session cannot acquire a newer task generation.
+    const proof: Proof = { parent: original.parent, root: original.root, identity: original.identity, lease: original.lease,
+      child, live: true, activation: event.runId, continuation: event.runId }
+    this.active.set(event.id, proof)
+    this.continuations.push([event.id, proof])
+    proof.launch = this.receipt(event.id, proof, 'started', true)
+    void proof.launch.catch(() => { proof.live = false })
+  }
+  private end(event: ActivationEvent & { stopReason: string }): void {
+    const proof = this.active.get(event.id)
+    const child = proof?.child
+    if (!proof || proof.activation !== event.runId || !child) return
+    proof.ended = true
+    if (event.stopReason === 'error' || this.options.agents?.get(child.id) || child.status !== 'idle') return
+    proof.settlement = Promise.resolve(proof.launch).then(async () => {
+      if (!proof.completed && proof.live) await this.receipt(event.id, proof, 'completed')
+    })
+    void proof.settlement.catch(() => {})
   }
   private local(agent: Agent): boolean {
     try { return !!agent.session?.header?.cwd && realpathSync(agent.session.header.cwd) === this.options.repositoryRoot } catch { return false }
@@ -115,29 +171,37 @@ export class NativeTaskAuthority {
   resolve(execution: Execution): ExecutionIdentity | undefined {
     const agent = execution.agent as Agent | undefined
     if (!agent?.session || !isNativeSubagent(agent)) return undefined
-    const proof = this.proofs.get(agent.session.id)
-    if (this.stopped || !proof?.live || proof.stopRequested) return undefined
-    this.exact(agent); this.exact(proof.parent)
+    const original = this.proofs.get(agent.session.id)
+    const proof = this.active.get(agent.session.id) ?? original
+    if (this.stopped || !proof?.live || proof.ended || proof.stopRequested || original?.stopRequested) return undefined
+    this.exact(agent)
     if (!this.local(agent) || agent.session.header?.parentSession !== proof.parent.session!.id || proof.child && proof.child !== agent)
       throw new KiokukoError('CONFLICT', 'Native child lineage changed')
     proof.child ??= agent
-    const parentExecution: Execution = { agent: proof.parent }
-    const current = this.resolve(parentExecution) ?? this.options.resolveParent(parentExecution)
-    if (!current || !this.same(proof.identity, current)) throw new KiokukoError('CONFLICT', 'Native child task owner changed')
+    const published = proof.activation ? proof.root : undefined
+    const owner = published?.agent ?? proof.parent
+    this.exact(owner)
+    if (proof.activation && this.options.backend?.rootOf?.(agent) !== owner)
+      throw new KiokukoError('CONFLICT', 'Native child runtime owner changed')
+    const ownerExecution: Execution = { agent: owner }
+    const current = this.resolve(ownerExecution) ?? this.options.resolveParent(ownerExecution)
+    if (!current || !this.same(published?.identity ?? proof.identity, current))
+      throw new KiokukoError('CONFLICT', 'Native child task owner changed')
     execution[TASK_AUTHORITY] = proof.lease
     return { ...proof.identity, sessionId: agent.session.id, workflowSessionId: proof.lease.sessionId, agent }
   }
   /** Reading/cancelling an old child receipt remains possible after parent stop. */
   read(execution: Execution): ExecutionIdentity | undefined {
-    const agent = execution.agent as Agent | undefined, proof = agent?.session ? this.proofs.get(agent.session.id) : undefined
-    if (this.stopped || !agent?.session || !proof?.live) return undefined
+    const agent = execution.agent as Agent | undefined
+    const proof = agent?.session ? this.active.get(agent.session.id) ?? this.proofs.get(agent.session.id) : undefined
+    if (this.stopped || !agent?.session || !proof?.live || proof.ended) return undefined
     this.exact(agent)
     if (!this.local(agent) || !isNativeSubagent(agent) || agent.session.header?.parentSession !== proof.parent.session?.id || proof.child && proof.child !== agent) return undefined
     proof.child ??= agent
     return { ...proof.identity, sessionId: agent.session.id, workflowSessionId: proof.lease.sessionId, agent }
   }
   private async receipt(childId:string, proof:Proof, state:'started'|'completed', authorize=false): Promise<void> {
-    const operationId=`native-child:${childId}`
+    const operationId=proof.continuation ? `native-child:${childId}:${proof.continuation}` : `native-child:${childId}`
     const receipt:ExecutionReceipt={version:1,operationId,runId:proof.lease.taskId,sessionId:proof.identity.sessionId,generation:proof.identity.generation,
       kind:'native_child',repositoryRoot:proof.lease.repositoryRoot,cwd:proof.lease.repositoryRoot,targets:[],state,evidenceRef:operationId,persistence:'saved',taskAuthority:proof.lease}
     await this.options.runtime.withDatabase(db=>withImmediateTransaction(db,()=>{
@@ -155,6 +219,7 @@ export class NativeTaskAuthority {
   private async observeNaturalCompletion(childId:string, proof:Proof, activation:{result:Promise<unknown>;dispose():Promise<void>}):Promise<void> {
     await activation.result
     await activation.dispose()
+    if (proof.settlement) return proof.settlement
     const child=proof.child
     if(this.stopped||!proof.live||proof.completed||!child?.session||!child.whenIdle)return
     await child.whenIdle()
@@ -173,6 +238,7 @@ export class NativeTaskAuthority {
     // waits, not separate cancellation/receipt lifecycles.
     const operation=Promise.resolve().then(async()=>{
       await Promise.allSettled([proof.launch])
+      await Promise.allSettled([proof.settlement])
       if(proof.completed)return true
       const child=proof.child??this.options.agents?.list?.().find(agent=>agent.session?.id===id)
       if(!child)return false
@@ -195,14 +261,18 @@ export class NativeTaskAuthority {
   }
   async stopTask(task:{taskId:string;repositoryRoot:string},signal?:AbortSignal):Promise<boolean> {
     signal?.throwIfAborted()
-    const pending=[...this.proofs].filter(([,proof])=>proof.lease.taskId===task.taskId&&proof.lease.repositoryRoot===task.repositoryRoot)
+    const pending=this.allProofs().filter(([,proof])=>proof.lease.taskId===task.taskId&&proof.lease.repositoryRoot===task.repositoryRoot)
     const cleanup=Promise.all(pending.map(([id,proof])=>this.requestStop(id,proof)))
     return (await waitForStop(cleanup,signal)).every(Boolean)
   }
+  private allProofs(): [string, Proof][] {
+    return [...this.proofs, ...this.continuations]
+  }
   dispose(): void {
     this.stopped = true
-    for(const [id,proof] of this.proofs)void this.requestStop(id,proof).catch(()=>{})
-    this.proofs.clear(); hosts.get(this.options.runtime)?.delete(this)
+    for(const dispose of this.disposeLifecycle) dispose()
+    for(const [id,proof] of this.allProofs())void this.requestStop(id,proof).catch(()=>{})
+    this.active.clear(); this.continuations.length = 0; this.proofs.clear(); hosts.get(this.options.runtime)?.delete(this)
     const backend = this.options.backend
     if (backend && backend.startActivation === this.wrapper && this.original) backend.startActivation = this.original
   }

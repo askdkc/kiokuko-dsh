@@ -39,6 +39,8 @@ export function claimAutomaticContinuationInTransaction(
     readonly dshSessionId: string
     readonly instructionDigest: string
     readonly progressDigest: string
+    /** Optional cap for this instruction across all observations until new human input. */
+    readonly deliveryLimit?: number
     readonly now?: string
   },
 ): DshLoopGuardClaim {
@@ -81,7 +83,12 @@ export function claimAutomaticContinuationInTransaction(
     WHERE run_id = ? AND dsh_session_id = ? AND generation = ?
       AND policy_version = 2 AND progress_digest = ?
   `).get<{ attempts: number | null }>(runId, dshSessionId, generation, progressDigest)?.attempts
-  const decision = previous === 2 ? 'blocked' : previous === 1 ? 'replan' : 'deliver'
+  const limitReached = input.deliveryLimit !== undefined && database.prepare(`
+    SELECT count(*) AS deliveries FROM dsh_loop_guard_claims
+    WHERE run_id = ? AND dsh_session_id = ? AND generation = ? AND instruction_digest = ?
+      AND decision IN ('deliver', 'replan')
+  `).get<{ deliveries: number }>(runId, dshSessionId, generation, instructionDigest)!.deliveries >= input.deliveryLimit
+  const decision = limitReached || previous === 2 ? 'blocked' : previous === 1 ? 'replan' : 'deliver'
   const ordinal = state.automaticCount + 1
   database.prepare(`
     UPDATE dsh_loop_guard_states
@@ -95,7 +102,7 @@ export function claimAutomaticContinuationInTransaction(
       decision, created_at, progress_digest, policy_version, reason
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)
   `).run(claimId, runId, dshSessionId, instructionDigest, generation, ordinal, decision, now, progressDigest,
-    decision === 'deliver' ? 'new_observation' : 'no_progress')
+    limitReached ? 'delivery_limit' : decision === 'deliver' ? 'new_observation' : 'no_progress')
   return Object.freeze({ claimId, decision, ordinal, generation, recovered: false, replayed: false })
 }
 

@@ -1629,6 +1629,8 @@ export function createDshHostAdapter(
         },
         {
           runtime,
+          workingDirectory: (session) =>
+            (ctx.get("workingDirectory", false) as { get(session: object): string } | undefined)?.get(session),
           resolve(execution) {
             const agent = execution.agent as NativeAgent | undefined;
             const session = agent?.session;
@@ -1696,6 +1698,8 @@ export function createDshHostAdapter(
     agents,
     sessions,
     resolveParent: resolveParentOwned,
+    onLifecycle: (name, listener) =>
+      onNativeServiceEvent(ctx, name, listener, { global: true }),
   });
   const ownedDisposer = tools
     ? mountOwnedExecution(

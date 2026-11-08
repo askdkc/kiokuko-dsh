@@ -1,6 +1,7 @@
 import { withImmediateTransaction } from '../db/transaction.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { continuationMessage, continuationProgress } from './continuation-evidence.js'
+import { readCodingWorkflow } from './coding-workflow/store.js'
 import type { DshCoreRuntime } from './core-runtime.js'
 import { claimAutomaticContinuationInTransaction } from './loop-guard.js'
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
@@ -19,6 +20,9 @@ interface VerificationAgent {
 function claimId(lease: TaskLease, turn: number): string {
   return canonicalContentHash({ kind: 'completion-verification', lease, turn })
 }
+
+const verificationInstruction = canonicalContentHash('verify the current requested outcome')
+const verificationWakeLimit = 2
 
 export function isVerificationContinuation(message: any): boolean {
   return message?.source?.kind === KIOKUKO_DSH_SOURCE_KIND &&
@@ -47,31 +51,33 @@ export async function continueVerification(input: {
   try {
     await runtime.withDatabase(db => {
       if (!canWake()) return
-      authorizeTaskLease(db, authority)
-      const assessment = assessTaskCompletion(db, authority.taskId)
-      if (!assessment.evidenceRequired || assessment.verified ||
-        assessment.managedOperationsReady === false || assessment.nativeChildrenPending) return
-      const actionable = assessment.criteria.some(criterion => criterion.state !== 'satisfied' &&
-        !['no_binding', 'binding_not_approved', 'criterion_changed', 'unsupported_completion_method'].includes(criterion.reason))
-      if (!actionable) return
-
       const id = claimId(authority, turn)
       const claim = withImmediateTransaction(db, () => {
+        authorizeTaskLease(db, authority)
+        const assessment = assessTaskCompletion(db, authority.taskId)
+        if (!assessment.evidenceRequired || assessment.verified ||
+          assessment.managedOperationsReady === false || assessment.nativeChildrenPending) return
+        const workflow = readCodingWorkflow(db, authority.taskId)
+        if (workflow?.blocker || workflow?.pendingScopeChange) return
+        const actionable = assessment.criteria.some(criterion => criterion.state !== 'satisfied' &&
+          !['no_binding', 'binding_not_approved', 'criterion_changed', 'unsupported_completion_method'].includes(criterion.reason))
+        if (!actionable) return
         const decision = claimAutomaticContinuationInTransaction(db, {
           claimId: id,
           runId: authority.taskId,
           dshSessionId: authority.sessionId,
-          instructionDigest: canonicalContentHash('verify the current requested outcome'),
+          instructionDigest: verificationInstruction,
           progressDigest: continuationProgress(db, authority.taskId, authority.repositoryRoot, assessment),
+          deliveryLimit: verificationWakeLimit,
         })
         if (decision.decision === 'blocked') {
           saveSessionNotice(db, {
-            id: `completion-blocked:${id}`,
+            id: `completion-retries-ended:${canonicalContentHash({ runId: authority.taskId, sessionId: authority.sessionId, generation: decision.generation })}`,
             runId: authority.taskId,
             sessionId: authority.sessionId,
             rootPath: authority.repositoryRoot,
             kind: 'status',
-            text: '完了条件の検証が残っています。同じ結果が続いたため、自動での再試行を終了しました。',
+            text: '完了条件の検証が残っています。自動再試行を終了しました。作業は保持されています。',
             anchorSeq: 0,
           })
         }
@@ -79,7 +85,7 @@ export async function continueVerification(input: {
       })
       // The claim reserves one native delivery. A crash at the inbox boundary
       // leaves an uncertain reservation, which must never be sent a second time.
-      if (!canWake() || claim.replayed || (claim.decision !== 'deliver' && claim.decision !== 'replan')) return
+      if (!claim || !canWake() || claim.replayed || (claim.decision !== 'deliver' && claim.decision !== 'replan')) return
       const message = continuationMessage(id, claim.decision === 'deliver'
         ? 'The current request is still open. Use task_completion status to find the missing verification. Establish current host-observed evidence using the selected route, or explain the specific obstacle if verification cannot run.'
         : 'The previous verification attempt did not change the observed result. Try a different authorized check for the same request. If no check can run, report which condition is unverified and why.')

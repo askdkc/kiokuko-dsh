@@ -77,6 +77,23 @@ test('native completion tool proposes a check and only a later matching foregrou
     await callbacks.get('tools/pre-execute')!(unobserved, async () => undefined)
     await callbacks.get('tools/result')!(unobserved, { value: { exitCode: 0 }, content: [{ type: 'text', text: 'ok' }] })
     assert.deepEqual(readMemoryReuseChecks(db, lookup), [], 'exit code and matching text cannot mint host proof')
+    const bashValue = { kind: 'foreground', cwd: root, exitCode: 0, signal: null, timedOut: false, aborted: false,
+      stdout: { text: 'ok', truncated: false }, stderr: { truncated: false } }
+    for (const [kind, value] of [
+      ['truncated', { ...bashValue, stdout: { ...bashValue.stdout, truncated: true } }],
+      ['different-cwd', { ...bashValue, cwd: join(root, 'src') }],
+      ['denied', { ...bashValue, sandbox: { denied: true } }],
+      ['nonzero', { ...bashValue, exitCode: 1 }],
+      ['background', { ...bashValue, kind: 'background' }],
+    ] as const) {
+      const bash = { ...execution, name: 'bash', arguments: { command: method.command }, callId: `bash-${kind}` }
+      await callbacks.get('tools/pre-execute')!(bash, async () => undefined)
+      await callbacks.get('tools/result')!(bash, { isError: false, value, content: [{ type: 'text', text: 'ok' }] })
+      const status = await tool.execute({ action: 'status' }, { agent, name: 'task_completion', callId: `status-${kind}`, signal })
+      assert.equal(status.verified, false, kind)
+      assert.equal(status.criteria[0].evidenceRef, bash.callId)
+      assert.deepEqual(readMemoryReuseChecks(db, lookup), [], kind)
+    }
     const retry = { ...execution, callId: 'command-retry' }
     await callbacks.get('tools/pre-execute')!(retry, async () => undefined)
     await callbacks.get('tools/result')!(retry, observeProcessResult({ isError: false,
@@ -86,7 +103,7 @@ test('native completion tool proposes a check and only a later matching foregrou
     }))
     const done = await tool.execute({ action: 'status' }, { agent, name: 'task_completion', callId: 'status-2', signal })
     assert.equal(done.verified, true, JSON.stringify({ done, rows: db.prepare('SELECT * FROM dsh_completion_executions').all() }))
-    assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_completion_executions').get<{ n: number }>()?.n, 3)
+    assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_completion_executions').get<{ n: number }>()?.n, 8)
     assert.deepEqual(readMemoryReuseChecks(db, lookup).map(item => [item.state, item.runId, item.evidenceRef]),
       [['verified', prepared.run.runId, 'command-retry']])
     assert.deepEqual(readMemoryReuseChecks(db, { ...lookup, sessionId: 'other' }), [], 'active evidence is session scoped')

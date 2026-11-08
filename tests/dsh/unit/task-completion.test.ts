@@ -1,5 +1,9 @@
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { continuationProgress } from '../../../src/dsh/continuation-evidence.js'
+import { continueVerification } from '../../../src/dsh/verification-continuation.js'
+import { resetLoopGuardForUserInTransaction } from '../../../src/dsh/loop-guard.js'
+import { bindTaskRepository, captureTaskLease } from '../../../src/dsh/task-state.js'
+import { withImmediateTransaction } from '../../../src/db/transaction.js'
 import { bindMainModelRequestIntent, createRequestIntentContext, requestIntentMessageRefs, requestIntentReferenceIds } from '../../../src/dsh/decisions/request-intent.js'
 import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -50,6 +54,60 @@ test('source-bound verification requires observed proof even in shadow mode', ()
   const missing = { mode: 'shadow' as const, verified: false, required: 0, criteria: [], evidenceRequired: true as const }
   assert.equal(taskCompletionBlocksClose(missing), true)
   assert.equal(taskCompletionBlocksClose({ ...missing, verified: true }), false)
+})
+
+test('automatic verification parks after two wakes even when each retry changes source', async () => {
+  const f = await fixture('shadow')
+  try {
+    const task = 'Verify parser output'
+    const message = { id: 'verify-original', role: 'user', content: [{ type: 'text', text: task }] }
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'verify',
+      evidenceRefs: requestIntentReferenceIds(context) }, context)
+    assert.ok(decision)
+    initializeTaskCompletion(f.database, f.runId, 'shadow', decision)
+    const ledger = new LedgerStore(f.database)
+    if (ledger.readRun(f.runId)?.status === 'intake') ledger.updateRunStatus(f.runId, 'active')
+    const identity = { taskId: f.runId, sessionId: 'completion-session', repositoryRoot: f.root }
+    bindTaskRepository(f.database, identity)
+    const authority = captureTaskLease(f.database, identity)
+    for (const [index, criterion] of f.criteria.entries())
+      bindTaskCriterion(f.database, { runId: f.runId, callId: `bind-${index}`,
+        criterionId: criterion.criterionId, method: f.method, approved: true })
+
+    const messages: unknown[] = []
+    const agent = { status: 'idle', inbox: { nextStep: [], nextTurn: [] }, cancel() {},
+      followup(message: unknown) { messages.push(message) } }
+    const wake = (turn: number) => continueVerification({
+      runtime: { withDatabase: async (fn: (database: typeof f.database) => unknown) => fn(f.database) } as any,
+      agent, authority, turn, current: () => true,
+    })
+    for (let turn = 1; turn <= 6; turn++) {
+      await writeFile(join(f.root, 'src/check.test.ts'), `changed source ${turn}`)
+      await wake(turn)
+      await wake(turn)
+    }
+    assert.equal(messages.length, 2)
+    assert.equal(f.database.prepare("SELECT count(*) AS n FROM dsh_session_notices WHERE id LIKE 'completion-retries-ended:%'")
+      .get<{ n: number }>()?.n, 1, 'only one stop notice per human-input generation')
+    assert.equal(assessTaskCompletion(f.database, f.runId).verified, false)
+    assert.equal(ledger.readRun(f.runId)?.status, 'active', 'keep the unverified work available for explicit continuation')
+    withImmediateTransaction(f.database, () => resetLoopGuardForUserInTransaction(f.database, {
+      runId: f.runId, dshSessionId: authority.sessionId, resolution: 'manual_user',
+    }))
+    await wake(7)
+    assert.equal(messages.length, 3, 'a new human turn can resume verification')
+    for (const [index] of f.criteria.entries()) {
+      const callId = `observed-${index}`
+      assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId, command, repositoryRoot: f.root }), true)
+      finishTaskCompletionExecution(f.database, { runId: f.runId, callId, result: {
+        value: { exitCode: 0 }, content: [{ type: 'text', text: tap(1) }],
+      } })
+    }
+    assert.equal(assessTaskCompletion(f.database, f.runId).verified, true)
+    await wake(8)
+    assert.equal(messages.length, 3, 'verified work must not schedule another wake')
+  } finally { await f.cleanup() }
 })
 
 test('a bound verification request in shadow stays open until its current check passes', async () => {

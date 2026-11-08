@@ -3,7 +3,7 @@ import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type Ag
   type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
 import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import { AssistantStreamAccumulator, BlockAssembler, LlmError, markAgentLoopRequest, createAssistantMessage, createSystemMessage, createUserMessage,
-  createToolResultMessage, type UserMessage, type ContextFormed, type LlmCallConfig, type LlmFailure, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
+  createToolResultMessage, type UserMessage, type ContextFormed, type ContextSnapshotSection, type LlmCallConfig, type LlmFailure, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
 import { appendPluginRecord, interruptedTurnClosers, ToolCallRecovery, type Session, type SessionEvent,
   type TurnEndReason, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { renderPrompt, renderContextSections, joinContextSections } from '@deepseek-ai/dsh-system-prompt'
@@ -84,6 +84,7 @@ export class KiokukoHarnessAgent implements Agent {
   private ready=false; private disposed=false; private wake=false; private turn=0; private step=0; private streamRevision=0
   private claimedInputs:readonly UserMessage[]=[]
   private headerSeen=false
+  private runtimeContextSeen=false
   private systemSeq:SessionSeq|undefined;private systemText:string|undefined
   private attemptedProvider:string|undefined;private retryPolicy:import('@deepseek-ai/dsh-llm').ResolvedRetryPolicy|undefined
   constructor(private readonly ownerCtx:Context, readonly session:Session, options:HarnessOptions,
@@ -92,7 +93,24 @@ export class KiokukoHarnessAgent implements Agent {
     this.id=session.id;this.options={...options};this.model=new KiokukoHarnessModel(session,this.options);this.scope=createScope(ownerCtx,this,parent?{parent}:{});this.ctx=this.scope.ctx
     this.dispatch=agentEvents(this.ctx,this);this.inbox=new KiokukoInbox(session,this.dispatch,seed)
     for(const e of seed){if(e.type==='turn/start')this.turn=e.data.turn;if(e.type==='request/header')this.headerSeen=true}
+    this.runtimeContextSeen=seed.some(event=>event.type==='user/message'&&event.data.source.kind==='runtime-context')
     const head=seed.find(e=>e.seq===session.surface.nodes[0]);if(head?.type==='system/message'){this.systemSeq=head.seq;this.systemText=head.data.message.content.map(b=>b.type==='text'?b.text:'').join('')}
+  }
+  /** Only the retained native surface proves that a snapshot was delivered. */
+  private retainedRuntimeContext():UserMessage|undefined {
+    const nodes=this.session.surface.nodes
+    for(let index=nodes.length-1;index>=0;index--) {
+      const event=this.session.eventAt(nodes[index]!)
+      if(event?.type==='user/message'&&event.data.source.kind==='runtime-context')return event.data
+    }
+  }
+  private projectRuntimeContext(sections:readonly ContextSnapshotSection[]):UserMessage|undefined {
+    const retained=this.retainedRuntimeContext()
+    if(!sections.length&&!retained&&!this.runtimeContextSeen)return
+    const text=sections.length?joinContextSections(sections):'Current runtime context: none. Earlier runtime-context snapshots no longer apply.'
+    if(retained?.content.length===1&&retained.content[0]?.type==='text'&&retained.content[0].text===text)return
+    return createUserMessage({content:[{type:'text',text}],source:sections.length
+      ?{kind:'runtime-context',form:'snapshot',sections}:{kind:'runtime-context'}})
   }
   get status(): 'idle'|'running' { return this.driver ? 'running':'idle' }
   private audit(action:string,phase:string,callId?:string,diagnostic?:LlmFailure) {
@@ -173,10 +191,10 @@ export class KiokukoHarnessAgent implements Agent {
             const assemblyContext={...assembleContextFor(this,signal),modelSelection,...(toolSet===undefined?{}:{toolSet})}
             assembly=prompt?await prompt.assemble(assemblyContext):undefined
             const sections=assembly?renderContextSections(assembly):[]
-            const context=joinContextSections(sections)
+            const context=this.projectRuntimeContext(sections)
             // Observers receive only claimed inbox input. The terminal admission
-            // adds generated context, matching the native pre-step contract.
-            const messages=context?[...payload.messages,createUserMessage({content:[{type:'text',text:context}],source:{kind:'runtime-context',form:'snapshot',sections}})]:payload.messages
+            // adds changed context, matching the native pre-step contract.
+            const messages=context?[...payload.messages,context]:payload.messages
             const internal=await this.lifecycle.preStep(payload,async()=>({kind:'enter',messages}))
             decision=internal
             if(internal.kind==='enter') {
@@ -221,18 +239,30 @@ export class KiokukoHarnessAgent implements Agent {
       if(blocked||signal.aborted&&!this.wake)break
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
   }
+  private commitInput(message:UserMessage):void {
+    if(message.source.kind==='runtime-context') {
+      const retained=this.retainedRuntimeContext(),block=message.content[0]
+      if(message.content.length===1&&block?.type==='text'&&retained?.content.length===1
+        &&retained.content[0]?.type==='text'&&retained.content[0].text===block.text)return
+    }
+    this.session.append('user/message',message,{surfaceOp:'append'})
+    if(message.source.kind==='runtime-context')this.runtimeContextSeen=true
+  }
   private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<ModelStepResult> {
     if(this.systemSeq===undefined){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage('')},{surfaceOp:'append'});this.systemSeq=event.seq;this.systemText=''}
+    // Prefer the host-admitted snapshot over the earlier assembly, including on retry.
+    const snapshot=[...messages].reverse().find(message=>message.source.kind==='runtime-context')
+      ??this.projectRuntimeContext(assembly?renderContextSections(assembly):[])??this.retainedRuntimeContext()
     // Accepted input must survive even provider/prompt preparation failure.
-    for(const message of messages)this.session.append('user/message',message,{surfaceOp:'append'})
-    for(;;){try{return await this.requestAttempt(signal,assembly,modelSelection,toolSet)}catch(error){
+    for(const message of messages)this.commitInput(message)
+    for(;;){try{return await this.requestAttempt(signal,assembly,modelSelection,toolSet,snapshot)}catch(error){
       if(signal.aborted||!(error instanceof LlmError))throw error
       const recovery=await this.dispatch.waterfall('agent/request-error',{turn:this.turn,step:this.step,provider:this.attemptedProvider??'',failure:error.failure,retryPolicy:this.retryPolicy,signal},async()=>undefined)
       if(recovery?.kind!=='retry')throw error
       this.audit('model','retry')
     }}
   }
-  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<ModelStepResult> {
+  private async requestAttempt(signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown,snapshot?:UserMessage):Promise<ModelStepResult> {
     const proposed:LlmCallConfig={...modelSelection,...(this.options.maxTokens?{maxTokens:this.options.maxTokens}:{})}
     const config=await this.dispatch.waterfall('agent/request',{turn:this.turn,step:this.step,signal},async()=>proposed)
     this.attemptedProvider=config.provider;this.retryPolicy=undefined
@@ -245,8 +275,8 @@ export class KiokukoHarnessAgent implements Agent {
     if(this.systemText!==text){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage(text)},
       this.systemSeq!==undefined?{surfaceOp:{op:'replace',startSeq:this.systemSeq,endSeq:this.systemSeq},sourceEventSeqs:[this.systemSeq]}:{surfaceOp:'append'})
       this.systemSeq=event.seq;this.systemText=text}
-    // Admission already owns the assembled snapshot, including any host updates.
-    // Appending the pre-admission assembly again would duplicate continuity.
+    // Reconcile after preparation/compaction without replaying accepted human input.
+    if(snapshot)this.commitInput(snapshot)
     await this.ctx.sessions.flush(this.session)
     const assembler=new BlockAssembler(),accumulator=new AssistantStreamAccumulator(),revision=++this.streamRevision
     const attemptId=`kiokuko:${this.id}:${this.turn}:${this.step}:${revision}` as any
