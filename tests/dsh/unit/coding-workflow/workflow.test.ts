@@ -486,6 +486,8 @@ test('human worker recovery remains available with a defined Goal without granti
     await assert.rejects(manager.taskAuthority.run(owner, () => manager.taskAuthority.authorizeEffect(owner), {
       assertCurrent() {},
       async run() { throw new Error('Mode control cannot execute a command') },
+      toolCatalog() { return [] },
+      async callTool() { throw new Error('Mode control cannot call a connected tool') },
     }), (error: any) => ['TASK_REQUIRED', 'TASK_STATE_CONFLICT'].includes(error.code), 'mode-only recovery cannot authorize file effects')
     await assert.rejects(readFile(join(f.root, 'recovery-must-not-write')), { code: 'ENOENT' })
   } finally { await manager.dispose(); await protectedManager.dispose(); await f.close() }

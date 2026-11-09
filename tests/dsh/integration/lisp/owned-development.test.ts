@@ -37,7 +37,7 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
   const agent:any={id:'owned-agent',session},ctx=new cordis.Context(),fibers:any[]=[],commands=new Map<string,any>()
   let plan=false
   let intake:SourceOnDemandIntake|undefined
-  let surface:any,local:any,unmountOwned:(()=>Promise<void>)|undefined,approvals=0
+  let surface:any,local:any,unmountOwned:(()=>Promise<void>)|undefined,removeFixture:(()=>void)|undefined,approvals=0
   const signal=new AbortController().signal
   try{
     fibers.push(await ctx.plugin(prompt.default,{})); await mountNativeTools(ctx, tools, packages!, fibers)
@@ -53,7 +53,7 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     intake.mount(ctx,ctx.tools)
     await intake.capture({agent,turn:1,step:0,messages:[{id:'human-existing-task',role:'user',source:{kind:'user'},content:[{type:'text',text:'Continue the admitted task and verify the local fixture.'}]}],signal})
     unmountOwned=mountOwnedExecution(ctx,{runtime,resolve:execution=>execution.agent===agent?{runId:prepared.run.runId,sessionId:session.id,repositoryRoot:root,workspace:prepared.project.workspace,generation:'native-generation-1',agent}:undefined})
-    ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true})})
+    removeFixture=ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true,revision:1})})
     surface=await mountLispSurface(ctx,runtime,LispConfig.parse({enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
     const enabled=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal})
     assert.equal(enabled.kind,'success',enabled.text)
@@ -64,6 +64,18 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     }
     const native=await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})
     assert.equal(native.isError,false,JSON.stringify(native));assert.equal(native.value.available,true)
+    const connected=await evaluate('(kioku.tools:call-tool "fixture_native")')
+    assert.equal(connected.available,true,'Lisp must call the current step-admitted DSH tool through its structured catalog')
+    const oldDefinition=await evaluate('(gethash "definitionId" (kioku.tools:describe "fixture_native"))')
+    removeFixture?.(); removeFixture=ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true,revision:2})})
+    const stale=await executeNativeTool(ctx,packages!,{callId:randomUUID(),name:'lisp_eval',arguments:{operationId:randomUUID(),
+      code:`(kioku.internal:rpc "tool-call" (kioku.internal:object "name" "fixture_native" "definitionId" ${JSON.stringify(oldDefinition)} "args" (kioku.internal:object)))`},agent,signal})
+    assert.equal(stale.value.ok,false,JSON.stringify(stale));assert.match(JSON.stringify(stale.value),/STALE_TOOL_DEFINITION|definition changed/u)
+    const replaced=await evaluate('(kioku.tools:result-value (kioku.tools:call "fixture_native"))')
+    assert.equal(replaced.revision,2,'refreshing the catalog reaches the replacement implementation')
+    removeFixture?.(); removeFixture=undefined
+    assert.equal(await evaluate('(handler-case (progn (kioku.tools:describe "fixture_native") "present") (error () "absent"))'),'absent')
+    removeFixture=ctx.tools.register({name:'fixture_native',modelFacing:true,parameters:{type:'object'},output:{schema:{},render:()=>[]},execute:()=>({available:true,revision:3})})
     const guarded=join(root,'source-to-preserve.txt')
     await writeFile(guarded,'original source')
     const direct=await evaluate(`(handler-case (progn (delete-file ${JSON.stringify(guarded)}) "deleted") (file-error () "denied"))`)
@@ -72,10 +84,11 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     await evaluate('(kioku.files:propose-write "new/deep/source.txt" "source result")')
     assert.equal(await readFile(join(root,'new/deep/source.txt'),'utf8'),'source result')
     assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_owned_operations WHERE state='completed' AND receipt_json LIKE '%kioku_write%'").get<any>().n,1)
-    const command="node --test --test-reporter=tap check.test.mjs"
-    bindTaskCriterion(db,{runId:prepared.run.runId,callId:'bind',criterionId:assessTaskCompletion(db,prepared.run.runId).criteria[0]!.criterionId,method:{kind:'native_command',command,cwd:'src',sourcePaths:['src/check.test.mjs'],assertion:'selected_tests_pass'},approved:true})
-    const checked=await evaluate('(kioku.process:run "node" (list "--test" "--test-reporter=tap" "check.test.mjs") :directory "src")')
-    assert.equal(checked.code,0);assert.equal(checked.receipt.verification,'passed');assert.equal(checked.receipt.checks[0].outcome,'passed')
+    const operation={kind:'test' as const,adapter:'node-test' as const,adapterVersion:1 as const,files:['check.test.mjs'],directory:'src',timeoutMs:120000,isolation:'default' as const}
+    bindTaskCriterion(db,{runId:prepared.run.runId,callId:'bind',criterionId:assessTaskCompletion(db,prepared.run.runId).criteria[0]!.criterionId,method:{kind:'typed_operation',definitionVersion:1,operation,sourcePaths:['src/check.test.mjs'],assertion:'selected_tests_pass'},approved:true})
+    const checked=await evaluate('(kioku.test:result-raw (kioku.test:run (kioku.test:spec :framework :node-test :files (list "check.test.mjs") :directory "src")))')
+    assert.equal(checked.code,0);assert.equal(checked.testStatus,'passed')
+    assert.equal(assessTaskCompletion(db,prepared.run.runId).criteria[0]!.state,'satisfied','typed Lisp test evidence must not depend on a command string')
     const server=createServer((_request,response)=>response.end('LOCAL_CURL_FIXTURE'))
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
     try {
@@ -91,6 +104,10 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     assert.equal(collected.receipt.state,'completed');assert.equal(collected.receipt.exitCode,0)
     await evaluate(`(kioku.process:job-status ${JSON.stringify(job)})`)
     assert.equal(await readFile(join(root,'count'),'utf8'),'x');assert.equal(approvals,0)
+    await evaluate(`(progn
+      (kioku.session:save "selected-files" (kioku.internal:object "files" #("src/check.test.mjs")))
+      (kioku.functions:save-definition "increment-saved" "(defun increment-saved (value) (+ value 1))")
+      t)`)
     const cancelJob=await evaluate('(kioku.process:start-job "node" (list "-e" "setInterval(()=>{},1000)"))')
     const generation=(await surface.manager.status({sessionId:session.id,agentId:agent.id,root}) as any).generation
     plan=true
@@ -109,7 +126,13 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).isError,true,'explicit protected reload reinstates its legacy fence')
     surface.stop();await surface.dispose();surface=undefined
     surface=await mountLispSurface(ctx,runtime,LispConfig.parse({executionMode:'development',enabled:true,sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',startupTimeoutMs:60000}))
+    const restoredMode=await commands.get('kioku-lisp').handler({rawInput:'enable',agent,signal})
+    assert.equal(restoredMode.kind,'success',restoredMode.text)
     assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'fixture_native',arguments:{},agent,signal})).value.available,true,'development reload releases the old ordinary-tool restriction')
     assert.equal((await executeNativeTool(ctx, packages!, {callId:randomUUID(),name:'kioku_read',arguments:{path:'count'},agent,signal})).value.content,'x')
-  }finally{await intake?.dispose();surface?.stop();await surface?.dispose();await unmountOwned?.();await local?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
+    const restored=await evaluate(`(progn (kioku.functions:restore-definition "increment-saved")
+      (kioku.internal:object "value" (increment-saved 41) "saved" (kioku.session:restore "selected-files")))`)
+    assert.equal(restored.value,42);assert.deepEqual(restored.saved.files,['src/check.test.mjs'])
+    assert.equal(await readFile(join(root,'count'),'utf8'),'x','restoring definitions/data must not repeat completed external work')
+  }finally{removeFixture?.();await intake?.dispose();surface?.stop();await surface?.dispose();await unmountOwned?.();await local?.dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(base,{recursive:true,force:true})}
 })

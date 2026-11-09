@@ -463,7 +463,32 @@ composed operation stops before its next step. Use `run` when the function needs
 to inspect a nonzero exit and handle it explicitly. `result-ok?` is true only for
 exit code zero; missing or nonnumeric exit codes return false.
 
-For selected tests, use the bundled `kioku.test` functions inside `lisp_eval`:
+For completion checks, prefer a typed specification bound to the current criterion.
+The host records the definition revision, operation and source digests, owner and
+execution environment separately from the structured result:
+
+```lisp
+(defparameter *check*
+  (kioku.verify:bind
+    :criterion-id "selected-tests"
+    :operation (kioku.test:spec
+                 :framework :node-test
+                 :files '("test/example.test.mjs")
+                 :directory ".")
+    :source-paths '("src" "test/example.test.mjs")))
+
+(defparameter *result* (kioku.verify:run *check*))
+(unless (kioku.test:passed-p *result*)
+  (kioku.test:failures *result*))
+```
+
+`kioku.test:run` is available for exploration, but an unbound run is not promoted
+into completion evidence. A Lisp `passed` value or copied execution ID is never
+proof: the host must find the saved receipt for the exact current definition,
+owner, source and environment. Zero tests, skip/todo, incomplete or truncated
+reports, abnormal exit and stale source remain non-passing.
+
+The older bundled `kioku.test` helpers remain compatible entry points:
 
 ```lisp
 (kioku.test:node "test/example.test.ts" :tsx t)
@@ -498,6 +523,37 @@ For missing or truncated reports, check the returned diagnostic and inspect
 the saved `/value/json/stdout` or `/value/json/stderr` with `lisp_inspect`.
 The saved logs are bounded and `logsTruncated` indicates when capture was
 shortened. Project-specific commands remain available through `kioku.process:run`.
+
+## Structured workspace, connected tools, state and recovery
+
+`kioku.tools:list`, `describe` and `call` expose the tools admitted for the current
+model step. Each catalog entry carries its schema and a host definition identity;
+disconnecting or replacing a tool invalidates an earlier entry. Calls still traverse
+the normal DSH pipeline, including approvals, Stop, parent/child scope and the current
+toolset. `kioku.workspace` provides structured read/write/edit/remove adapters and
+`kioku.jobs` provides start/status/await/cancel. Pure JSON, CSV, text and collection
+transformations stay in `kioku.data` rather than spawning a process.
+
+The resident worker keeps ordinary variables, functions and macros between calls.
+Use `kioku.session:save`/`restore` for explicit JSON data or result references and
+`kioku.functions:save-definition`/`restore-definition` for one `defun` or `defmacro`.
+Restoring a definition is explicit; startup never re-evaluates arbitrary top-level
+forms or repeats external operations. Streams, live processes, stacks, credentials
+and generation-scoped code handles are not restorable.
+
+Inside a condition handler, `kioku.recovery:await-restart` can suspend the current
+evaluation and expose the active restart choices. `lisp_resume` selects one restart
+with typed arguments on that same live dynamic stack. Its ticket is single-use and
+becomes invalid after Stop, expiry or generation change; other evaluations cannot
+enter the waiting worker.
+
+If the host observes that the Lisp runtime, transport or API is unrecoverable,
+`lisp_fallback` records the objective, completed/pending work, changed files, evidence,
+uncertain effects and next steps. It confirms process shutdown, disables only the Lisp
+route, attempts `compactRegion` immediately before the next model step, and continues
+the same task with the standard DSH tools. Missing, failed or inapplicable compaction
+keeps the original history and marks the outcome accurately. Stop, cancellation and
+permission denial are never fallback reasons, and unresolved effects remain fenced.
 
 The experimental flag spelling works with Node 22.8+ and remains accepted by
 Node 24/26. The shorter `--test-isolation` spelling requires Node 23.6+.

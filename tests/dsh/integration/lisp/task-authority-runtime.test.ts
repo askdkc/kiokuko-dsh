@@ -78,6 +78,11 @@ test('all Lisp entry points use effect authority without blocking saved reads or
     transitionTask(db, working, { operation: 'wait', operationId: 'wait', expectedRevision: working.revision, reason: 'Host has stopped all effects', evidence: ['stopped'] })
     const hot = success(await run('lisp_hot_call', { name: contract.name, input: 41 })); assert.equal(hot.value, 42)
     success(await run('lisp_status')); success(await run('lisp_hot_status')); success(await run('lisp_cancel'))
+    const noRestart = await run('lisp_resume', { targetOperationId: 'missing-operation', generation: 'missing-generation', ticket: 'missing-ticket', restartId: 'continue', arguments: [] })
+    assert.equal(noRestart.ok, false); assert.match(JSON.stringify(noRestart), /RESTART_STALE/)
+    seen.add('lisp_fallback')
+    const noFallback: any = await manager.fallback(owner, { fallbackId: randomUUID(), reasonCode: 'RECOVERY_REQUIRED', handoff: { objective: 'continue' } }).catch(error => ({ ok: false, code: error.code }))
+    assert.equal(noFallback.ok, false); assert.match(JSON.stringify(noFallback), /FALLBACK_(?:NOT_REQUIRED|REASON_MISMATCH)/)
     assert.deepEqual([...seen].sort(), [...LISP_TOOLS].sort(), 'Every public Lisp tool has an executed boundary case')
   } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
 })

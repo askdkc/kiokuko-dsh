@@ -4,9 +4,10 @@ import { workingLispTask } from '../../helpers/lisp-task.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtemp, realpath, mkdir, readFile, writeFile, stat } from 'node:fs/promises'
+import { cp, mkdtemp, realpath, mkdir, readFile, rm, writeFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
 import { LispManager } from '../../../../src/dsh/lisp/manager.js'
@@ -17,7 +18,11 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
   skip: process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires an OS sandbox and a working SBCL; not evidence when skipped' : false, timeout: 180000,
 }, async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'li-'))), root = join(base, 'workspace')
+  const libraryRoot = await realpath(await mkdtemp(join(tmpdir(), 'li-library-')))
   await mkdir(root)
+  const library = join(libraryRoot, 'lisp')
+  await cp(fileURLToPath(new URL('../../../../lisp/', import.meta.url)), library, { recursive: true,
+    filter: source => !source.split(/[\\/]/u).some(part => part === '.native' || part.startsWith('.native-build-')) })
   const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
   const store = new LispStore(async fn => fn(db))
   let approval: 'allow' | 'deny' | 'skip' | 'throw' | 'mutate' | 'pending' = 'deny', questions = 0
@@ -31,7 +36,7 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
   } }
   const config = LispConfig.parse({ executionMode: 'protected', enabled: true, sbclPath: process.env.KIOKUKO_LISP_SBCL ?? 'sbcl', startupTimeoutMs: 60000 })
   const ciRequests: unknown[] = []
-  const options = { store, config, dataRoot: join(base, 'data'), questions: ui, ciCall: async (_owner: unknown, request: any) => {
+  const options = { store, config, dataRoot: join(base, 'data'), library, questions: ui, ciCall: async (_owner: unknown, request: any) => {
     ciRequests.push(request)
     if (request.kind === 'list-runs') return { source: 'fixture', runs: [{ databaseId: 42 }] }
     if (request.kind === 'failed-log') return { source: 'fixture', runId: request.runId, log: 'failed log' }
@@ -243,5 +248,5 @@ test('real protected SBCL: state, CSV/JSON/regex, Python, deletion permissions, 
     console.log(JSON.stringify({ coldPreparationMs: firstCompile.prepareMs, warmPreparationMs: secondCompile.prepareMs }))
     await manager.disable(owner)
     assert.equal((await manager.status(owner) as any).state, 'DISABLED')
-  } finally { await manager.dispose(); db.close() }
+  } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }); await rm(libraryRoot, { recursive: true, force: true }) }
 })

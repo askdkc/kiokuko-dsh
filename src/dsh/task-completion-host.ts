@@ -19,6 +19,9 @@ import { captureExecutionTaskLease } from './task-authority-context.js'
 import { withImmediateTransaction } from '../db/transaction.js'
 import { currentLispNativeCommand } from './lisp-tool-identity.js'
 import { observeProcessResult } from './execution-result.js'
+import { OperationSpecSchema } from './operation-spec.js'
+import { reportTestResult } from './test-report.js'
+import { canonicalContentHash } from '../serialization/validate.js'
 
 interface NativeExecution extends TaskAuthorityExecution { callId: string; name: string; arguments: any; parent?: unknown; agent?: any; signal: AbortSignal }
 interface Context {
@@ -37,10 +40,13 @@ const input = z.discriminatedUnion('action', [
   z.object({ action: z.literal('bind'), criterionId: z.string().min(1).max(256), method: CompletionMethodSchema }).strict(),
 ])
 const transport = z.object({ action: z.enum(['status', 'bind']), criterionId: z.string().optional(),
-  method: z.object({ kind: z.literal('native_command'), command: z.string(),
+  method: z.union([z.object({ kind: z.literal('native_command'), command: z.string(),
     cwd: z.string(), sourcePaths: z.array(z.string()).min(1).max(32).describe('Required: at least one current repository-relative implementation/test path; include an asserted artifact.'),
     protocol: ProtocolRecipeSchema.optional(), appliedMemories: AppliedMemoriesSchema.optional().describe('Optional exact entryId/revision pairs from status.deliveredMemories. Include only a memory whose use this check tests.'),
-    assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).describe('Match the criterion evidence. selected_tests_pass needs complete Node TAP or Vitest TAP/JSON for the selected files. output_matches requires expectedOutput; artifact_matches requires artifactPath, artifactSha256, and artifact in sourcePaths. Coding never accepts exit_zero alone.').optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict().optional(),
+    assertion: z.enum(['exit_zero', 'selected_tests_pass','output_matches','artifact_matches']).describe('Match the criterion evidence. selected_tests_pass needs complete Node TAP or Vitest TAP/JSON for the selected files. output_matches requires expectedOutput; artifact_matches requires artifactPath, artifactSha256, and artifact in sourcePaths. Coding never accepts exit_zero alone.').optional(),expectedOutput:z.string().optional(),artifactPath:z.string().optional(),artifactSha256:z.string().optional() }).strict(),
+    z.object({kind:z.literal('typed_operation'),definitionVersion:z.literal(1),operation:OperationSpecSchema,
+      sourcePaths:z.array(z.string()).min(1).max(32),assertion:z.enum(['exit_zero','selected_tests_pass']),
+      appliedMemories:AppliedMemoriesSchema.optional()}).strict()]).optional(),
 }).strict()
 
 const nativeBashOutput = z.object({
@@ -50,7 +56,7 @@ const nativeBashOutput = z.object({
     signal: z.string().nullable(), timedOut: z.boolean(), aborted: z.boolean(),
     sandbox: z.object({ denied: z.boolean(), runnerFailed: z.boolean().optional() }).optional(),
     stdout: z.object({ text: z.string(), truncated: z.boolean() }),
-    stderr: z.object({ truncated: z.boolean() }),
+    stderr: z.object({ text: z.string().default(''), truncated: z.boolean() }),
   }),
 })
 
@@ -70,16 +76,22 @@ function directBashDirectory(execution: NativeExecution, identity: NonNullable<R
 }
 
 /** Use the native tool's structured process result, independent of the rendered preview. */
-function observedNativeBashResult(result: unknown, cwd: string) {
+function observedNativeBashResult(result: unknown, cwd: string, operation?: z.infer<typeof OperationSpecSchema>) {
   const parsed = nativeBashOutput.safeParse(result)
   if (!parsed.success) return (result as { isError?: boolean } | undefined)?.isError === true ? { isError: true } : undefined
   const { value } = parsed.data
   if (realpathSync(value.cwd) !== cwd || value.sandbox?.denied || value.sandbox?.runnerFailed) return
   const exited = value.exitCode !== null
+  const report = operation?.kind === 'test' ? reportTestResult(operation.adapter === 'node-test' ? 'node' : 'vitest', {
+    code: value.exitCode, signal: value.signal, stdout: value.stdout.text, stderr: value.stderr.text,
+    timedOut: value.timedOut, stdoutTruncated: value.stdout.truncated, stderrTruncated: value.stderr.truncated,
+    receipt: { cancelled: value.aborted, timedOut: value.timedOut, outputComplete: !value.stdout.truncated && !value.stderr.truncated },
+  }) : undefined
   return observeProcessResult({
     isError: false,
     value: { exitCode: value.exitCode, signal: value.signal, timedOut: value.timedOut, aborted: value.aborted,
-      processStarted: exited, processStopped: exited, outputComplete: !value.stdout.truncated && !value.stderr.truncated },
+      processStarted: exited, processStopped: exited, outputComplete: !value.stdout.truncated && !value.stderr.truncated,
+      ...(report?.summary ? { summary: report.summary } : {}) },
     content: [{ type: 'text', text: value.stdout.text }],
   })
 }
@@ -90,7 +102,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
     lease: TaskLease; bashCwd?: string; lisp?: NonNullable<ReturnType<typeof currentLispNativeCommand>> }>()
   const disposers: (() => void)[] = []
   disposers.push(ctx.tools.register({ name: 'task_completion', modelFacing: true,
-    description: 'Inspect task completion criteria or propose one exact check before running it. Bind never runs a command or marks a criterion successful. The host checks approval and actual evidence. Supply command, cwd, nonempty sourcePaths and assertion. Read status for criterion-specific requirements. To record memory reuse, optionally add method.appliedMemories from status.deliveredMemories only when the check tests its application.',
+    description: 'Inspect task completion criteria or bind a verification before running it. Prefer typed_operation with a versioned operation spec and sourcePaths; native_command remains a compatibility route. Bind never executes or marks success. The host separately checks approval, exact spec identity, current source and host-observed evidence.',
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
@@ -171,7 +183,11 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
           return beginTaskCompletionExecution(db, {
             runId: identity.runId, callId: execution.callId, command, repositoryRoot: identity.repositoryRoot,
             ...(bashCwd === undefined ? {} : { cwd: bashCwd }),
-            ...(lisp?.argv ? { lispArgv: lisp.argv } : {}) })
+            ...(lisp?.operation ? { operation: lisp.operation } : {}),
+            ...(lisp?.argv ? { lispArgv: lisp.argv } : {}),
+            receipt: { sessionId: identity.sessionId, agentId: identity.agent.id,
+              environmentDigest: canonicalContentHash({ host: 'dsh-native', tool: execution.name,
+                sessionId: identity.sessionId, agentId: identity.agent.id }) } })
         }))
         if (tracked) pending.set(execution, { runId: identity.runId, callId: execution.callId, agent: identity.agent,
           sessionId: identity.sessionId, lease, ...(bashCwd === undefined ? {} : { bashCwd }),
@@ -192,7 +208,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
       if (lisp && currentLispNativeCommand(execution) !== lisp) return
       authorizeTaskLease(db, tracked.lease)
       finishTaskCompletionExecution(db, { runId: tracked.runId, callId: tracked.callId,
-        result: bashCwd === undefined ? result : observedNativeBashResult(result, bashCwd) })
+        result: bashCwd === undefined ? result : observedNativeBashResult(result, bashCwd, lisp?.operation) })
       synchronizeCodingWorkflow(db, tracked.runId)
       saveTaskCompletionReceipt(db, tracked.runId)
     })).catch(() => { /* Stale or missing proof remains unknown. */ })

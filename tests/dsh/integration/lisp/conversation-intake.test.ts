@@ -155,7 +155,10 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
    assert.equal(waited.value.generation,defined.value.generation,'a bounded native wait preserves the live Lisp process')
    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM dsh_managed_operations WHERE state='unknown'").get<{n:number}>()!.n,0)
    const described=await execute('lisp_describe',{operationId:'test-api',symbol:'kioku.test'})
-   assert.deepEqual(described.value.value.symbols,['kioku.test:node','kioku.test:vitest'])
+   assert.deepEqual(described.value.value.symbols,[
+     'kioku.test:failures','kioku.test:node','kioku.test:passed-p','kioku.test:result-raw','kioku.test:result-summary',
+     'kioku.test:run','kioku.test:spec','kioku.test:test-result','kioku.test:test-spec','kioku.test:vitest',
+   ])
    const bin=join(base,'node_modules','.bin')
    await mkdir(bin,{recursive:true})
    const installedVitest=process.env.KIOKUKO_TEST_VITEST_BIN

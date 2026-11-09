@@ -30,6 +30,7 @@ test('real SBCL returning 42 retains native process operation and a complete zer
     await manager.start();await manager.enable(owner)
     const result=await manager.execute(owner,'lisp_eval',{operationId:'external-then-42',code:`(kioku.process:run ${JSON.stringify(process.execPath)} (list "-e" "require('fs').writeFileSync('effect.txt','once')")) 42`},undefined,{
       assertCurrent(){},async run(input){const result=await promisify(execFile)(input.program,input.argv,{cwd:root,timeout:input.timeoutMs});return {code:0,stdout:result.stdout,stderr:result.stderr,receipt:{route:'native',processStopped:true}}},
+      toolCatalog(){return []},async callTool(){throw new Error('No connected tools expected')},
     }) as any
     assert.equal(result.ok,true,JSON.stringify(result));assert.equal(result.value.json,42)
     assert.equal(await readFile(join(root,'effect.txt'),'utf8'),'once')
@@ -81,7 +82,7 @@ test('human reconciliation remains available after task stop and then Lisp becom
     await assert.rejects(manager.abandonManaged(owner,foreignOperation.operationId,'Checked'),{code:'UNKNOWN_OPERATION'})
     assert.equal(journal.readOperation(foreignOperation.operationId).state,'unknown','recovery cannot clear another session')
     // The blocking condition is gone: recovery now starts a fresh worker.
-    const recovered=await manager.taskAuthority.run(owner,()=>manager.recover(owner),{assertCurrent(){},async run(){throw new Error('Recovery must not run commands')}}) as any
+    const recovered=await manager.taskAuthority.run(owner,()=>manager.recover(owner),{assertCurrent(){},async run(){throw new Error('Recovery must not run commands')},toolCatalog(){return []},async callTool(){throw new Error('Recovery must not call tools')}}) as any
     assert.notEqual(recovered.code,'RECONCILIATION_REQUIRED')
     assert.equal((await manager.status(owner) as any).managedReconciliationRequired,false)
     // A later effect is permitted again.

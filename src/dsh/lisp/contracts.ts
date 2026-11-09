@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { HostServiceError } from '../service-error.js'
 export { LispConfig, type LispConfiguration } from '../lisp-config.js'
 
-export const LISP_TOOLS = ['lisp_eval', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset',
+export const LISP_TOOLS = ['lisp_eval', 'lisp_resume', 'lisp_fallback', 'lisp_define', 'lisp_call', 'lisp_observe', 'lisp_stage', 'lisp_verify', 'lisp_apply', 'lisp_compare', 'lisp_describe', 'lisp_inspect', 'lisp_status', 'lisp_cancel', 'lisp_reset',
   'lisp_recover', 'lisp_hot_contract', 'lisp_hot_install', 'lisp_hot_call', 'lisp_hot_status', 'lisp_hot_deactivate'] as const
 export type LispTool = typeof LISP_TOOLS[number]
 export const FRAME_BYTES = 1_048_576
@@ -11,7 +11,7 @@ export const FILE_BYTES = 64 * 1024 * 1024
 export { RESULT_BYTES, renderResult } from './model-result.js'
 export const identifier = z.string().min(1).max(256).regex(/^[^\p{Cc}\p{Cf}]+$/u)
 export interface LispOwner { sessionId: string; agentId: string; root: string }
-export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'SUSPENDED' | 'EVALUATING' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
+export type LispState = 'DISABLED' | 'PREFLIGHT' | 'READY' | 'SUSPENDED' | 'EVALUATING' | 'AWAITING_RESTART' | 'STOPPING' | 'RECOVERY_REQUIRED' | 'STOP_UNCONFIRMED'
 export class LispError extends HostServiceError {
   constructor(code: string, message: string, recovery = '/kioku-lisp status で状態を確認してください。') { super(code, message, recovery); this.name = 'LispError' }
 }

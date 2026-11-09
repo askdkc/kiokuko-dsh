@@ -28,7 +28,7 @@ for (const executionMode of ['development','protected'] as const) test(`${execut
     dispatches++
     const value=await promisify(execFile)(input.program,input.argv,{cwd:root,timeout:input.timeoutMs,signal})
     return {code:0,...value,receipt:{route:'native',processStopped:true}}
-  }}
+  },toolCatalog(){return []},async callTool(){throw new Error('No connected tools expected')}}
   const run=(operationId:string,code:string,timeoutMs?:number)=>manager.execute(owner,'lisp_eval',
     {operationId,code,...(timeoutMs===undefined?{}:{timeoutMs})},undefined,executionMode==='development'?native:undefined) as Promise<any>
   const wait=`(kioku.process:run ${JSON.stringify(process.execPath)} (list "-e" "setTimeout(()=>console.log('done'),1600)") :timeout-ms 5000)`

@@ -137,7 +137,10 @@ export async function apply(ctx){
     { cwd: project, env, stdio: ['ignore', 'pipe', 'pipe'] })
   for (const stream of [host.stdout, host.stderr]) stream.on('data', chunk => { logs += chunk })
   const web = await waitForUrl()
-  browser = await chromium.launch({ headless: true })
+  browser = await chromium.launch({
+    headless: true,
+    ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
+  })
   page = await browser.newPage({ locale: 'en-US', viewport: { width: 1280, height: 844 } })
   await installFixtureQuestionAnswers(page)
   const credentials = page.getByRole('dialog', { name: 'Add an API key to get started', exact: true })

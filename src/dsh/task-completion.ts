@@ -42,6 +42,7 @@ import { readCodingWorkflow } from "./coding-workflow/store.js";
 import { recordCodingAttempt } from "./coding-workflow/service.js";
 import type { RequestIntentDecision } from "./decisions/request-intent.js";
 import { hasUnsettledNativeChildren } from "./native-execution-ownership.js";
+import { OperationSpecSchema, operationDirectory, operationSpecDigest } from "./operation-spec.js";
 
 export const CompletionConfig = z
   .object({ mode: z.enum(["shadow", "enforce"]).default("shadow") })
@@ -120,6 +121,19 @@ export const CompletionMethodSchema = z.discriminatedUnion("kind", [
           });
       }
     }),
+  z.object({
+    kind: z.literal("typed_operation"),
+    definitionVersion: z.literal(1),
+    operation: OperationSpecSchema,
+    sourcePaths: z.array(relativePath).min(1).max(32),
+    assertion: z.enum(["exit_zero", "selected_tests_pass"]),
+    appliedMemories: AppliedMemoriesSchema.optional(),
+  }).strict().superRefine((value, ctx) => {
+    if (value.operation.kind === "test" && value.assertion !== "selected_tests_pass")
+      ctx.addIssue({ code: "custom", path: ["assertion"], message: "Test operations require selected_tests_pass" });
+    if (value.operation.kind !== "test" && value.assertion !== "exit_zero")
+      ctx.addIssue({ code: "custom", path: ["assertion"], message: "Package operations require exit_zero" });
+  }),
 ]);
 export type CompletionMethod = z.infer<typeof CompletionMethodSchema>;
 export type CriterionAssessment = {
@@ -398,7 +412,7 @@ export function bindTaskCriterion(
   );
   const approved =
     input.approved ||
-    criterion.description.trim() === method.command;
+    (method.kind === "native_command" && criterion.description.trim() === method.command);
   // One approved command may substantiate several criteria in the same
   // revision, but never a criterion from a later contract revision.
   const coding = readCodingWorkflow(database, input.runId);
@@ -497,10 +511,12 @@ export function beginTaskCompletionExecution(
   input: {
     runId: string;
     callId: string;
-    command: string;
+    command?: string;
+    operation?: unknown;
     repositoryRoot: string;
     cwd?: string;
     lispArgv?: readonly string[];
+    receipt?: { sessionId: string; agentId: string; environmentDigest: string };
   },
 ): boolean {
   const source = criteriaForRun(database, input.runId);
@@ -515,18 +531,22 @@ export function beginTaskCompletionExecution(
     .all<BindingRow>(input.runId);
   const matching = rows.filter((row) => {
     const method = CompletionMethodSchema.parse(JSON.parse(row.method_json));
-    return (
-      method.kind === "native_command" &&
-      (executionCommand(method.command) === executionCommand(input.command) ||
-        (input.lispArgv !== undefined && matchesLiteralCommand(method.command, input.lispArgv))) &&
-      realpathSync(path.resolve(source.repositoryRoot, method.cwd)) ===
-        realpathSync(input.cwd ?? input.repositoryRoot) &&
-      source.criteria.some(
+    const currentCriterion = source.criteria.some(
         (criterion) =>
           criterion.id === row.criterion_id &&
           criterion.revision === row.criterion_revision,
-      )
-    );
+      );
+    if (!currentCriterion) return false;
+    if (method.kind === "typed_operation") {
+      const operation = OperationSpecSchema.safeParse(input.operation);
+      return operation.success && canonicalContentHash(operation.data) === canonicalContentHash(method.operation) &&
+        realpathSync(path.resolve(source.repositoryRoot, operationDirectory(method.operation))) ===
+          realpathSync(input.cwd ?? input.repositoryRoot);
+    }
+    return typeof input.command === "string" &&
+      (executionCommand(method.command) === executionCommand(input.command) ||
+        (input.lispArgv !== undefined && matchesLiteralCommand(method.command, input.lispArgv))) &&
+      realpathSync(path.resolve(source.repositoryRoot, method.cwd)) === realpathSync(input.cwd ?? input.repositoryRoot);
   });
   const coding = readCodingWorkflow(database, input.runId);
   const hasReuse = matching.some(row => CompletionMethodSchema.parse(JSON.parse(row.method_json)).appliedMemories)
@@ -567,7 +587,7 @@ export function beginTaskCompletionExecution(
         criterion.criterionId === row.criterion_id && criterion.state !== "satisfied")) : undefined) ?? matching[0]);
   if (!current) return false;
   const method = CompletionMethodSchema.parse(JSON.parse(current.method_json));
-  if (method.kind !== "native_command") return false;
+  if (method.kind === "typed_operation" && !input.receipt) return false;
   const digest = completionSourceDigest(
     database,
     input.runId,
@@ -588,16 +608,23 @@ export function beginTaskCompletionExecution(
     : null;
   const existing = database
     .prepare(
-      "SELECT method_digest, source_digest, outcome FROM dsh_completion_executions WHERE run_id = ? AND call_id = ?",
+      `SELECT method_digest, source_digest, outcome, operation_spec_digest, owner_session_id, owner_agent_id,
+       environment_digest FROM dsh_completion_executions WHERE run_id = ? AND call_id = ?`,
     )
-    .get<{ method_digest: string; source_digest: string; outcome: string }>(
+    .get<{ method_digest: string; source_digest: string; outcome: string; operation_spec_digest:string|null;
+      owner_session_id:string|null; owner_agent_id:string|null; environment_digest:string|null }>(
       input.runId,
       input.callId,
     );
   if (existing) {
+    const typedIdentityChanged = method.kind === "typed_operation" && (
+      existing.operation_spec_digest !== operationSpecDigest(method.operation) ||
+      existing.owner_session_id !== input.receipt?.sessionId ||
+      existing.owner_agent_id !== input.receipt?.agentId ||
+      existing.environment_digest !== input.receipt?.environmentDigest);
     if (
       existing.method_digest !== current.method_digest ||
-      existing.source_digest !== digest
+      existing.source_digest !== digest || typedIdentityChanged
     ) {
       throw new KiokukoError(
         "CONFLICT",
@@ -609,7 +636,9 @@ export function beginTaskCompletionExecution(
   database
     .prepare(
       `INSERT OR IGNORE INTO dsh_completion_executions
-    (run_id,call_id,method_digest,source_digest,outcome,updated_at,coding_scope,coding_goal_ready,coding_inputs_json) VALUES(?,?,?,?,'started',?,?,?,?)`,
+    (run_id,call_id,method_digest,source_digest,outcome,updated_at,coding_scope,coding_goal_ready,coding_inputs_json,
+     criterion_id,criterion_revision,operation_spec_digest,owner_session_id,owner_agent_id,environment_digest,evidence_version,persistence_state)
+     VALUES(?,?,?,?,'started',?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .run(
       input.runId,
@@ -620,6 +649,14 @@ export function beginTaskCompletionExecution(
       coding?.scopeVersion ?? null,
       goalReady ? 1 : 0,
       codingInputs ? JSON.stringify(codingInputs) : null,
+      current.criterion_id,
+      current.criterion_revision,
+      method.kind === "typed_operation" ? operationSpecDigest(method.operation) : null,
+      input.receipt?.sessionId ?? null,
+      input.receipt?.agentId ?? null,
+      input.receipt?.environmentDigest ?? null,
+      method.kind === "typed_operation" ? 1 : null,
+      method.kind === "typed_operation" ? "saved" : null,
     );
   return true;
 }
@@ -648,7 +685,6 @@ export function finishTaskCompletionExecution(
   const method = CompletionMethodSchema.parse(
     JSON.parse(bindingRow.method_json),
   );
-  if (method.kind !== "native_command") return;
   let sourceDigest: string | undefined;
   try {
     sourceDigest = completionSourceDigest(
@@ -686,11 +722,13 @@ export function finishTaskCompletionExecution(
   const observed = isHostExecutionResult(result);
   const outputAvailable = !observed || result.value.outputComplete !== false;
   let tap: TapSummary | undefined;
+  if (method.kind === "typed_operation" && observed && method.operation.kind === "test")
+    tap = result.value.summary;
   if (method.assertion === "selected_tests_pass" && outputAvailable) {
-    if (!coding || hasExplicitTestCases(content)) tap = parseTestSummary(content, observed);
+    if (!tap && (!coding || hasExplicitTestCases(content))) tap = parseTestSummary(content, observed);
     if (!tap && observed && result.value.outputComplete === true) {
       tap = parseVitestTapSummary(content);
-      if (!tap && /(?:^|[\s/'"])vitest(?:\.mjs)?(?=['"\s]|$)/u.test(method.command)
+      if (!tap && method.kind === "native_command" && /(?:^|[\s/'"])vitest(?:\.mjs)?(?=['"\s]|$)/u.test(method.command)
         && /(?:^|[\s'"])--reporter=json(?=['"\s]|$)/u.test(method.command)) {
         const report = parseVitestReport(content);
         if (report && report.summary.tests > 0 && (!report.failed || report.summary.fail > 0)) tap = report.summary;
@@ -723,7 +761,7 @@ export function finishTaskCompletionExecution(
         : ((coding || method.assertion === "output_matches") && !observed) ||
             (method.appliedMemories && !completeObservation) ||
             !Number.isSafeInteger(exit) ||
-            (method.assertion === "exit_zero" &&
+            (method.kind === "native_command" && method.assertion === "exit_zero" &&
               hasShellPipeline(method.command)) ||
             (method.assertion === "selected_tests_pass" && !tap)
           ? "unknown"
@@ -813,13 +851,6 @@ export function assessTaskCompletion(
           reason: "criterion_changed",
         };
       const method = CompletionMethodSchema.parse(JSON.parse(row.method_json));
-      if (method.kind !== "native_command")
-        return {
-          criterionId: criterion.id,
-          description: criterion.description,
-          state: "stale",
-          reason: "unsupported_completion_method",
-        };
       const executions = database
         .prepare(
           `SELECT * FROM dsh_completion_executions WHERE run_id = ? AND method_digest = ?
@@ -903,10 +934,12 @@ export function assessTaskCompletion(
               ? "selected_tests_unmet"
               : execution.outcome === "passed" && complete
                 ? "observed_command"
-                : method.assertion === "exit_zero" &&
+                : method.kind === "native_command" && method.assertion === "exit_zero" &&
                     hasShellPipeline(method.command)
                   ? "pipeline_stage_status_unknown_use_direct_verifier"
-                  : "coverage_unknown",
+                  : execution.outcome === "passed" && method.kind === "typed_operation"
+                    ? "observed_typed_operation"
+                    : "coverage_unknown",
         evidenceRef: execution.call_id,
       };
     },

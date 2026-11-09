@@ -29,8 +29,8 @@ const content = (name: string) => artifact.resources.find((r: any) => r.id === `
 const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SKILL.md')).map((r: any) => r.id.slice(0,-'/SKILL.md'.length))
 // Exact model-facing contract: protected Lisp, native reads and memory recovery.
 const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check', 'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_result', 'kioku_write', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
-  'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
-  'lisp_inspect', 'lisp_observe', 'lisp_recover', 'lisp_reset', 'lisp_stage', 'lisp_status', 'lisp_verify',
+  'lisp_fallback', 'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
+  'lisp_inspect', 'lisp_observe', 'lisp_recover', 'lisp_reset', 'lisp_resume', 'lisp_stage', 'lisp_status', 'lisp_verify',
   'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')

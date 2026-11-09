@@ -4,6 +4,46 @@ import { DatabaseSync } from 'node:sqlite'
 import { readFileSync } from 'node:fs'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { LispStore } from '../../../../src/dsh/lisp/store.js'
+test('explicit session values and definitions survive a host restart without replaying effects', async () => {
+  const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
+  for (const name of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql', '047_managed_operation_journal.sql', '053_lisp_execution_environment.sql'])
+    db.exec(readFileSync(new URL(`../../../../migrations/${name}`, import.meta.url), 'utf8'))
+  const owner = { sessionId: 'saved', agentId: 'agent', root: '/workspace' }
+  try {
+    const first = new LispStore(async fn => fn(db))
+    await first.enable(owner)
+    const value = await first.saveState(owner, 'selection', 'json', { files: ['src/check.ts'], passed: false })
+    const definition = await first.saveState(owner, 'normalize', 'definition', { source: '(defun normalize (x) x)', form: 'defun' })
+    assert.equal(value.revision, 1); assert.equal(definition.revision, 1)
+    const restarted = new LispStore(async fn => fn(db))
+    assert.deepEqual((await restarted.restoreState(owner, 'selection'))?.value, { files: ['src/check.ts'], passed: false })
+    assert.equal((await restarted.restoreState(owner, 'normalize'))?.kind, 'definition')
+    assert.equal((await restarted.saveState(owner, 'selection', 'json', { files: ['src/check.ts'], passed: true })).revision, 2)
+    assert.equal((await restarted.listState(owner)).length, 2)
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_operations').get<{n:number}>()!.n, 0,
+      'restoring values must not replay or synthesize an external operation')
+  } finally { db.close() }
+})
+test('fallback handoff is durable, single-owner and idempotent across host restart', async () => {
+  const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
+  for (const name of ['019_dsh_lisp.sql', '031_dsh_lisp_hot_tools.sql', '047_managed_operation_journal.sql', '053_lisp_execution_environment.sql'])
+    db.exec(readFileSync(new URL(`../../../../migrations/${name}`, import.meta.url), 'utf8'))
+  const owner = { sessionId: 'fallback-session', agentId: 'fallback-agent', root: '/workspace' }
+  try {
+    const first = new LispStore(async fn => fn(db)); await first.enable(owner)
+    const handoff = { objective: 'continue verification', completed: ['typed test'], pending: ['package check'] }
+    const prepared = await first.createFallback(owner, 'fallback-1', 'WORKER_EXITED', handoff)
+    assert.equal(prepared.state, 'prepared')
+    const restarted = new LispStore(async fn => fn(db))
+    assert.deepEqual((await restarted.activeFallback(owner.sessionId))?.handoff, handoff)
+    assert.equal((await restarted.createFallback(owner, 'fallback-1', 'WORKER_EXITED', handoff)).fallbackId, 'fallback-1')
+    await assert.rejects(restarted.createFallback({ ...owner, agentId: 'other-agent' }, 'fallback-1', 'WORKER_EXITED', handoff), /異なるフォールバック/)
+    await assert.rejects(restarted.createFallback(owner, 'fallback-2', 'WORKER_EXITED', handoff), /異なるフォールバック/)
+    await restarted.updateFallback('fallback-1', 'continued', { outcome: 'unavailable' })
+    const continued = await restarted.activeFallback(owner.sessionId)
+    assert.equal(continued?.state, 'continued'); assert.deepEqual(continued?.compaction, { outcome: 'unavailable' })
+  } finally { db.close() }
+})
 test('durable requests deduplicate by owner and digest; restart quarantines unfinished work', async () => {
   const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
   db.exec(readFileSync(new URL('../../../../migrations/019_dsh_lisp.sql', import.meta.url), 'utf8'))

@@ -17,12 +17,12 @@ import { recordTaskEvidence, transitionTask } from '../../../../src/dsh/task-sta
 for (const action of ['cancel', 'dispose', 'dispose-session'] as const) {
   test(`task ${action} aborts and waits for preflight before reporting stopped`, { timeout: 10000 }, async t => {
     const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-preflight-cancel-'))), root = join(base, 'workspace')
-    await mkdir(root); await mkdir(join(base, 'runtime'))
+    await mkdir(root); await mkdir(join(base, 'runtime')); await mkdir(join(base, 'library'))
     const db = new NodeSqliteAdapter(':memory:', new DatabaseSync(':memory:'))
     migrateDatabase(db)
     const owner = { sessionId: 'session', agentId: 'agent', root }
     const store = new LispStore(async fn => fn(db))
-    const manager = new LispManager({ store, dataRoot: join(base, 'runtime'), config: LispConfig.parse({ enabled: true, executionMode: 'development' }) })
+    const manager = new LispManager({ store, dataRoot: join(base, 'runtime'), library: join(base, 'library'), config: LispConfig.parse({ enabled: true, executionMode: 'development' }) })
     let entered!: () => void, release!: () => void, compileSignal!: AbortSignal, starts = 0
     const preparing = new Promise<void>(resolve => { entered = resolve })
     const gate = new Promise<void>(resolve => { release = resolve })

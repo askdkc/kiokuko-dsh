@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reportTestResult } from '../../../../src/dsh/lisp/test-report.js'
+import { reportTestResult } from '../../../../src/dsh/test-report.js'
 
 const processResult = (code: number | null, stdout: string, stderr = '') => ({ code, stdout, stderr })
 

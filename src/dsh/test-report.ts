@@ -1,19 +1,16 @@
 import { isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stripVTControlCharacters } from 'node:util'
-import { hasExplicitTestCases, parseNodeTapSummary, type TapSummary } from '../node-tap-summary.js'
-import { parseVitestReport } from '../vitest-summary.js'
+import { hasExplicitTestCases, parseNodeTapSummary, type TapSummary } from './node-tap-summary.js'
+import { parseVitestReport } from './vitest-summary.js'
 
 type TestRunner = 'node' | 'vitest'
 interface SourceLocation { file: string; line: number; column: number }
-interface Failure extends Partial<SourceLocation> {
-  name: string
-  message?: string
-  assertionLocation?: SourceLocation
-}
+interface Failure extends Partial<SourceLocation> { name: string; message?: string; assertionLocation?: SourceLocation }
 interface Report { summary: TapSummary; failures: Failure[]; failuresOmitted: number; hasCases: boolean; failed: boolean }
 const MAX_FAILURES = 8
 const LOG_CHARS = 24_000
+
 function location(text: string): SourceLocation | undefined {
   const match = /^(.+):(\d+):(\d+)$/u.exec(text)
   return match ? { file: match[1]!, line: Number(match[2]), column: Number(match[3]) } : undefined
@@ -116,8 +113,7 @@ export function reportTestResult(runner: TestRunner, value: unknown) {
   const diagnostic = testStatus !== 'passed' && failures.length === 0
     ? limitLog(stripVTControlCharacters(stderr.trim() || stdout.trim()), 1200) : ''
   return { ...result, runner, testStatus, summary: report?.summary ?? null, failures,
-    failuresOmitted: report?.failuresOmitted ?? 0,
-    ...(diagnostic ? { diagnostic } : {}),
+    failuresOmitted: report?.failuresOmitted ?? 0, ...(diagnostic ? { diagnostic } : {}),
     logsTruncated: !!(incomplete || result.stderrTruncated || stdout.length > LOG_CHARS || stderr.length > LOG_CHARS),
     stdout: limitLog(stdout), stderr: limitLog(stderr) }
 }

@@ -51,7 +51,9 @@
     "migrations/049_lisp_session_hosts.sql",
     "migrations/050_auxiliary_recovery.sql",
     "migrations/051_drop_enno.sql",
-    "migrations/052_dsh_continuation_evidence.sql"
+    "migrations/052_dsh_continuation_evidence.sql",
+    "migrations/053_lisp_execution_environment.sql",
+    "migrations/054_typed_completion_receipts.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

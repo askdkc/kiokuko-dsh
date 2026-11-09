@@ -14,7 +14,7 @@ import type { DshUserQuestions } from '../user-interaction.js'
 import { EvalInput, RecoverInput, LispError, digest, fail, failure, identifier, type LispConfiguration, type LispOwner, type LispState, type LispTool, type WorkerResult } from './contracts.js'
 import { LispStore } from './store.js'
 import { sessionCodingWorkflow } from '../coding-workflow/store.js'
-import { LispWorker, type LispRpcContext, type Job } from './worker.js'
+import { LispWorker, type LispRpcContext, type Job, type AwaitingRestart } from './worker.js'
 import { LispSupervisor } from './supervision.js'
 import { verifyLispVendor } from './integrity.js'
 import type { CompilationStatus } from './compiled-cache.js'
@@ -33,6 +33,7 @@ import { ApplyInput, CompareInput, StageInput, VerifyInput, candidateFromResult,
 import { LispTaskAuthority, type LispTaskExecution } from './task-authority.js'
 import type { TaskLease } from '../task-state.js'
 import { processIdentity } from '../../../lisp/process-identity.mjs'
+import { OperationSpecSchema } from '../operation-spec.js'
 
 interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; error?: ReturnType<typeof failure>; active: Set<AbortController>; admission?: Promise<LispWorker>; inputBytes?: number; compilation?: CompilationStatus
   execution?: LispTaskExecution | undefined;
@@ -43,7 +44,8 @@ interface AgentState { owner: LispOwner; state: LispState; worker?: LispWorker; 
   ownedJobs?:Set<string>; ownedCalls?:Set<Promise<unknown>>; ownedDispatches?:Set<AbortController>; ownedStop?:Promise<void>;
   hostBusy?: boolean; resumed?: boolean; disposed?: boolean;
   packageBase?: NonNullable<PackageResult['base']>;
-  currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> } }
+  currentVerification?: { operationId: string; generation: string; results: Array<{ request: LispCiRequest; result: unknown }> };
+  awaiting?: { operationId: string; generation: string; ticket: string } }
 const MODEL_RECOVERY_CAUSES = new Set(['TIMEOUT', 'OUTPUT_LIMIT', 'WORKER_EXITED', 'PROTOCOL_ERROR', 'WORKER_NOT_RESUMED', 'CACHE_INVALID', 'COMPILE_TIMEOUT', 'WORKER_RESTART_LIMIT'])
 class DisposableEvalError extends LispError {
   constructor(readonly evaluation: WorkerResult, readonly output: unknown, readonly generation: string) {
@@ -55,7 +57,7 @@ export interface ManagerOptions {
   skillPrompts?: DshSkillPrompts
   store: LispStore; config: LispConfiguration; dataRoot: string; library?: string; protectedRoots?: string[]; questions?: DshUserQuestions
   notify?: (owner: LispOwner, message: string) => void
-  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>, signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[]) => Promise<unknown>
+  toolCall?: (owner: LispOwner, name: string, args: Record<string, unknown>, signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[], operation?: import('../operation-spec.js').OperationSpec) => Promise<unknown>
   toolCatalog?: (owner:LispOwner)=>{name:string;parameters:unknown;adapterVersion:number}[]
   packagesCall?: (owner: LispOwner, request: PackageRequest, signal: AbortSignal) => Promise<PackageResult>
   ciCall?: (owner: LispOwner, request: LispCiRequest, signal: AbortSignal, scratchRoot?: string) => Promise<unknown>
@@ -659,6 +661,22 @@ export class LispManager {
       if (result.base) state.packageBase = result.base
       return result.value
     }
+    if (method === 'session-save') {
+      const request = z.object({ name: z.string().min(1).max(256), kind: z.enum(['json','definition','result_ref']), value: z.unknown() }).strict().parse(args)
+      await this.taskAuthority.authorizeEffect(state.owner)
+      context.signal.throwIfAborted()
+      const saved = await this.#store.saveState(state.owner, request.name, request.kind, request.value)
+      await this.taskAuthority.authorizeEffect(state.owner)
+      return saved
+    }
+    if (method === 'session-restore') {
+      const request = z.object({ name: z.string().min(1).max(256) }).strict().parse(args)
+      return await this.#store.restoreState(state.owner, request.name) ?? null
+    }
+    if (method === 'session-list') {
+      z.object({}).strict().parse(args)
+      return this.#store.listState(state.owner)
+    }
     if (method === 'typesafe-status' || method === 'typesafe-evaluate') {
       if (!this.options.typesafeCall) fail('TYPESAFE_UNAVAILABLE', 'TypeSafe host adapter is unavailable.')
       if (method === 'typesafe-status' && !z.object({}).strict().safeParse(args).success) fail('TYPESAFE_INVALID_REQUEST', 'TypeSafe status takes no arguments.')
@@ -674,18 +692,21 @@ export class LispManager {
         if(value.receipt?.processStopped===true && ['completed','cancelled'].includes(value.receipt.state))state.ownedJobs?.delete(request.id)
         return value
       }
-      const input=z.object({program:z.string().min(1),argv:z.array(z.string()),timeoutMs:z.number().int().positive(),directory:z.string().optional()}).strict().parse(args)
+      const input=z.object({program:z.string().min(1),argv:z.array(z.string()),timeoutMs:z.number().int().positive(),directory:z.string().optional(),operation:OperationSpecSchema.optional()}).strict().parse(args)
       const quote=(value:string)=>"'" + value.replaceAll("'", "'\\''") + "'"
       const directory=input.directory??'.'
       const native = this.taskAuthority.current()?.nativeCommands
       if (method === 'run' && native && native.processRoute !== 'owned' && this.#config.executionMode === 'development') {
         native.assertCurrent()
-        return this.ownedDispatch(state, signal => native.run(input, AbortSignal.any([signal, context.signal])))
+        const nativeInput = { program: input.program, argv: input.argv, timeoutMs: input.timeoutMs,
+          ...(input.directory === undefined ? {} : { directory: input.directory }),
+          ...(input.operation === undefined ? {} : { operation: input.operation }) }
+        return this.ownedDispatch(state, signal => native.run(nativeInput, AbortSignal.any([signal, context.signal])))
       }
       const lease = await this.taskAuthority.authorizeEffect(state.owner, 'owned')
       context.signal.throwIfAborted()
       const argv = [input.program, ...input.argv]
-      const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:argv.map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease,argv)) as any
+      const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:argv.map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease,argv,input.operation)) as any
       // A launched job must remain cancellable even if task authority changed
       // while its start acknowledgement was in flight.
       this.retainOwned(state,value)
@@ -693,9 +714,17 @@ export class LispManager {
       if(method==='start-job')return value.receipt.operationId
       return {code:value.exitCode,stdout:value.output??'',stderr:'',receipt:value.receipt}
     }
-    if (method === 'tools-list') return this.options.toolCatalog?.(state.owner)??[]
+    if (method === 'tools-list') return this.taskAuthority.current()?.nativeCommands?.toolCatalog() ?? this.options.toolCatalog?.(state.owner)??[]
     if (method === 'tool-call') {
-      const parsed = z.object({ name: z.enum(['lisp_status','kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result']), args: z.record(z.string(),z.unknown()) }).strict().parse(args)
+      const parsed = z.object({ name: z.string().min(1).max(256), definitionId: z.string().min(1).max(256).optional(), args: z.record(z.string(),z.unknown()) }).strict().parse(args)
+      const native = this.taskAuthority.current()?.nativeCommands
+      if (native) {
+        const definitionId = parsed.definitionId ?? native.toolCatalog().find(item => item.name === parsed.name)?.definitionId
+        if (!definitionId) fail('TOOL_DEFINITION_REQUIRED', 'Call AVAILABLE-TOOLS and use its current definitionId.')
+        return native.callTool(parsed.name, definitionId, parsed.args, context.signal)
+      }
+      if (!['lisp_status','kioku_read','kioku_write','kioku_edit','kioku_remove','kioku_exec','kioku_result'].includes(parsed.name))
+        fail('CAPABILITY_DENIED', 'This tool is not available through the protected compatibility bridge.')
       if (!this.options.toolCall) fail('HOST_ADAPTER_UNAVAILABLE', 'このホストには監査済みアダプターがありません。')
       const lease = ['kioku_write','kioku_edit','kioku_remove','kioku_exec'].includes(parsed.name)
         ? await this.taskAuthority.authorizeEffect(state.owner, 'owned') : undefined
@@ -859,6 +888,71 @@ export class LispManager {
       if (this.#disabling.has(owner.sessionId)) fail('BUSY', 'Lisp を停止中です。')
       const state = this.entry(owner)
       if (tool === 'lisp_recover') return await this.recoverFromTool(owner, RecoverInput.parse(input), signal)
+      if (tool === 'lisp_resume') {
+        await this.authorizeCodingTask(owner)
+        await this.claimSession(owner)
+        const request = z.object({ operationId: identifier, targetOperationId: identifier, generation: identifier,
+          ticket: identifier, restartId: identifier, arguments: z.array(z.unknown()).max(16).default([]) }).strict().parse(input)
+        const id = request.operationId, hash = digest({ tool, input }), old = await this.#store.get(owner, id)
+        if (old) { if (old.kind !== tool || old.digest !== hash) fail('ID_CONFLICT', '同じ再開 ID の内容が異なります。'); return this.replay(owner, old) }
+        const worker = state.worker, awaiting = state.awaiting
+        if (state.state !== 'AWAITING_RESTART' || !worker?.healthy || !awaiting || awaiting.operationId !== request.targetOperationId
+          || awaiting.generation !== request.generation || awaiting.ticket !== request.ticket)
+          fail('RESTART_STALE', 'この Restart は現在の Lisp 評価には属していません。')
+        await this.#store.reserve(owner, id, tool, hash, worker.generation, request)
+        state.state = 'EVALUATING'; state.execution = this.taskAuthority.current()
+        const abort = new AbortController(); state.active.add(abort)
+        const combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
+        try {
+          const response = await worker.resume(request.ticket, request.restartId, request.arguments, combined)
+          const waiting = response as unknown as AwaitingRestart
+          if (waiting.type === 'awaiting_restart') {
+            state.state = 'AWAITING_RESTART'; state.awaiting = { operationId: request.targetOperationId, generation: worker.generation, ticket: waiting.ticket }
+            const result = { ok: false, code: 'AWAITING_RESTART', operationId: request.targetOperationId, generation: worker.generation,
+              awaitingRestart: { ticket: waiting.ticket, condition: waiting.condition, restarts: waiting.restarts, expiresAt: waiting.expiresAt } }
+            await this.#store.transition(owner, request.targetOperationId, ['AWAITING_RESTART'], 'AWAITING_RESTART', result)
+            await this.#store.transition(owner, id, ['RUNNING'], 'SUCCEEDED', result)
+            return result
+          }
+          delete state.awaiting
+          const base = { ok: response.ok, operationId: request.targetOperationId, resumedBy: id, value: response.value,
+            output: worker.output(), generation: worker.generation, proposals: response.proposals }
+          if (!response.ok) {
+            state.state = 'READY'
+            await this.#store.transition(owner, request.targetOperationId, ['AWAITING_RESTART'], 'FAILED', base)
+            await this.#store.transition(owner, id, ['RUNNING'], 'FAILED', base)
+            if (state.currentVerification?.operationId === request.targetOperationId) delete state.currentVerification
+            return base
+          }
+          const applied = await this.#proposals.apply(owner, request.targetOperationId, worker.generation, response.proposals, combined)
+          const uncertain = applied.some(change => change.state === 'UNKNOWN')
+          if (uncertain) { await this.#supervisor.stop(worker); this.halted(state, new LispError('RECONCILIATION_REQUIRED', '変更結果が未確定です。記録とバックアップを照合してください。')) }
+          else state.state = 'READY'
+          const complete = applied.every(change => change.state === 'APPLIED' || change.state === 'UNCHANGED')
+          const result = { ...base, ok: complete, state: uncertain ? 'UNKNOWN' : complete ? 'SUCCEEDED' : 'FAILED', changes: applied }
+          await this.#store.transition(owner, request.targetOperationId, ['AWAITING_RESTART'], result.state, result)
+          await this.#store.transition(owner, id, ['RUNNING'], result.state === 'UNKNOWN' ? 'UNKNOWN' : complete ? 'SUCCEEDED' : 'FAILED', result)
+          if (result.state === 'SUCCEEDED' && response.proposals.length === 0 && this.options.verifiedCall
+            && state.currentVerification?.operationId === request.targetOperationId
+            && state.currentVerification.generation === worker.generation) {
+            for (const verified of state.currentVerification.results) {
+              try { await this.options.verifiedCall(owner, request.targetOperationId, worker.generation, verified.request, verified.result) }
+              catch { /* Optional host proof cannot change the durable Lisp result. */ }
+            }
+          }
+          if (state.currentVerification?.operationId === request.targetOperationId) delete state.currentVerification
+          return result
+        } catch (error) {
+          delete state.awaiting
+          try { await this.#supervisor.stop(worker) } catch { /* retain primary resume failure */ }
+          this.halted(state, error)
+          const result = { ...failure(error), operationId: request.targetOperationId, generation: worker.generation, state: 'UNKNOWN' }
+          try { await this.#store.transition(owner, request.targetOperationId, ['AWAITING_RESTART'], 'UNKNOWN', result) } catch { /* journal remains non-success */ }
+          try { await this.#store.transition(owner, id, ['RUNNING'], 'UNKNOWN', result) } catch { /* journal remains non-success */ }
+          if (state.currentVerification?.operationId === request.targetOperationId) delete state.currentVerification
+          return result
+        } finally { state.active.delete(abort) }
+      }
       if (tool === 'lisp_inspect' && input.managedOperationId !== undefined) {
         if ([input.ref, input.resultOperationId, input.section, input.pointer, input.offset, input.limit].some(v => v !== undefined))
           fail('INVALID_INSPECTION', 'managedOperationId は他の参照や範囲と同時に指定できません。')
@@ -892,15 +986,17 @@ export class LispManager {
           hot: 'lisp_hot_contract authorizes schemas through the current profile approval policy and finite input/expected cases. lisp_hot_install validates and atomically selects immutable code by name for this project. lisp_hot_call pins the active version. lisp_hot_status reads revisions; lisp_hot_deactivate uses the current profile approval policy to stop new calls. Results remain session/agent-local.',
         } }
       if (tool === 'lisp_describe' && !input.symbol) return { ok: true, source: 'bundled', state: state.state,
-        packages: ['kioku.tools', 'kioku.process', 'kioku.test', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions', 'kioku.recovery', 'kioku.code'],
-        api: { recovery: 'In an explicit handler-bind, call kioku.recovery:select-restart with the condition, selected JSON state and 1-8 (restart-symbol description) pairs. The configured decision provider selects one zero-argument restart on the live stack, at most 4 times per evaluation and 30 seconds per choice. Working task required; abstention/errors abort; no expression replay. Protected disposable task workers deny RPC.', code: 'kioku.code:capabilities, open, outline, enclosing, query, span, semantic, release, with-snapshot. Read-only disk snapshots; handles expire at evaluation end. Check status before using data.', packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
+        packages: ['kioku.tools', 'kioku.workspace', 'kioku.jobs', 'kioku.process', 'kioku.test', 'kioku.verify', 'kioku.session', 'kioku.functions', 'kioku.files', 'kioku.data', 'kioku.objects', 'kioku.environment', 'kioku.ci', 'kioku.packages', 'kioku.typesafe', 'kioku.decisions', 'kioku.recovery', 'kioku.code'],
+        api: { recovery: 'Use kioku.recovery:await-restart inside a live handler to return the condition and active restarts to the main model; lisp_resume invokes exactly one restart on that same stack. Stop, expiry, generation changes and duplicate tickets cannot resume it. Existing kioku.recovery:select-restart remains available for Lisp-local decisions. After an observed unrecoverable runtime/API failure, lisp_fallback durably hands the same task to standard DSH tools.', code: 'kioku.code:capabilities, open, outline, enclosing, query, span, semantic, release, with-snapshot. Read-only disk snapshots; handles expire at evaluation end. Check status before using data.', packages: 'kioku.packages:metadata, audit and update-lockfiles use an approval-gated public npm broker. Updates generate in protected scratch and propose frozen files, never install dependencies or write the repository directly.', scratch: '(kioku.files:scratch) takes no arguments', splitLines: 'kioku.process:split-lines returns a vector; use loop across',
           decisions: '(kioku.decisions:status), evaluate, assess-relevance, classify-failure, assess-change. Consume selected/abstained results; ordinary reasoning on fallback, cancellation is terminal.',
           typesafe: '(kioku.typesafe:status); (kioku.typesafe:evaluate state questions :model "jev-latest" :timeout-ms 30000). Explicit semantic decisions via the host; consume answers with gethash. Strings/hash tables/vectors use JSON conventions. Catch kioku.typesafe:service-error; no retries or approval bypass. Configure with /kioku-typesafe-key.',
           describe: 'symbol="kioku.files" lists bundled exports; symbol="kioku.user" lists your task functions; an exact function name returns arguments/docs.',
           workflow: 'Define task-specific defun helpers once, compose them into one useful operation, and call that function in later evaluations. Batch known reads and checks; return a compact result. Definitions last for this worker generation. Stop before decisions requiring new evidence or approval.',
           hot: 'Use lisp_hot_contract, lisp_hot_install and lisp_hot_call for approved project-shared functions. Reuse only your own protected worker with a fresh package and no host RPC; otherwise use private protected scratch without a repository mount. Schemas do not establish purity. No mode switch is needed. lisp_hot_status reads active versions.',
           run: '(kioku.process:run "node" (list "--test" "--experimental-test-isolation=none" "test/public.test.mjs") :directory "project") uses a project-relative directory in development mode (scratch-relative in protected mode). Check final receipts and result-code.',
-          tests: '(kioku.test:node "test/example.test.ts" :tsx t) or (kioku.test:vitest "test/example.spec.ts" :config-loader :native). Both accept a path or list, :directory, :name-pattern and :timeout-ms; Node also accepts :isolation :none. Inspect testStatus, code, summary and failures. Use lisp_inspect for saved logs.',
+          tests: '(kioku.test:spec :framework :node-test :files (list "test/example.test.mjs") :directory ".") creates a typed operation. Bind it with kioku.verify:bind and run the bound definition with kioku.verify:run. passed-p/failures consume the structured result. node/vitest remain compatibility entry points.',
+          tools: 'kioku.tools:list/describe/call exposes only the current model step toolset and pins each definition identity. Calls traverse the existing DSH pipeline; stale, disconnected or replaced definitions are rejected.',
+          state: 'kioku.session:save/restore stores JSON data and result references explicitly. kioku.functions:save-definition/restore-definition stores one defun/defmacro source without evaluating it automatically on startup.',
           inspect: 'lisp_inspect accepts ref, or resultOperationId with section/offset/limit (Unicode characters). Never rerun to retrieve output.',
           reads: 'Use native read/glob/grep/skill for repository exploration; lisp_eval.inputs for read-only workspace or session-attachment copies.',
           verify: '(kioku.ci:verify :test :script "test:unit") runs a focused npm script. For an extracted project: (kioku.ci:verify :test :location :scratch :directory "extract/project"). Uses the current profile approval policy and runs the actual npm command.' },
@@ -1153,7 +1249,7 @@ export class LispManager {
           return result
         } catch (error) { await this.cancel(state); this.halted(state, error); throw error }
       }
-      if (state.state !== 'READY') fail(state.state === 'EVALUATING' ? 'BUSY' : 'RECOVERY_REQUIRED', 'Lisp は実行可能な状態ではありません。/kioku-lisp status で確認してください。')
+      if (state.state !== 'READY') fail(['EVALUATING','AWAITING_RESTART'].includes(state.state) ? 'BUSY' : 'RECOVERY_REQUIRED', 'Lisp は実行可能な状態ではありません。/kioku-lisp status で確認してください。')
       const worker = state.worker!
       state.state = 'EVALUATING' // reserve the slot before the first await
       state.execution = this.taskAuthority.current()
@@ -1195,6 +1291,15 @@ export class LispManager {
         await this.#store.reserve(owner, id, tool, hash, worker.generation, payload); reserved = true
         if (tool === 'lisp_eval') state.currentVerification = { operationId: id, generation: worker.generation, results: [] }
         const response = await this.journalRequest(state, worker, tool === 'lisp_eval' ? 'eval' : tool === 'lisp_describe' ? 'describe' : 'inspect', args, timeout, combined, true, tool === 'lisp_eval' && input.timeoutMs === undefined)
+        const waiting = response as unknown as AwaitingRestart
+        if (waiting.type === 'awaiting_restart') {
+          state.state = 'AWAITING_RESTART'; state.awaiting = { operationId: id, generation: worker.generation, ticket: waiting.ticket }
+          const result = { ok: false, code: 'AWAITING_RESTART', operationId: id, generation: worker.generation,
+            awaitingRestart: { ticket: waiting.ticket, condition: waiting.condition, restarts: waiting.restarts, expiresAt: waiting.expiresAt } }
+          evidence = result
+          await this.#store.transition(owner, id, ['RUNNING'], 'AWAITING_RESTART', result)
+          return result
+        }
         const result = { ok: response.ok, operationId: id, value: response.value, output: worker.output(), generation: worker.generation, proposals: response.proposals,
           ...(!response.ok ? { ...(response.condition ? { condition: response.condition } : {}), workerState: 'READY',
             nextInspection: { tool: 'lisp_inspect', resultOperationId: id } } : {}) }
@@ -1235,7 +1340,7 @@ export class LispManager {
         } else if (!worker.healthy) { try { await this.#supervisor.stop(worker) } catch (stop) { error = stop }; this.halted(state, error) }
         else if (state.state === 'EVALUATING') state.state = 'READY'
         return outcome
-      } finally { await state.codeLease?.adapter.dispose(); delete state.codeLease; state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id) delete state.currentVerification }
+      } finally { await state.codeLease?.adapter.dispose(); delete state.codeLease; state.active.delete(abort); delete state.packageBase; if (state.currentVerification?.operationId === id && state.state !== 'AWAITING_RESTART') delete state.currentVerification }
     } catch (error) { return failure(error) }
   }
   private async taskResult(owner: LispOwner, ref: string): Promise<unknown> {
@@ -1482,6 +1587,26 @@ export class LispManager {
       for (const state of states) state.disposed = false
       this.#disabling.delete(owner.sessionId)
     }
+  }
+  async fallback(owner: LispOwner, input: { fallbackId: string; reasonCode: string; handoff: Record<string, unknown> }): Promise<unknown> {
+    const forbidden = new Set(['CANCELLED','STOP','CAPABILITY_DENIED','APPROVAL_DENIED','PERMISSION_DENIED'])
+    if (forbidden.has(input.reasonCode)) fail('FALLBACK_FORBIDDEN', 'Stop、取消、権限拒否は Lisp フォールバックの理由にできません。')
+    const state = this.#agents.get(JSON.stringify([owner.sessionId, owner.agentId]))
+    if (!state || !['RECOVERY_REQUIRED','STOP_UNCONFIRMED'].includes(state.state) && state.error?.code !== input.reasonCode)
+      fail('FALLBACK_NOT_REQUIRED', '現在の Lisp は復旧不能状態として確認されていません。')
+    if (state.error?.code && state.error.code !== input.reasonCode)
+      fail('FALLBACK_REASON_MISMATCH', '報告された理由がホストの Lisp 障害コードと一致しません。')
+    const status = await this.status(owner)
+    const saved = await this.#store.listState(owner)
+    const operations = await this.#store.operationSummaries(owner.sessionId, 0)
+    const handoff = { ...input.handoff, lisp: { status, saved, operations: operations.operations,
+      lostState: ['live stack', 'streams', 'process handles', 'generation-scoped code handles'], evidenceRetainedByHost: true } }
+    const prepared = await this.#store.createFallback(owner, input.fallbackId, input.reasonCode, handoff)
+    try { await this.disable(owner) }
+    catch (error) { await this.#store.updateFallback(prepared.fallbackId, 'failed', { outcome: 'stop_failed', error: failure(error) }); throw error }
+    return { ok: true, state: 'FALLBACK_PREPARED', fallbackId: prepared.fallbackId, reasonCode: input.reasonCode,
+      handoff, compaction: { outcome: 'pending', note: 'The host will attempt compaction immediately before the next model step.' },
+      continuation: 'DSH standard tools' }
   }
   async dispose(): Promise<void> {
     this.#closed = true

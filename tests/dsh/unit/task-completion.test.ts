@@ -15,6 +15,7 @@ import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { assessTaskCompletion, beginTaskCompletionExecution, bindTaskCriterion, finishTaskCompletionExecution,
   completionSourceDigest, initializeTaskCompletion, parseNodeTapSummary, saveTaskCompletionReceipt, selectedNodeTestCommand, taskCompletionBlocksClose } from '../../../src/dsh/task-completion.js'
+import { observeProcessResult } from '../../../src/dsh/execution-result.js'
 
 const command = 'node --test --test-reporter=tap src/check.test.ts'
 const tap = (pass: number, skipped = 0) => `TAP version 13\n# tests ${pass + skipped}\n# pass ${pass}\n# fail 0\n# cancelled 0\n# skipped ${skipped}\n# todo 0\n# duration_ms 3\n`
@@ -54,6 +55,58 @@ test('source-bound verification requires observed proof even in shadow mode', ()
   const missing = { mode: 'shadow' as const, verified: false, required: 0, criteria: [], evidenceRequired: true as const }
   assert.equal(taskCompletionBlocksClose(missing), true)
   assert.equal(taskCompletionBlocksClose({ ...missing, verified: true }), false)
+})
+
+test('typed verification binds specification identity separately from host-observed evidence', async () => {
+  const f = await fixture('enforce')
+  try {
+    const operation = { kind: 'test' as const, adapter: 'node-test' as const, adapterVersion: 1 as const,
+      files: ['check.test.ts'], directory: 'src', timeoutMs: 120000, isolation: 'default' as const }
+    const method = { kind: 'typed_operation' as const, definitionVersion: 1 as const, operation,
+      sourcePaths: ['src/check.test.ts'], assertion: 'selected_tests_pass' as const }
+    const receipt = { sessionId: 'typed-session', agentId: 'typed-agent', environmentDigest: 'typed-environment' }
+    bindTaskCriterion(f.database, { runId: f.runId, callId: 'typed-bind',
+      criterionId: f.criteria[0]!.criterionId, method, approved: true })
+    assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-wrong',
+      operation: { ...operation, files: ['other.test.ts'] }, repositoryRoot: f.root, cwd: join(f.root, 'src'), receipt }), false)
+    assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-forged',
+      operation, repositoryRoot: f.root, cwd: join(f.root, 'src'), receipt }), true)
+    assert.throws(() => beginTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-forged',
+      operation, repositoryRoot: f.root, cwd: join(f.root, 'src'), receipt: { ...receipt, agentId: 'other-agent' } }),
+    /reused with changed bound input/)
+    finishTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-forged', result: {
+      value: { exitCode: 0, summary: { tests: 1, pass: 1, fail: 0, cancelled: 0, skipped: 0, todo: 0 } }, content: [],
+    } })
+    assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'unknown',
+      'a copied success object is not host evidence')
+
+    for (const [callId, summary] of [
+      ['typed-zero', { tests: 0, pass: 0, fail: 0, cancelled: 0, skipped: 0, todo: 0 }],
+      ['typed-skip', { tests: 1, pass: 0, fail: 0, cancelled: 0, skipped: 1, todo: 0 }],
+    ] as const) {
+      assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId,
+        operation, repositoryRoot: f.root, cwd: join(f.root, 'src'), receipt }), true)
+      finishTaskCompletionExecution(f.database, { runId: f.runId, callId, result: observeProcessResult({
+        isError: false, value: { exitCode: 0, signal: null, timedOut: false, aborted: false,
+          processStarted: true, processStopped: true, outputComplete: true, summary }, content: [],
+      }) })
+      assert.notEqual(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied',
+        'zero tests and skipped tests are not typed completion proof')
+    }
+
+    assert.equal(beginTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-observed',
+      operation, repositoryRoot: f.root, cwd: join(f.root, 'src'), receipt }), true)
+    finishTaskCompletionExecution(f.database, { runId: f.runId, callId: 'typed-observed', result: observeProcessResult({
+      isError: false,
+      value: { exitCode: 0, signal: null, timedOut: false, aborted: false, processStarted: true,
+        processStopped: true, outputComplete: true,
+        summary: { tests: 1, pass: 1, fail: 0, cancelled: 0, skipped: 0, todo: 0 } },
+      content: [],
+    }) })
+    assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied')
+    await writeFile(join(f.root, 'src/check.test.ts'), 'changed typed target')
+    assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'stale')
+  } finally { await f.cleanup() }
 })
 
 test('automatic verification parks after two wakes even when each retry changes source', async () => {

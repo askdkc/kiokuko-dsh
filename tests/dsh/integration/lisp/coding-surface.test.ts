@@ -20,6 +20,7 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
   db.exec(await readFile(new URL('../../../../migrations/031_dsh_lisp_hot_tools.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/047_managed_operation_journal.sql', import.meta.url), 'utf8'))
   db.exec(await readFile(new URL('../../../../migrations/049_lisp_session_hosts.sql', import.meta.url), 'utf8'))
+  db.exec(await readFile(new URL('../../../../migrations/053_lisp_execution_environment.sql', import.meta.url), 'utf8'))
   const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
   const ctx = new Context(), definitions = new Map<string, any>(), commands = new Map<string, any>()
   const sections = new Map<string, string>()
@@ -55,6 +56,12 @@ for (const outcome of ['ready', 'task-ready', 'startup-failure', 'decline'] as c
       activated++
       surface!.manager.enabled.set(owner.sessionId, owner.root)
       return { state: 'READY' }
+    })
+    let startupAttempts=0
+    if (outcome === 'startup-failure') t.mock.method(surface.manager, 'enable', async (owner: LispOwner) => {
+      surface!.manager.enabled.set(owner.sessionId, owner.root)
+      if(startupAttempts++)return {state:'RECOVERY_REQUIRED'}
+      throw new Error('SBCL ENOENT: injected startup failure')
     })
     const service = ctx.get(LISP_CODING_SERVICE) as LispCodingService
     const input = { agent, turn: 1, task: 'Implement src/index.ts', taskType: 'build' as const, signal: new AbortController().signal }

@@ -67,7 +67,7 @@ test('upgrade preserves old delivery history and does not retry a reserved nativ
     database.prepare(`INSERT INTO dsh_loop_guard_claims
       (claim_id,run_id,dsh_session_id,instruction_digest,generation,ordinal,decision,created_at)
       VALUES (?,'run','session',?,0,4,'wait_user','now')`).run(continuation, digest)
-    assert.deepEqual(migrateDatabase(database).applied, [52])
+    assert.deepEqual(migrateDatabase(database).applied, [52, 53, 54])
     assert.equal(database.prepare('SELECT decision FROM dsh_loop_guard_claims').get()?.decision, 'wait_user')
     assert.equal(database.prepare('SELECT status FROM dsh_boundary_jobs').get()?.status, 'pending')
     assert.equal(reserveOutboxDelivery(database, continuation, 'then'), true)

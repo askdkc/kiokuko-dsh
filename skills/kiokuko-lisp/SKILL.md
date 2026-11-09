@@ -11,7 +11,7 @@ description: Compose reusable Common Lisp task tools alongside owned development
 ## Admission and tools
 
 Coding: use the host’s task Lisp choice independently of optional coding notes. Pending is not consent to start Lisp. Resume the saved choice. Verify the requested user entry with fresh host results.
-Use the coding choice or /kioku-lisp enable for a persistent worker, and enable-task for disposable scratch. lisp_define, lisp_call and lisp_observe need no mode switch or Working task. Compose exact dependency refs in your own protected worker or private scratch without repository mounts or host RPC. Schemas cannot prove Lisp safe. Children get only native-scope capabilities and never inherit the parent's lease, heap or refs. Publication and effects retain approvals and authority. With Lisp ON, use kioku.process:run/start-job for Git/gh/builds/tests. Direct shells are blocked, even reads. Read/search/Skill and owned file tools remain available. On failure recover or explicitly disable Lisp. Never spoof host-bound session/agent/directory/generation.
+Use the coding choice or `/kioku-lisp enable`; `enable-task` is disposable scratch. Schemas grant no effects; children inherit no lease, heap or refs. With Lisp ON, compose `kioku.data/workspace/tools/jobs/verify`; `kioku.process` is compatibility. Direct shells are blocked. Recover failures; only `lisp_fallback` may hand an observed unrecoverable runtime/API failure to standard tools. Stop, denial and unknown effects never authorize fallback. Never spoof host-bound session/agent/directory/generation.
 
 Owned kioku_read/write/edit/remove/exec/result retain receipts. Routine development needs no confirmation. Declare destructiveTargets for known effects. Classification of arbitrary code is incomplete. After completion, organize memory with permission and save only the approved text.
 
@@ -21,6 +21,8 @@ Schemas define arguments; never guess. `lisp_describe` without a symbol gives th
 API/verifier map, even during recovery. Persistent `lisp_eval`: declared inputs;
 `lisp_describe`: functions; `lisp_inspect`: paged evidence; `lisp_status`: state;
 `lisp_cancel`: stop; `lisp_recover`: restart a stopped worker after diagnosis;
+`lisp_resume`: select one live restart on the suspended stack; `lisp_fallback`: durable
+handoff and route switch after an unrecoverable runtime/API failure;
 `lisp_reset`: healthy, confirmed-stopped worker only, no recovery bypass.
 Task `lisp_define`: compiled, schema/example-checked lambda; `lisp_call`: inline input/inputRef;
 `lisp_observe`: workspace capture without bodies; `lisp_stage`: freeze against observed
@@ -38,7 +40,8 @@ remain owner-bound until expiry. Never replay effects.
 ## Task tools and files
 
 Common Lisp/CL-PPCRE/CL-CSV/YASON via `kioku.tools`, `kioku.data`,
-`kioku.files`, `kioku.process`, `kioku.objects`, `kioku.environment`, `kioku.ci`,
+`kioku.workspace`, `kioku.jobs`, `kioku.test`, `kioku.verify`, `kioku.session`,
+`kioku.functions`, `kioku.files`, `kioku.process`, `kioku.objects`, `kioku.environment`, `kioku.ci`,
 `kioku.decisions`, `kioku.typesafe`, `kioku.code`; no Quicklisp/network downloads. First enable
 compiles; later starts reuse verified code, not session state. Compile/cache failure
 blocks startup: report `/kioku-lisp recover`; never modify compiled files or replay effects.
@@ -135,8 +138,8 @@ Existing approvals remain authoritative. Consume a choice before inspection:
 10000 records max. UTF-8 files; bounded `kioku.files:search-text`/`diff-text`.
 `kioku.objects:register-artifact`: immutable host copy of scratch-relative path,
 64 MiB/file, 1000/session, 1 GiB total, no project application.
-`kioku.tools:available-tools`: audited adapters (initially lisp_status); `call-tool`:
-DSH guards/registry, refuses others/recursive eval. Bounded stdout/stderr. See lisp_hot_* schemas.
+`kioku.tools:list/describe/call`: current schemas and pinned definitions through DSH guards;
+stale definitions and recursive shell/Lisp calls fail. See lisp_hot_* schemas.
 <!-- /kiokuko:runtime -->
 
 <!-- kiokuko:runtime prototype-driven-planning -->

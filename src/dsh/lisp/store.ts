@@ -11,6 +11,8 @@ export interface Operation extends Record<string, unknown> {
   state: string; payload: string; result: string | null; updated_at: string
 }
 export interface Session extends Record<string, unknown> { session_id: string; root_path: string; enabled: number; epoch: string }
+export interface SavedState { name: string; revision: number; kind: 'json'|'definition'|'result_ref'; value: unknown; digest: string; updatedAt: string }
+export interface LispFallback { fallbackId: string; sessionId: string; agentId: string; state: 'prepared'|'compacted'|'continued'|'failed'; reasonCode: string; handoff: unknown; compaction: unknown; createdAt: string; updatedAt: string }
 
 /** Only the host uses this store; every mutation stays inside the runtime's DB service. */
 export class LispStore {
@@ -84,6 +86,77 @@ export class LispStore {
     })
   }
   session(id: string): Promise<Session | undefined> { return this.database(db => db.prepare('SELECT * FROM dsh_lisp_sessions WHERE session_id=?').get<Session>(id)) }
+  saveState(owner: LispOwner, name: string, kind: SavedState['kind'], value: unknown): Promise<SavedState> {
+    if (!/^[^\p{Cc}\p{Cf}]{1,256}$/u.test(name)) fail('SAVED_STATE_NAME', '保存名が不正です。')
+    const encoded = JSON.stringify(value)
+    if (encoded === undefined || Buffer.byteLength(encoded) > 16 * 1024 * 1024) fail('SAVED_STATE_VALUE', 'JSON として保存できる 16 MiB 以下の値を指定してください。')
+    const hash = digest({ kind, value })
+    return this.database(db => withImmediateTransaction(db, () => {
+      const session = db.prepare('SELECT root_path,enabled FROM dsh_lisp_sessions WHERE session_id=?').get<{root_path:string;enabled:number}>(owner.sessionId)
+      if (!session?.enabled || session.root_path !== owner.root) fail('SCOPE_CONFLICT', '有効な同一作業場所の Lisp セッションだけが状態を保存できます。')
+      const old = db.prepare('SELECT revision FROM dsh_lisp_saved_state WHERE session_id=? AND agent_id=? AND name=?')
+        .get<{revision:number}>(owner.sessionId, owner.agentId, name)
+      if (!old && db.prepare('SELECT COUNT(*) AS n FROM dsh_lisp_saved_state WHERE session_id=?').get<{n:number}>(owner.sessionId)!.n >= 1000)
+        fail('SAVED_STATE_LIMIT', 'このセッションの保存状態数が上限です。')
+      const revision = (old?.revision ?? 0) + 1, now = new Date().toISOString()
+      db.prepare(`INSERT INTO dsh_lisp_saved_state(session_id,agent_id,name,revision,kind,value_json,digest,updated_at)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,agent_id,name) DO UPDATE SET
+        revision=excluded.revision,kind=excluded.kind,value_json=excluded.value_json,digest=excluded.digest,updated_at=excluded.updated_at`)
+        .run(owner.sessionId, owner.agentId, name, revision, kind, encoded, hash, now)
+      return { name, revision, kind, value: JSON.parse(encoded), digest: hash, updatedAt: now }
+    }))
+  }
+  restoreState(owner: LispOwner, name: string): Promise<SavedState | undefined> {
+    return this.database(db => {
+      const row = db.prepare(`SELECT name,revision,kind,value_json,digest,updated_at FROM dsh_lisp_saved_state
+        WHERE session_id=? AND agent_id=? AND name=?`).get<{name:string;revision:number;kind:SavedState['kind'];value_json:string;digest:string;updated_at:string}>(owner.sessionId, owner.agentId, name)
+      if (!row) return
+      const value: unknown = JSON.parse(row.value_json)
+      if (digest({ kind: row.kind, value }) !== row.digest) fail('SAVED_STATE_CORRUPT', '保存状態の内容が一致しません。')
+      return { name: row.name, revision: row.revision, kind: row.kind, value, digest: row.digest, updatedAt: row.updated_at }
+    })
+  }
+  listState(owner: LispOwner): Promise<Omit<SavedState,'value'>[]> {
+    return this.database(db => db.prepare(`SELECT name,revision,kind,digest,updated_at FROM dsh_lisp_saved_state
+      WHERE session_id=? AND agent_id=? ORDER BY name`).all<{name:string;revision:number;kind:SavedState['kind'];digest:string;updated_at:string}>(owner.sessionId, owner.agentId)
+      .map(row => ({ name: row.name, revision: row.revision, kind: row.kind, digest: row.digest, updatedAt: row.updated_at })))
+  }
+  createFallback(owner: LispOwner, fallbackId: string, reasonCode: string, handoff: unknown): Promise<LispFallback> {
+    const encoded = JSON.stringify(handoff)
+    if (!encoded || Buffer.byteLength(encoded) > 1024 * 1024) fail('FALLBACK_HANDOFF_LIMIT', '引継ぎ情報が大きすぎます。')
+    return this.database(db => withImmediateTransaction(db, () => {
+      const existing = db.prepare(`SELECT * FROM dsh_lisp_fallbacks WHERE session_id=? AND state IN ('prepared','compacted','continued')`)
+        .get<Record<string,unknown>>(owner.sessionId)
+      if (existing) {
+        const current = this.fallbackRow(existing)
+        if (current.agentId !== owner.agentId || current.fallbackId !== fallbackId || current.reasonCode !== reasonCode || digest(current.handoff) !== digest(JSON.parse(encoded)))
+          fail('FALLBACK_CONFLICT', 'このセッションには内容の異なるフォールバック記録があります。')
+        return current
+      }
+      const now = new Date().toISOString()
+      db.prepare(`INSERT INTO dsh_lisp_fallbacks(fallback_id,session_id,agent_id,state,reason_code,handoff_json,created_at,updated_at)
+        VALUES(?,?,?,'prepared',?,?,?,?)`).run(fallbackId, owner.sessionId, owner.agentId, reasonCode, encoded, now, now)
+      return { fallbackId, sessionId: owner.sessionId, agentId: owner.agentId, state: 'prepared', reasonCode,
+        handoff: JSON.parse(encoded), compaction: null, createdAt: now, updatedAt: now }
+    }))
+  }
+  activeFallback(sessionId: string): Promise<LispFallback | undefined> {
+    return this.database(db => {
+      const row = db.prepare(`SELECT * FROM dsh_lisp_fallbacks WHERE session_id=? AND state IN ('prepared','compacted','continued') ORDER BY created_at DESC LIMIT 1`)
+        .get<Record<string,unknown>>(sessionId)
+      return row ? this.fallbackRow(row) : undefined
+    })
+  }
+  updateFallback(fallbackId: string, state: LispFallback['state'], compaction: unknown): Promise<void> {
+    return this.database(db => { db.prepare('UPDATE dsh_lisp_fallbacks SET state=?,compaction_json=?,updated_at=? WHERE fallback_id=?')
+      .run(state, JSON.stringify(compaction), new Date().toISOString(), fallbackId) })
+  }
+  private fallbackRow(row: Record<string,unknown>): LispFallback {
+    return { fallbackId: String(row.fallback_id), sessionId: String(row.session_id), agentId: String(row.agent_id),
+      state: row.state as LispFallback['state'], reasonCode: String(row.reason_code), handoff: JSON.parse(String(row.handoff_json)),
+      compaction: row.compaction_json ? JSON.parse(String(row.compaction_json)) : null,
+      createdAt: String(row.created_at), updatedAt: String(row.updated_at) }
+  }
   /** Manual ON is session metadata: one atomic insert, never an unfinished effect journal. */
   manualMode(owner: LispOwner, remember = false): Promise<boolean> {
     return this.database(db => {

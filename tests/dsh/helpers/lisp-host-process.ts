@@ -8,6 +8,7 @@ const base = process.argv[2]!
 const db = openConnection(join(base, 'state.sqlite3'))
 const store = new LispStore(async fn => fn(db))
 const manager = new LispManager({ store, dataRoot: join(base, 'data'),
+  ...(process.env.KIOKUKO_LISP_TEST_LIBRARY ? { library: process.env.KIOKUKO_LISP_TEST_LIBRARY } : {}),
   config: LispConfig.parse({ enabled: true, executionMode: 'development', startupTimeoutMs: 60000,
     sbclPath:process.env.KIOKUKO_LISP_SBCL??'sbcl',...(process.argv[3]?JSON.parse(process.argv[3]):{}) }) })
 process.on('message', async ({ id, method, owner, input }: any) => {

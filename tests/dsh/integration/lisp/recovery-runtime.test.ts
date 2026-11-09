@@ -67,6 +67,30 @@ for (const executionMode of ['development', 'protected'] as const) test(`real SB
   try {
     await manager.start(); assert.equal((await manager.enable(owner) as any).state, 'READY')
     assert.equal((await run('init', '(defparameter *effects* 0)')).ok, true)
+    const suspended = await run('main-model-restart', `(let ((local 41))
+      (handler-bind ((simple-error (lambda (condition)
+        (kioku.recovery:await-restart condition (kioku.internal:object "local" local)
+          '((use-local "Add one to the captured lexical value" #("integer")))))))
+        (restart-case (progn (incf *effects*) (error "choose on the next model step"))
+          (use-local (increment) (+ local increment)))))`)
+    assert.equal(suspended.code, 'AWAITING_RESTART', JSON.stringify(suspended))
+    assert.equal((await manager.status(owner) as any).state, 'AWAITING_RESTART')
+    const choice = suspended.awaitingRestart.restarts[0]
+    const resumed = await manager.execute(owner, 'lisp_resume', { operationId: 'resume-main-model',
+      targetOperationId: suspended.operationId, generation: suspended.generation, ticket: suspended.awaitingRestart.ticket,
+      restartId: choice.id, arguments: [1] }) as any
+    assert.equal(resumed.ok, true, JSON.stringify(resumed)); assert.equal(resumed.value.json, 42)
+    assert.equal((await manager.status(owner) as any).state, 'READY')
+    assert.equal((await manager.execute(owner, 'lisp_resume', { operationId: 'resume-main-model',
+      targetOperationId: suspended.operationId, generation: suspended.generation, ticket: suspended.awaitingRestart.ticket,
+      restartId: choice.id, arguments: [1] }) as any).replay, true, 'transport replay returns the saved result')
+    const consumed = await manager.execute(owner, 'lisp_resume', { operationId: 'resume-consumed-ticket',
+      targetOperationId: suspended.operationId, generation: suspended.generation, ticket: suspended.awaitingRestart.ticket,
+      restartId: choice.id, arguments: [1] }) as any
+    assert.equal(consumed.code, 'RESTART_STALE', JSON.stringify(consumed))
+    assert.equal((await manager.status(owner) as any).state, 'READY', 'a consumed ticket cannot disturb the resumed worker')
+    assert.equal((await run('main-model-effect-count', '*effects*')).value.json, 1, 'restart resumption never replays the failed form')
+    await run('main-model-reset-count', '(setf *effects* 0)')
     const recovered = await run('recover-live', expression())
     assert.equal(recovered.ok, true, JSON.stringify(recovered)); assert.equal(recovered.value.json, 42)
     assert.equal((await run('recover-live', expression())).replay, true); assert.equal(calls, 1)
@@ -150,5 +174,19 @@ for (const executionMode of ['development', 'protected'] as const) test(`real SB
     const callsAtRevocation: number = calls
     assert.equal((await run('already-revoked', expression(1000, true))).ok, false)
     assert.equal(calls, callsAtRevocation); assert.equal(hostEffects, 0)
+    const fallbackPid = (await manager.status(owner) as any).supervisorPid
+    assert.ok(Number.isInteger(fallbackPid) && fallbackPid > 1); process.kill(fallbackPid, 'SIGTERM')
+    let fallbackStatus:any
+    for(let attempt=0;attempt<100;attempt++){
+      fallbackStatus=await manager.status(owner)
+      if(fallbackStatus.state==='RECOVERY_REQUIRED')break
+      await new Promise(resolve=>setTimeout(resolve,10))
+    }
+    assert.equal(fallbackStatus.state,'RECOVERY_REQUIRED',JSON.stringify(fallbackStatus))
+    await assert.rejects(manager.fallback(owner,{fallbackId:'forbidden-fallback',reasonCode:'CANCELLED',handoff:{objective:'must not switch'}}),/フォールバックの理由/)
+    const fallback=await manager.fallback(owner,{fallbackId:`fallback-${executionMode}`,reasonCode:fallbackStatus.error.code,
+      handoff:{objective:'continue the same task',completed:['restart verification'],pending:['standard-tool verification']}}) as any
+    assert.equal(fallback.state,'FALLBACK_PREPARED');assert.equal((await manager.status(owner) as any).state,'DISABLED')
+    assert.equal((await new LispStore(async fn=>fn(db)).activeFallback(owner.sessionId))?.fallbackId,`fallback-${executionMode}`)
   } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
 })

@@ -9,14 +9,20 @@ import { z } from 'zod'
 import { CODE_METHODS } from './code-intelligence-contracts.js'
 import { FRAME_BYTES, LispError, WorkerFrame, failure, type LispConfiguration, type WorkerResult } from './contracts.js'
 import { sandboxLaunch, type SandboxLayout } from './sandbox.js'
-import { reportTestResult } from './test-report.js'
+import { reportTestResult } from '../test-report.js'
+import { OperationSpecSchema } from '../operation-spec.js'
 
-const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum([...CODE_METHODS, 'run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages']), arguments: z.unknown() }).strict()
-const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional() }).strict()
+const Rpc = z.object({ version: z.literal(1), type: z.literal('rpc'), id: z.string().max(256), request: z.string(), method: z.enum([...CODE_METHODS, 'run', 'start-job', 'job-status', 'cancel-job', 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'restart-await', 'packages', 'session-save', 'session-restore', 'session-list']), arguments: z.unknown() }).strict()
+const Program = z.object({ program: z.string().min(1).max(4096), argv: z.array(z.string().max(262144)).max(128), timeoutMs: z.number().int().min(100).max(600000), directory: z.string().min(1).max(4096).optional(), operation: OperationSpecSchema.optional() }).strict()
 const TestProgram = Program.extend({ testRunner: z.enum(['node', 'vitest']) })
 export interface Job { child: ChildProcess; done: Promise<void>; settled?: boolean; result?: { code: number | null; signal: string | null; stdout: string; stderr: string }; error?: string }
 export interface LispRpcContext { generation: string; evaluationId: string; signal: AbortSignal; rpcId?:string }
-interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void; waitForProcess?: (timeoutMs: number) => () => void }
+export interface AwaitingRestart {
+  type: 'awaiting_restart'; id: string; ticket: string; condition: { type: string; message: string; context: unknown };
+  restarts: { id: string; name: string; description: string; arguments: unknown }[]; expiresAt: string
+}
+interface Pending { id: string; allowRpc: boolean; abort: AbortController; resolve: (r: WorkerResult) => void; reject: (e: unknown) => void; waitForProcess?: (timeoutMs: number) => () => void; suspended?: boolean }
+interface Suspension { pending: Pending; rpcId: string; value: AwaitingRestart; timer: ReturnType<typeof setTimeout>; consumed: boolean }
 /** A worker has one evaluation slot; cancellation never waits for that slot. */
 export class LispWorker {
   readonly generation = randomUUID()
@@ -33,6 +39,7 @@ export class LispWorker {
   #ready: (() => void) | undefined
   #startupReject: ((e: unknown) => void) | undefined
   #rpcActive = false
+  #suspension: Suspension | undefined
   #jobLaunches = 0
   #stdout: Buffer[] = []
   #stderr: Buffer[] = []
@@ -43,6 +50,7 @@ export class LispWorker {
     readonly auditJob?: (input: z.infer<typeof Program>, launch: () => Promise<Job>) => Promise<Job>,
     readonly onFailure?: (error: Error) => void) {}
   get busy(): boolean { return this.#pending !== undefined }
+  get awaitingRestart(): AwaitingRestart | undefined { return this.#suspension?.value }
   get healthy(): boolean { return !this.#closed && !this.#fatal && this.#child !== undefined }
   get hasRunningJobs(): boolean { return [...this.jobs.values()].some(job => !job.settled) }
   get jobsIdle(): boolean { return this.#jobLaunches === 0 && !this.hasRunningJobs }
@@ -117,6 +125,8 @@ export class LispWorker {
     this.#pending?.abort.abort(error)
     this.#pending?.reject(error)
     this.#pending = undefined
+    if (this.#suspension) clearTimeout(this.#suspension.timer)
+    this.#suspension = undefined
     // A debugger/OS can suspend the trusted supervisor. Wake it so its TERM
     // handler can SIGKILL the owned runtime (or private process namespace).
     for (const child of [this.#child, ...[...this.jobs.values()].map(job => job.child)]) {
@@ -185,17 +195,58 @@ export class LispWorker {
     try {
       try { this.send({ version: 1, id, method, ...args }) } catch (error) { this.break(new Error(failure(error).message)) }
       const result = await promise
+      if ((result as unknown as AwaitingRestart).type === 'awaiting_restart') {
+        clearTimeout(timer); signal?.removeEventListener('abort', abort)
+        return result
+      }
       await new Promise<void>(resolve => setImmediate(resolve))
       return result
     }
     catch (error) { await this.stop(); throw error }
-    finally { evaluation.abort(); clearTimeout(timer); signal?.removeEventListener('abort', abort); this.#pending = undefined }
+    finally {
+      if (!pending.suspended) { evaluation.abort(); clearTimeout(timer); signal?.removeEventListener('abort', abort); this.#pending = undefined }
+    }
+  }
+  async resume(ticket: string, restartId: string, args: unknown[], signal?: AbortSignal): Promise<WorkerResult> {
+    const suspension = this.#suspension, pending = suspension?.pending
+    if (!suspension || !pending || this.#pending !== pending || suspension.consumed || suspension.value.ticket !== ticket)
+      throw new LispError('RESTART_STALE', 'Restart ticket is no longer active.')
+    if (!suspension.value.restarts.some(item => item.id === restartId)) throw new LispError('RESTART_INVALID', 'Restart is not in the active set.')
+    if (signal?.aborted) throw new LispError('CANCELLED', 'Restart was cancelled.')
+    suspension.consumed = true; clearTimeout(suspension.timer); this.#suspension = undefined; pending.suspended = false
+    const promise = new Promise<WorkerResult>((resolve, reject) => { pending.resolve = resolve; pending.reject = reject })
+    const abort = () => this.break(new LispError('CANCELLED', 'Restart was cancelled.'))
+    signal?.addEventListener('abort', abort, { once: true })
+    const timer = setTimeout(() => this.break(new LispError('TIMEOUT', 'Lisp evaluation exceeded its resumed compute budget.')), this.config.timeoutMs)
+    try {
+      this.send({ id: suspension.rpcId, ok: true, value: { ticket, restartId, args } })
+      const result = await promise
+      if ((result as unknown as AwaitingRestart).type === 'awaiting_restart') { clearTimeout(timer); signal?.removeEventListener('abort', abort); return result }
+      await new Promise<void>(resolve => setImmediate(resolve))
+      return result
+    } catch (error) { await this.stop(); throw error }
+    finally {
+      if (!pending.suspended) { clearTimeout(timer); signal?.removeEventListener('abort', abort); pending.abort.abort(); if (this.#pending === pending) this.#pending = undefined }
+    }
   }
   private async rpc(rpc: z.infer<typeof Rpc>): Promise<void> {
     let resume: (() => void) | undefined
     try {
       if (!this.#pending || this.#pending.id !== rpc.request) throw new Error('RPC outside evaluation')
       if (!this.#pending.allowRpc || !this.rpcAllowed(rpc.method)) throw new LispError('CAPABILITY_DENIED', 'この作業用ツールからは host RPC を実行できません。')
+      if (rpc.method === 'restart-await') {
+        const request = z.object({ ticket: z.string().min(1).max(256), condition: z.object({ type: z.string().min(1).max(512), message: z.string().max(8000), context: z.unknown() }).strict(),
+          restarts: z.array(z.object({ id: z.string().min(1).max(256), name: z.string().min(1).max(256), description: z.string().min(1).max(1024), arguments: z.unknown() }).strict()).min(1).max(8) }).strict().parse(rpc.arguments)
+        if (this.#suspension) throw new LispError('RESTART_BUSY', 'A restart choice is already pending.')
+        const expiresAt = new Date(Date.now() + 600_000).toISOString()
+        const value: AwaitingRestart = { type: 'awaiting_restart', id: rpc.request, ...request, expiresAt }
+        const pending = this.#pending
+        pending.suspended = true
+        const timer = setTimeout(() => this.break(new LispError('RESTART_EXPIRED', 'Restart choice expired.')), 600_000)
+        this.#suspension = { pending, rpcId: rpc.id, value, timer, consumed: false }
+        pending.resolve(value as unknown as WorkerResult)
+        return
+      }
       const testRequest = rpc.method === 'run' && typeof rpc.arguments === 'object'
         && rpc.arguments !== null && Object.hasOwn(rpc.arguments, 'testRunner') ? TestProgram.parse(rpc.arguments) : undefined
       const { testRunner, ...command } = testRequest ?? {}
@@ -205,7 +256,7 @@ export class LispWorker {
         resume = this.#pending.waitForProcess(process.timeoutMs)
       }
       let value: unknown
-      if ([...CODE_METHODS, 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
+      if ([...CODE_METHODS, 'tools-list', 'tool-call', 'artifact', 'ci-list-runs', 'ci-failed-log', 'ci-verify', 'typesafe-status', 'typesafe-evaluate', 'decisions-status', 'decisions-evaluate', 'recovery-select', 'packages', 'session-save', 'session-restore', 'session-list',...(this.config.executionMode==='development'?['run','start-job','job-status','cancel-job']:[])].includes(rpc.method)) {
         if (!this.hostCall) throw new Error('HOST_ADAPTER_UNAVAILABLE')
         value = await this.hostCall(rpc.method, args, { generation: this.generation, evaluationId: this.#pending.id, signal: this.#pending.abort.signal, rpcId:rpc.id })
       } else if (rpc.method === 'run' || rpc.method === 'start-job') {

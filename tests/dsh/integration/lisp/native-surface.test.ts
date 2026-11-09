@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { NodeSqliteAdapter } from '../../../../src/db/adapter.js'
 import { migrateDatabase } from '../../../../src/db/migrate.js'
-import { LispConfig } from '../../../../src/dsh/lisp/contracts.js'
+import { LispConfig, LispError } from '../../../../src/dsh/lisp/contracts.js'
 import { mountLispSurface } from '../../../../src/dsh/lisp/surface.js'
 import type { DshRuntime } from '../../../../src/dsh/runtime.js'
 
@@ -79,6 +79,19 @@ for (const scenario of ['disabled-config', 'scope-conflict', 'startup-failure'] 
     ctx.tools.register(tools.defineTool({ name: 'ordinary_tool', description: 'counter', parameters: {},
       output: { schema: { type: 'integer' }, render: () => [] }, execute: async () => ++effects }))
     surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode: 'protected', enabled: scenario !== 'disabled-config', sbclPath: join(base, 'missing-sbcl') }))
+    if (scenario === 'startup-failure') {
+      const enable = surface.manager.enable.bind(surface.manager)
+      let attempts = 0
+      surface.manager.enable = async (...args: Parameters<typeof enable>) => {
+        if (attempts++ === 0) {
+          const owner = args[0]
+          await surface!.manager.options.store.enable(owner)
+          surface!.manager.enabled.set(owner.sessionId, owner.root)
+          throw new LispError('STARTUP_FAILED', 'injected SBCL ENOENT')
+        }
+        return enable(...args)
+      }
+    }
     const call = (agent: any, name = 'ordinary_tool') => executeNativeTool(ctx, packages!, { callId: randomUUID(), name, arguments: {}, agent, signal: new AbortController().signal })
     const command = (agent: any) => commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal: new AbortController().signal })
     assert.equal((await call(agents[0])).isError, true, 'saved session remains protected')

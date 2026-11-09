@@ -57,6 +57,8 @@ test('KDSH-COMPLETION-INPUT-GUIDANCE-001: actual native errors name missing fiel
     const after=await call({action:'status'});assert.equal(after.value.verified,false,'binding alone never verifies the criterion')
     assert.equal(after.value.criteria[0].state,'unknown')
     assert.ok(after.value.bindingGuide.native_command.requiredFields.includes('sourcePaths'))
+    assert.ok(after.value.bindingGuide.typed_operation.requiredFields.includes('operation'))
+    assert.equal(after.value.bindingGuide.typed_operation.operations.test.assertion, 'selected_tests_pass')
     assert.equal(after.value.bindingGuide.criteria[0].requiredAssertion,'output_matches')
     assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_completion_executions').get()!.n,0)
   }finally{dispose();for(const fiber of fibers.reverse())await fiber.dispose();db.close();await rm(root,{recursive:true,force:true})}

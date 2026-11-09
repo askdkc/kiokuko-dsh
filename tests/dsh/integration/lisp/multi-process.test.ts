@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fork, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
-import { mkdir, mkdtemp, readdir, realpath, rm, readFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readdir, realpath, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openConnection } from '../../../../src/db/connection.js'
@@ -12,7 +12,8 @@ import { workingLispTask } from '../../helpers/lisp-task.js'
 import type { LispOwner } from '../../../../src/dsh/lisp/contracts.js'
 
 function host(base: string) {
-  const child = fork(new URL('../../helpers/lisp-host-process.ts', import.meta.url), [base], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'] })
+  const child = fork(new URL('../../helpers/lisp-host-process.ts', import.meta.url), [base], { execArgv: ['--import', 'tsx'], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    env: { ...process.env, KIOKUKO_LISP_TEST_LIBRARY: join(base, 'library') } })
   let sequence = 0, diagnostics = ''
   child.stderr!.on('data', data => { diagnostics += data })
   const pending = new Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>()
@@ -39,6 +40,8 @@ async function until(check: () => Promise<boolean>) {
 
 async function fixture() {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-multi-')))
+  await cp(new URL('../../../../lisp/', import.meta.url), join(base, 'library'), { recursive: true,
+    filter: source => !source.split(/[\\/]/u).some(part => part === '.native' || part.startsWith('.native-build-')) })
   const db = openConnection(join(base, 'state.sqlite3'))
   const owners: LispOwner[] = []
   for (let i = 0; i < 6; i++) {

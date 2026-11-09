@@ -14,6 +14,7 @@ import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
 import { mountApprovalPolicy } from './approval-settings.js'
 import type { ApprovalQuestions } from './approval.js'
 import type { SemanticCompactionCoordinator } from '../semantic-compaction/coordinator.js'
+import { handoffRange } from '../model-handoff.js'
 import { renderHistoryResult } from './model-result.js'
 import { isDeepStrictEqual } from 'node:util'
 import { savedPageVersion, savedResultVersion, type SavedResultPage } from './inspection.js'
@@ -57,7 +58,7 @@ import { LISP_TOOLS, LispError, failure, fail, identifier, renderResult, type Li
 
 interface Session extends LispAttachmentSession { id: string; header: { cwd: string; parentSession?: string } }
 interface Agent { id: string; status?: string; session: Session; ctx: { get(name: string, strict?: boolean): any }; inject?: (message: unknown) => void }
-interface Tools { register(definition: any, options?: {when: () => boolean}): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown): any; schemas(scope?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
+interface Tools { register(definition: any, options?: {when: () => boolean}): () => void; guard(fn: (execution: any) => string | undefined): () => void; get(name: string, scope?: unknown, toolSet?: unknown): any; schemas(scope?: unknown, toolSet?: unknown): { name: string; description: string; parameters: unknown }[]; modeFor?(scope:unknown):string; presentAs?(mode: 'native'): () => void; setExecutor?: unknown; restrict(options: { allow: string[] }): () => void; execute(execution: unknown): Promise<unknown> }
 interface ExecutionFence { protect(sessionId: string): void; release(sessionId: string): void }
 interface ExecutionFences { attach(request: { id: string; tools: readonly string[]; check(execution: any): string | undefined; beforeStep(agent: Agent): Promise<boolean> }): ExecutionFence }
 interface Fence { sessions: Map<string, string>; controller?: LispManager; prepareAgent?: (agent: Agent) => Promise<boolean>; definitions: Map<string, object>; stopped: boolean; executionMode: 'development'|'protected'; protocolBridge?: (execution: any) => boolean; diagnosticOnly?: WeakSet<Agent> }
@@ -126,9 +127,27 @@ export const ToolInput = z.object({ operationId: identifier.optional(), code: z.
   verificationRef: identifier.optional(), leftRef: z.string().uuid().optional(), rightRef: z.string().uuid().optional(),
   target: z.enum(['typecheck', 'lisp', 'test', 'build', 'package', 'vendor']).optional(), script: z.string().max(256).optional(),
   timeoutMs: z.number().int().min(100).max(600000).optional(), symbol: z.string().max(256).optional(), ref: identifier.optional(), generation: identifier.optional(),
+  targetOperationId: identifier.optional(), ticket: identifier.optional(), restartId: identifier.optional(), arguments: z.array(z.unknown()).max(16).optional(),
+  reasonCode: z.string().min(1).max(256).optional(), objective: z.string().max(4000).optional(), constraints: z.array(z.string().max(1000)).max(32).optional(),
+  changedFiles: z.array(z.string().max(4096)).max(100).optional(), completed: z.array(z.string().max(2000)).max(100).optional(),
+  pending: z.array(z.string().max(2000)).max(100).optional(), evidenceIds: z.array(z.string().max(256)).max(100).optional(),
+  uncertainEffects: z.array(z.string().max(2000)).max(100).optional(), nextSteps: z.array(z.string().max(2000)).max(100).optional(),
   resultOperationId: identifier.optional(), managedOperationId: identifier.optional(), expectedGeneration: identifier.nullable().optional(), section: z.enum(['result', 'value', 'stdout', 'stderr', 'changes']).optional(),
   pointer: z.string().max(1024).optional(),
   offset: z.number().int().nonnegative().optional(), limit: z.number().int().min(1).max(2000).optional() }).strict()
+
+export async function lispFallbackCompactionOutcome(agent: Agent, signal: AbortSignal,
+  compaction?: { compactRegion(start:number,end:number,agent:Agent,signal:AbortSignal):Promise<any> }): Promise<Record<string,unknown>> {
+  if (!compaction?.compactRegion) return { outcome: 'unavailable' }
+  const range = handoffRange(agent.session as any)
+  if (!range) return { outcome: 'skipped', reason: 'history_too_short_or_unbalanced' }
+  try {
+    const result = await compaction.compactRegion(range.start, range.end, agent,
+      AbortSignal.any([signal, AbortSignal.timeout(30_000)]))
+    return result?.compactionId ? { outcome: 'summarized', compactionId: result.compactionId }
+      : { outcome: 'failed', reason: 'missing_compaction_identity' }
+  } catch (error) { return { outcome: 'failed', error: failure(error) } }
+}
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
@@ -149,6 +168,12 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       fail('SESSION_MISMATCH', 'Lisp approval session identity changed.')
   })
   const development=config.executionMode==='development'
+  const toolDefinitionIds = new WeakMap<object, string>()
+  const definitionId = (definition: object): string => {
+    let id = toolDefinitionIds.get(definition)
+    if (!id) { id = `tool-v1-${randomUUID()}`; toolDefinitionIds.set(definition, id) }
+    return id
+  }
   // Registry visibility is not permission: only this host-minted call scope may
   // cross the protected fence, through the pinned real owned implementation.
   type PinnedOwned = Readonly<{ definition: any; execute: unknown }>
@@ -160,9 +185,19 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   } }
   const databasePath = await runtime.withDatabase(db => db.filePath)
   const store = new LispStore(fn => runtime.withDatabase(db => fn(db)))
+  const pendingFallbacks = new Map<Agent, Awaited<ReturnType<LispStore['activeFallback']>>>()
+  const fallbackPrompts = new Map<Agent, () => void>()
+  const installFallbackPrompt = (agent: Agent, fallback: NonNullable<Awaited<ReturnType<LispStore['activeFallback']>>>) => {
+    fallbackPrompts.get(agent)?.()
+    const prompt = agent.ctx.get('systemPrompt', false) as { section(input: unknown): () => void } | undefined
+    if (!prompt) return
+    const remove = prompt.section({ name: 'kiokuko:lisp-fallback', order: -89998,
+      text: `Lisp execution route was disabled after ${fallback.reasonCode}. Continue this same task with the standard DSH tools. Do not automatically return to Lisp. Host handoff ${fallback.fallbackId}: ${JSON.stringify(fallback.handoff).slice(0, 24000)}` })
+    fallbackPrompts.set(agent, remove)
+  }
   const typesafe = new HttpTypeSafeClient(typeSafeCredentials(ctx))
   let ownerForOwned:(binding:LispOwner)=>{signal:AbortSignal}
-  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[]):Promise<any> => {
+  const ownedCall = async(owner:LispOwner,name:string,args:Record<string,unknown>,signal?:AbortSignal,callId?:string, taskLease?:TaskLease, argv?: readonly string[], operation?: import('../operation-spec.js').OperationSpec):Promise<any> => {
     const agent=agents.get(owner.agentId)
     if(!agent||agent.session.id!==owner.sessionId||sessions.get(owner.sessionId)!==agent.session||realpathSync(agent.session.header.cwd)!==owner.root)fail('SESSION_MISMATCH','Owned tool caller changed.')
     const binding=ownerForOwned(owner)
@@ -170,7 +205,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       ...(taskLease ? { [TASK_AUTHORITY]: taskLease } : {})}
     const dispatch = () => dispatchHostTool(invocation)
     const execute = () => argv && name === 'kioku_exec' && typeof args.command === 'string'
-      ? withLispOwnedCommand(invocation, args.command, argv, dispatch) : dispatch()
+      ? withLispOwnedCommand(invocation, args.command, argv, dispatch, operation) : dispatch()
     const result=await (taskLease ? withTaskAuthority(taskLease, execute) : execute()) as any
     if (lispHostToolWasNotDispatched(result)) managedAdmissionDenied(new LispError(
       'OWNED_EXECUTION_NOT_DISPATCHED', result.error?.message ?? JSON.stringify(result.content),
@@ -250,10 +285,10 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', '添付入力のセッションを確認できません。')
       return attachmentInput(agent.session, agent.ctx.get('attachments', false) as LispAttachmentStore | undefined, path, signal)
     },
-    toolCall: async (owner, name, args, signal,callId,taskLease,argv) => {
+    toolCall: async (owner, name, args, signal,callId,taskLease,argv,operation) => {
       const agent = agents.get(owner.agentId)
       if (!agent || agent.session.id !== owner.sessionId || sessions.get(owner.sessionId) !== agent.session || realpathSync(agent.session.header.cwd) !== owner.root) fail('SESSION_MISMATCH', 'ホスト呼び出しの主体を確認できません。')
-      if (development) return ownedCall(owner,name,args,signal,callId,taskLease,argv)
+      if (development) return ownedCall(owner,name,args,signal,callId,taskLease,argv,operation)
       if ((PROTOCOL_OWNED_TOOLS as readonly string[]).includes(name)) {
         const effect = PROTOCOL_OWNED_EFFECTS.has(name)
         if (effect && (!taskLease || !callId)) fail('TASK_REQUIRED', 'Protected owned effects require the original task lease and call identity.')
@@ -309,7 +344,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         if (!persistent.stopped && persistent.controller && agent && agent.session.id === scope
           && agents.get(agent.id) === agent && sessions.get(scope) === agent.session
           && (hostFences ? isLispNativeCommandFence : isLispNativeCommand)(execution, tools.get(execution.name, agent)?.execute)) return undefined
-        return 'LISP_ROUTE_REQUIRED: Lisp is enabled for this session. Use lisp_eval for computation, kioku.test:node / vitest for selected tests, and kioku.process:run / start-job for other external commands. Direct Bash/zsh/PowerShell calls are disabled. Read/search/Skill tools remain available. Recover Lisp on failure; do not silently change routes. The user can explicitly disable Lisp with /kioku-lisp disable.'
+        return 'LISP_ROUTE_REQUIRED: Lisp is enabled for this session. Compose operations through kioku.data/workspace/tools/jobs and bind typed checks with kioku.verify. Direct Bash/zsh/PowerShell calls are disabled. Read/search/Skill tools remain available. Diagnose and recover Lisp first; after a host-observed unrecoverable runtime/API failure, use lisp_fallback to preserve the handoff and continue with standard DSH tools. Stop, cancellation, permission denial and unknown effects are not fallback reasons. The user can explicitly disable Lisp with /kioku-lisp disable.'
       }
       if (persistent.executionMode === 'protected' && execution.name === 'run_code') return 'Protected Lisp requires the native DSH tool executor. Select native execution in the DSH profile, or disable protected Lisp; the PTC program was not executed.'
       if (persistent.stopped || !persistent.controller) return persistent.executionMode==='development' ? 'Lisp は停止中です。通常ツールは利用できます。' : 'Lisp の保護が継続中です。プラグインを戻し /kioku-lisp status で確認してください。'
@@ -419,7 +454,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id) ? guide : '' }))
   if (policyPrompt) disposers.push(policyPrompt.section({ name: 'kiokuko:lisp-route', order: 90000,
     text: ({agent}: {agent?: Agent}) => agent && manager.enabled.has(agent.session.id)
-      ? 'Lisp is ON. Execute computations and orchestration in Lisp. For selected tests use kioku.test:node or kioku.test:vitest. For other external commands, including git/gh and builds, use kioku.process:run or start-job inside Lisp. Direct shell calls are rejected. Read/search/Skill and owned file tools remain available. Do not fall back to a direct shell after Lisp failure; recover the selected route or wait for the user to disable it.' : '' }))
+      ? 'Lisp is ON. Keep state, transformations and orchestration in Lisp. Prefer kioku.test:spec with kioku.verify:bind/run, discover current DSH tools through kioku.tools:list/describe/call, and use kioku.workspace and kioku.jobs for structured effects. kioku.process remains a compatibility adapter. Direct shell calls are rejected. Read/search/Skill and owned file tools remain available. Diagnose and recover failures; only lisp_fallback may switch an unrecoverable Lisp runtime/API failure to standard DSH tools with a durable handoff.' : '' }))
   const registeredAgents = new WeakSet<object>()
   const agentDisposers = new Map<string, (() => void)[]>()
   const boundAgents = new Map<string, Agent>()
@@ -504,6 +539,31 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   || current.owner.root !== binding.owner.root || binding.agent.session !== agentSession || binding.agent.ctx !== agentContext)
                   fail('STALE_NATIVE_COMMAND', 'Native Lisp caller, turn or arguments changed.')
               },
+              toolCatalog() {
+                this.assertCurrent()
+                return tools.schemas(binding.agent, execution.toolSet).flatMap(schema => {
+                  if (LISP_TOOLS.includes(schema.name as LispTool) || NATIVE_SHELL_TOOLS.has(schema.name) || schema.name === 'run_code') return []
+                  const current = tools.get(schema.name, binding.agent, execution.toolSet)
+                  return current ? [{ ...schema, definitionId: definitionId(current), available: true as const }] : []
+                })
+              },
+              async callTool(name, expectedDefinitionId, args, signal) {
+                this.assertCurrent()
+                if (LISP_TOOLS.includes(name as LispTool) || NATIVE_SHELL_TOOLS.has(name) || name === 'run_code')
+                  fail('CAPABILITY_DENIED', 'Recursive Lisp and shell transports are not callable through KIOKU.TOOLS.')
+                const current = tools.get(name, binding.agent, execution.toolSet)
+                if (!current || definitionId(current) !== expectedDefinitionId)
+                  fail('STALE_TOOL_DEFINITION', 'The admitted tool definition changed; refresh AVAILABLE-TOOLS.')
+                const child = { name, callId: `lisp-tool-${randomUUID()}`, agent: binding.agent,
+                  parent: execution.token ?? Symbol('lisp-connected-tool'),
+                  ...(execution.rootCallId ?? execution.callId ? { rootCallId: execution.rootCallId ?? execution.callId } : {}),
+                  ...(execution.toolSet ? { toolSet: execution.toolSet } : {}), arguments: args,
+                  signal: AbortSignal.any([binding.signal, signal]) }
+                const result = await dispatchHostTool(child) as any
+                this.assertCurrent()
+                if (result?.isError) fail('CONNECTED_TOOL_FAILED', JSON.stringify(result.content).slice(0, 4000))
+                return result?.value
+              },
               async run(input, signal) {
                 this.assertCurrent()
                 if (!pinned) managedAdmissionDenied(new LispError('HOST_ADAPTER_UNAVAILABLE', 'The native Bash tool is unavailable.'))
@@ -557,7 +617,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                   return next()
                 }, {global:true, prepend:true})
                 let result: any
-                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child), [input.program, ...input.argv]) }
+                try { result = await withLispNativeCommand(child, pinned.execute, commandAdmission, () => dispatchHostTool(child), [input.program, ...input.argv], input.operation) }
                 catch (error) { throw invalidDirectory ?? error }
                 finally { removeDispatchWitness() }
                 if (invalidDirectory) throw invalidDirectory
@@ -590,6 +650,20 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
             } : undefined
             if((name === 'lisp_recover' || development && !admission) && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
             if (name === 'lisp_cancel' && !await manager.isTaskMode(binding.owner)) { identifier.parse(parsed.operationId); identifier.parse(parsed.generation) }
+            if (name === 'lisp_fallback') {
+              const request = z.object({ operationId: identifier, reasonCode: z.string().min(1).max(256), objective: z.string().min(1).max(4000),
+                constraints:z.array(z.string().max(1000)).max(32).default([]),changedFiles:z.array(z.string().max(4096)).max(100).default([]),
+                completed:z.array(z.string().max(2000)).max(100).default([]),pending:z.array(z.string().max(2000)).max(100).default([]),
+                evidenceIds:z.array(z.string().max(256)).max(100).default([]),uncertainEffects:z.array(z.string().max(2000)).max(100).default([]),
+                nextSteps:z.array(z.string().max(2000)).max(100).default([]) }).strict().parse(parsed)
+              const result = await modeOnly(binding, () => manager.fallback(binding.owner, { fallbackId: request.operationId,
+                reasonCode: request.reasonCode, handoff: { objective:request.objective,constraints:request.constraints,changedFiles:request.changedFiles,
+                  completed:request.completed,pending:request.pending,evidenceIds:request.evidenceIds,uncertainEffects:request.uncertainEffects,nextSteps:request.nextSteps } })) as any
+              const fallback = await store.activeFallback(binding.owner.sessionId)
+              if (fallback) { installFallbackPrompt(binding.agent, fallback); pendingFallbacks.set(binding.agent, fallback) }
+              unregister(binding.agent); hostFence?.release(binding.owner.sessionId)
+              return result
+            }
             if (name !== 'lisp_status' && name !== 'lisp_hot_status' && !isSavedLispResultRead({ name, arguments: parsed, parent: undefined }))
               parsed.operationId = await store.bind(binding.owner, identifier.parse(execution.callId), identifier.parse(parsed.operationId), { name, input: parsed, ...(parsed.prototype === true ? {codingRequest} : {}) })
             const signal = execution.signal ? AbortSignal.any([binding.signal, execution.signal]) : binding.signal
@@ -630,6 +704,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
           || current.owner.sessionId !== binding.owner.sessionId || current.owner.agentId !== binding.owner.agentId || current.owner.root !== binding.owner.root)
           fail('SESSION_MISMATCH', 'Lisp mode owner changed.')
       },
+      toolCatalog() { return [] },
+      async callTool() { return fail('CAPABILITY_DENIED', 'Mode control cannot call connected tools.') },
       async run() { return fail('CAPABILITY_DENIED', 'Mode control cannot execute a command.') },
     })
   }
@@ -645,6 +721,17 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
   fence.prepareAgent = async candidate => {
     const binding = owner(candidate)
+    const previousFallback = await store.activeFallback(binding.owner.sessionId)
+    if (previousFallback && !manager.enabled.has(binding.owner.sessionId)) {
+      if (pendingFallbacks.get(binding.agent)?.fallbackId === previousFallback.fallbackId) {
+        pendingFallbacks.delete(binding.agent)
+        const outcome = await lispFallbackCompactionOutcome(binding.agent, binding.signal, root.get('compaction', false))
+        await store.updateFallback(previousFallback.fallbackId, outcome.outcome === 'summarized' ? 'compacted' : 'continued', outcome)
+      }
+      unregister(binding.agent); hostFence?.release(binding.owner.sessionId)
+      installFallbackPrompt(binding.agent, previousFallback)
+      return true
+    }
     const workflow=await runtime.withDatabase(db=>sessionCodingWorkflow(db,binding.owner.sessionId))
     if(workflow&&(!development||workflow.protocol||!isLispConversation(candidate))&&(workflow.choice.state!=='yes'||['preparing','awaiting_lisp_choice','cancelled','superseded'].includes(workflow.state))){unregister(binding.agent);return true}
     runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
@@ -789,7 +876,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     answered: (agent: LispCodingInput['agent'], task: string, choice:'yes'|'no', answerRef:string, scope:string, protectedWorkflow = true) => preparation.answered(agent,task,choice,answerRef,scope,!development || protectedWorkflow) }))
   const subagentRuntime = () => root.get('subagents', false) as { rootOf?(agent: Agent): Agent } | undefined
   const childOwnership = new NativeChildOwnership(root.get('subagents', false) as any, agents)
-  disposers.push(() => childOwnership.dispose())
+  disposers.push(() => { childOwnership.dispose(); for (const remove of fallbackPrompts.values()) remove(); fallbackPrompts.clear() })
   const workerRouter = (binding: ReturnType<typeof owner>, creating = false): (() => boolean) => {
     const backend = subagentRuntime()
     const live = (agent: Agent) => agent !== binding.agent && agents.get(agent.id) === agent
@@ -1000,7 +1087,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   }
 }
 function description(name: LispTool): string {
-  return ({ lisp_eval: 'Evaluate Common Lisp, the selected route for computation and command orchestration while Lisp is ON. Use (kioku.test:node "test/example.test.ts" :tsx t) or (kioku.test:vitest "test/example.spec.ts") for selected tests. Inspect testStatus and failures; use lisp_inspect for saved logs. Use kioku.process:run / start-job for other external programs; direct native shell calls are rejected. Ordinary development does not require a preliminary prototype. Explicitly protected coding workflows require prototype:true and saved-result inspection before implementation. In persistent mode, define and reuse cohesive functions in one worker generation; proposals use the current host approval policy. In enable-task mode, each evaluation is a disposable scratch experiment without workspace inputs or proposals. Exact operationId replay never re-evaluates.',
+  return ({ lisp_eval: 'Evaluate Common Lisp, the selected route for stateful computation and operation composition while Lisp is ON. Prefer kioku.test:spec plus kioku.verify:bind/run for selected checks; use kioku.tools, kioku.workspace and kioku.jobs for structured host operations. kioku.process and kioku.test:node/vitest remain compatibility APIs. Direct native shell calls are rejected. Explicitly saved definitions/data survive host restart; live streams, stacks and handles do not. Ordinary development does not require a preliminary prototype. Exact operationId replay never re-evaluates.',
+    lisp_resume: 'Resume the exact live Common Lisp stack returned as AWAITING_RESTART. Supply its targetOperationId, generation, one-use ticket, listed restartId and typed arguments. Expired, stopped, changed-generation and duplicate tickets never execute a restart.',
+    lisp_fallback: 'After an observed unrecoverable Lisp runtime/API failure, stop Lisp, persist an exact handoff, attempt history compaction before the next model step, restore the standard DSH tool route, and continue the same task. Never use for Stop, cancellation or permission denial.',
     lisp_hot_contract: 'Authorize immutable schemas through the current host approval policy and finite input/expected cases for a project-shared function. Profile auto-approval or explicit human consent grants approval; model declarations do not. No task-mode switch is needed; publishing still requires current task authority.',
     lisp_hot_install: 'Validate a candidate against the current approved contract in protected scratch, then atomically select it at expectedRevision. Dependency code is snapshotted. Failed checks preserve the active version.',
     lisp_hot_call: 'Call a project-shared function by name, pinning its active immutable version. Input/result refs remain private to this session and agent. Exact operationId replay never executes again.',
@@ -1032,6 +1121,18 @@ export function lispToolSchema(name: LispTool): object {
   const required = Object.keys(properties)
   if (name === 'lisp_status') properties.offset = { type: 'integer', minimum: 0, description: 'Read the next 10 operation summaries using nextOffset.' }
   if (name === 'lisp_eval') { Object.assign(properties, { prototype: { type:'boolean', description:'Mark the small coding prototype. After success inspect its saved resultOperationId before implementation.' }, code: { type: 'string', maxLength: 262144 }, inputs: { type: 'array', items: { type: 'string' }, maxItems: 100, description: 'Workspace-relative files or exact paths of uploads in this session. The worker reads copies in array order. (kioku.files:input 0) returns a path, not the contents. Use (kioku.files:read-text (kioku.files:input 0)) for text. Iterate only over the declared indices, for example (loop for i below 2 collect (kioku.files:read-text (kioku.files:input i))) for two small files.' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 600000 } }); required.push('code') }
+  if (name === 'lisp_resume') { Object.assign(properties, {
+    targetOperationId: { type: 'string', minLength: 1, maxLength: 256 }, generation: { type: 'string', minLength: 1, maxLength: 256 },
+    ticket: { type: 'string', minLength: 1, maxLength: 256 }, restartId: { type: 'string', minLength: 1, maxLength: 256 },
+    arguments: { type: 'array', items: {}, maxItems: 16 },
+  }); required.push('targetOperationId', 'generation', 'ticket', 'restartId', 'arguments') }
+  if (name === 'lisp_fallback') { Object.assign(properties, {
+    reasonCode:{type:'string',minLength:1,maxLength:256},objective:{type:'string',minLength:1,maxLength:4000},
+    constraints:{type:'array',items:{type:'string',maxLength:1000},maxItems:32},changedFiles:{type:'array',items:{type:'string',maxLength:4096},maxItems:100},
+    completed:{type:'array',items:{type:'string',maxLength:2000},maxItems:100},pending:{type:'array',items:{type:'string',maxLength:2000},maxItems:100},
+    evidenceIds:{type:'array',items:{type:'string',maxLength:256},maxItems:100},uncertainEffects:{type:'array',items:{type:'string',maxLength:2000},maxItems:100},
+    nextSteps:{type:'array',items:{type:'string',maxLength:2000},maxItems:100},
+  }); required.push('reasonCode','objective') }
   if (name === 'lisp_define') { Object.assign(properties, { name: { type: 'string', maxLength: 64 }, description: { type: 'string', maxLength: 1000 }, source: { type: 'string', maxLength: 262144 }, inputSchema: { type: 'object' }, outputSchema: { type: 'object' }, dependencies: { type: 'array', items: { type: 'object' }, maxItems: 32 }, examples: { type: 'array', items: { type: 'object' }, maxItems: 10 }, firstInput: {} }); required.push('name', 'description', 'source', 'inputSchema', 'outputSchema') }
   if (name === 'lisp_call') { Object.assign(properties, { toolRef: { type: 'string', format: 'uuid' }, input: {}, inputRef: { type: 'string', format: 'uuid' }, fields: { type: 'array', items: { type: 'string' }, maxItems: 20 } }); required.push('toolRef') }
   if (name === 'lisp_observe') { Object.assign(properties, { paths: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 100 }, format: { type: 'string', enum: ['text', 'json'] } }); required.push('paths') }

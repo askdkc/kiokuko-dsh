@@ -21,7 +21,7 @@ import { observeProcessResult } from './execution-result.js'
 import { parseTestSummary, type TapSummary } from './node-tap-summary.js'
 import {ExecutionJournal} from './execution-journal.js'
 import {shellArguments} from './execution-command.js'
-import { lispOwnedCommandArgv } from './lisp-tool-identity.js'
+import { lispOwnedCommandArgv, lispOwnedCommandOperation } from './lisp-tool-identity.js'
 import { assertCodingDispatch, assertCodingCommandRetry } from './coding-workflow/service.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
 import { executionRequestAction } from './coding-workflow/intent.js'
@@ -185,14 +185,16 @@ export class OwnedExecutionService {
       saveTaskCompletionReceipt(db,identity.runId)
     })}catch{/* Missing auxiliary evidence never rejects development. */}
   }
-  private async evidence(identity: ExecutionIdentity, receipt: ExecutionReceipt, command: string, lease: TaskLease, execute: () => Promise<unknown>, lispArgv?: readonly string[]): Promise<unknown> {
+  private async evidence(identity: ExecutionIdentity, receipt: ExecutionReceipt, command: string, lease: TaskLease, execute: () => Promise<unknown>, lispArgv?: readonly string[], operation?: unknown): Promise<unknown> {
     let completion = false, memory = false
     let sourcePaths:string[]=[]
     await this.checkAuthority(identity, lease)
     try { await this.host.runtime.withDatabase(db => {
       this.assertAuthority(identity, lease, db)
       completion = beginTaskCompletionExecution(db,{runId:identity.runId,callId:receipt.operationId,command,repositoryRoot:identity.repositoryRoot,cwd:receipt.cwd,
-        ...(lispArgv ? { lispArgv } : {})})
+        ...(lispArgv ? { lispArgv } : {}), ...(operation ? { operation } : {}),
+        receipt:{sessionId:identity.sessionId,agentId:identity.agent.id,
+          environmentDigest:canonicalContentHash({host:'owned-execution',generation:identity.generation,sessionId:identity.sessionId,agentId:identity.agent.id})}})
       if(completion){const method=db.prepare(`SELECT b.method_json FROM dsh_completion_executions e JOIN dsh_completion_bindings b
         ON b.run_id=e.run_id AND b.method_digest=e.method_digest WHERE e.run_id=? AND e.call_id=? LIMIT 1`).get<{method_json:string}>(identity.runId,receipt.operationId)
         if(method)sourcePaths=JSON.parse(method.method_json).sourcePaths}
@@ -515,7 +517,7 @@ export class OwnedExecutionService {
       const preview = safeText(output).slice(-24000); receipt.displayedBytes = Buffer.byteLength(preview)
       // Evidence consumes the full output here, before the public preview.
       return result
-    }, lispOwnedCommandArgv(execution, input.command)).then(result => ({exitCode:receipt.exitCode,output:safeText((result as ReturnType<typeof observeProcessResult>).content[0]!.text).slice(-24000)}))
+    }, lispOwnedCommandArgv(execution, input.command), lispOwnedCommandOperation(execution, input.command)).then(result => ({exitCode:receipt.exitCode,output:safeText((result as ReturnType<typeof observeProcessResult>).content[0]!.text).slice(-24000)}))
     } catch (error) {
       // Before the only launch boundary, cancellation proves that no child ran.
       // Once launch was attempted, preserve unknown outcomes and reconcile them.
