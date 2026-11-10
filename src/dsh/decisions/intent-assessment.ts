@@ -41,7 +41,7 @@ const criteria = [
   ],
   [
     'reference',
-    'Assess the represented relation and selected proposal references against the supplied current-session source. A new request need not have an active Goal or proposal. Same-scope continuation may refer to the active task without a formal Goal. Targets remain those in the original source, not an invented current-directory target; the candidate does not supply a replacement target.',
+    'Assess the represented relation and selected proposal references against the supplied current-session source, including its host-bound workspaceDirectory. A new request need not have an active Goal or proposal. Same-scope continuation may refer to the active task without a formal Goal. For a repository/codebase repair, the host-bound workspace is known context: a reported defect, failing CI run, issue or screenshot can identify the requested outcome without naming an implementation file. The agent should inspect the workspace to locate that file; absence of a named implementation path alone is not insufficient evidence. Preserve explicit targets outside that workspace and genuinely unresolved recipients, deletion targets or deployment environments. The candidate does not replace the source target or grant permission.',
   ],
   [
     'constraints',

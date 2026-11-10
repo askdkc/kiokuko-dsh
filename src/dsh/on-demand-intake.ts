@@ -1,3 +1,4 @@
+import { isNativeSubagent, parentOnlyTaskToolMessage } from './native-subagent.js'
 import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarification-claims.js'
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
 import { isCodingWorkflowStatus } from './coding-workflow/host.js'
@@ -167,6 +168,7 @@ interface Dependencies {
   readonly answerContext?: DshAnswerContext | undefined
   readonly recovery?: AuxiliaryRecovery
   readonly nativeChild?: (agent: DemandAgent) => boolean
+  readonly nativeChildRejection?: (agent: DemandAgent) => string
   readonly validate: (input: DemandInput) => Promise<void>
   /** Positive host authority lookup; unavailable storage must reject, never mean absent. */
   readonly nativeOwnership?: (
@@ -1687,6 +1689,29 @@ export class OnDemandIntake {
     const target = !!executionClarification(state.task, decision, context)
     const transition =
       context?.activeTask && !taskCanExecute(context.activeTask)
+    // Repository identity is already host-bound. A checker disagreement is not
+    // evidence that the human omitted a filename or a goal: return its evidence
+    // to the model for inspection without admitting work or opening a modal.
+    // Concrete missing targets, scope and lifecycle operations still ask below.
+    if (reason.assessment && context?.workspaceDirectory && !target && !scope && !transition) {
+      return {
+        prepared: false,
+        status: 'request_interpretation_required',
+        originalTask: state.task,
+        workspaceDirectory: context.workspaceDirectory,
+        requestIntent: decision,
+        requestInterpretation: requestInterpretationRecovery(decision, context),
+        currentReferences: requestIntentRequiredReferenceIds(context),
+        semantic: state.assessment?.result.semantic,
+        semanticIssues: state.assessment?.result.semanticIssues ?? [],
+        semanticChecks: state.assessment?.result.semanticChecks ?? [],
+        detector: state.assessment?.result.detector,
+        permissions: 'unchanged_native_policy',
+        nextAction: 'submit_current_request_intent',
+        detail:
+          'Review the assessment against the original request and host-bound workspace in the main model. For a repository repair, inspect that workspace and the supplied issue, CI run or screenshot to locate the implementation; do not ask the human to repeat the repository or name a file that inspection can identify. Preserve explicit external targets, exclusions and proposal/lifecycle approval boundaries. Revise the interpretation using current evidence or report a specific conflict; do not repeat an unchanged rejected submission. Ask only if a concrete action or target remains ambiguous after inspection. No execution has been prepared and native permissions remain unchanged.',
+      }
+    }
     const confirmCurrent = reason.assessment && state.assessment?.result.semantic === 'insufficient' &&
       !!decision && mayConfirmRequestInterpretation(decision) && !(decision.relation === 'same_scope_continuation' && context?.proposals.length) && !target && !scope && !transition
     const confirmLabel = 'この依頼の対象・操作・制約のまま進める'
@@ -2655,8 +2680,9 @@ export class OnDemandIntake {
       const dispose = systemPrompt.section({
         name: 'kiokuko:on-demand-intake',
         order: -99999,
-        text:
-          'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' +
+        text: ({ agent }: { agent?: DemandAgent }) => agent && isNativeSubagent(agent)
+          ? 'Delegated work uses the host-reserved parent task authority. Do not call prepare_requested_work or task_operation: both are parent-only and cannot repair child ownership. If an effect is denied, report its exact reason to the parent; do not retry intake or change identity.'
+          : 'On-demand host contract: text answers do not require execution intake. The public prepare_requested_work tool accepts an advisory taskType or a source-bound requestIntent; task_prepare/task_answer remain host-only. ' +
           ON_DEMAND_GUIDANCE,
       })
       this.#guidanceInSystemPrompt = true
@@ -2666,7 +2692,7 @@ export class OnDemandIntake {
       name: TASK_PREPARE_TOOL,
       modelFacing: true,
       description:
-        'Prepare the exact original user request for tool-backed work. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
+        'Parent-only: prepare the exact original user request for tool-backed work. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
       parameters: {
         ...JSON.parse(JSON.stringify(z.toJSONSchema(preparationFieldsSchema))),
         anyOf: [{ required: ['taskType'] }, { required: ['requestIntent'] }],
@@ -2678,6 +2704,7 @@ export class OnDemandIntake {
         ],
       },
       execute: async (args: unknown, execution: Execution) => {
+        if (execution.agent && isNativeSubagent(execution.agent)) throw new Error(parentOnlyTaskToolMessage(TASK_PREPARE_TOOL))
         const state = this.bound(execution)
         const value = parsePreparationRequest(args)
         if (
@@ -2859,6 +2886,10 @@ export class OnDemandIntake {
         async (execution: Execution, next: () => Promise<any>) => {
           if (this.#stopped || execution.signal.aborted)
             return denied('On-demand intake is stopped or cancelled')
+          if (execution.agent && isNativeSubagent(execution.agent) && [TASK_PREPARE_TOOL, 'task_operation'].includes(execution.name))
+            return denied(parentOnlyTaskToolMessage(execution.name))
+          if (execution.agent && isNativeSubagent(execution.agent) && this.host.nativeChild && !this.host.nativeChild(execution.agent))
+            return denied(this.host.nativeChildRejection?.(execution.agent) ?? 'Native child runtime identity mismatch [runtime_identity_mismatch]')
           if (execution.agent && this.host.nativeChild?.(execution.agent)) {
             const decision = await next()
             return decision?.kind === 'cancel'
@@ -3327,6 +3358,10 @@ export class OnDemandIntake {
       tools.guard((execution) => {
         if (this.#stopped || execution.signal.aborted)
           return 'On-demand intake is stopped or cancelled'
+        if (execution.agent && isNativeSubagent(execution.agent) && [TASK_PREPARE_TOOL, 'task_operation'].includes(execution.name))
+          return parentOnlyTaskToolMessage(execution.name)
+        if (execution.agent && isNativeSubagent(execution.agent) && this.host.nativeChild && !this.host.nativeChild(execution.agent))
+          return this.host.nativeChildRejection?.(execution.agent) ?? 'Native child runtime identity mismatch [runtime_identity_mismatch]'
         if (execution.agent && this.host.nativeChild?.(execution.agent))
           return undefined
         if (this.isControl(execution)) return undefined

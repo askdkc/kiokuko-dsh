@@ -108,6 +108,58 @@ test('an auxiliary abstention does not ask users to repeat a concrete request', 
   assert.equal(f.admissions.length, 0)
 })
 
+// Fault-injected assessment routing; ordinary healthy main-model abstention is
+// already advisory. These doubles exercise rejected candidates, not model quality.
+for (const semantic of ['insufficient', 'contradicted'] as const) {
+  test(`workspace repair: ${semantic} assessment returns evidence to the model, not a generic target question`, async t => {
+    const task = 'https://github.com/askdkc/dsh-cli/actions/runs/42802248754\n\nci fails. fix this.'
+    const message = human('workspace-ci-repair', task)
+    const context = createRequestIntentContext({ task, workspaceDirectory: '/work/dsh-cli',
+      messageRefs: requestIntentMessageRefs([message], task) })!
+    let supported = false
+    let asks = 0
+    const f = await fixture(t, {
+      nativeOwnership: async () => 'unowned',
+      requestContext: async () => context,
+      interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'provider_abstained') }),
+      assess: async () => ({ semantic: supported ? 'supported' : semantic,
+        semanticIssues: supported ? [] : ['reference'], semanticInputDigest: 'a'.repeat(64),
+        detector: { state: 'available', result: { status: supported ? 'entailed' : semantic === 'contradicted' ? 'refuted' : 'undetermined', complete: true }, elapsedMs: 0 },
+        outcome: supported ? 'consistent' : 'clarify' }) as any,
+      questions: { async ask(request) { asks++; return { answers: [{ id: request.questions[0].id, selected: [] }] } } },
+    })
+    ;(f.agent as any).inject = () => assert.fail('No fabricated human answer')
+    await f.capture([message])
+    const args = { requestIntent: { relation: 'new', action: 'change', changeScope: 'implementation',
+      evidenceRefs: requestIntentReferenceIds(context) } }
+    for (let i = 0; i < 2; i++) {
+      const result = await f.execute(TASK_PREPARE_TOOL, args)
+      assert.equal(result.value.status, 'request_interpretation_required')
+      assert.equal(result.value.semantic, semantic)
+      assert.deepEqual(result.value.semanticIssues, ['reference'])
+      assert.equal(result.value.workspaceDirectory, '/work/dsh-cli')
+      assert.equal(result.value.originalTask, task)
+      assert.equal(result.value.prepared, false)
+      assert.equal(result.value.permissions, 'unchanged_native_policy')
+      assert.equal(f.intake.awaitingClarification(f.agent), false)
+    }
+    assert.equal(asks, 0)
+    assert.equal(f.admissions.length, 0, 'checker conflict is not silently accepted')
+    assert.equal((await f.execute('review_probe')).isError, true)
+    assert.equal(f.bodies(), 0)
+    // New current-source evidence may resolve the disagreement without a native-answer receipt.
+    supported = true
+    const next = human('workspace-ci-evidence', 'The failing run belongs to this workspace; repair the failing test without weakening it.')
+    context.task += '\n' + next.content[0]!.text
+    context.messageRefs = requestIntentMessageRefs([message, next], context.task)
+    await f.capture([message, next])
+    const prepared = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { ...args.requestIntent,
+      evidenceRefs: requestIntentReferenceIds(context) } })
+    assert.equal(prepared.value.prepared, true)
+    assert.equal(asks, 0)
+  })
+}
+
 test('ordinary native requests reach Akinator when the action target is missing', async t => {
   const asked: string[] = []
   const f = await fixture(t, {

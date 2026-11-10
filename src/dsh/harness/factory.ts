@@ -8,6 +8,7 @@ import { appendPluginRecord, interruptedTurnClosers, ToolCallRecovery, type Sess
   type TurnEndReason, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { renderPrompt, renderContextSections, joinContextSections } from '@deepseek-ai/dsh-system-prompt'
 import { KiokukoInbox } from './inbox.js'
+import { normalizeModelStreamFailure } from './model-stream-failure.js'
 import { KiokukoHarnessLifecycle } from './lifecycle.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
 import { memoryFailureDiagnostic } from '../memory-failure.js'
@@ -293,7 +294,11 @@ export class KiokukoHarnessAgent implements Agent {
       signal.throwIfAborted()
       const content=assembler.blocks(), stream=[...accumulator.snapshot()]
       const finish=assembler.finish
-      if(finish.kind==='error'||finish.kind==='aborted')throw new LlmError(memoryFailureDiagnostic(finish.failure).message,finish.failure.code,finish.failure)
+      if(finish.kind==='error'||finish.kind==='aborted') {
+        // Classify only failed model output, before any tool effect is admitted.
+        const failure=finish.kind==='error'?normalizeModelStreamFailure(finish.failure):finish.failure
+        throw new LlmError(memoryFailureDiagnostic(failure).message,failure.code,failure)
+      }
       const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
       // Some providers put unfinished reasoning in text blocks even with a
       // normal stop. Keep that stream in the attempt log, outside prompt history.

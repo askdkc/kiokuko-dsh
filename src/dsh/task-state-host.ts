@@ -25,7 +25,7 @@ import { observedTaskCompletionEvidence } from "./owned-completion-evidence.js";
 import { assessTaskCompletion } from "./task-completion.js";
 import { stopTaskNativeChildren } from "./native-task-authority.js";
 import { stopTaskOwnedExecutions } from "./owned-execution.js";
-import { isNativeSubagent } from "./native-subagent.js";
+import { isNativeSubagent, parentOnlyTaskToolMessage } from "./native-subagent.js";
 import type { LispAssemblyService } from "./lisp/request-surface.js";
 import type { OnDemandIntake } from "./on-demand-intake.js";
 import {
@@ -137,6 +137,7 @@ export class DshTaskWorkflow {
   #closed = false;
   constructor(private readonly options: HostOptions) {}
   private current(agent: TaskNativeAgent): void {
+    if (agent && isNativeSubagent(agent)) throw new KiokukoError('CONFLICT', parentOnlyTaskToolMessage(TASK_OPERATION_TOOL));
     if (
       this.#closed ||
       !agent?.session ||
@@ -406,6 +407,7 @@ export class DshTaskWorkflow {
       concludeTurn?: () => void;
     },
   ): Promise<TaskSnapshot> {
+    this.current(agent);
     const input = TaskModelOperationSchema.parse(raw);
     const operation: TaskUiOperation =
       input.operation === "create"

@@ -576,6 +576,7 @@ export async function mountCore(
     defaults: () => readStartupDefaults(ctx, config.startupDefaults),
     lisp: () => get(LISP_CODING_SERVICE) as LispCodingService | undefined })
   const startupConversationGate = createStartupConversationGate(decisions)
+  let childTaskAuthority: NativeTaskAuthority | undefined
   const demand = new OnDemandIntake(
     {
       startupGate: (input, task) =>
@@ -681,6 +682,7 @@ export async function mountCore(
           active.delete(session.id)
         return ownership
       },
+      nativeChildRejection: (agent) => childTaskAuthority?.unregisteredChildReason(agent as NativeAgent) ?? 'Native child authority is unavailable [authority_unavailable]',
       nativeChild: (agent) =>
         agents?.get(agent.id) === agent &&
         sessions?.get(agent.session?.id) === agent.session &&
@@ -1717,6 +1719,7 @@ export async function mountCore(
         resolveParent: resolveParentOwned,
         onLifecycle: (name, listener) => (ctx as any).on(name, listener, { global: true }),
       })
+      childTaskAuthority = nativeTaskAuthority
       disposers.push(() => nativeTaskAuthority.dispose())
       const resolveOwned = (execution: any) =>
         nativeTaskAuthority.resolve(execution) ?? resolveParentOwned(execution)

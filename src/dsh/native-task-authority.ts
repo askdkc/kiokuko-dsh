@@ -20,6 +20,14 @@ interface Options {
   onLifecycle?(name: 'subagent/start', listener: (event: ActivationEvent) => void): () => void
   onLifecycle?(name: 'subagent/end', listener: (event: ActivationEvent & { stopReason: string }) => void): () => void
 }
+export type NativeChildAuthorityReason = 'authority_disposed' | 'launch_not_reserved' | 'launch_failed' | 'stop_requested' | 'activation_ended' | 'runtime_identity_mismatch' | 'parent_mismatch' | 'workspace_mismatch' | 'activation_mismatch' | 'runtime_owner_mismatch' | 'task_owner_changed'
+
+// The native tool pipeline retains this reason in its failed tool result. Keep it
+// in the message as well as details: some executors serialize only Error.message.
+function authorityDenied(reason: NativeChildAuthorityReason, detail: string): KiokukoError {
+  return new KiokukoError('CONFLICT', `No current admitted execution owner: ${detail} [${reason}]. Report this reason to the parent; child intake cannot restore authority.`, { reason })
+}
+
 type Proof = { parent: Agent; root?: { agent: Agent; identity: ExecutionIdentity }; identity: ExecutionIdentity; lease: TaskLease; child?: Agent; live: boolean; completed?: boolean; launch?: Promise<any>; stopRequested?: boolean; stop?: Promise<boolean>; activation?: string; ended?: boolean; continuation?: string; settlement?: Promise<void> }
 
 /** A caller may leave a stop wait; the host must still track its cleanup. */
@@ -162,7 +170,15 @@ export class NativeTaskAuthority {
   }
   private exact(agent: Agent): void {
     if (!agent.session || this.options.agents?.get(agent.id) !== agent || this.options.sessions?.get(agent.session.id) !== agent.session)
-      throw new KiokukoError('CONFLICT', 'Native child runtime identity changed')
+      throw authorityDenied('runtime_identity_mismatch', 'Native child runtime identity changed')
+  }
+  /** Explain an already denied registry lookup; this never grants or binds authority. */
+  unregisteredChildReason(agent: Agent): string {
+    const proof = agent.session && (this.active.get(agent.session.id) ?? this.proofs.get(agent.session.id))
+    const reason = !proof ? 'launch_not_reserved'
+      : proof.child === agent && (proof.ended || proof.completed) ? 'activation_ended'
+      : 'runtime_identity_mismatch'
+    return authorityDenied(reason, 'Native child is not the current registered runtime').message
   }
   private same(left: ExecutionIdentity, right: ExecutionIdentity): boolean {
     return left.agent === right.agent && left.runId === right.runId && left.sessionId === right.sessionId
@@ -173,20 +189,27 @@ export class NativeTaskAuthority {
     if (!agent?.session || !isNativeSubagent(agent)) return undefined
     const original = this.proofs.get(agent.session.id)
     const proof = this.active.get(agent.session.id) ?? original
-    if (this.stopped || !proof?.live || proof.ended || proof.stopRequested || original?.stopRequested) return undefined
+    if (this.stopped) throw authorityDenied('authority_disposed', 'Native task authority disposed')
+    if (!proof) throw authorityDenied('launch_not_reserved', 'Native child launch was not reserved by this host')
+    if (!proof.live) throw authorityDenied('launch_failed', 'Native child launch failed')
+    if (proof.stopRequested || original?.stopRequested) throw authorityDenied('stop_requested', 'Native child stop requested')
+    if (proof.ended || proof.completed) throw authorityDenied('activation_ended', 'Native child activation ended')
     this.exact(agent)
-    if (!this.local(agent) || agent.session.header?.parentSession !== proof.parent.session!.id || proof.child && proof.child !== agent)
-      throw new KiokukoError('CONFLICT', 'Native child lineage changed')
+    if (!this.local(agent)) throw authorityDenied('workspace_mismatch', 'Native child workspace changed')
+    if (agent.session.header?.parentSession !== proof.parent.session!.id)
+      throw authorityDenied('parent_mismatch', 'Native child lineage changed')
+    if (proof.child && proof.child !== agent)
+      throw authorityDenied('activation_mismatch', 'Native child activation changed')
     proof.child ??= agent
     const published = proof.activation ? proof.root : undefined
     const owner = published?.agent ?? proof.parent
     this.exact(owner)
     if (proof.activation && this.options.backend?.rootOf?.(agent) !== owner)
-      throw new KiokukoError('CONFLICT', 'Native child runtime owner changed')
+      throw authorityDenied('runtime_owner_mismatch', 'Native child runtime owner changed')
     const ownerExecution: Execution = { agent: owner }
     const current = this.resolve(ownerExecution) ?? this.options.resolveParent(ownerExecution)
     if (!current || !this.same(published?.identity ?? proof.identity, current))
-      throw new KiokukoError('CONFLICT', 'Native child task owner changed')
+      throw authorityDenied('task_owner_changed', 'Native child task owner changed')
     execution[TASK_AUTHORITY] = proof.lease
     return { ...proof.identity, sessionId: agent.session.id, workflowSessionId: proof.lease.sessionId, agent }
   }

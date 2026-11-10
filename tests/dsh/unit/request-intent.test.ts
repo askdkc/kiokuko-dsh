@@ -51,6 +51,17 @@ test('current workspace reaches interpretation and a workspace switch invalidate
     'knowing the workspace alone must not invent a specific missing target')
 })
 
+for (const task of ['Delete this', 'Send it', 'Deploy that', 'これを削除して']) {
+  test(`a known workspace does not resolve an operational target: ${task}`, () => {
+    const context = createRequestIntentContext({ task, workspaceDirectory: '/work/current',
+      messageRefs: requestIntentMessageRefs([], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'operate',
+      evidenceRefs: requestIntentRequiredReferenceIds(context) }, context)!
+    assert.ok(decision)
+    assert.ok(executionClarification(task, decision, context))
+  })
+}
+
 const context = createRequestIntentContext({
   task,
   messageRefs: requestIntentMessageRefs([], task),

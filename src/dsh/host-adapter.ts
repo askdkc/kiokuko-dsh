@@ -929,6 +929,7 @@ export function createDshHostAdapter(
                 turnState.releaseRun(current.runId, current.authority);
               return ownership;
             },
+            nativeChildRejection: (agent) => nativeTaskAuthority.unregisteredChildReason(agent as NativeAgent),
             nativeChild: (agent) =>
               agents?.get(agent.id) === agent &&
               sessions?.get(agent.session?.id ?? "") === agent.session &&

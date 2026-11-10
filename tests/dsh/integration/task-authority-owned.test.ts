@@ -183,10 +183,14 @@ test('native children require host spawn proof and retain the original parent au
   const exec = (agent:any,name:string,args:any,id:string) => service.execute(name,args,{agent,name,arguments:args,callId:id,signal:new AbortController().signal}) as Promise<any>
   try {
     const fake = create('forged-lineage')
-    await assert.rejects(exec(fake,'kioku_write',{path:'forged',content:'no'},'fake'),/No current/)
+    await assert.rejects(exec(fake,'kioku_write',{path:'forged',content:'no'},'fake'),/launch_not_reserved/)
     const first = await backend.startActivation({provider:'spawn',delivery:'parent',request:{parent},signal:new AbortController().signal})
     const child = agents.get(`agent:${first.childId}`)
     assert.equal((await exec(child,'kioku_write',{path:'child.txt',content:'yes'},'child')).applied,true)
+    child.session.header.parentSession = 'different-parent'
+    await assert.rejects(exec(child,'kioku_write',{path:'wrong-parent',content:'no'},'wrong-parent'), /parent_mismatch/)
+    child.session.header.parentSession = parent.session.id
+    assert.equal((await exec(child,'kioku_write',{path:'restored-parent.txt',content:'still-authorized'},'restored-parent')).applied,true)
     f.state('Pending');f.state('Working')
     await assert.rejects(exec(child,'kioku_write',{path:'stale-child.txt',content:'no'},'stale'),/stale/)
     await assert.rejects(backend.startActivation({provider:'spawn',delivery:'parent',request:{parent:child},signal:new AbortController().signal}),/stale/)
@@ -205,7 +209,7 @@ test('native children require host spawn proof and retain the original parent au
     authority.dispose()
     assert.equal(await stopTaskNativeChildren(f.runtime,{taskId:f.identity.runId,repositoryRoot:f.root}),false,'restart/absence is not stopped proof')
     assert.equal(backend.startActivation,original)
-    await assert.rejects(exec(newChild,'kioku_write',{path:'after-reload',content:'no'},'reload'),/No current/)
+    await assert.rejects(exec(newChild,'kioku_write',{path:'after-reload',content:'no'},'reload'),/authority_disposed/)
   } finally {authority.dispose();await service.close();await f.cleanup()}
 })
 

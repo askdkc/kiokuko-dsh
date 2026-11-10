@@ -69,7 +69,7 @@ export function mountTaskWorkflowSurface(ctx: Context, service: DshTaskWorkflow,
   if (commands?.register) disposers.push(commands.register(taskWorkflowCommand(service)))
   if (tools?.register && demand) {
     const definition = { name: TASK_OPERATION_TOOL,
-      description: 'Explicit structured operation on the exact current SQLite task. Read its current taskId, revision, generation and allowedOps. Create uses the original human request; it accepts no rewritten request. State changes do not grant native permission. Explicit completion and stop require current host-observed evidence. Ordinary coding can end with a report of observed results and unverified checks. If only run_code is exposed, use only return await tools.task_operation(<one JSON object>) as the entire code; the host intercepts it without program evaluation.',
+      description: 'Parent-only: explicit structured operation on the exact current SQLite task. Read its current taskId, revision, generation and allowedOps. Create uses the original human request; it accepts no rewritten request. State changes do not grant native permission. Explicit completion and stop require current host-observed evidence. Ordinary coding can end with a report of observed results and unverified checks. If only run_code is exposed, use only return await tools.task_operation(<one JSON object>) as the entire code; the host intercepts it without program evaluation.',
       parameters: { ...JSON.parse(JSON.stringify(z.toJSONSchema(TaskModelOperationSchema))), type: 'object' },
       output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: (args: unknown, execution: any) => service.modelOperation(execution.agent, args, execution),

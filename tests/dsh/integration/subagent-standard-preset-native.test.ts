@@ -1,3 +1,4 @@
+import { executeNativeTool } from '../helpers/native-tools.js'
 import { continuableSessionIds } from '../helpers/subagent-receipts.js'
 import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import {fixtureDefinition,toolValue,interpretedPreparation} from '../helpers/coding-script.js'
@@ -42,7 +43,7 @@ async function waitBounded(promise: Promise<unknown>, failure: string): Promise<
     await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), 10_000) })])
   } finally { if (timer) clearTimeout(timer) }
 }
-for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
+for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'authority'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
@@ -61,6 +62,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
   const parallel = mode === 'parallel' || mode === 'parallel-staggered'
   try {
     await mkdir(repository)
+    await writeFile(join(repository, 'authority.txt'), 'original')
     await mkdir(profileDir, { recursive: true })
     const base = join(packageRoot, '@deepseek-ai/dsh-base')
     const web = join(packageRoot, '@deepseek-ai/dsh-web-app')
@@ -117,6 +119,15 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     ctx.on('subagent/start', (info: any) => { started.push({ ...info, header: ctx.sessions.get(info.id)?.header }) })
     ctx.on('subagent/end', (info: any) => { ended.push(info); if (ended.length === (parallel ? 2 : 1)) finishChildren() })
     let parentRequests = 0
+    let childStep = 0
+    const childAgents: any[] = [], authorityResults: any[] = []
+    let continuationDone!: () => void
+    const continuationFinished = new Promise<void>(resolve => { continuationDone = resolve })
+    ctx.on('subagent/start', (event: any) => { childStep = 0; childAgents.push(ctx.agents.get(event.id)) })
+    ctx.on('subagent/end', () => { if (ended.length === 2) continuationDone() })
+    const invoke = (agent: any, name: string, args: any, callId: string) => executeNativeTool(ctx, packageRoot, {
+      agent, name, arguments: args, callId, signal: new AbortController().signal,
+    })
     class ScriptedAdapter extends llm.LlmAdapter {
       async listModels(provider: string) { return [{ provider, id: 'mock', name: 'mock' }] }
       async resolveModel(provider: string, model: string) { return { provider, id: model, name: model } }
@@ -124,6 +135,20 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         if (options.purpose === 'akinator-expected') { yield* mock.textResponse('{"expected":null}'); return }
         requests.push(options)
         const child = options.sessionId !== 'standard-parent'
+        if (child && mode === 'authority') {
+          if (++childStep === 1) {
+            yield* mock.toolCallResponse(`edit-${started.length}`, 'kioku_edit', {
+              path: 'authority.txt', oldText: started.length === 1 ? 'original' : 'first', newText: started.length === 1 ? 'first' : 'resumed',
+            }); return
+          }
+          const agent = ctx.agents.get(options.sessionId)
+          for (const [name, args] of [[TASK_PREPARE_TOOL, { taskType: 'build' }], ['task_operation', { operation: 'create', taskType: 'build' }]] as const) {
+            authorityResults.push({ name, result: await invoke(agent, name, args, `child-${name}-${started.length}`) })
+          }
+          const forged = { id: agent.id, session: agent.session, ctx: agent.ctx }
+          authorityResults.push({ name: 'forged', result: await invoke(forged, 'kioku_write', { path: 'authority.txt', content: 'forged' }, `forged-${started.length}`) })
+          yield* mock.textResponse('CHILD_COMPLETE'); return
+        }
         if (child && mode === 'failure') throw new Error('child fixture failure')
         if (child && parallel) {
           const childRequest = ++childRequests
@@ -151,7 +176,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
           : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
           : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
           : parallel && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
-          : (mode === 'foreground' || mode === 'failure') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
+          : (mode === 'foreground' || mode === 'failure' || mode === 'authority') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
           : mock.textResponse('PARENT_COMPLETE')
         for (const chunk of chunks) yield chunk
       }
@@ -243,6 +268,35 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       const seed = JSON.stringify(requests.find(request => request.sessionId !== 'standard-parent')?.messages)
       assert.match(seed, /PARENT_SEED/)
       assert.doesNotMatch(seed, /Implement a bounded change using a subagent\./)
+    }
+    if (mode === 'authority') {
+      assert.equal(readFileSync(join(repository, 'authority.txt'), 'utf8'), 'first', 'first child effect needs no child intake')
+      authorityResults.push({ name: 'ended', result: await invoke(childAgents[0], 'kioku_write', { path: 'authority.txt', content: 'ended' }, 'ended-child') })
+      await ctx.subagents.sendMessage(parent.agent, started[0].id, [{ type: 'text', text: 'Continue the delegated edit.' }],
+        { delivery: 'queue', signal: new AbortController().signal })
+      await waitBounded(continuationFinished, 'Resumed child did not settle')
+      assert.equal(readFileSync(join(repository, 'authority.txt'), 'utf8'), 'resumed', 'first resumed effect uses the original task lease')
+      const unregistered = await ctx.agents.create({ sessionId: session.SessionId('unregistered-child'),
+        agentOptions: { provider: 'mock', model: 'mock' },
+        meta: { cwd: repository, origin: 'subagent', parentSession: parent.agent.session.id, delegationDepth: 1 },
+        setup: (agentCtx: any) => ctx.agentPresets.mount(agentCtx, 'standard').then(() => undefined) })
+      try {
+        authorityResults.push({ name: 'unregistered', result: await invoke(unregistered.agent, 'kioku_write', { path: 'authority.txt', content: 'unregistered' }, 'unregistered-edit') })
+      } finally { await unregistered.dispose() }
+      assert.equal(authorityResults.length, 8, 'both activations probe parent tools and forgery, plus ended and unregistered edits')
+      for (const { name, result } of authorityResults) {
+        assert.equal(result.isError, true, JSON.stringify({ name, result }))
+        assert.match(JSON.stringify(result), name === 'forged' ? /runtime_identity_mismatch/ : name === 'ended' ? /activation_ended/ : name === 'unregistered' ? /launch_not_reserved/ : /parent-only/, name)
+      }
+      for (const request of requests.filter(request => request.sessionId !== 'standard-parent')) {
+        for (const tool of request.tools?.filter((tool: any) => [TASK_PREPARE_TOOL, 'task_operation'].includes(tool.name)) ?? []) {
+          assert.match(tool.description, /Parent-only/, 'schema must not suggest these tools recover child authority')
+        }
+        const system = JSON.stringify(request.messages.filter((message: any) => message.role === 'system'))
+        assert.match(system, /Delegated work uses the host-reserved parent task authority/)
+        assert.doesNotMatch(system, /The public prepare_requested_work tool accepts/)
+      }
+      assert.equal(readFileSync(join(repository, 'authority.txt'), 'utf8'), 'resumed', 'all rejected edits leave content unchanged')
     }
     if (parallel) {
       await parent.agent.whenIdle()
