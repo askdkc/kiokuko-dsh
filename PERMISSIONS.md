@@ -193,7 +193,7 @@ saved in SQLite and outrank the default, so a saved refusal keeps that session
 unrecorded; with `askOnStart: true`, skip/cancel or unavailable UI continues
 without recording.
 Set it to `false` and reload to disable the feature. The runtime dependency
-`agenticreplay` uses `>=0.1.0 <1.0.0` and installs automatically through npm.
+`agenticreplay` follows npm's `latest` tag; lockfiles retain their resolution until explicitly updated.
 Kiokuko resolves its bundled core, schema and viewer libraries from that package. No extra installer,
 startup subprocess, automatic package repair, or network transmission is added.
 The dependencies are Apache-2.0; the [upstream license](docs/AGENTICREPLAY-LICENSE.txt)

@@ -6,11 +6,11 @@ another DSH. The ordinary npm dependency
 `@agenticreplay/core`, `@agenticreplay/schema`, and `@agenticreplay/viewer` libraries.
 Node resolves them from that distribution without fixed installation paths.
 Kiokuko calls the libraries in process; it does not launch the CLI or install packages at startup.
-The supported range is `>=0.1.0 <1.0.0`: patch and minor releases in the pre-1.0
-API family, including 0.1.2 and 0.2.0, can be selected by a dependency update
-without editing Kiokuko's dependency range. Prereleases and 1.0+ are excluded.
-Lockfiles retain the tested resolution; installing or restarting does not update
-it automatically. A permitted range is not proof of future API compatibility.
+The dependency follows npm's `latest` tag for fresh installations. Existing
+installations and repository lockfiles retain their resolution until an explicit
+dependency update; restarting does not update it. Both repository lockfiles
+currently resolve 0.1.18. New releases must pass the recording, reading and
+package-consumer checks before they can be described as tested.
 The trace manifest records the installed core version.
 Each recorded final model request also includes a bounded manifest of host-owned
 context sections still present in that request: section ID, digest, byte count,

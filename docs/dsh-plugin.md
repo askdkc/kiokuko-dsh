@@ -182,8 +182,7 @@ For an npm-installed Kiokuko, update the plugin itself:
 dsh plugin --profile web update kiokuko-dsh --latest
 ```
 
-The `agenticreplay` distribution uses `>=0.1.0 <1.0.0`. This includes future patch and minor
-releases such as 0.1.2 and 0.2.0 without changing Kiokuko's dependency declarations.
+The `agenticreplay` distribution follows npm's `latest` tag for fresh installations.
 Lockfiles keep the tested versions until you explicitly update dependencies:
 
 ```bash
@@ -193,8 +192,8 @@ dsh web
 ```
 
 The package supplies the bundled recording libraries; `--depth Infinity`
-selects the indirect AgenticReplay dependency. Prereleases and 1.0+ are excluded. The range
-does not guarantee future API compatibility. After restarting, check a new
+selects the indirect AgenticReplay dependency. The tag does not guarantee future
+API compatibility. After restarting, check a new
 recording with `/kioku-agenticreplay list`, `show`, and `export`.
 When upgrading from OrcaReplay, rename explicit `orca` settings to `agenticReplay`
 first. Saved session choices are preserved; legacy recordings are retained but

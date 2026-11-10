@@ -108,8 +108,8 @@ These are the full-package defaults. The [configured core and optional modules](
 
 Startup also refreshes an existing Kiokuko managed block in the startup directory’s `AGENTS.md`, preserving your other instructions. Restart DSH after updating the package. See [setup and verification](docs/dsh-plugin.md#what-setup-updates-and-when) for another workspace or stale copies; `kiokuko use` is not the DSH setup command.
 
-The `agenticreplay` distribution uses `>=0.1.0 <1.0.0`, so future patch and minor releases
-can be installed by an explicit dependency update without changing the range.
+The `agenticreplay` distribution follows npm's `latest` tag for fresh installations.
+Existing installations select a newer release through an explicit dependency update.
 Lockfiles retain the tested versions until updated. Restart DSH afterward.
 When upgrading from OrcaReplay, rename explicit `orca` settings to `agenticReplay`;
 saved session choices survive and legacy traces are retained but not imported.

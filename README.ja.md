@@ -109,8 +109,8 @@ pnpm dsh plugin --profile dsh-cli add kiokuko-dsh@latest
 
 起動時には、起動ディレクトリの `AGENTS.md` にある既存の Kiokuko 管理ブロックも更新し、その外側の指示は保持します。パッケージ更新後は DSH を再起動してください。別の作業ディレクトリや配備コピーの確認・修復は[セットアップ手順](docs/dsh-plugin.md#what-setup-updates-and-when)を参照してください。`kiokuko use` は DSH のセットアップコマンドではありません。
 
-`agenticreplay` パッケージは `>=0.1.0 <1.0.0` を指定しています。今後のパッチ版・マイナー版は
-依存範囲を変えずに更新できます。ロックファイルは明示的に更新するまで検証済みの版を保持します。
+`agenticreplay` パッケージは `latest` を指定し、新規インストールでは npm の最新版に追従します。
+既存環境では依存関係を明示的に更新します。ロックファイルは更新するまで検証済みの版を保持します。
 更新後は DSH を再起動してください。OrcaReplay から更新する際は、明示的な `orca` 設定を
 `agenticReplay` に変更します。保存済みの記録設定は引き継ぎ、旧ログは保持しますが取り込みません。
 [更新の詳細](docs/dsh-plugin.md#update) · [記録機能の移行](docs/agenticreplay-recording.md#upgrade-from-orcareplay)

@@ -94,14 +94,8 @@ test('dsh bundle manifest has one named Kiokuko Cordis row and no default export
     const cordis = JSON.parse(await readFile(join(fixtureRoot, 'node_modules/@deepseek-ai/cordis/package.json'), 'utf8'))
     const cordisRange = packageManifest.peerDependencies?.['@deepseek-ai/cordis']
     assert.ok(cordisRange && satisfies(cordis.version, cordisRange, { includePrerelease: true }), 'the published peer range must admit the Cordis version used by native tests')
-    for (const name of ['agenticreplay']) {
-      const range = packageManifest.dependencies?.[name]
-      assert.ok(range, `${name} must be installed as a runtime dependency`)
-      for (const version of ['0.1.2', '0.2.0']) {
-        assert.ok(satisfies(version, range), `${name} must admit ${version} without editing Kiokuko`)
-      }
-      assert.equal(satisfies('1.0.0', range), false, `${name} major API changes require an explicit review`)
-    }
+    assert.equal(packageManifest.dependencies?.agenticreplay, 'latest',
+      'fresh consumers must follow the published AgenticReplay latest tag')
     assert.ok(!Object.keys(packageManifest.dependencies ?? {}).some(name => name.startsWith('@agenticreplay/')),
       'libraries are resolved from the published distribution, not independently installed')
 

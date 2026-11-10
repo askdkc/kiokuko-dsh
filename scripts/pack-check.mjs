@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { Script } from 'node:vm'
-import { satisfies, subset, validRange } from 'semver'
+import { satisfies, valid, validRange } from 'semver'
 
 const exec = promisify(execFile)
 const checkStarted = performance.now()
@@ -497,9 +497,8 @@ try {
   }
   for (const name of ['agenticreplay']) {
     const range = packageManifest.dependencies?.[name]
-    if (typeof range !== 'string' || !validRange(range) || !subset(range, '>=0.1.0 <1.0.0') ||
-        !satisfies('0.1.2', range) || !satisfies('0.2.0', range)) {
-      throw new Error(`${name} must admit future patch and minor releases within the pre-1.0 dependency range`)
+    if (range !== 'latest') {
+      throw new Error(`${name} must track the published latest distribution`)
     }
     const entry = npmLock.packages[`node_modules/${name}`]
     const pnpmEntry = pnpmLock.importers['.'].dependencies[name]
@@ -507,7 +506,7 @@ try {
       throw new Error(`${name} has no published resolution in both lockfiles`)
     }
     if (npmLock.packages[''].dependencies[name] !== range || pnpmEntry?.specifier !== range ||
-        typeof entry?.version !== 'string' || !satisfies(entry.version, range) || pnpmEntry.version !== entry.version ||
+        typeof entry?.version !== 'string' || !valid(entry.version) || pnpmEntry.version !== entry.version ||
         typeof entry.integrity !== 'string' || entry.integrity !== pnpmLock.packages[`${name}@${entry.version}`]?.resolution?.integrity) {
       throw new Error(`${name} lockfile tarball integrity mismatch`)
     }

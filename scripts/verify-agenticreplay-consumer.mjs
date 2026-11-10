@@ -37,6 +37,12 @@ import { Config, DshRuntime, DshAgenticReplayStore, DshAgenticReplayRecorder, Ds
 const plugin = createRequire(import.meta.resolve('kiokuko-dsh/dsh'));
 const distribution = createRequire(plugin.resolve('agenticreplay'));
 const coreEntry = distribution.resolve('@agenticreplay/core');
+const schema = createRequire(distribution.resolve('@agenticreplay/schema'));
+const ajv = createRequire(schema.resolve('ajv'));
+const { gte } = plugin('semver');
+const fastUriVersion = ajv('fast-uri/package.json').version;
+assert.ok(gte(fastUriVersion, '3.1.9'), 'the installed AJV must resolve patched fast-uri');
+const distributionVersion = JSON.parse(await readFile(findPackageJSON('agenticreplay', plugin.resolve('agenticreplay')), 'utf8')).version;
 const { TraceReader } = await import(pathToFileURL(coreEntry).href);
 const { buildTimeline, exportTraceHtml } = await import(pathToFileURL(distribution.resolve('@agenticreplay/viewer')).href);
 const root = join(process.cwd(), 'workspace'); await mkdir(root);
@@ -53,7 +59,7 @@ try {
     'https://example.invalid/?token=FAKEONLY_DUMMY_CREDENTIAL&token_count=3#keep',
   ];
   const benign = 'ordinary-visible-evidence keyboard=mechanical token_budget=4096';
-  const body = samples.join('\\n')+'\\n'+benign;
+  const body = samples.join('\\n')+'\\n'+benign.repeat(800);
   for await (const chunk of recorder.stream(binding, { provider: 'fixture', model: 'fixture', system:body, messages:[{role:'user',content:[{type:'text',text:body}]}] }, async function* () {
     yield { type: 'text-delta', index: 0, text: body }; yield { type: 'finish', reason: { kind: 'stop' } };
   })) {}
@@ -69,7 +75,10 @@ try {
   const shown=await service.show(binding,status.trace.agenticreplay_run_id);assert.ok(shown.events.length>0);
   const exported=await service.export(binding,status.trace.agenticreplay_run_id);assert.ok((await readFile(exported)).length>0);
   const installed = JSON.parse(await readFile(findPackageJSON('@agenticreplay/core', coreEntry), 'utf8'));
+  assert.equal(installed.version, distributionVersion);
+  assert.ok(gte(installed.version, '0.1.18'));
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
+  assert.ok(manifest.counts.blobs > 0, 'exercise redaction through blob storage');
   assert.equal(manifest.agenticreplay_version, installed.version);
   const reader = await TraceReader.open(dir); const events = await reader.events();
   const failure = events.find(e => e.type === 'error' && e.attrs?.diagnostic?.requestId === 'consumer-request-1');
@@ -88,7 +97,7 @@ try {
   assert.ok(files.join(' ').includes(benign));assert.ok(html.includes(benign));
   assert.equal(buildTimeline(events).length, events.length);
   assert.ok((await exportTraceHtml(dir, join(root, 'fixture.html'))).bytes > 0);
-  console.log(JSON.stringify({ packageManager: '${packageManager}', automaticRuntimeDependencies: 'passed', agenticreplayVersion: installed.version, events: events.length, exactReplay: false }));
+  console.log(JSON.stringify({ packageManager: '${packageManager}', automaticRuntimeDependencies: 'passed', agenticreplayVersion: installed.version, fastUriVersion, events: events.length, exactReplay: false }));
 } finally { await recorder.shutdown(); await runtime.close(); }
 `)
   const result = await exec(process.execPath, ['verify.mjs'], { cwd: consumer, env, timeout: 30_000 })

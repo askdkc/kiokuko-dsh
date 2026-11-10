@@ -1,0 +1,4 @@
+{"seq":0,"ts":"2026-11-09T21:57:05.078Z","mono_us":79,"turn":0,"type":"run.start","actor":"harness","payload":{"label":"legacy compatibility fixture"}}
+{"seq":1,"ts":"2026-11-09T21:57:05.079Z","mono_us":817,"turn":0,"type":"model.request","actor":"model","payload":{"messages":[{"role":"user","content":"legacy request"}]}}
+{"seq":2,"ts":"2026-11-09T21:57:05.079Z","mono_us":949,"turn":0,"type":"model.response","actor":"model","payload":{"$blob":"sha256:5993c18b8a7c4b3248f9724aba4599453fb927e9d3335244328a8bcbd4797466","bytes":33027,"media_type":"application/json"}}
+{"seq":3,"ts":"2026-11-09T21:57:05.081Z","mono_us":3153,"turn":0,"type":"run.end","actor":"harness","payload":{"reason":"completed"}}

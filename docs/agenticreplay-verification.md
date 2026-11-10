@@ -6,16 +6,31 @@ contract. Migration 034 preserves historical tables and copies recording choices
 into the new index without importing old traces.
 
 Kiokuko depends on the published `agenticreplay` distribution with
-`>=0.1.0 <1.0.0`. Node resolves the bundled core, schema and viewer packages from
+`latest`. Node resolves the bundled core, schema and viewer packages from
 that dependency. No global CLI installation, locally built upstream SDK,
 separately published scoped package or fixed installation directory is required.
 Both lockfiles record the actual registry tarball and integrity. The trace
 manifest records the installed core version, rather than a release literal.
 
-The dependency range admits later pre-1.0 patch and minor releases, including
-0.2.0. Lockfiles retain the tested version until explicitly updated. This range
-does not guarantee that a future upstream release preserves its library APIs or
-bundle structure; such a change must pass the same checks before acceptance.
+Fresh consumer installations follow npm's `latest` tag. Existing installations
+and repository lockfiles retain their resolved version until explicitly updated;
+`npm ci` reproduces the locked version. Both repository lockfiles currently
+resolve 0.1.18. Future releases must pass the same checks: the tag does not
+guarantee compatible library APIs or bundle structure.
+
+To refresh the tested resolution while retaining latest tracking:
+
+```bash
+npm update agenticreplay --ignore-scripts
+pnpm update agenticreplay --lockfile-only --ignore-scripts
+```
+
+Development-only DSH packages explicitly retain the historical 0.2.1-alpha.3
+baseline, including the session and tools peers needed to resolve both graphs.
+This prevents lockfile regeneration from mixing independently moving `alpha`
+tags or selecting unpublished dependencies through old optional peer releases.
+It does not pin the supported host: CI stages the current official DSH master
+for runtime acceptance, as described in [DSH compatibility](dsh-plugin.md).
 
 Run from the repository:
 
@@ -37,6 +52,8 @@ The native check requires the installed pinned DSH fixture and rejects missing
 or mismatched runtimes. The default suite's opt-in skips do not establish native
 coverage. Recording checks exercise reading, HTML export, native DSH events,
 shutdown, limits, redaction, session identity and legacy-manifest rejection.
+The distribution test also reads and exports a real synthetic 0.1.9 trace,
+including its blob, and checks that historical bytes remain unchanged.
 
 `test:agenticreplay:package` builds and installs the actual packed plugin in
 separate empty npm and pnpm consumers, then records, reads and exports through
