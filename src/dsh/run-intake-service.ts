@@ -220,8 +220,8 @@ function normalizeOpenRequest(value: unknown): DshRunOpenRequest {
   const taskInput = object(input.task);
   knownFields(taskInput, ['title', 'query', 'profileHints']);
   const task: TaskInput = {
-    title: boundedString(taskInput.title, 16 * 1024, true),
-    query: boundedString(taskInput.query, 16 * 1024, true),
+    title: boundedString(taskInput.title, Infinity, true),
+    query: boundedString(taskInput.query, Infinity, true),
     profileHints: profileHints(taskInput.profileHints),
   };
 

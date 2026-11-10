@@ -29,7 +29,9 @@ export function sanitizeEvent(value: unknown, options: SanitizationOptions = {})
 }
 
 export function sanitizeTask(value: unknown, options: SanitizationOptions = {}): Sanitized<TaskInput> {
-  return withTypedValue(value, options, validateTaskInput, 'task snapshot');
+  // Original requests are not event previews. Keep sanitization without an event-sized cap.
+  const result = sanitizeJson(validateTaskInput(value), options);
+  return { value: result.value as unknown as TaskInput, redactions: result.redactions, truncated: result.truncated };
 }
 
 export function sanitizeProfileHints(value: unknown, options: SanitizationOptions = {}): Sanitized<ProfileHints> {

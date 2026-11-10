@@ -96,8 +96,9 @@ export function validateTaskInput(value: unknown): TaskInput {
   const input = object(value, 'task');
   knownFields(input, ['title', 'query', 'profileHints'], 'task');
   return {
-    title: nonEmptyString(input.title, 'task.title'),
-    query: nonEmptyString(input.query, 'task.query'),
+    // The title may carry the original native request rather than a short label.
+    title: nonEmptyString(input.title, 'task.title', Infinity),
+    query: nonEmptyString(input.query, 'task.query', Infinity),
     profileHints: validateProfileHints(input.profileHints),
   };
 }

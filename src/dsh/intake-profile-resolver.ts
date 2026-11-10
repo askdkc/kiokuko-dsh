@@ -47,7 +47,8 @@ function optionalText(value: string | null | undefined, multiline = false, maxim
 
 /** Resolve only from the task, canonical cwd, supplied hints, and bounded evidence. */
 export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput): GroundedIntakeProfile {
-  const task = boundedText(input.task, 'task', 64 * 1024, true)
+  // Native user text has already been accepted by the host; only metadata is size-bounded here.
+  const task = boundedText(input.task, 'task', Infinity, true)
   const cwd = boundedText(input.cwd, 'cwd', 4_096)
   if (!path.isAbsolute(cwd)) validation('cwd must be absolute')
   const hints = input.profileHints ?? {}

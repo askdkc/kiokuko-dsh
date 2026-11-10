@@ -15,7 +15,45 @@ test('diagnostics bound hostile fields and omit private error structure', () => 
   assert.equal(failureDiagnostic({ message: 'capacity exceeded' }, 'metadata').message, undefined)
 })
 
-test('tool exposure diagnostics collapse per-step repeats within one native turn', () => {
+test('routine tool exposure is silent while actual failures still warn', (t) => {
+  const previous = process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+  delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+  t.after(() => {
+    if (previous === undefined) delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+    else process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = previous
+  })
+  const lines: string[] = []
+  t.mock.method(console, 'info', (line: string) => lines.push(line))
+  t.mock.method(console, 'warn', (line: string) => lines.push(line))
+  const reporter = createToolExposureDiagnostics(() => ToolExposureConfig.parse({ mode: 'auto' }))
+  const context: ToolExposureContext = { agentId: 'agent', sessionId: 'session', runId: null, turn: null, nativeSeq: 6,
+    prepareGeneration: null, closed: null, failed: null, taskType: null, intakeStatus: null, selectionStatus: null, policyKnown: false }
+  const metrics = { toolCountBefore: 83, toolCountAfter: 83, taskFilteredCount: 0, phaseFilteredCount: 0,
+    descriptionTransformedCount: 1, descriptionBytesBefore: 23485, descriptionBytesAfter: 23068,
+    parameterBytesBefore: 62586, parameterBytesAfter: 62586, unownedSurfaceReductionCount: 0 as const,
+    unownedSurfaceReductionReason: 'registration_provenance_unavailable' as const }
+  for (let prepareGeneration = 1; prepareGeneration <= 10; prepareGeneration++) {
+    reporter.fallback('unbound:turn_record_missing', { ...context, nativeTurn: prepareGeneration })
+    reporter.projection('lean', 'task_execution:build:projected', metrics, { ...context, prepareGeneration })
+  }
+  assert.deepEqual(lines, [])
+  reporter.fallback('pre_step_runtime', { ...context, failure: { code: 'API_ERROR' } })
+  reporter.fallback('unbound:policy_binding', context)
+  assert.equal(lines.length, 2)
+  process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = '1'
+  reporter.fallback('unbound:turn_record_missing', { ...context, nativeTurn: 1 })
+  reporter.projection('lean', 'task_execution:build:projected', metrics, { ...context, prepareGeneration: 1 })
+  assert.equal(lines.length, 4)
+  assert.match(lines[3]!, /kiokuko.tool-exposure.v1/)
+})
+
+test('tool exposure diagnostics collapse per-step repeats within one native turn', (t) => {
+  const previous = process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+  process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = '1'
+  t.after(() => {
+    if (previous === undefined) delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+    else process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = previous
+  })
   const lines: string[] = []
   const reporter = createToolExposureDiagnostics(() => ToolExposureConfig.parse({ mode: 'auto' }), { info: line => lines.push(line), warn: line => lines.push(line) })
   const base: ToolExposureContext = { agentId: 'agent', sessionId: 'session-a', runId: null, turn: null, nativeTurn: 1, step: 1, nativeSeq: 26,

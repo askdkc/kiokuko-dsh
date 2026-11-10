@@ -277,7 +277,7 @@ export class DshTaskWorkflow {
     replay?: ModelOperationReplay,
   ): Promise<TaskSnapshot> {
     const owner = await this.owner(agent);
-    const request = text.max(16384).parse(task),
+    const request = z.string().trim().min(1).parse(task),
       taskType = z.enum(TASK_TYPES).parse(type);
     const grounded = resolveGroundedIntakeProfile({
       task: request,

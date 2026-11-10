@@ -16,6 +16,25 @@ import {
 import { parseDecisionResult } from '../../../src/dsh/decisions/contracts.js'
 import { executionClarification } from '../../../src/dsh/intake-clarification.js'
 
+test('large native requests retain exact main-model evidence without exceeding the optional provider budget', async () => {
+  const task = '診断ログ: 通常の出力です。\n'.repeat(20_000) + 'この出力を止めて。履歴は削除しないで。'
+  const context = createRequestIntentContext({ task, workspaceDirectory: '/repo', messageRefs: requestIntentMessageRefs([], task) })
+  assert.ok(context, 'local request evidence must not disappear because of provider limits')
+  assert.equal(context.task, task)
+  assert.equal(buildRequestIntentBatch(context), undefined, 'do not truncate or send an oversized optional request')
+  const decision = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'implementation',
+    evidenceRefs: requestIntentRequiredReferenceIds(context) }, context)
+  assert.ok(decision)
+  assert.ok(rebindRequestIntentDecision(decision, context))
+  assert.equal(rebindRequestIntentDecision(decision, { ...context, task: task + '変更' }), undefined)
+  let evaluated = false
+  const fallback = await classifyRequestIntent({ bind: async () => ({ mode: 'on' }),
+    evaluate: async () => { evaluated = true; throw new Error('oversized provider dispatch') } } as any,
+    'large-request', context, new AbortController().signal)
+  assert.ok(requestIntentIsUnresolved(fallback))
+  assert.equal(evaluated, false)
+})
+
 const task = 'A/B/C をまとめて入れて。前の案で続けて。'
 test('current workspace reaches interpretation and a workspace switch invalidates its evidence', () => {
   const task = 'このワークスペースで質問の回答ループを修正して'

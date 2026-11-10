@@ -697,6 +697,25 @@ test('concurrent reads share a safe repair and seeded histories retain their inh
   } finally { await f.close() }
 })
 
+test('healthy startup checks every stored ID without console noise', options, async (t) => {
+  const f = await fixture()
+  const lines: string[] = []
+  t.mock.method(console, 'info', (...args: unknown[]) => { lines.push(args.map(String).join(' ')) })
+  try {
+    const healthy = await f.old('quiet-startup', rows().slice(0, 1))
+    const installation = mountSessionHistoryCompatibility(f.ctx)
+    f.disposers.push(() => installation.dispose())
+    const result = await installation.ready
+    assert.equal(result.listed, 1)
+    assert.equal(result.checked, 1)
+    assert.equal(result.repaired, 0)
+    assert.equal(result.failed, 0)
+    assert.deepEqual(lines, [])
+    assert.deepEqual(await readFile(healthy.path), healthy.original)
+    await assert.rejects(access(`${healthy.path}.bak`), { code: 'ENOENT' })
+  } finally { await f.close() }
+})
+
 test('public plugin startup repairs unopened histories on first load and reload', options, async (t) => {
   const f = await fixture()
   let resolveScan!: (value: string) => void, rejectScan!: (reason: unknown) => void

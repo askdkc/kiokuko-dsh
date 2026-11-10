@@ -27,6 +27,8 @@ export function createToolExposureDiagnostics(config: () => ToolExposureConfig,
   let sequence = 0
   const runtime = { ...runtimeEvidence(), ...loadedPluginEvidence }
   const write = (kind: 'fallback' | 'projection', value: Record<string, unknown>, context: ToolExposureContext) => {
+    if (process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG !== '1'
+      && (kind === 'projection' || value.reason === 'unbound:turn_record_missing')) return
     const body = { ...value, context }
     const key = JSON.stringify([kind, value.requestedMode, 'mode' in value ? value.mode ?? null : null,
       'reason' in value ? value.reason ?? null : null, identityKey(context)])

@@ -19,7 +19,6 @@ import {
 } from './store.js';
 import type { AkinatorContext, AkinatorResult, AkinatorSessionView, TaskProfile } from './types.js';
 
-const MAX_SANITIZED_INPUT_BYTES = 64 * 1024;
 const PROFILE_FIELDS = ['taskType', 'target', 'expected', 'constraints'] as const;
 
 export interface StartAkinatorInput {
@@ -59,12 +58,6 @@ function conflict(message: string, details: Record<string, unknown> = {}): never
 function rejectSecret(value: string): void {
   const finding = findSecret(value);
   if (finding) throw new KiokukoError('SECURITY_REJECTION', 'Akinator input contains secret material and was rejected', { kind: finding.kind });
-}
-
-function assertBoundedTask(value: string): void {
-  if (Buffer.byteLength(value, 'utf8') > MAX_SANITIZED_INPUT_BYTES) {
-    throw new KiokukoError('VALIDATION_ERROR', `Akinator task snapshot exceeds ${MAX_SANITIZED_INPUT_BYTES} bytes`);
-  }
 }
 
 function assertBoundedAnswer(value: string, questionId: keyof TaskProfile): void {
@@ -239,7 +232,6 @@ export function startAkinatorInTransaction(
   const normalized = startInput(input);
   const task = normalized.task.trim();
   rejectSecret(task);
-  assertBoundedTask(task);
   const profile: TaskProfile = deriveProfile(task, normalized.profileHints ?? {}, options);
   assertSafeProfile(profile);
   const evaluation = evaluateProfile(profile, 0);

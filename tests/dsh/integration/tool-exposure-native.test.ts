@@ -379,7 +379,13 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
       const previousInfo = console.info
       console.info = (...args: unknown[]) => { diagnostics.push(args.map(String).join(' ')); previousInfo(...args) }
       const leanBefore = requests.length
-      try { await preparedTurn(leanAgent, true) } finally { console.info = previousInfo }
+      const previousDebug = process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+      process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = '1'
+      try { await preparedTurn(leanAgent, true) } finally {
+        console.info = previousInfo
+        if (previousDebug === undefined) delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+        else process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = previousDebug
+      }
       assert.equal(requests.length, leanBefore + 3, `lean request path did not reach a final answer: ${diagnostics.join(' | ') || '(no diagnostics)'}`)
       const leanBody = requests[leanBefore + 1]!.body
       const leanNames = modelFacingNames(leanBody)
@@ -437,6 +443,8 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
         const registry = (h.ctx as any).get('tools')
         const registeredSchemas = registry.schemas()
         const diagnostics: string[] = []
+        const previousDebug = process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+        delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
         const previousInfo = console.info
         console.info = (...args: unknown[]) => { diagnostics.push(args.map(String).join(' ')); previousInfo(...args) }
         try {
@@ -445,8 +453,12 @@ return ({ answers: request.questions.map((question: any) => ({ id: question.id, 
           } else {
             await preparedTurn(autoAgent)
           }
-        } finally { console.info = previousInfo }
-        assert.ok(diagnostics.some(line => line.includes(`"requestedMode":"auto","mode":"${effectiveMode}"`) && line.includes(`:${taskType}:`)), `observed task/mode must match ${taskType}/${effectiveMode}`)
+        } finally {
+          console.info = previousInfo
+          if (previousDebug === undefined) delete process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG
+          else process.env.KIOKUKO_TOOL_EXPOSURE_DEBUG = previousDebug
+        }
+        assert.equal(diagnostics.some(line => line.includes('toolExposure projection')), false, 'normal auto projection must be silent')
         assert.deepEqual(registry.schemas(), registeredSchemas, 'auto must not mutate registered schemas')
         assert.equal(requests.length, before + (taskType === 'research' ? 3 : 2), taskType)
         if (taskType === 'research') {

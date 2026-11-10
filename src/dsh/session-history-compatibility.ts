@@ -216,7 +216,6 @@ async function checkStoredSessionIds(backend: Persistence, repairedIds: Readonly
   const scanId = randomUUID(), started = performance.now()
   const result = { supported: true, listed: 0, checked: 0, repaired: 0, failed: 0, cancelled: false,
     failures: [] as { id: string; error: string }[], mismatches: [] as { id: string; path: string; identity: LogIdentity }[], enumerationError: undefined as string | undefined }
-  console.info(`[kiokuko-dsh] [info] Checking stored session IDs ${JSON.stringify({ scanId, timestamp: new Date().toISOString(), runtime: loadedPluginEvidence })}`)
   try {
     const snapshots = await backend.list({ signal: AbortSignal.any([signal, AbortSignal.timeout(60_000)]) })
     const ids = [...new Set(snapshots.map(snapshot => snapshot.header.id))]
@@ -244,7 +243,8 @@ async function checkStoredSessionIds(backend: Persistence, repairedIds: Readonly
     if (!signal.aborted) result.enumerationError = error instanceof Error ? error.message : String(error)
   }
   result.cancelled = signal.aborted
-  console.info(`[kiokuko-dsh] [info] Session ID check: ${result.checked}/${result.listed} checked, ${result.repaired} repaired, ${result.failed} failed${result.cancelled ? ', cancelled' : ''} ${JSON.stringify({ scanId, timestamp: new Date().toISOString(), durationMs: Math.round(performance.now() - started), omittedFailures: result.failed - result.failures.length, enumerationFailed: !!result.enumerationError, runtime: loadedPluginEvidence })}`)
+  if (result.repaired > 0 || result.failed > 0 || result.enumerationError || result.cancelled)
+    console.info(`[kiokuko-dsh] [info] Session ID check: ${result.checked}/${result.listed} checked, ${result.repaired} repaired, ${result.failed} failed${result.cancelled ? ', cancelled' : ''} ${JSON.stringify({ scanId, timestamp: new Date().toISOString(), durationMs: Math.round(performance.now() - started), omittedFailures: result.failed - result.failures.length, enumerationFailed: !!result.enumerationError, runtime: loadedPluginEvidence })}`)
   if (result.enumerationError) console.error('[kiokuko-dsh] [error] Session ID enumeration failed:', JSON.stringify({ scanId, diagnostic: failureDiagnostic(result.enumerationError, 'redacted') }))
   for (const failure of result.failures) console.warn(`[kiokuko-dsh] [warn] Session ID check failed ${JSON.stringify({ scanId, sessionId: failure.id, diagnostic: failureDiagnostic(failure.error, 'redacted') })}`)
   const { enumerationError, ...summary } = result

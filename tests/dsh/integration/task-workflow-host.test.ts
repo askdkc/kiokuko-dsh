@@ -15,6 +15,7 @@ import { DshTaskWorkflow, TASK_OPERATION_TOOL, TaskModelOperationSchema, type Ta
 import { taskWorkflowCommand, mountTaskWorkflowSurface } from '../../../src/dsh/task-state-surface.js'
 import { createRequestIntentContext, requestIntentMessageRefs, unresolvedRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
 import { OnDemandIntake } from '../../../src/dsh/on-demand-intake.js'
+import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { captureTaskLease, authorizeTaskLease, readTaskSnapshot, type TaskSnapshot } from '../../../src/dsh/task-state.js'
 import { mountOwnedExecution, OwnedExecutionService } from '../../../src/dsh/owned-execution.js'
 import { TASK_TYPES } from '../../../src/akinator/types.js'
@@ -73,6 +74,37 @@ test('explicit command creates every task type in its existing ledger/intake and
     for (const input of ['unknown', 'start extra more', 'create unknown text', 'complete', 'ignore']) assert.equal((await run(input)).kind, 'error')
     assert.deepEqual(await f.service.snapshot(f.agent), before)
     await assert.rejects(f.service.snapshot({ ...f.agent }), /exact current/)
+  } finally { await f.cleanup() }
+})
+
+test('long original requests also pass ordinary task preparation with their full source intact', async () => {
+  const f = await fixture()
+  const task = '診断ログ: 通常の投影です。\n'.repeat(20_000) + 'この出力を止めて。履歴は削除しないで。'
+  try {
+    const prepared = await f.runtime.withDatabase(db => prepareAgentTask(db, {
+      requestId: 'long-ordinary-request', dshSessionId: f.agent.session.id, task, cwd: f.root,
+      profileHints: { taskType: 'debug', target: 'src', expected: 'Normal logs are silent', constraints: null },
+      capabilities: [], skillDiscoveryMode: 'off',
+    }))
+    assert.equal(prepared.intake.status, 'ready')
+    const stored = await f.runtime.withDatabase(db => db.prepare('SELECT task_text FROM akinator_sessions').get<{ task_text: string }>())
+    assert.equal(stored!.task_text, task)
+  } finally { await f.cleanup() }
+})
+
+test('long original requests survive native task creation, persistence and execution admission', async () => {
+  const f = await fixture()
+  const request = '診断ログ: 通常の投影です。\n'.repeat(20_000) + 'この無駄な出力を止めて。履歴は削除しないで。'
+  try {
+    const created = await f.service.operate(f.agent, { operation: 'create', taskType: 'debug', request }, signal())
+    assert.equal(created.request, request)
+    assert.equal((await f.service.snapshot(f.agent)).task!.request, request)
+    const stored = await f.runtime.withDatabase(db => db.prepare('SELECT task_text FROM akinator_sessions').get<{ task_text: string }>())
+    assert.equal(stored!.task_text, request)
+    const working = await f.service.operate(f.agent, { operation: 'start', expected: created }, signal())
+    assert.equal(working.state, 'Working')
+    const lease = await f.runtime.withDatabase(db => captureTaskLease(db, working))
+    await f.runtime.withDatabase(db => authorizeTaskLease(db, lease))
   } finally { await f.cleanup() }
 })
 

@@ -84,7 +84,7 @@ const activeGoal = z
 export const RequestIntentContextSchema = z
   .object({
     /** Exact current user request. No transcript or other session is accepted. */
-    task: z.string().min(1).max(16_384),
+    task: z.string().min(1),
     /** Canonical directory supplied by the live host, never model-authored. */
     workspaceDirectory: z.string().min(1).max(4096).refine(path.isAbsolute).optional(),
     messageRefs: z.array(messageReference).min(1).max(16),
@@ -113,15 +113,6 @@ export const RequestIntentContextSchema = z
         code: 'custom',
         path: ['proposals'],
         message: 'Proposal references must be unique',
-      })
-    }
-    if (
-      Buffer.byteLength(JSON.stringify(value), 'utf8') >
-      MAX_REQUEST_INTENT_BYTES
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Request intent context exceeds its byte limit',
       })
     }
   })
@@ -291,6 +282,8 @@ export function buildRequestIntentBatch(
 ): DecisionBatch | undefined {
   const parsed = RequestIntentContextSchema.safeParse(raw)
   if (!parsed.success) return undefined
+  // Bound optional provider input, not the host's original request or main-model evidence.
+  if (Buffer.byteLength(JSON.stringify(parsed.data), 'utf8') > MAX_REQUEST_INTENT_BYTES) return undefined
   return {
     purpose: 'request-intent',
     state: {
