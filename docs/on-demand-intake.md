@@ -104,3 +104,22 @@ Native-loop tests use the published pinned DSH runtimes with scripted generation
 ## Recording diagnostics
 
 AgenticReplay remains a model/tool observation capture with `httpCapture:false`. The request observer wraps final native guards so a pre-provider failure remains visible. Failed request projection never emits an orphan response. Capture limits stop recording without affecting native execution; the index and bounded `runs/<runId>/capture-status.json` retain the missing-event count and first failure code independently of the stopped event queue. Native turn failures and bounded memory-fence codes are recorded without private exception text. A failed filesystem cannot guarantee a diagnostic file; status reports persistence failure in that case. Historical traces lacking diagnostics cannot retrospectively establish why capture stopped.
+
+### Preparation timings
+
+Intake diagnostics include `kind: timing` with a fixed `phase`, monotonic
+`elapsedMs`, and `phase_completed`, `phase_failed`, `phase_cancelled` or
+`phase_timeout`. Phases cover classification, auxiliary assessment, authority,
+database, Lisp preparation, external provider waits, human answer waits and the
+containing preparation operation. Nested durations are inclusive; do not sum
+parent and child durations. Records contain no request text, arguments, provider
+response, path or exception message. At most 256 segments are retained per
+measured invocation. Timing writes occur outside the measured DB context.
+
+A completed segment means its promise returned, not that a provider selected an
+answer or that work was approved. Use the existing provider fallback/abstention,
+assessment and admission events for those distinctions. Human answer waits have
+no new deadline. Optional assessment retains its existing bounded deadline;
+Stop remains terminal. Missing references and unknown changeScope require the
+current evidence: allowed values are implementation, document and unknown.
+Never replace scope_change with new to bypass a scope-change confirmation.

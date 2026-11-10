@@ -82,3 +82,20 @@ pnpm dsh plugin --profile web remove @askdkc/dsh-lsp-server
 
 Use `dsh-cli` for CLI. Removal does not lift protected-session restrictions or
 authorize a fallback to generic tools.
+
+## Timeout ownership
+
+The V1 adapter binds an evaluation to the host's agent, session, workspace,
+service scope and provider object identity. It distinguishes caller cancellation,
+caller deadlines and its own operation deadline. It has no host-native response
+batch ID and cannot identify the process range of a generic `lsp_diagnostics`
+call. Those native diagnostic deadlines and process termination belong to
+`dsh-cli` / `dsh-lsp-server`; changing this plugin does not repair their 60-second
+provider deadline. Do not infer a batch from a call ID, tool name or elapsed time.
+
+A timeout or cancelled diagnostic is unverified, not an empty successful result.
+The adapter retains its existing evaluation budget and rejects stale snapshots
+and provider changes. This plugin does not suppress push notifications or alter
+the provider's protection against delayed notifications. A cross-call timeout
+limit needs a host contract that explicitly identifies the shared execution
+range, workspace and provider and distinguishes Stop from deadline expiry.

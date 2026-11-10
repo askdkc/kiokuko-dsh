@@ -4242,3 +4242,17 @@ test('an explicitly unresolved choice stays unresolved without inferring a choic
   assert.equal(result.value.prepared, false)
   assert.equal(f.admissions.length, 0)
 })
+
+test('intake records monotonic phase timings without request or provider text', async t => {
+  const observations: any[] = []
+  const f = await fixture(t, {
+    classify: async () => { await new Promise(resolve => setTimeout(resolve, 15)); return {deferInference:true} },
+    diagnostic: async (_input, observation) => { observations.push(observation) },
+  })
+  await f.capture([human('timed-input', 'Inspect the private-token-fixture source')])
+  const timing = observations.find(o => o.kind === 'timing' && o.timing.phase === 'classification')
+  assert.ok(timing, 'classification delay must be attributed to its own phase')
+  assert.ok(timing.timing.elapsedMs >= 10)
+  assert.equal(timing.timing.outcome, 'completed')
+  assert.doesNotMatch(JSON.stringify(observations.filter(o => o.kind === 'timing')), /private-token-fixture/)
+})

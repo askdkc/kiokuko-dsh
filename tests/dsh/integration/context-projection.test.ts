@@ -122,7 +122,7 @@ test('22 continuations do not copy the native request and preserve additional in
 for (const mode of ['system', 'no-system', 'deferred'] as const) {
   test(`on-demand stable guidance has one owner (${mode})`, async () => {
     const live = session()
-    const sections: { text: string }[] = []
+    const sections: { text: string | ((context: {agent?: any}) => string) }[] = []
     const intake = new OnDemandIntake({} as any, { onlyWhenDeferred: mode === 'deferred' })
     intake.mount({ on: () => () => {} }, {
       get: () => undefined, guard: () => () => {}, register: () => () => {},
@@ -133,7 +133,7 @@ for (const mode of ['system', 'no-system', 'deferred'] as const) {
       const first = intake.guidance([], turn)[0] as any
       const dynamic = first.content[0].text as string
       const stable = 'The original user request may be answered now without selecting a task category.'
-      const rendered = [...sections.map(section => section.text), dynamic].join('\n')
+      const rendered = [...sections.map(section => typeof section.text === 'function' ? section.text({agent:turn.input.agent}) : section.text), dynamic].join('\n')
       assert.equal(rendered.split(stable).length - 1, 1, 'Stable guidance is delivered exactly once')
       assert.equal(dynamic.includes(stable), mode !== 'system')
       assert.match(dynamic, /"requiredReferences":\["message:[a-f0-9]{64}"/, 'Current request reference is preserved')

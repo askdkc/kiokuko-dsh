@@ -748,3 +748,21 @@ The task-startup card offers a Lisp choice independently of the optional coding 
 `startupDefaults.lisp` (default `ask`) preselects an editable answer on the card. A saved answer takes priority. The combined startup card reuses the chat choice after restart and on ordinary follow-ups. A different chat or repository asks separately, and explicit Lisp commands can override the inherited choice. A saved yes followed by startup failure remains a recoverable blocker. Recover the runtime or explicitly change the route with `/kioku-lisp disable`. When using ordinary tools or Lisp, verify the requested behavior through the actual entry point. A protected workflow still uses its bound checks and host process evidence. See [coding workflow](coding-workflow.md).
 
 Live opt-in condition/restart recovery: see [bounded recovery](lisp-recovery.md).
+
+### Preparing workflows and parent verification
+
+A selected Lisp workflow in `preparing` keeps status, saved-result inspection and
+cancellation available to its current owner. Live heap inspection, calculation,
+recovery and effects wait for workflow preparation. Status/receipt reads never
+start a worker. The response includes `workflowAccess` with the blocking state
+and recovery action; it does not change the workflow to ready. Ordinary development
+conversation keeps its existing exception; protected/protocol workflows do not.
+
+For a parent completion condition, bind the current parent's exact
+`task_completion` criterion and execute its check through that parent's
+`kioku.verify:run` / typed test route. Inspect the resulting host receipt. A child's
+message or Lisp object is evidence to inspect, not the parent's completion receipt.
+This change adds no cross-owner receipt adoption. Host-observed command results
+remain tied to their task, command, owner and generation; use a new parent check
+when no valid parent receipt exists. `coding_workflow_blocker` takes local
+criterion IDs, while `task_completion` uses the full IDs returned by its status.

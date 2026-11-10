@@ -379,7 +379,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           resultFor(request, 'inconclusive-plan'),
                         )
                         assert.equal(inconclusive.prepared, false, 'inconclusive plan must not prepare')
-                        assert.equal(inconclusive.status, 'awaiting_clarification')
+                        assert.equal(inconclusive.status, 'request_interpretation_required')
                         assert.equal(
                           existsSync(join(root, 'src/parser.ts')),
                           false,
@@ -388,7 +388,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           asked.filter((id) =>
                             id.startsWith('request-clarification-'),
                           ).length,
-                          1,
+                          0,
                         )
                         if (presentation === 'ptc')
                           return mock.toolCallResponse('unsafe-while-waiting', 'run_code', {
@@ -415,7 +415,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                       )
                       assert.ok(blocked)
                       assert.equal(blocked.isError, true)
-                      assert.match(resultText(blocked), /awaiting clarification/iu)
+                      assert.match(resultText(blocked), /Clarify the requested work before code execution/iu)
                       return toolCall('missing-scope-plan', 'prepare_requested_work', {
                         requestIntent: { ...repairedPreparation.requestIntent, changeScope: 'unknown' },
                       })
@@ -450,7 +450,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           asked.filter((id) =>
                             id.startsWith('request-clarification-'),
                           ).length,
-                          1,
+                          0,
                         )
                         return toolCall(
                           'prepare-plan',
@@ -513,8 +513,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
               assert.equal(
                 asked.filter((id) => id.startsWith('request-clarification-'))
                   .length,
-                legacy === 'assessment' ? 1 : 0,
-                'an insufficient plan candidate asks once and cannot execute without resolved evidence',
+                0,
+                'checker uncertainty is returned to the main model and cannot execute without resolved evidence',
               )
               assert.equal(
                 asked.filter((id) => id === 'execution-mode').length <= 1,

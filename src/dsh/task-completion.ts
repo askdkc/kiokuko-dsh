@@ -377,7 +377,7 @@ export function bindTaskCriterion(
   if (!criterion)
     throw new KiokukoError(
       "CONFLICT",
-      "Completion criterion is absent or its revision changed",
+      "Completion criterion is absent or its revision changed. Read task_completion status and use an exact current criterionId (coding:<workflowId>:<criterionId> for coding conditions). Local coding_workflow blocker IDs cannot be used here; rebind after a revision change.",
     );
   const codingWorkflow = readCodingWorkflow(database, input.runId);
   const codingCriterion = codingWorkflow?.definition?.criteria.find(

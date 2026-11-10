@@ -44,7 +44,7 @@ test('aborted stop returns promptly during launch but cancels and confirms the e
     await assert.rejects(bounded(stopped),error=>error===reason)
     assert.equal(f.state(),'started','unresolved launch is not completed')
     f.launchGate.resolve();await launch;await bounded(f.idleEntered.promise)
-    assert.equal(f.cancels,1);assert.equal(f.authority.resolve({agent:f.child}),undefined,'stop revokes child execution authority')
+    assert.equal(f.cancels,1);assert.throws(()=>f.authority.resolve({agent:f.child}), { code: 'CONFLICT', details: { reason: 'stop_requested' } }, 'stop revokes child execution authority')
     assert.equal(f.state(),'started','cancel request alone is not idle proof')
     f.finish();assert.equal(await bounded(stopTaskNativeChildren(f.runtime,f.taskIdentity)),true)
     assert.equal(f.state(),'completed')
@@ -71,7 +71,7 @@ test('dispose during an unresolved launch still cancels late child without grant
   try {
     await f.entered.promise;f.authority.dispose();f.launchGate.resolve();await launch
     await bounded(f.idleEntered.promise);assert.equal(f.cancels,1)
-    assert.equal(f.authority.resolve({agent:f.child}),undefined)
+    assert.throws(()=>f.authority.resolve({agent:f.child}), { code: 'CONFLICT', details: { reason: 'authority_disposed' } })
     f.finish();await new Promise(r=>setImmediate(r));assert.equal(f.state(),'started')
     assert.equal(await stopTaskNativeChildren(f.runtime,f.taskIdentity),false)
   } finally {await f.cleanup()}
@@ -87,7 +87,7 @@ test('late idle cannot confirm a replacement runtime object and retry does not g
     f.agents.set(f.child.id,{...f.child});f.finish();await rejection
     assert.equal(f.state(),'started')
     f.agents.set(f.child.id,f.child)
-    assert.equal(f.authority.resolve({agent:f.child}),undefined)
+    assert.throws(()=>f.authority.resolve({agent:f.child}), { code: 'CONFLICT', details: { reason: 'stop_requested' } })
     assert.equal(await f.authority.stopTask(f.taskIdentity),true)
     assert.equal(f.state(),'completed')
   } finally {await f.cleanup()}

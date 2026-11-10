@@ -216,3 +216,99 @@ test('real DSH registry: session tools, nested/child/late-tool denial, unload fe
     db.close(); await rm(base, { recursive: true, force: true })
   }
 })
+
+for (const executionMode of ['development', 'protected'] as const) test(`preparing Lisp preserves diagnostics without starting a worker (${executionMode})`, {
+  skip: packages ? false : 'requires pinned native DSH', timeout: 15000,
+}, async () => {
+  const [cordis, prompt, tools, scope] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope']
+    .map(name => import(pathToFileURL(join(packages!, '@deepseek-ai', name, 'lib/index.js')).href)))
+  const { initializeCodingWorkflow, mutateCodingWorkflow } = await import('../../../../src/dsh/coding-workflow/store.js')
+  const { LISP_ASSEMBLY_SERVICE } = await import('../../../../src/dsh/lisp/request-surface.js')
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'lisp-preparing-')))
+  const db = new NodeSqliteAdapter(join(base, 'db.sqlite3'), new DatabaseSync(join(base, 'db.sqlite3')))
+  const runtime = { withDatabase: async (fn: (db: NodeSqliteAdapter) => unknown) => fn(db) } as unknown as DshRuntime
+  const agent: any = { id: 'owner', session: { id: 'session', header: { cwd: base } } }
+  const parent: any = { id: 'parent', session: { id: 'parent-session', header: { cwd: base } } }
+  const owner = { sessionId: 'session', agentId: 'owner', root: base }
+  const task = workingLispTask(db, owner)
+  const { claimExecutionOwner } = await import('../../../../src/dsh/orchestration/execution-owner.js')
+  claimExecutionOwner(db, {sessionId:owner.sessionId,workspace:'project:lisp-tests',mode:'normal',startId:'preparing',runId:task.taskId})
+  const ctx = new cordis.Context(), fibers: any[] = [], commands = new Map<string, any>()
+  let surface: Awaited<ReturnType<typeof mountLispSurface>> | undefined, local: any
+  try {
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
+    fibers.push(await ctx.plugin({ name: 'preparing-services', apply(c: any) {
+      c.provide('agents', { get: (id: string) => id === agent.id ? agent : id === parent.id ? parent : undefined, isOwnedBy: () => true })
+      c.provide('sessions', { get: (id: string) => id === agent.session.id ? agent.session : id === parent.session.id ? parent.session : undefined })
+      c.provide('commands', { register: (d: any) => { commands.set(d.name, d); return () => commands.delete(d.name) } })
+    } }))
+    local = scope.createScope(ctx, agent); agent.ctx = local.ctx
+    surface = await mountLispSurface(ctx, runtime, LispConfig.parse({ executionMode, enabled: true, sbclPath: '/does-not-exist' }))
+    await surface.manager.options.store.enable(owner)
+    surface.manager.enabled.set(owner.sessionId, base)
+    const identity = { runId: task.taskId, sessionId: owner.sessionId, repositoryRoot: base }
+    let workflow = initializeCodingWorkflow(db, { ...identity, requestId: 'prepare', task: 'Implement parser' })
+    const change = (state: typeof workflow.state, choice: typeof workflow.choice.state = 'yes') => {
+      workflow = mutateCodingWorkflow(db, identity, randomUUID(), workflow.revision, {state,choice}, value => {
+        value.state = state; value.choice.state = choice
+      })
+    }
+    change('preparing')
+    const assembly = ctx.get(LISP_ASSEMBLY_SERVICE) as any
+    const project = () => assembly.project(agent, { sections: [], variables: {}, tools: ctx.tools.schemas(agent) })
+    const call = (name: string, args: object = {}, candidate = agent, signal = new AbortController().signal) =>
+      executeNativeTool(ctx, packages!, { callId: randomUUID(), name, arguments: args, agent: candidate, signal })
+    const projected = await project()
+    assert.ok(projected.tools.some((t: any) => t.name === 'lisp_status'), 'status remains model-visible during preparing')
+    const originalStart = surface.manager.enableSessionWorker
+    let starts = 0
+    surface.manager.enableSessionWorker = async () => { starts++; throw new Error('projection must not start a preparing child') }
+    surface.manager.enabled.set(parent.session.id, base)
+    agent.session.header.origin = 'subagent'; agent.session.header.parentSession = parent.id
+    try { await project(); assert.equal(starts, 0, 'child projection shares the preparing guard') }
+    finally { delete agent.session.header.origin; delete agent.session.header.parentSession; surface.manager.enableSessionWorker = originalStart; surface.manager.enabled.delete(parent.session.id) }
+    const status = await call('lisp_status')
+    assert.equal(status.isError, false, JSON.stringify(status))
+    assert.equal(status.value.workflowAccess.state, 'preparing')
+    assert.equal(status.value.workflowAccess.effects, 'blocked')
+    assert.equal(status.value.generation, null, 'status must not start a worker')
+    for (const name of ['lisp_eval', 'lisp_recover']) {
+      const denied = await call(name, { operationId: randomUUID(), code: '(+ 1 2)', expectedGeneration: null })
+      assert.match(JSON.stringify(denied), /LISP_WORKFLOW_BLOCKED/)
+    }
+    const journal = surface.manager.options.store
+    for (const [savedOwner, id] of [[owner, 'own-result'], [{...owner,sessionId:'another-session'}, 'foreign-result']] as const) {
+      await journal.enable(savedOwner)
+      await journal.reserve(savedOwner, id, 'lisp_eval', 'fixture-digest', 'old-generation', {})
+      await journal.transition(savedOwner, id, ['RUNNING'], 'SUCCEEDED', {ok:true,generation:'old-generation',value:{json:42}})
+    }
+    const saved = await call('lisp_inspect', { operationId: 'inspect', resultOperationId: 'own-result', section:'result' })
+    assert.equal(saved.value.ok, true, JSON.stringify(saved))
+    assert.equal(JSON.parse(saved.value.data).value.json, 42, 'authorized history survives a worker generation change')
+    const foreign = await call('lisp_inspect', {operationId:'foreign',resultOperationId:'foreign-result'})
+    assert.equal(foreign.value.ok, false)
+    assert.doesNotMatch(JSON.stringify(foreign), /fixture-digest|old-generation/)
+    assert.equal((await call('lisp_status')).value.generation, null, 'saved inspection never starts a worker')
+    const live = await call('lisp_inspect', { operationId: 'inspect-live', ref: 'old-generation/1' })
+    assert.match(JSON.stringify(live), /LISP_WORKFLOW_BLOCKED/)
+    const stale = { ...agent, id: 'old-owner' }
+    assert.equal((await call('lisp_status', {}, stale)).isError, true)
+    const stop = new AbortController(); stop.abort()
+    assert.equal((await call('lisp_status', {}, agent, stop.signal)).isError, true)
+    for (const [state, choice] of [['awaiting_lisp_choice','pending'], ['cancelled','cancelled'], ['superseded','yes']] as const) {
+      change(state, choice)
+      const hidden = await project()
+      assert.ok(hidden.sections.some((s: any) => s.name === 'kiokuko:lisp-workflow-access'))
+      assert.ok(!hidden.tools.some((t: any) => t.name === 'lisp_eval'))
+    }
+    change('ready')
+    await project()
+    assert.equal((await call('lisp_status')).value.workflowAccess.effects, 'available')
+    change('preparing') // Dispatch must recheck a registration captured while ready.
+    assert.match(JSON.stringify(await call('lisp_eval', {operationId:'late',code:'(+ 1 2)'})), /LISP_WORKFLOW_BLOCKED/)
+  } finally {
+    surface?.stop(); await surface?.dispose(); await local?.dispose()
+    for (const fiber of fibers.reverse()) await fiber.dispose()
+    db.close(); await rm(base, {recursive:true,force:true})
+  }
+})

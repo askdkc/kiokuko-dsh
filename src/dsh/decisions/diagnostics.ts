@@ -1,3 +1,4 @@
+import { INTAKE_PHASES, type IntakeTiming } from '../intake-timing.js'
 import type { IntentAssessment } from './intent-assessment.js'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
@@ -24,9 +25,10 @@ export const DiagnosticAttempt = z.object({ origin: z.enum(['intake','provider']
 export type DiagnosticAttempt = z.input<typeof DiagnosticAttempt>
 export const DIAGNOSTIC_REASONS = ['observed','resolved','unresolved','native_unowned','clarification_required','target_unknown','scope_unknown',
   'transition_required','question_unavailable','context_changed','answer_queued','resume_observed','receipt_observed','continuation_observed',
-  'assessment_disabled','assessment_user_confirmed','assessment_consistent','assessment_clarify','assessment_unavailable','provider_completed','provider_fallback','provider_cancelled','evaluation_failed'] as const
-export const DiagnosticEvent = z.object({ kind: z.enum(['reference','extraction','semantic_match','detector','route','admission','task_resume','question','answer','resume','provider','choice','receipt','continuation']),
+  'assessment_disabled','assessment_user_confirmed','assessment_consistent','assessment_clarify','assessment_unavailable','provider_completed','provider_fallback','provider_cancelled','evaluation_failed','phase_completed','phase_failed','phase_cancelled','phase_timeout'] as const
+export const DiagnosticEvent = z.object({ kind: z.enum(['reference','extraction','semantic_match','detector','route','admission','task_resume','question','answer','resume','provider','choice','receipt','continuation','timing']),
   status: z.enum(['observed','not_run','waiting','queued','blocked']), reason: z.enum(DIAGNOSTIC_REASONS),
+  phase: z.enum(INTAKE_PHASES).optional(),
   parentEventId: digest.optional(), referenceDigest: digest.optional(), targetSessionId: nativeId.optional(),
   binding: DiagnosticBinding.optional(),
   relation: z.enum(['new','same_scope_continuation','scope_change','unknown']).optional(),
@@ -256,7 +258,8 @@ function readDecisionDiagnosticsSnapshot(db: SqliteDatabase, sessionId: string, 
 
 export interface IntakeDiagnosticInput { agent: { session?: { id: string } }; turn: number; messages: readonly unknown[] }
 export interface IntakeDiagnosticObservation {
-  kind: 'interpretation'|'native_unowned'|'question'|'answer'|'resume'|'assessment'|'assessment_disabled'; assessment?: IntentAssessment; context?: RequestIntentContext; decision?: RequestIntentDecision;
+  timing?: IntakeTiming;
+  kind: 'timing'|'interpretation'|'native_unowned'|'question'|'answer'|'resume'|'assessment'|'assessment_disabled'; assessment?: IntentAssessment; context?: RequestIntentContext; decision?: RequestIntentDecision;
   questionRef?: string; answerRef?: string; reason?: 'target_unknown'|'scope_unknown'|'transition_required'|'clarification_required'|'context_changed'
 }
 /** References originate in captured native input / host-issued question and followup IDs, never model submissions. */
@@ -283,7 +286,14 @@ export function createIntakeDiagnosticSink(runtime: DiagnosticRuntime) {
       }
       const evaluationId=requestIntentDiagnosticId(observation.decision)
       const eventKey=[observation.kind,observation.questionRef ?? null,observation.answerRef ?? null,observation.decision ?? null,evaluationId ?? null]
-      if(observation.kind==='assessment_disabled'){
+      if(observation.kind==='timing'){
+        const timing = observation.timing
+        if (!timing) return
+        appendDiagnosticEvent(db,owner.id,diagnosticEventId(owner.id,['timing',timing.id]), {
+          kind:'timing', status:timing.outcome==='completed'?'observed':'blocked',
+          reason:`phase_${timing.outcome}`, phase:timing.phase, elapsedMs:timing.elapsedMs,
+        })
+      } else if(observation.kind==='assessment_disabled'){
         for(const kind of ['semantic_match','detector'] as const)appendDiagnosticEvent(db,owner.id,diagnosticEventId(owner.id,['disabled',kind]),{kind,status:'not_run',reason:'assessment_disabled'})
       } else if(observation.kind==='assessment') {
         const a=observation.assessment;if(!a)throw new DiagnosticConflict('causal_conflict')

@@ -59,8 +59,8 @@ lists `kioku.user` exports/arguments/docs. Native tool entries stay fixed.
 Persistent `inputs` accepts workspace-relative or current-session upload paths.
 Read-only copies are checked for identity, size and digest (64 MiB/file, 256 MiB/generation).
 `(kioku.files:read-text (kioku.files:input 0))` reads the first copy. Iterate only over
-declared inputs. Use `kioku.files:scratch` for output and an existing `:directory` for
-`kioku.process:run`. Reimport applied files for comparison. Export needs authorization.
+declared inputs. Private `kioku.files:scratch` is for Lisp I/O, not native Bash writes.
+Development processes write to authorized workspace paths; EPERM means failure. Reimport applied files for comparison. Export needs authorization.
 `kioku.files:propose-write` uses relative paths and records successful evaluations durably.
 Changes within the working project directory, including deletion, replacement and project DB updates, need no extra user permission. Outside-project changes require concrete confirmation. Protected compatibility mode retains frozen targets and its protected-path restrictions. Duplicate targets fail;
 unchanged writes do nothing. Refusal/skip/UI failure/cancellation never authorizes.
@@ -237,9 +237,9 @@ effects; selected answers never replace host validation, tests or approval.
 
 ## Task toolkit example
 
-Adapt functions to the task's actual files and checks. Define this toolkit once
-in one `lisp_eval`; later calls invoke `repair-and-check` with changed arguments.
-The example checks a scratch Node project; it does not claim to run `npm test`.
+Define task-specific helpers once; reuse them with new inputs.
+Protected mode only: edit and test the same scratch project. In development,
+edit via `kioku.workspace` and test that workspace; never mix the two roots.
 
 ```lisp
 (defun replace-once (text before after)
@@ -252,13 +252,17 @@ The example checks a scratch Node project; it does not claim to run `npm test`.
                  (subseq text (+ at (length before))))))
 
 (defun check-project (directory)
-  "Return the scratch project's process exit code, stdout and stderr."
+  "Return the protected scratch project's process exit code, stdout and stderr."
+  (unless (equal (gethash "executionMode" (kioku.environment:status)) "protected")
+    (error "PROTECTED_SCRATCH_EXAMPLE_ONLY"))
   (kioku.process:run "node"
     '("--test" "--experimental-test-isolation=none" "test/public.test.mjs")
     :directory directory))
 
 (defun repair-and-check (directory file before after)
   "Edit one matched scratch file and check it; failed tests leave the edit visible."
+  (unless (equal (gethash "executionMode" (kioku.environment:status)) "protected")
+    (error "PROTECTED_SCRATCH_EXAMPLE_ONLY"))
   (let ((paths (kioku.files:glob-scratch
                 (concatenate 'string directory "/" file) :limit 2)))
     (unless (= 1 (length paths)) (error "EXPECTED_ONE_FILE"))

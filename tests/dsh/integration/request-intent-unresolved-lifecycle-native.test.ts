@@ -118,10 +118,10 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         const prepared = resultFor(request, 'first-prepare')
         assert.equal(prepared.isError, false, text(prepared))
         // This provider deliberately abstains on semantic checks in both turns.
-        // Count each distinct user request, not both requests as one question.
+        // A concrete workspace request returns checker uncertainty to the main model.
         assert.equal(JSON.parse(text(prepared)).prepared, false)
-        assert.equal(JSON.parse(text(prepared)).status, 'awaiting_clarification')
-        assert.equal(clarificationQuestions, 1)
+        assert.equal(JSON.parse(text(prepared)).status, 'request_interpretation_required')
+        assert.equal(clarificationQuestions, 0)
         working = readCurrent()
         assert.equal(working.state, 'Working'); assert.equal(working.runStatus, 'active')
         // A queued human follow-up creates a genuine next native turn, without
@@ -147,7 +147,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         const value = JSON.parse(text(result))
         assert.equal(value.status, uncertain === 'whole-intent' ? 'request_interpretation_required' : 'awaiting_clarification')
         assert.equal(value.nextAction, uncertain === 'whole-intent' ? 'submit_current_request_intent' : 'continue_independent_work_or_wait')
-        assert.equal(clarificationQuestions, uncertain === 'whole-intent' ? 1 : 2, 'only concrete missing information triggers a question')
+        assert.equal(clarificationQuestions, uncertain === 'whole-intent' ? 0 : 1, 'only concrete missing information triggers a question')
         assert.deepEqual(authority(readCurrent()), authority(working!))
         rejected = true
         return f.mock.textResponse('Wait for the user to clarify the concrete target and action before changing the active work.')

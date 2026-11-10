@@ -1,3 +1,4 @@
+import { lispWorkflowAccess, isLispWorkflowDiagnostic } from './workflow-access.js'
 import { NativeChildOwnership } from './native-child-ownership.js'
 import { createLispHostDispatch, lispHostToolWasNotDispatched } from './host-tool-dispatch.js'
 import { formatLispStatus, type LispStatusView } from './status-text.js'
@@ -469,6 +470,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     for (const name of PROTOCOL_OWNED_TOOLS) protocolDefinitions.delete(`${agent.id}:${name}`)
   }
   disposers.push(() => { for (const dispose of runtimePrompts.values()) dispose(); runtimePrompts.clear(); boundAgents.clear(); for (const list of agentDisposers.values()) for (const dispose of list.reverse()) dispose(); agentDisposers.clear(); fence!.definitions.clear(); protocolDefinitions.clear() })
+  const workflowAccess = async (agent: Agent) => {
+    const binding = owner(agent)
+    const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
+    return lispWorkflowAccess(workflow, binding.owner.root, development && isLispConversation(agent))
+  }
   const register = (agent: Agent) => {
     if (registeredAgents.has(agent)) return
     if (boundAgents.has(agent.id)) unregister(boundAgents.get(agent.id)!)
@@ -520,6 +526,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         execute: async (args: unknown, execution: { agent?: Agent; signal?: AbortSignal; callId?: string; rootCallId?: string; token?: symbol; toolSet?: unknown; parent?: unknown }) => {
           try {
             const binding = owner(execution.agent), parsed = ToolInput.parse(args)
+            binding.signal.throwIfAborted()
+            execution.signal?.throwIfAborted()
+            const access = await workflowAccess(binding.agent)
+            if (access.visibility === 'hidden' || access.visibility === 'diagnostics' && !isLispWorkflowDiagnostic({name, arguments: parsed, parent: execution.parent}))
+              fail('LISP_WORKFLOW_BLOCKED', `Lisp workflow is ${access.state}. ${access.recovery}`)
             const codingRequest = preparation.binding(binding.agent)
             const observe = preparation.track(binding.agent, name, parsed, execution.parent)
             const tracked: PreparationCall | undefined = observe ? { observe } : undefined
@@ -677,6 +688,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
             return name === 'lisp_status' ? {
               ...outcome as object,
               codingPreparation: preparation.status(binding.agent),
+              workflowAccess: access,
               ...(diagnosticOnly.has(binding.agent) ? { continuation: {
                 effects: 'blocked', next: ['inspect_receipts', 'read', 'search', 'plan', 'recover'],
               } } : {}),
@@ -732,8 +744,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       installFallbackPrompt(binding.agent, previousFallback)
       return true
     }
-    const workflow=await runtime.withDatabase(db=>sessionCodingWorkflow(db,binding.owner.sessionId))
-    if(workflow&&(!development||workflow.protocol||!isLispConversation(candidate))&&(workflow.choice.state!=='yes'||['preparing','awaiting_lisp_choice','cancelled','superseded'].includes(workflow.state))){unregister(binding.agent);return true}
+    const access = await workflowAccess(binding.agent)
+    if (access.visibility === 'hidden') { unregister(binding.agent); return true }
+    if (access.visibility === 'diagnostics') { register(binding.agent); return true }
     runtimePrompts.get(candidate.id)?.(); runtimePrompts.delete(candidate.id)
     manager.setAgentBusy(binding.owner, true)
     if (await manager.isTaskMode(binding.owner)) {
@@ -896,6 +909,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
   const admitWorker = async (candidate: {id:string}, signal?: AbortSignal, phase?: 'creating' | 'published') => {
     const binding = owner(candidate)
     if (!config.enabled || !isNativeSubagent(binding.agent)) return
+    if ((await workflowAccess(binding.agent)).visibility !== 'full') return
     const liveParent = workerRouter(binding, phase === 'creating')
     if (!liveParent() || !tools.schemas(binding.agent).some(tool => LISP_TOOLS.includes(tool.name as LispTool))) return
     // The router shares the execution preference, never its process,
@@ -952,8 +966,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     async project(candidate, assembly) {
       const binding = owner(candidate)
       await admitWorker(candidate)
-      const workflow = await runtime.withDatabase(db => sessionCodingWorkflow(db, binding.owner.sessionId))
-      if (workflow && (!development || workflow.protocol || !isLispConversation(candidate)) && (workflow.choice.state !== 'yes' || ['preparing', 'awaiting_lisp_choice', 'cancelled', 'superseded', 'completed'].includes(workflow.state))) {
+      const access = await workflowAccess(binding.agent)
+      assembly = { ...assembly, sections: [...assembly.sections.filter(section => section.name !== 'kiokuko:lisp-workflow-access'), {name: 'kiokuko:lisp-workflow-access', text: JSON.stringify(access)}] }
+      if (access.visibility === 'hidden') {
         unregister(binding.agent)
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
         return { ...assembly, tools: surface.tools?.filter(tool => !LISP_TOOLS.includes(tool.name as LispTool)) ?? [] }

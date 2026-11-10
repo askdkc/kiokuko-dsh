@@ -656,3 +656,16 @@ test('invalid file arguments inside a Lisp bridge are a known denial, never an u
     await assert.rejects(readFile(join(f.root, 'output.txt')), {code:'ENOENT'})
   } finally { await f.close() }
 })
+
+test('completion binding and workflow blockers explain their different identifier namespaces', async () => {
+  const f = await fixture()
+  try {
+    f.propose(); f.choose()
+    const workflow = readCodingWorkflow(f.db, f.identity.runId)!
+    assert.throws(() => bindTaskCriterion(f.db, {runId:f.identity.runId, callId:'wrong-local-id', criterionId:'parser-check',
+      method:{kind:'native_command',command:f.command,cwd:'.',sourcePaths:['src/check.test.mjs'],assertion:'selected_tests_pass'},approved:true}), /task_completion status.*coding:<workflowId>:<criterionId>/)
+    assert.throws(() => reportCodingBlocker(f.db, f.identity, 'wrong-completion-id', workflow.revision, {
+      criterionIds:[`coding:${workflow.workflowId}:parser-check`],kind:'input',cause:'missing',required:'input',recovery:[],resumeWhen:'input supplied',
+    }), /local criterionIds.*parser-check.*Do not use task_completion IDs/)
+  } finally { await f.close() }
+})

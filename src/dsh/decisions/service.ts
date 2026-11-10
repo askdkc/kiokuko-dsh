@@ -1,3 +1,4 @@
+import { measureIntakePhase } from '../intake-timing.js'
 import { SemanticCompactionConfig, type SemanticCompactionConfiguration, type CompactionOutcome } from '../semantic-compaction/contracts.js'
 import { evaluateCompactionBatches } from './compaction-batches.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
@@ -489,7 +490,7 @@ export class DecisionService {
             combined.throwIfAborted()
             hooks?.onProviderDispatch?.()
             providerDispatched=true
-            parts.push(parseDecisionResult(await abortable(provider.evaluate(part, combined), combined), part))
+            parts.push(parseDecisionResult(await measureIntakePhase('external_wait', () => abortable(provider.evaluate(part, combined), combined), combined), part))
           }
         }
         combined.throwIfAborted()

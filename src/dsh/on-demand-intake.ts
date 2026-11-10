@@ -1,3 +1,4 @@
+import { measureIntakePhase, withIntakeTiming, type IntakePhase } from './intake-timing.js'
 import { isNativeSubagent, parentOnlyTaskToolMessage } from './native-subagent.js'
 import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarification-claims.js'
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
@@ -433,6 +434,10 @@ function preparationResponse(value: any) {
 
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
+  private measure<T>(input: DemandInput, phase: IntakePhase, operation: () => Promise<T>): Promise<T> {
+    return withIntakeTiming(input.signal, async timing => { await this.host.diagnostic?.(input, {kind:'timing', timing}) },
+      () => measureIntakePhase(phase, operation, input.signal))
+  }
   private async diagnose(
     state: Turn,
     observation: Omit<IntakeDiagnosticObservation, 'context' | 'decision'>,
@@ -792,7 +797,7 @@ export class OnDemandIntake {
       messageRefs: requestIntentMessageRefs(input.messages, task),
     })
     try {
-      await this.host.prepareNativeCoding(input, task, context, this.nativeContinuation(input))
+      await this.measure(input, 'preparation', async () => this.host.prepareNativeCoding!(input, task, context, this.nativeContinuation(input)))
     } catch (error) {
       input.signal.throwIfAborted()
       // The Lisp choice retains cancellation. The actual turn consumes it
@@ -883,7 +888,7 @@ export class OnDemandIntake {
         // active execution bound to the host instead of creating an empty intake.
         if (previous.status === 'closed') {
           this.cancelClarification(sessionId)
-          await this.host.validate(input)
+          await this.measure(input, 'authority', () => this.host.validate(input))
           input.signal.throwIfAborted()
           await this.host.advance?.(input)
           this.#turns.delete(sessionId)
@@ -907,7 +912,7 @@ export class OnDemandIntake {
       !hasRequestInput(input.messages) &&
       this.host.ready(input.agent)
     ) {
-      await this.host.validate(input)
+      await this.measure(input, 'authority', () => this.host.validate(input))
       input.signal.throwIfAborted()
       await this.host.advance?.(input)
       return false
@@ -956,7 +961,7 @@ export class OnDemandIntake {
         this.host.nativeChild?.(input.agent) !== true,
     )
     const promise = (async () => {
-      await this.host.validate(input)
+      await this.measure(input, 'authority', () => this.host.validate(input))
       this.assertCurrent(state)
       // Presets and later host plugins register readers after mount. Pin the
       // validated owner's first reader once, including absence; never rebind it.
@@ -1001,7 +1006,7 @@ export class OnDemandIntake {
         // A whole-message greeting is conversation, not an implementation
         // request; the execution choice stays reserved for work requests.
         if (!(await this.startupSuppressed(state.input, state.task)))
-          await this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input))
+          await this.measure(state.input, 'preparation', async () => this.host.prepareNativeCoding?.(state.input, state.task, context, this.nativeContinuation(state.input)))
         this.assertCurrent(state)
         state.nativeUnowned = true
         if (context) {
@@ -1022,17 +1027,17 @@ export class OnDemandIntake {
         const context=await this.host.requestContext?.(state.input,state.task)
           ?? createRequestIntentContext({task:state.task,messageRefs:requestIntentMessageRefs(state.input.messages,state.task)})
         this.assertCurrent(state)
-        await this.host.prepareNativeCoding(state.input,state.task,context,this.nativeContinuation(state.input))
+        await this.measure(state.input, 'preparation', async () => this.host.prepareNativeCoding!(state.input,state.task,context,this.nativeContinuation(state.input)))
         this.assertCurrent(state)
       }
       try {
-        state.intent = await this.host.classify(input, state.task)
+        state.intent = await this.measure(input, 'classification', () => this.host.classify(input, state.task))
       } catch {
         input.signal.throwIfAborted()
         state.intent = { deferInference: true }
       }
       try {
-        const interpreted = await this.host.interpret?.(state.input, state.task)
+        const interpreted = await this.measure(state.input, 'classification', async () => this.host.interpret?.(state.input, state.task))
         if (interpreted) {
           state.requestIntentContext = interpreted.context
           state.requestIntent = interpreted.decision
@@ -1226,7 +1231,7 @@ export class OnDemandIntake {
       }
       if (!answerer && automatic?.status !== 'answered') return
       const value = automatic?.status === 'answered' ? automatic.value
-        : await abortable(answerer!.ask(evaluation.question!, state.input.signal, state.input.agent), state.input.signal)
+        : await this.measure(state.input, 'user_wait', () => abortable(answerer!.ask(evaluation.question!, state.input.signal, state.input.agent), state.input.signal))
       this.assertCurrent(state)
       sources[evaluation.question!.id] = automatic?.status === 'answered' ? automatic.source ?? 'decision' : 'human'
       current = applyAnswer(current, { questionId: evaluation.question!.id, value })
@@ -1410,7 +1415,7 @@ export class OnDemandIntake {
       let result:IntentAssessment|undefined
       const started=performance.now(),deadline=AbortSignal.timeout(1500)
       const signal=AbortSignal.any([state.input.signal,deadline])
-      try {result=await abortable(this.host.assess({...state.input,signal},context,decision,undefined,this.hasNativeConfirmation(state,context,decision)),signal)}
+      try {result=await this.measure({...state.input,signal}, 'auxiliary_assessment', () => abortable(this.host.assess!({...state.input,signal},context,decision,undefined,this.hasNativeConfirmation(state,context,decision)),signal))}
       catch {state.input.signal.throwIfAborted();result={semantic:'unavailable',semanticInputDigest:canonicalContentHash([context,decision]),
         detector:{state:'unavailable',reason:deadline.aborted?'timeout':'process_failed',elapsedMs:Math.ceil(performance.now()-started)},outcome:'unavailable'}}
       this.assertCurrent(state)
@@ -1538,7 +1543,7 @@ export class OnDemandIntake {
     state.taskType = taskType
     const operation = (async () => {
       // Retain exact original messages. The only caller-supplied input is an advisory task type.
-      const admitted = await this.host.prepare(
+      const admitted = await this.measure(state.input, 'preparation', () => this.host.prepare(
         {
           ...state.input,
           signal: AbortSignal.any([state.input.signal, signal]),
@@ -1547,7 +1552,7 @@ export class OnDemandIntake {
         requestIntent ?? state.requestIntent,
         state.requestIntentContext,
         state.nativeIntake,
-      )
+      ))
       this.assertCurrent(state)
       signal.throwIfAborted()
       if (!admitted || !this.host.ready(state.input.agent, state.input.turn))
@@ -1937,7 +1942,7 @@ export class OnDemandIntake {
           if (!claimed) return pending.result = { ...result, status: 'clarification_unresolved',
             nextAction: 'continue_independent_work', detail: 'An earlier question for this turn has no current live answer. It will not be sent again.' }
         }
-        const response = await abortable(
+        const response = await this.measure({...state.input, signal}, 'user_wait', () => abortable(
           this.host.questions!.ask({
             agent: state.input.agent,
             signal,
@@ -1957,7 +1962,7 @@ export class OnDemandIntake {
             ],
           }),
           signal,
-        )
+        ))
         signal.throwIfAborted()
         assertQuestionCurrent()
         if (
@@ -2006,8 +2011,8 @@ export class OnDemandIntake {
           answerQuestionId = `${id}-correction`
           answerQuestion = `次の依頼について、訂正後の具体的な対象（ファイル・項目など）と希望する操作を入力してください。変更しない範囲もあれば含めてください。\n\n${state.task}`
           await this.diagnose(state, {kind:'question',questionRef:answerQuestionId,reason:'clarification_required'})
-          const corrected = await abortable(this.host.questions!.ask({agent:state.input.agent,signal,
-            questions:[{id:answerQuestionId,question:answerQuestion}]}),signal)
+          const corrected = await this.measure({...state.input, signal}, 'user_wait', () => abortable(this.host.questions!.ask({agent:state.input.agent,signal,
+            questions:[{id:answerQuestionId,question:answerQuestion}]}),signal))
           signal.throwIfAborted()
           assertQuestionCurrent()
           if (this.#clarifications.get(sessionId) !== pending || pending.status !== 'waiting') return result

@@ -12,11 +12,11 @@ export function requestInterpretationRecovery(decision:RequestIntentDecision|und
   const currentReferences=context?requestIntentRequiredReferenceIds(context):[]
   return {
     code:prepared?'REQUEST_INTERPRETATION_ALREADY_PREPARED':'REQUEST_INTERPRETATION_REQUIRED',state:'required',executed:false,
-    permissions:'unchanged_native_policy',missingFields,currentReferences,evidenceTools:['read','glob','grep'],
+    permissions:'unchanged_native_policy',missingFields,currentReferences,allowedChangeScopes:['implementation','document','unknown'],evidenceTools:['read','glob','grep'],
     nextAction:prepared?'fresh_native_turn':context?'submit_current_request_intent':'refresh_native_context',
     recovery:[
       'Use the original request and current host-bound context to establish the concrete target. Native read/glob/grep remain subject to their existing permissions; do not substitute cwd for an unresolved target.',
-      'If the action or target is still unclear, ask the user a concrete clarification. Otherwise submit prepare_requested_work with requestIntent.relation, action and exact current evidenceRefs; implementation changes also need changeScope.',
+      'If the action or target is still unclear, ask the user a concrete clarification. Otherwise submit prepare_requested_work with requestIntent.relation, action and exact current evidenceRefs; changes also need changeScope=implementation or document (unknown means unresolved). Preserve scope_change when the authorized scope changes; never relabel it new to bypass confirmation.',
       'A taskType label is advisory preparation, not effect authority. Changing or repeating Bash commands cannot repair missing interpretation.',
       prepared?'This turn is already prepared and its interpretation is immutable. Preserve the error and unfinished work. Obtain fresh native input for the original request, then bind its new current references before preparation; do not forge user input or reuse stale references.'
         :'Submit interpretation before preparing. If a turn is already prepared, preserve it and recover through fresh native input rather than replacing its interpretation.',

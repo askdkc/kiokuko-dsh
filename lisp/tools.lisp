@@ -232,7 +232,7 @@
   (kioku.internal:rpc "artifact" (kioku.internal:object "path" scratch-relative-path)))
 (in-package :kioku.process)
 (defun run (program arguments &key (timeout-ms 120000) (directory "."))
-  "Run a protected program in a scratch-relative DIRECTORY. Inspect result-code; Lisp evaluation success is not process success."
+  "Run a program. Development DIRECTORY is workspace-relative (or an authorized absolute path); native Bash permissions apply and private Lisp scratch is not writable authority. Protected DIRECTORY is scratch-relative. Inspect result-code, timedOut and stderr; Lisp evaluation success is not process success."
   (kioku.internal:rpc "run" (kioku.internal:object "program" program "argv" (coerce arguments 'vector) "timeoutMs" timeout-ms "directory" directory)))
 (defun python (code &key (timeout-ms 120000) (directory ".")) (run "python3" (list "-I" "-c" code) :timeout-ms timeout-ms :directory directory))
 (defun shell (code &key (timeout-ms 120000) (directory ".")) (run "sh" (list "-c" code) :timeout-ms timeout-ms :directory directory))
@@ -705,7 +705,7 @@ CHOICES contains 1-8 (restart-name description) pairs. No expression replay or a
           (setf start (1+ (the fixnum pos))))))))
 
 (defun run-lines (program arguments &key (timeout-ms 120000) (limit 2000) (directory "."))
-  "Run in scratch-relative DIRECTORY and split stdout; signal on process failure."
+  "Run in mode-specific DIRECTORY (development: workspace; protected: scratch) and split stdout; signal on process failure."
   (let ((result (run program arguments :timeout-ms timeout-ms :directory directory)))
     (unless (result-ok? result)
       (error "PROGRAM_FAILED(~A): ~A" (result-code result) (result-stderr result)))

@@ -1,3 +1,4 @@
+import { measureIntakePhase } from './intake-timing.js'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
 import { initializeDatabase, type InitOptions } from './database.js'
@@ -183,8 +184,10 @@ export class DshCoreRuntime {
     if (this.#closing || this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed')
     this.#activeDatabaseOperations += 1
     try {
-      const resources = await this.#requireResources()
-      return await operation(resources.database, resources.embeddingRuntime)
+      return await measureIntakePhase('database', async () => {
+        const resources = await this.#requireResources()
+        return await operation(resources.database, resources.embeddingRuntime)
+      })
     } finally {
       this.#activeDatabaseOperations -= 1
       if (this.#activeDatabaseOperations === 0) this.#resolveActiveDatabaseDrain?.()

@@ -1,3 +1,4 @@
+import { measureIntakePhase } from './intake-timing.js'
 import { canonicalContentHash } from '../serialization/validate.js'
 import { abortable } from './http-json.js'
 import { LispCodingCancelled } from './coding-question.js'
@@ -98,11 +99,11 @@ export class TaskStartup {
         label: startupOptionLabel(label, index < CANCEL_INDEX && isStartupDefault(defaults, index)),
       }))
       if (!choice && this.host.questions) {
-        const response = await abortable(this.host.questions.ask({ agent: input.agent, signal: input.signal, questions: [{
+        const response = await measureIntakePhase('user_wait', () => abortable(this.host.questions!.ask({ agent: input.agent, signal: input.signal, questions: [{
           id: key, header: 'Kiokuko · 作業開始', question: 'この作業で decision と Lisp を使いますか？',
           detail: `この選択は同じチャットの次のターンにも引き継ぎます。既定の選択は変更できます。decision: ${config.provider} / ${selectedDecisionSettings(config)?.model ?? '未設定'}。未認証時に他へ切り替えません。Lisp の通常の権限・承認・Stop は維持します。取消・Skip は作業を保持して中止します。`,
           options,
-        }] }), input.signal).catch(error => {
+        }] }), input.signal), input.signal).catch(error => {
           if (error?.code === 'ASK_CANCELLED' && !input.signal.aborted) return { answers: [{ id: key, selected: [] }] }
           throw error
         })

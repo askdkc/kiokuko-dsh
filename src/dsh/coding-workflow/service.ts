@@ -229,7 +229,7 @@ export function reportCodingBlocker(db: SqliteDatabase, identity: CodingIdentity
   const blocker = CodingBlockerSchema.parse(raw)
   return mutateCodingWorkflow(db, identity, callId, expectedRevision, { blocker }, value => {
     if (terminal(value)) throw new KiokukoError('CONFLICT', 'Coding workflow is terminal')
-    if (blocker.criterionIds.some(id => !value.definition?.criteria.some(item => item.criterionId === id))) throw new KiokukoError('VALIDATION_ERROR', 'Unknown blocked criterion')
+    if (blocker.criterionIds.some(id => !value.definition?.criteria.some(item => item.criterionId === id))) throw new KiokukoError('VALIDATION_ERROR', `Unknown blocked criterion. coding_workflow_blocker uses local criterionIds from coding_workflow status: ${value.definition?.criteria.map(item => item.criterionId).join(', ') ?? '(no criteria defined)'}. Do not use task_completion IDs (coding:<workflowId>:<criterionId>); propose the missing criterion first.`)
     value.blocker = blocker; value.state = 'blocked'
   })
 }

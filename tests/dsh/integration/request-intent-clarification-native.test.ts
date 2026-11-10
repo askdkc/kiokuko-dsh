@@ -177,8 +177,17 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         const prepared = resultFor(request, 'clarify-preparation')
         assert.equal(prepared.isError, false, resultText(prepared))
         const value = JSON.parse(resultText(prepared))
-        assert.equal(value.status, 'awaiting_clarification')
+        assert.equal(value.status, scenario === 'reversed-answered' ? 'request_interpretation_required' : 'awaiting_clarification')
         assert.equal(value.answer, undefined)
+        if (scenario === 'reversed-answered' && !request.messages.some((message: any) => message.source?.kind === 'user' && JSON.stringify(message.content).includes(clarifiedAnswer))) {
+          assert.equal(asked.length, 0, 'a contradicted extraction returns evidence to the model')
+          assertUnchanged()
+          assert.equal(await readFile(join(dir, 'PLAN.md'), 'utf8'), originalContent)
+          // A genuine later user instruction changes the requested action; a checker failure cannot do so.
+          agent.followup(llm.createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: requested + '\n' + clarifiedAnswer }] }))
+          responses.unshift(acceptAnswer)
+          return native.textResponse('The document edit conflicts with the request, so no change was made.')
+        }
         if (!request.messages.some((message: any) => message.source?.kind === 'user' && JSON.stringify(message.content).includes(clarifiedAnswer))) {
           const deadline = Date.now() + 2500
           while (!agent.inbox.nextStep.some((message: any) => JSON.stringify(message.content).includes(clarifiedAnswer)) && Date.now() < deadline) await delay(5)
@@ -205,7 +214,7 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         assert.equal(prepared.isError, false, resultText(prepared)); assert.equal(JSON.parse(resultText(prepared)).prepared, true)
         assert.equal(JSON.parse(resultText(prepared)).requestIntent.changeScope, 'document')
         assert.deepEqual(JSON.parse(resultText(prepared)).requestIntent.evidence, clarifiedEvidence)
-        assertUnchanged(); assert.equal(asked.length, 1)
+        assertUnchanged(); assert.equal(asked.length, scenario === 'reversed-answered' ? 0 : 1)
         return native.toolCallResponse('answered-write', 'kioku_write', { path: 'PLAN.md', content: updatedContent })
       }, async (request: any) => {
         const written = resultFor(request, 'answered-write')
@@ -246,12 +255,13 @@ for (const scenario of ['answered', 'reversed-answered', 'target-answered', 'dis
         assert.equal(current.generation, working!.generation + 1)
         assert.equal(current.pendingStop, undefined)
       }
-      assert.equal(asked.length, 1, 'a single unresolved scope gets a single native question')
-      database(db=>assertNativeDecisionDiagnostics(db,agent.session.id,answeredScenario,scenario==='reversed-answered'||scenario==='target-answered'))
+      assert.equal(asked.length, scenario === 'reversed-answered' ? 0 : 1, 'only concrete missing information triggers a native question')
+      if (scenario !== 'reversed-answered') database(db=>assertNativeDecisionDiagnostics(db,agent.session.id,answeredScenario,scenario==='target-answered'))
       if (answeredScenario || scenario === 'dismissed' || scenario === 'foreign-answer') {
         assert.deepEqual(errors, []); assert.equal(checked, true)
       }
       if(scenario==='reversed-answered')database(db=>{
+        assert.equal(db.prepare("SELECT count(*) n FROM dsh_diagnostic_events WHERE kind IN ('question','answer')").get()!.n, 0, 'model recovery must not invent a human question or answer receipt')
         const rows=db.prepare("SELECT document_json FROM dsh_diagnostic_events WHERE kind='detector' ORDER BY created_at").all().map(r=>JSON.parse(String(r.document_json)))
         assert.ok(rows.some(r=>r.judge?.state==='available'&&r.judge.status==='refuted'&&r.judge.complete===true),'actual finite-domain subprocess must refute the reversed extraction')
         assert.ok(rows.some(r=>r.judge?.state==='available'&&r.judge.status==='entailed'&&r.judge.complete===true),'new same-scope answer must pass a fresh finite-domain assessment')

@@ -1,3 +1,4 @@
+import { measureIntakePhase } from '../intake-timing.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {codingIntent, codingContinuation} from '../coding-workflow/intent.js'
 import type {LispCodingInput} from './coding-choice.js'
@@ -66,7 +67,7 @@ export class LispCodingPreparation {
       if(selected.status==='unavailable') { state.phase='unavailable'; state.reason=selected.reason; throw new Error(selected.reason) }
       state.choice=selected.choice;state.answerRef=selected.answerRef
       state.phase=selected.choice==='yes'?'selected':'declined'
-      if(selected.choice==='yes')await this.host.activate(input.agent,input.signal)
+      if(selected.choice==='yes')await measureIntakePhase('lisp_preparation', () => this.host.activate(input.agent,input.signal), input.signal)
       else await this.host.deactivate?.(input.agent)
     })()
     try{await state.pending}catch(error){if(this.current(input.agent)===state && state.key===key && state.phase==='choice_pending'){state.phase=input.signal.aborted?'cancelled':'unavailable';state.reason=error instanceof Error?error.message:String(error)}throw error}finally{delete state.pending}
@@ -82,7 +83,7 @@ export class LispCodingPreparation {
       phase:choice==='yes'?'selected':'declined',attempts:0,failures:0}
     this.states.set(input.agent,state)
     try {
-      if(choice==='yes')await this.host.activate(input.agent,input.signal)
+      if(choice==='yes')await measureIntakePhase('lisp_preparation', () => this.host.activate(input.agent,input.signal), input.signal)
       else await this.host.deactivate?.(input.agent)
     } catch(error) { state.phase='unavailable'; state.reason=error instanceof Error?error.message:String(error); throw error }
     input.signal.throwIfAborted()
