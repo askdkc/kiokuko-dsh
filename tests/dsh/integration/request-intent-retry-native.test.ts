@@ -295,7 +295,9 @@ for (const mode of ['native', 'ptc'] as const)
             assert.match(text(rejected), expected)
             unchanged()
           }
-          assert.equal((await invoke(request('new', []))).isError, true)
+          const emptyRefs = await invoke(request('new', []))
+          assert.equal(emptyRefs.isError, false)
+          assert.equal((mode === 'ptc' ? emptyRefs.value.result : emptyRefs.value).status, 'invalid_preparation_request')
           unchanged()
           context.proposals[0]!.revision = 3
           const stale = await invoke(request('new'))
@@ -322,6 +324,13 @@ for (const mode of ['native', 'ptc'] as const)
           } finally {
             ask()
           }
+          const malformed = await invoke({ requestIntent: { relation: 'new', action: 'change', changeScope: 'fix', evidenceRefs: refs } })
+          assert.equal(malformed.isError, false, JSON.stringify(malformed))
+          const invalid = mode === 'ptc' ? malformed.value.result : malformed.value
+          assert.equal(invalid.status, 'invalid_preparation_request')
+          assert.equal(invalid.nextAction, 'correct_preparation_input')
+          assert.ok(invalid.issues.some((issue: any) => issue.path === 'requestIntent.changeScope' && issue.allowedValues.includes('implementation')))
+          unchanged()
           const result = await invoke(request('new'), { callId: 'corrected' })
           assert.equal(result.isError, false, JSON.stringify(result))
           const receipt = mode === 'ptc' ? result.value.result : result.value

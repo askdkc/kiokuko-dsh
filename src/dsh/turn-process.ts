@@ -1,6 +1,7 @@
 import { canonicalContentHash, canonicalJson } from '../serialization/validate.js'
 import type { SqliteDatabase } from '../db/adapter.js'
 import { KiokukoError } from '../errors.js'
+import { isKiokukoDshSource } from './plugin-source.js'
 
 export const DSH_TURN_HANDOFF_MAX_BYTES = 32 * 1024
 export const DSH_BOUNDARY_JOB_MAX_ATTEMPTS = 3
@@ -127,6 +128,32 @@ export function markOutboxObservedInTransaction(database: SqliteDatabase, contin
     UPDATE dsh_continuation_outbox SET status = 'observed', observed_seq = ?, updated_at = ?
      WHERE continuation_id = ? AND status IN ('pending', 'dispatched', 'observed')
   `).run(sequence, now, digest(continuationId, 'continuationId'))
+}
+
+/** Reconcile positive native observations after a lost callback or restart.
+ * A missing event proves nothing and never clears a dispatch reservation. */
+export function reconcileOutboxObservations(database: SqliteDatabase, sessionId: string,
+  events: readonly { type?: unknown; seq?: unknown; data?: unknown }[]): number {
+  const pending = new Map(readPendingOutbox(database, sessionId).map(item => [item.continuationId, item]))
+  let observed = 0
+  for (const event of events) {
+    if (event.type !== 'user/message' || typeof event.seq !== 'number' || !Number.isSafeInteger(event.seq) || event.seq < 0) continue
+    const message = event.data as { id?: string; source?: unknown; content?: unknown } | undefined
+    if (!message || !isKiokukoDshSource(message.source)) continue
+    const source = message.source as { deliveryId?: string }
+    const id = source.deliveryId ?? message.id
+    const item = id ? pending.get(id) : undefined
+    if (!item) continue
+    const expected = item.message as { content?: unknown; source?: unknown }
+    // Native persistence may add turn metadata. The delivered body and source
+    // must still match the exact outbox payload, not merely a copied ID.
+    if (canonicalContentHash({ content: message.content ?? null, source: message.source }) !==
+      canonicalContentHash({ content: expected.content ?? null, source: expected.source ?? null })) continue
+    markOutboxObservedInTransaction(database, item.continuationId, event.seq)
+    pending.delete(item.continuationId)
+    observed++
+  }
+  return observed
 }
 
 export function supersedeOutboxAtOrBeforeRevisionInTransaction(

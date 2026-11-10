@@ -1,5 +1,5 @@
 import { clarificationClaims } from '../clarification-claims.js'
-import { acceptsVerificationContinuation, continueVerification, isVerificationContinuation } from '../verification-continuation.js'
+import { observeVerificationContinuation, acceptsVerificationContinuation, continueVerification, isVerificationContinuation } from '../verification-continuation.js'
 import { noteScopedMemory } from '../memory-sidebar.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
@@ -2341,7 +2341,7 @@ export async function mountCore(
               if (!current?.task.authority || current.agent !== payload.agent ||
                 !acceptsVerificationContinuation(verification, current.task.authority, payload.turn) ||
                 current.turn !== payload.turn - 1 && current.turn !== payload.turn) return { kind: 'reject' }
-              await runtime.withDatabase(db => authorizeTaskLease(db, current.task.authority!))
+              await runtime.withDatabase(db => observeVerificationContinuation(db, verification, current.task.authority!, payload.turn))
               payload.signal.throwIfAborted()
               if (active.get(payload.agent.session.id) !== current) return { kind: 'reject' }
               current.turn = payload.turn

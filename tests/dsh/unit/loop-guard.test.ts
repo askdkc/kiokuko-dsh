@@ -1,7 +1,7 @@
 import { mkdtempSync, copyFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readPendingOutbox, reserveOutboxDelivery } from '../../../src/dsh/turn-process.js'
+import { reconcileOutboxObservations, readPendingOutbox, reserveOutboxDelivery } from '../../../src/dsh/turn-process.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
@@ -67,12 +67,23 @@ test('upgrade preserves old delivery history and does not retry a reserved nativ
     database.prepare(`INSERT INTO dsh_loop_guard_claims
       (claim_id,run_id,dsh_session_id,instruction_digest,generation,ordinal,decision,created_at)
       VALUES (?,'run','session',?,0,4,'wait_user','now')`).run(continuation, digest)
-    assert.deepEqual(migrateDatabase(database).applied, [52, 53, 54])
+    assert.deepEqual(migrateDatabase(database).applied, [52, 53, 54, 55, 56])
     assert.equal(database.prepare('SELECT decision FROM dsh_loop_guard_claims').get()?.decision, 'wait_user')
     assert.equal(database.prepare('SELECT status FROM dsh_boundary_jobs').get()?.status, 'pending')
     assert.equal(reserveOutboxDelivery(database, continuation, 'then'), true)
     assert.equal(reserveOutboxDelivery(database, continuation, 'later'), false)
     assert.equal(readPendingOutbox(database, 'session')[0]?.deliveryReserved, true)
+    const message = { id: continuation, source: { kind: 'plugin:kiokuko-dsh', form: 'instructions' },
+      content: [{ type: 'text', text: 'Continue the retained task.' }] }
+    database.prepare('UPDATE dsh_continuation_outbox SET message_json=?').run(JSON.stringify(message))
+    const observation = { type: 'user/message', seq: 42, data: { ...message, turn: 2 } }
+    assert.equal(reconcileOutboxObservations(database, 'foreign-session', [observation]), 0)
+    assert.equal(reconcileOutboxObservations(database, 'session', [{ ...observation, data: { ...message, content: [] } }]), 0)
+    assert.equal(reconcileOutboxObservations(database, 'session', []), 0)
+    assert.equal(readPendingOutbox(database, 'session')[0]?.deliveryReserved, true, 'absence never permits resend')
+    assert.equal(reconcileOutboxObservations(database, 'session', [observation]), 1)
+    assert.equal(reconcileOutboxObservations(database, 'session', [observation]), 0)
+    assert.equal(readPendingOutbox(database, 'session').length, 0)
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), [])
   } finally { database.close(); rmSync(previous, { recursive: true, force: true }) }
 })

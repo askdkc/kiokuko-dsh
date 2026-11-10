@@ -658,13 +658,26 @@
     },
     {
       "id": "memory-sidebar-web",
-      "argv": ["node", "scripts/verify-memory-sidebar-web.mjs"],
-      "profiles": ["browser"],
+      "argv": [
+        "node",
+        "scripts/verify-memory-sidebar-web.mjs"
+      ],
+      "profiles": [
+        "browser"
+      ],
       "result": "script",
-      "requires": ["dsh-native"],
+      "requires": [
+        "dsh-native"
+      ],
       "expected": "packed DSH Web shows delivery, source excerpts, and current or stale reuse evidence",
-      "dependsOn": ["build"],
-      "completionEvidence": { "packedWeb": true, "nativeSidebar": true, "reuseFreshness": true },
+      "dependsOn": [
+        "build"
+      ],
+      "completionEvidence": {
+        "packedWeb": true,
+        "nativeSidebar": true,
+        "reuseFreshness": true
+      },
       "packed": true
     },
     {
@@ -876,6 +889,28 @@
       "expected": "Explicit selected native fixture; nonempty official lifecycle without skipped required cases.",
       "optIn": true,
       "exclusionReason": "Live public package registries are an explicitly selected integration lane."
+    },
+    {
+      "id": "dsh-cli-packed",
+      "argv": [
+        "node",
+        "scripts/verify-packed-cli.mjs"
+      ],
+      "profiles": [
+        "main",
+        "runtime",
+        "ci-main"
+      ],
+      "result": "script",
+      "requires": [
+        "dsh-native",
+        "sbcl"
+      ],
+      "expected": "installed archive executes the real CLI PTY and resumes its retained session; loaded factory hash matches the archive",
+      "dependsOn": [
+        "build"
+      ],
+      "packed": true
     }
   ],
   "testExclusions": [
@@ -1006,7 +1041,8 @@
         "consumers": [
           "consumer-npm",
           "consumer-pnpm",
-          "dsh-cli-profile"
+          "dsh-cli-profile",
+          "dsh-cli-packed"
         ]
       }
     },

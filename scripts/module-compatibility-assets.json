@@ -53,7 +53,9 @@
     "migrations/051_drop_enno.sql",
     "migrations/052_dsh_continuation_evidence.sql",
     "migrations/053_lisp_execution_environment.sql",
-    "migrations/054_typed_completion_receipts.sql"
+    "migrations/054_typed_completion_receipts.sql",
+    "migrations/055_clarification_delivery_phase.sql",
+    "migrations/056_verification_delivery_phase.sql"
   ],
   "runtimeAssets": [
     "lisp/supervisor.mjs",

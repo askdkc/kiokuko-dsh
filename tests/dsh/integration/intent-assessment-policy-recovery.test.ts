@@ -42,3 +42,15 @@ for (const scenario of ['insufficient','confirmed','supported','contradicted','r
   }
  })
 }
+
+test('missing optional checker retains unavailable evidence but permits a bound ordinary main-model request', async () => {
+  const result = (await assessRequestIntent(undefined, 'checker-unavailable', context, candidate,
+    new AbortController().signal, { artifactRoot: '/nonexistent-kiokuko-checker-fixture' }))!
+  assert.equal(result.detector.state, 'unavailable')
+  assert.equal(result.semantic, 'unavailable')
+  assert.equal(result.outcome, 'advisory')
+  const stale = { ...candidate, evidence: { ...candidate.evidence, requestDigest: 'b'.repeat(64) } }
+  const denied = (await assessRequestIntent(undefined, 'checker-stale', context, stale,
+    new AbortController().signal, { artifactRoot: '/nonexistent-kiokuko-checker-fixture' }))!
+  assert.equal(assessmentAllowsPreparation(denied), false)
+})

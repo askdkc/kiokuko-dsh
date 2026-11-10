@@ -481,7 +481,7 @@ async function tui(resumeSessionId) {
         const done = native('command/done').at(-1).event.data
         assert.equal(done.kind, 'success', JSON.stringify(done))
       }
-      const lispRequest = `profile-fixture-lisp ${created.sessionId.slice(0, 8)}: evaluate (+ 20 22) using Lisp`
+      const lispRequest = `profile-fixture-lisp ${created.sessionId.slice(0, 8)}: evaluate (+ 20 22) using Lisp. 観測と未確定事項: 前の呼び出しに300,184msかかった。`
       const completionReviewOffset = fresh().length
       await line(lispRequest)
       await wait(() => {

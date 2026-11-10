@@ -1,3 +1,4 @@
+import { rebindRequestIntentDecision } from './request-intent.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { abortable } from '../models/vendor/abortable.js'
 import type {
@@ -213,6 +214,18 @@ export function mayConfirmRequestInterpretation(candidate: RequestIntentDecision
 export function assessmentAllowsPreparation(result: IntentAssessment): boolean {
   return result.outcome === 'consistent' || result.outcome === 'user_confirmed' || result.outcome === 'advisory'
 }
+/** Optional checker failure is not an authority decision. Revalidate all
+ * deterministic source bindings independently before degrading its verdict. */
+export function recoverUnavailableAssessment(
+  context: RequestIntentContext, candidate: RequestIntentDecision, result: IntentAssessment,
+): IntentAssessment {
+  if (result.outcome !== 'unavailable' || result.semantic === 'contradicted' ||
+    candidate.source !== 'main-model' || !ordinaryRequestInterpretation(candidate) ||
+    !rebindRequestIntentDecision(candidate, context) ||
+    context.proposals.some(proposal => !proposal.id.startsWith('assistant-')))
+    return result
+  return { ...result, outcome: 'advisory' }
+}
 export async function assessRequestIntent(
   service: DecisionService | undefined,
   requestId: string,
@@ -307,7 +320,7 @@ export async function assessRequestIntent(
       : detector.result.status === 'entailed'
         ? interpreted ? 'user_confirmed' : semantic === 'supported' ? 'consistent' : 'advisory'
         : 'clarify'
-  return {
+  return recoverUnavailableAssessment(context, candidate, {
     semantic,
     semanticIssues,
     ...(semanticChecks ? { semanticChecks } : {}),
@@ -316,5 +329,5 @@ export async function assessRequestIntent(
     ...(providerDecisionId ? { providerDecisionId } : {}),
     detector,
     outcome,
-  }
+  })
 }

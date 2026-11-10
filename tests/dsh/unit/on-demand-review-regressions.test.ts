@@ -1375,7 +1375,6 @@ for (const task of [
   'look up it',
   'それを消して？',
   'Delete that.',
-  'search A or B, I am undecided',
 ]) {
   test(`native web evidence: missing scope stops ${task}`, async (t) => {
     const f = await fixture(t),
@@ -2563,7 +2562,7 @@ test('a foreign question answer cannot become a source revision', async (t) => {
   assert.equal(f.admissions.length, 0)
 })
 
-test('unavailable assessment reports infrastructure failure without asking the human to repair a missing binary', async (t) => {
+test('unavailable optional assessment permits source-bound work without asking the human to repair a missing binary', async (t) => {
   const task = 'Implement src/parser.ts.',
     message = human('unavailable-not-an-answer', task),
     intent = activeIntent(
@@ -2600,17 +2599,12 @@ test('unavailable assessment reports infrastructure failure without asking the h
       evidenceRefs: requestIntentReferenceIds(intent.context),
     },
   })
-  assert.equal(r.value.status, 'assessment_unavailable')
-  assert.equal(r.value.detector, 'artifact_unavailable')
-  assert.equal(r.value.nextAction, 'report_assessment_unavailable')
-  assert.equal(r.value.preparedExecutionAllowed, false)
+  assert.equal(r.value.prepared, true)
   assert.equal(f.intake.awaitingClarification(f.agent), false)
-  assert.equal(f.admissions.length, 0)
-  const blocked = await f.execute('review_probe')
-  assert.equal(blocked.isError, true)
-  assert.match(JSON.stringify(blocked), /assessment_unavailable/)
-  assert.doesNotMatch(JSON.stringify(blocked), /Awaiting user clarification/)
-  assert.equal(f.bodies(), 0)
+  assert.equal(f.admissions.length, 1)
+  const executed = await f.execute('review_probe')
+  assert.equal(executed.isError, false)
+  assert.equal(f.bodies(), 1)
 })
 
 for (const cancelled of [true, false])
@@ -3503,7 +3497,7 @@ test('ordinary chat coding status is observational without manufacturing a nativ
   assert.equal(f.admissions.length, 0)
 })
 
-test('an unavailable assessment can recover on the next explicit preparation without a new turn', async (t) => {
+test('an unavailable optional assessment admits once and does not repeat the checker on identical preparation', async (t) => {
   const task = 'Implement src/parser.ts; preserve other files.',
     message = human('retry-assessment', task)
   const intent = activeIntent(
@@ -3535,13 +3529,9 @@ test('an unavailable assessment can recover on the next explicit preparation wit
       evidenceRefs: requestIntentReferenceIds(intent.context),
     },
   }
-  assert.equal(
-    (await f.execute(TASK_PREPARE_TOOL, args)).value.status,
-    'assessment_unavailable',
-  )
-  assert.equal(f.admissions.length, 0)
   assert.equal((await f.execute(TASK_PREPARE_TOOL, args)).value.prepared, true)
-  assert.equal(calls, 2)
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, args)).value.prepared, true)
+  assert.equal(calls, 1)
   assert.equal(f.admissions.length, 1)
 })
 
@@ -4168,4 +4158,35 @@ for(const verdict of ['supported','contradicted','insufficient'] as const)test(`
   assert.equal(f.bodies(),0)
   t.after(f.ctx.tools.guard((e:any)=>e.name===TASK_PREPARE_TOOL?'native permission denied':undefined))
   assert.equal((await f.prepare()).isError,true);assert.equal(f.admissions.length,0)
+})
+
+test('incident request recovers from malformed input through direct', async t => {
+  const task = '記憶レビューを修正する。観測と未確定事項: 呼び出しに300,184msかかった。src/review.tsを修正しテストする。'
+  const message = human('incident-source', task)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+  const f = await fixture(t, { interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'native_unowned_request') }) })
+  await f.capture([message])
+  const intent = { relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(context) }
+  const invalid = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { ...intent, changeScope: 'fix' } })
+  assert.equal(invalid.value.status, 'invalid_preparation_request')
+  assert.ok(invalid.value.issues.some((issue: any) => issue.path === 'requestIntent.changeScope'))
+  assert.equal(f.admissions.length, 0)
+  const valid = await f.execute(TASK_PREPARE_TOOL, { requestIntent: intent })
+  assert.equal(valid.isError, false, JSON.stringify(valid))
+  assert.equal(valid.value.prepared, true, JSON.stringify(valid))
+  assert.equal(f.admissions.length, 1)
+  assert.equal(valid.value.nextAction, 'execute_requested_work')
+  assert.equal(valid.value.blockedScope, 'none')
+})
+
+
+test('an explicitly unresolved choice stays unresolved without inferring a choice from text', async t => {
+  const task = 'search A or B, I am undecided'
+  const message = human('undecided-choice', task)
+  const intent = activeIntent([message], task, 'unknown', 'unknown')
+  const f = await fixture(t, { interpret: async () => intent })
+  await f.capture([message])
+  const result = await f.execute(TASK_PREPARE_TOOL, { taskType: 'research' })
+  assert.equal(result.value.prepared, false)
+  assert.equal(f.admissions.length, 0)
 })

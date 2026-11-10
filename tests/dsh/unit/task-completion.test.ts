@@ -109,6 +109,43 @@ test('typed verification binds specification identity separately from host-obser
   } finally { await f.cleanup() }
 })
 
+for (const boundary of ['before-dispatch', 'uncertain-dispatch'] as const) test(`verification reconciles ${boundary} without duplicate delivery`, async () => {
+  const f = await fixture('shadow')
+  try {
+    const task = 'Verify parser output'
+    const message = { id: 'verify-original', role: 'user', content: [{ type: 'text', text: task }] }
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'verify',
+      evidenceRefs: requestIntentReferenceIds(context) }, context)
+    assert.ok(decision)
+    initializeTaskCompletion(f.database, f.runId, 'shadow', decision)
+    const ledger = new LedgerStore(f.database)
+    if (ledger.readRun(f.runId)?.status === 'intake') ledger.updateRunStatus(f.runId, 'active')
+    const identity = { taskId: f.runId, sessionId: 'completion-session', repositoryRoot: f.root }
+    bindTaskRepository(f.database, identity)
+    const authority = captureTaskLease(f.database, identity)
+    for (const [index, criterion] of f.criteria.entries())
+      bindTaskCriterion(f.database, { runId: f.runId, callId: `bind-${index}`,
+        criterionId: criterion.criterionId, method: f.method, approved: true })
+
+    let checks = 0, attempts = 0, interrupted = true
+    const agent = { status: 'idle', inbox: { nextStep: [], nextTurn: [] }, cancel() {},
+      followup() { attempts++; if (boundary === 'uncertain-dispatch') throw Error('unknown native outcome') } }
+    const wake = () => continueVerification({
+      runtime: { withDatabase: async (fn: (database: typeof f.database) => unknown) => fn(f.database) } as any,
+      agent, authority, turn: 1, current: () => !(boundary === 'before-dispatch' && interrupted && ++checks === 3),
+    })
+    if (boundary === 'uncertain-dispatch') await assert.rejects(wake(), /unknown native outcome/)
+    else await wake()
+    interrupted = false
+    await wake()
+    await wake()
+    assert.equal(attempts, 1, 'only a confirmed unsent reservation can be delivered again')
+    assert.equal(f.database.prepare('SELECT count(*) AS n FROM dsh_loop_guard_claims').get<{ n: number }>()?.n, 1,
+      'reconciliation does not consume another retry')
+  } finally { await f.cleanup() }
+})
+
 test('automatic verification parks after two wakes even when each retry changes source', async () => {
   const f = await fixture('shadow')
   try {

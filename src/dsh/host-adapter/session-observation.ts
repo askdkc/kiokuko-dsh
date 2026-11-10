@@ -9,7 +9,7 @@ import { withImmediateTransaction } from '../../db/transaction.js'
 import { type DshLogEvent } from '../session-memory-finalizer.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { resolveProjectWorkspaceReadOnly } from '../../memory/workspaces.js'
-import { markOutboxObservedInTransaction } from '../turn-process.js'
+import { reconcileOutboxObservations } from '../turn-process.js'
 import { backupInputClaimInTransaction, readInputClaim, markClaimProgressInTransaction, settleInputClaimInTransaction, takeRecoverableInputClaimInTransaction } from '../input-claim.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SqliteDatabase } from '../../db/adapter.js'
@@ -156,7 +156,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
         if (continuationId !== undefined) {
           try {
             await runtime.withDatabase((database) => withImmediateTransaction(database, () => {
-              markOutboxObservedInTransaction(database, continuationId, event.seq as number)
+              reconcileOutboxObservations(database, session.id, [event])
             }))
           } catch {
             // Delivery observation is durable bookkeeping. A missed callback

@@ -1,5 +1,5 @@
 import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
-import { isVerificationContinuation, acceptsVerificationContinuation } from '../verification-continuation.js'
+import { observeVerificationContinuation, isVerificationContinuation, acceptsVerificationContinuation } from '../verification-continuation.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { readTaskCorrections } from '../correction-context.js'
 import { timeConstraintForRequest } from '../../memory/retrieval-contracts.js'
@@ -1260,6 +1260,7 @@ export function createAdmission({
           (item.turn !== event.turn - 1 && item.turn !== event.turn) ||
           !acceptsVerificationContinuation(verification, item.authority, event.turn))
           return { kind: 'reject' }
+        await runtime.withDatabase(db => observeVerificationContinuation(db, verification, item.authority!, event.turn))
       }
       const seenContinuations = new Set<string>()
       let nativeDecision: DshPreStepDecision = {

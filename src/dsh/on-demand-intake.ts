@@ -66,7 +66,7 @@ import {
   type MemoryOwnerIdentity,
   type MemoryOwnerKind,
 } from './memory-owner.js'
-import { assessmentAllowsPreparation, mayConfirmRequestInterpretation, type IntentAssessment } from './decisions/intent-assessment.js'
+import { recoverUnavailableAssessment, assessmentAllowsPreparation, mayConfirmRequestInterpretation, type IntentAssessment } from './decisions/intent-assessment.js'
 import type { IntakeDiagnosticObservation } from './decisions/diagnostics.js'
 
 class RequestClarification extends Error {
@@ -376,9 +376,7 @@ function denied(reason: string): { kind: 'deny'; reason: string } {
   return { kind: 'deny', reason }
 }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
-export function preparationCarrier(
-  value: unknown,
-): PreparationRequest | undefined {
+function preparationEnvelope(value: unknown): { input: unknown } | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value))
     return undefined
   const args = value as Record<string, unknown>
@@ -395,12 +393,39 @@ export function preparationCarrier(
   if (!code.startsWith(prefix) || !code.endsWith(')')) return undefined
   try {
     const input = JSON.parse(code.slice(prefix.length, -1)) as unknown
-    const parsed = parsePreparationRequest(input)
-    if (!parsed || code !== prefix + JSON.stringify(input) + ')')
-      return undefined
-    return parsed
+    if (code !== prefix + JSON.stringify(input) + ')') return undefined
+    return { input }
   } catch {
     return undefined
+  }
+}
+
+export function preparationCarrier(value: unknown): PreparationRequest | undefined {
+  const envelope = preparationEnvelope(value)
+  return envelope ? parsePreparationRequest(envelope.input) : undefined
+}
+
+/** Same recovery contract for direct calls and the inert PTC envelope. */
+function invalidPreparation(input: unknown, context?: RequestIntentContext) {
+  const parsed = preparationFieldsSchema.safeParse(input)
+  return {
+    prepared: false, status: 'invalid_preparation_request',
+    reason: 'invalid_input', blockedScope: 'current_preparation',
+    permissions: 'unchanged_native_policy', nextAction: 'correct_preparation_input',
+    issues: parsed.success ? [{ path: '', message: 'Supply taskType or requestIntent' }]
+      : parsed.error.issues.map(issue => ({ path: issue.path.join('.'), message: issue.message,
+        ...('values' in issue ? { allowedValues: issue.values } : {}) })),
+    currentReferences: context ? requestIntentRequiredReferenceIds(context) : [],
+  }
+}
+
+function preparationResponse(value: any) {
+  return { ...value,
+    status: value.status ?? (value.prepared ? 'prepared' : 'preparation_pending'),
+    reason: value.reason ?? (value.prepared ? 'request_prepared' : value.status ?? 'preparation_pending'),
+    blockedScope: value.blockedScope ?? (value.prepared || value.status === 'answer_directly' ? 'none' : 'effects_depending_on_current_request'),
+    nextAction: value.nextAction ?? (value.prepared ? 'execute_requested_work' : 'inspect_preparation_status'),
+    permissions: 'unchanged_native_policy',
   }
 }
 
@@ -431,6 +456,7 @@ export class OnDemandIntake {
     object,
     Map<string, ClarificationContext>
   >()
+  readonly #answerDelivery = new WeakMap<DemandAgent, Map<string, { captured(): Promise<unknown>; consumed(): Promise<unknown> }>>()
   readonly #clarificationAdmissions = new WeakMap<DemandAgent, Map<string, number>>()
   readonly #clarifications = new Map<
     string,
@@ -453,7 +479,7 @@ export class OnDemandIntake {
     {
       turn: Turn
       execute: Definition['execute']
-      carrier?: PreparationRequest
+      carrier?: { input: unknown }
       carrierDigest?: string
       skillRead?: boolean
       evidenceReadDigest?: string
@@ -718,8 +744,31 @@ export class OnDemandIntake {
     })) throw new Error('The queued clarification no longer belongs to a live request. The user can restate the pending decision.')
   }
 
+  private async restoreClarifications(input: DemandInput): Promise<void> {
+    if (!input.agent.session) return
+    if (this.host.clarificationClaims) {
+      for (const message of humanMessages(input.messages)) {
+        const id = humanId(message)
+        if (!id.startsWith(CLARIFICATION_REPLY_PREFIX) || this.#clarificationContexts.get(input.agent)?.has(id)) continue
+        const restored = await this.host.clarificationClaims.restore(input.agent.session!.id, input.agent.id, id, humanTask([message]), input.turn)
+        input.signal.throwIfAborted()
+        if (restored) {
+          const known = this.#clarificationContexts.get(input.agent) ?? new Map()
+          known.set(id, restored.context)
+          this.#clarificationContexts.set(input.agent, known)
+          const deliveries = this.#answerDelivery.get(input.agent) ?? new Map()
+          const claims = this.host.clarificationClaims
+          deliveries.set(id, { captured: () => claims.advance(restored.identity, id, 'captured'),
+            consumed: () => claims.advance(restored.identity, id, 'consumed') })
+          this.#answerDelivery.set(input.agent, deliveries)
+        }
+      }
+    }
+  }
+
   /** Availability only: never capture a turn or publish execution intent before turn/start. */
   async prepareNativeCapabilities(input: DemandInput): Promise<void> {
+    await this.restoreClarifications(input)
     this.assertClarificationSource(input)
     if (!this.host.prepareNativeCoding) return
     input = {
@@ -768,6 +817,7 @@ export class OnDemandIntake {
       ...input,
       signal: AbortSignal.any([input.signal, this.#lifecycle.signal]),
     }
+    await this.restoreClarifications(input)
     this.assertClarificationSource(input)
     const sessionId = input.agent.session!.id
     this.host.recovery?.active(sessionId)
@@ -782,6 +832,10 @@ export class OnDemandIntake {
       const admitted = this.#clarificationAdmissions.get(input.agent) ?? new Map()
       admitted.set(answerId, input.turn)
       this.#clarificationAdmissions.set(input.agent, admitted)
+    }
+    for (const message of humanMessages(input.messages)) {
+      const delivery = this.#answerDelivery.get(input.agent)?.get(humanId(message))
+      if (delivery) await delivery.captured()
     }
     if (previous) {
       if (
@@ -1366,6 +1420,7 @@ export class OnDemandIntake {
         canonicalContentHash([state.requestIntentContext, decision]) !== digest
       )
         throw new Error('Assessment source changed')
+      result = recoverUnavailableAssessment(context, decision, result)
       state.assessment = { digest, result }
       await this.diagnose(state, { kind: 'assessment', assessment: result })
       if(!assessmentAllowsPreparation(result))await this.deferAssessment(state,context,decision,digest)
@@ -1504,6 +1559,15 @@ export class OnDemandIntake {
         requestIntent: state.requestIntent ?? null,
       })
       state.status = 'prepared'
+      for (const message of humanMessages(state.input.messages)) {
+        const deliveries = this.#answerDelivery.get(state.input.agent)
+        const delivery = deliveries?.get(humanId(message))
+        if (delivery) {
+          // This receipt is bookkeeping, never a second execution gate after admission.
+          await delivery.consumed().catch(() => undefined)
+          deliveries!.delete(humanId(message))
+        }
+      }
       delete state.clarificationPending
       this.cancelClarification(state.input.agent.session!.id)
       delete state.confirmationResume
@@ -1540,8 +1604,10 @@ export class OnDemandIntake {
     const pending = this.#clarifications.get(sessionId)
     this.#clarifications.delete(sessionId)
     if (pending?.answerId) {
+      if (this.host.clarificationClaims) this.watch(this.host.clarificationClaims.invalidate(sessionId, pending.agent.id, pending.answerId))
       this.#clarificationContexts.get(pending.agent)?.delete(pending.answerId)
       this.#nativeConfirmations.get(pending.agent)?.delete(pending.answerId)
+      this.#answerDelivery.get(pending.agent)?.delete(pending.answerId)
     }
     pending?.controller.abort(new Error('Clarification source is no longer current'))
     pending?.disposeStop?.()
@@ -1572,7 +1638,11 @@ export class OnDemandIntake {
     }
     return true
   }
-  private async clarify(
+  private async clarify(state: Turn, signal: AbortSignal, reason: RequestClarification): Promise<unknown> {
+    return preparationResponse(await this.clarifyRequest(state, signal, reason))
+  }
+
+  private async clarifyRequest(
     state: Turn,
     executionSignal: AbortSignal,
     reason: RequestClarification,
@@ -1940,7 +2010,6 @@ export class OnDemandIntake {
         // Only the exact affirmative selection below creates a scoped receipt;
         // a free-text correction is fresh user evidence, never an admission.
         const answerMessageId = background ? CLARIFICATION_REPLY_PREFIX + randomUUID() : randomUUID()
-        if (claims && !await claims.settle(identity, answerMessageId)) return result
         assertQuestionCurrent()
         const reply = clarificationReply(clarification, {
           id: answerMessageId,
@@ -1950,6 +2019,7 @@ export class OnDemandIntake {
           scope: answerScope,
         })
         const content = reply.content
+        if (claims && !await claims.settle(identity, answerMessageId, { context: reply.context, content })) return result
         signal.throwIfAborted()
         assertQuestionCurrent()
         if (confirmCurrent && answerQuestionId === id && decision && context && !answer.custom?.trim() &&
@@ -1959,6 +2029,14 @@ export class OnDemandIntake {
             contentDigest: canonicalContentHash(content), sourcesDigest: canonicalContentHash(clarification.sources),
             scopeDigest: this.confirmationScope(context), candidateDigest: this.confirmationCandidate(decision) })
           this.#nativeConfirmations.set(state.input.agent, receipts)
+        }
+        if (claims) {
+          const deliveries = this.#answerDelivery.get(state.input.agent) ?? new Map()
+          deliveries.set(answerMessageId, {
+            captured: () => claims.advance(identity, answerMessageId, 'captured'),
+            consumed: () => claims.advance(identity, answerMessageId, 'consumed'),
+          })
+          this.#answerDelivery.set(state.input.agent, deliveries)
         }
         replies.set(answerMessageId, reply.context)
         this.#clarificationContexts.set(state.input.agent, replies)
@@ -2490,7 +2568,7 @@ export class OnDemandIntake {
         execution.name === 'run_code' &&
         state.status === 'answer' &&
         canonicalContentHash(
-          preparationCarrier(execution.arguments) ?? null,
+          preparationEnvelope(execution.arguments) ?? null,
         ) === proof.carrierDigest
       )
     return (
@@ -2605,10 +2683,10 @@ export class OnDemandIntake {
         if (
           !state ||
           execution.name !== TASK_PREPARE_TOOL ||
-          this.definition(execution)?.execute !== definition.execute ||
-          !value
+          this.definition(execution)?.execute !== definition.execute
         )
           throw new Error('Invalid task preparation request')
+        if (!value) return invalidPreparation(args, state.requestIntentContext)
         if (
           state.preparationCalls.has(execution.callId) ||
           !(
@@ -2745,7 +2823,7 @@ export class OnDemandIntake {
               value.requestIntent !== undefined,
             )
           }
-          return {
+          return preparationResponse({
             prepared: true,
             taskType:
               state.taskType ??
@@ -2767,7 +2845,7 @@ export class OnDemandIntake {
               : {}),
             memoryOwner: state.memoryOwner,
             permissions: 'unchanged_native_policy',
-          }
+          })
         } catch (error) {
           if (!(error instanceof RequestClarification)) throw error
           return this.clarify(state, execution.signal, error)
@@ -2842,7 +2920,7 @@ export class OnDemandIntake {
               (isLispImplementation(actual.execute) && this.pendingLispEffect(execution)) ||
               (!isLispImplementation(actual.execute) && !nativeEvidenceRead(execution) &&
                 execution.name !== 'skill' && execution.name !== TASK_PREPARE_TOOL &&
-                !(execution.name === 'run_code' && preparationCarrier(execution.arguments)))
+                !(execution.name === 'run_code' && preparationEnvelope(execution.arguments)))
             )) return denied('The current request is awaiting clarification. Native commands cannot bypass that question; resolve it and prepare the exact request first.')
             if (
               state.confirmationResume &&
@@ -2931,7 +3009,7 @@ export class OnDemandIntake {
               state.status === 'answer'
             const carrier =
               execution.name === 'run_code'
-                ? preparationCarrier(execution.arguments)
+                ? preparationEnvelope(execution.arguments)
                 : undefined
             const carrierDigest = carrier
               ? canonicalContentHash(carrier)
@@ -3118,7 +3196,7 @@ export class OnDemandIntake {
             return next()
           }
           if (!proof.carrier) return next()
-          const carrier = preparationCarrier(execution.arguments)
+          const envelope = preparationEnvelope(execution.arguments)
           if (
             !(
               state.status === 'answer' ||
@@ -3126,12 +3204,17 @@ export class OnDemandIntake {
                 this.host.ready(state.input.agent, state.input.turn))
             ) ||
             state.preparationCalls.has(execution.callId) ||
-            !carrier ||
-            canonicalContentHash(carrier) !== proof.carrierDigest
+            !envelope ||
+            canonicalContentHash(envelope) !== proof.carrierDigest
           )
             throw new Error(
               'Preparation carrier was already consumed or changed',
             )
+          const carrier = parsePreparationRequest(envelope.input)
+          if (!carrier) {
+            const result = { ...invalidPreparation(envelope.input, state.requestIntentContext), programExecuted: false }
+            return { isError: false, value: { logs: [], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+          }
           state.preparationCalls.add(execution.callId)
           try {
             const requestIntent = await this.bindIntent(
@@ -3188,7 +3271,7 @@ export class OnDemandIntake {
               requestIntent,
               carrier.requestIntent !== undefined,
             )
-            const result = {
+            const result = preparationResponse({
               prepared: true,
               taskType: state.taskType,
               originalTask: state.task,
@@ -3208,7 +3291,7 @@ export class OnDemandIntake {
               memoryOwner: state.memoryOwner,
               permissions: 'unchanged_native_policy',
               programExecuted: false,
-            }
+            })
             return {
               isError: false,
               value: {
@@ -3296,7 +3379,7 @@ export class OnDemandIntake {
             (state.status === 'prepared' &&
               this.host.ready(state.input.agent, state.input.turn))) &&
             canonicalContentHash(
-              preparationCarrier(execution.arguments) ?? null,
+              preparationEnvelope(execution.arguments) ?? null,
             ) === proof.carrierDigest
             ? undefined
             : 'Preparation carrier is not current'

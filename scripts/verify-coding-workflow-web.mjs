@@ -70,7 +70,7 @@ if(mode==='complete'){
 call('final','coding_workflow',{action:'status'});
 responses.push(r=>{result=value(r,prefix+'final');return mock.textResponse(mode==='complete'?'Goal achieved: the ordinary CLI returned 42.':'The Goal is preserved; implementation awaits this task’s choice.')});
 }
-agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:mode==='seed'?'Fixture ready':mode==='resume'?'Continue the current task without changing its scope.':'Implement src/parser.mjs so its public command adds one to numeric input. 通常実行で。'}]}));
+agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:mode==='seed'?'Fixture ready':mode==='resume'?'Continue the current task without changing its scope.':'Implement src/parser.mjs so its public command adds one to numeric input. 通常実行で。観測と未確定事項: 前の呼び出しに300,184msかかった。実装後にテストし結果を報告する。'}]}));
 await agent.whenIdle();if(result===undefined||responses.length)throw Error('Incomplete fixture script');await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n');return {kind:'success',text:'Recorded '+mode};
 }});}
 `)

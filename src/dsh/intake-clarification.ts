@@ -18,10 +18,7 @@ export function executionClarification(task: string, intent?: import('./decision
     || isContinuationReference(text) && !resolvedContinuation) {
     return 'The original request does not identify the action target. Ask which concrete file, item, recipient or operation the user means before preparing work; do not substitute the current directory as the target.'
   }
-  const alternatives = /\b(?:or|versus|vs|whether)\b/iu.test(text)
-    && /\b(?:undecided|unsure|uncertain|not\s+(?:yet\s+)?(?:decided|chosen|sure)|(?:haven\x27t|have not|can\x27t|cannot)\s+(?:yet\s+)?(?:decided|chosen|decide|choose))\b/iu.test(text)
-    || /(?:か[^。！？]*か|それとも|または|あるいは|どちら|どっち)/u.test(text)
-      && /(?:未定|未決|未確定|決め(?:て)?(?:い)?ない|決まって(?:い)?ない|決められ|迷って|判断でき|わからない|分からない)/u.test(text)
-  if (alternatives) return 'The user has not chosen between the requested alternatives. Discuss or ask which concrete action to take before preparing execution; an advisory task type cannot make that decision.'
+  // Natural-language uncertainty belongs to source-bound interpretation. Words
+  // in a report or quotation cannot independently veto the requested action.
   return undefined
 }

@@ -16,7 +16,7 @@ import { DshCompletionReporter } from '../completion-report.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { projectDshContext } from '../context-projection.js'
-import { replacePendingOutboxMessageInTransaction, type DshBoundaryJob } from '../turn-process.js'
+import { reconcileOutboxObservations, replacePendingOutboxMessageInTransaction, type DshBoundaryJob } from '../turn-process.js'
 import { claimAutomaticContinuationInTransaction } from '../loop-guard.js'
 import { continuationMessage, continuationProgress } from '../continuation-evidence.js'
 import { assessTaskCompletion } from '../task-completion.js'
@@ -185,6 +185,9 @@ export function createBoundaries(deps: BoundaryDependencies) {
     const sessionId = nativeSession?.id
     const cwd = nativeSession?.header?.cwd
     if (sessionId === undefined || cwd === undefined || typeof nativeSession?.snapshotEvents !== 'function') return
+    if (sessions?.get(sessionId) !== nativeSession || agents?.get(nativeAgent.id) !== nativeAgent) return
+    await runtime.withDatabase(database => withImmediateTransaction(database, () =>
+      reconcileOutboxObservations(database, sessionId, nativeSession.snapshotEvents!())))
     if (nativeAgent.status === 'running') return
     await deliverCompletionReport(nativeSession)
     const terminal = await runtime.withDatabase(database => database.prepare(`

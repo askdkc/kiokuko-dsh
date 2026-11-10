@@ -641,3 +641,14 @@ test('a bound research action retains an explicit analysis profile without grant
   assert.equal(requestIntentTaskType(decision, 'build'), 'research')
   assert.equal(decision.action, 'research')
 })
+
+test('investigation uncertainty and quoted alternatives do not veto a source-bound implementation request', () => {
+  for (const task of [
+    '記憶レビューの長時間待機を改善する。\n## 観測と未確定事項\n呼び出しに300,184msかかった。src/review.tsを修正してテストする。',
+    'Fix src/parser.ts. The report says "A or B is undecided"; investigate that report and implement the fix.',
+  ]) {
+    const current = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'implementation', evidenceRefs: requestIntentReferenceIds(current) }, current)!
+    assert.equal(executionClarification(task, decision, current), undefined)
+  }
+})

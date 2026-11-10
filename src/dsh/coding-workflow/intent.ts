@@ -63,6 +63,10 @@ export function codingIntent(task: string): boolean {
   }
   const request = lines.join('\n')
   if (executionClarification(request)) return false
+  // Legacy callers have no source-bound interpretation. An action followed
+  // immediately by an alternative is not an explicit implementation request.
+  // This only declines automatic coding enrollment; it never vetoes native intake.
+  if (/^(?:fix|implement|repair|change|update)\s+(?:or|versus|vs)\b/iu.test(request)) return false
   if (documentEditIntent(request)) return false
   if (/\b(?:write|create|draft)\s+(?:an?\s+)?(?:email|letter|message|report|document|post)\b/iu.test(request)
     || /(?:案内文|メール|記事|文章|文書|レポート)を(?:書|作|保存)/u.test(request)) return false
