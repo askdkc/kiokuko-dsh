@@ -9,7 +9,7 @@ Kiokuko calls the libraries in process; it does not launch the CLI or install pa
 The dependency follows npm's `latest` tag for fresh installations. Existing
 installations and repository lockfiles retain their resolution until an explicit
 dependency update; restarting does not update it. Both repository lockfiles
-currently resolve 0.1.18. New releases must pass the recording, reading and
+currently resolve 0.1.19. New releases must pass the recording, reading and
 package-consumer checks before they can be described as tested.
 The trace manifest records the installed core version.
 Each recorded final model request also includes a bounded manifest of host-owned

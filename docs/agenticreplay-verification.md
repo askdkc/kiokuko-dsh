@@ -15,7 +15,7 @@ manifest records the installed core version, rather than a release literal.
 Fresh consumer installations follow npm's `latest` tag. Existing installations
 and repository lockfiles retain their resolved version until explicitly updated;
 `npm ci` reproduces the locked version. Both repository lockfiles currently
-resolve 0.1.18. Future releases must pass the same checks: the tag does not
+resolve 0.1.19. Future releases must pass the same checks: the tag does not
 guarantee compatible library APIs or bundle structure.
 
 To refresh the tested resolution while retaining latest tracking:

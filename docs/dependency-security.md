@@ -106,9 +106,9 @@ these tests actually run; upgrades that introduce new hooks need review.
 
 ## 2026-11-10 AgenticReplay distribution update
 
-AgenticReplay now follows the npm `latest` tag, with 0.1.18 resolved in both
+AgenticReplay now follows the npm `latest` tag, with 0.1.19 resolved in both
 repository lockfiles. The installed 0.1.9 distribution contained fast-uri 3.1.8;
-0.1.18 resolves fast-uri 3.1.9 through its bundled schema → AJV dependency.
+0.1.19 resolves fast-uri 3.1.9 through its bundled schema → AJV dependency.
 This supersedes the unresolved bundled fast-uri finding below. It does not
 establish that every dependency is free of vulnerabilities or dismiss any
 remote alert. Existing installed profiles need their own update and restart.
