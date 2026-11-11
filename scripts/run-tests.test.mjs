@@ -66,7 +66,15 @@ for (const exitedGroupEperm of [false, true]) test(
       // sends SIGTERM to the supervisor, whose existing group cleanup remains on.
       await writeFile(
         file,
-        `import test from 'node:test'; import {spawn} from 'node:child_process'; import {writeFileSync} from 'node:fs';\ntest('bounded busy fixture',{timeout:20},async()=>{const child=spawn(process.execPath,['-e','setTimeout(()=>{},5000)'],{stdio:'ignore'});writeFileSync(${JSON.stringify(pidFile)},String(child.pid));const until=Date.now()+5000;while(Date.now()<until)await Promise.resolve()});\n`,
+        `import test from 'node:test'; import {spawn} from 'node:child_process'; import {once} from 'node:events'; import {writeFileSync} from 'node:fs';
+test('ready descendant',async t=>{
+  const child=spawn(process.execPath,['-e',${JSON.stringify((exitedGroupEperm ? "process.on('SIGTERM',()=>setTimeout(()=>process.exit(0),200));" : '') + "setTimeout(()=>{},5000);process.send('ready')")}],{stdio:['ignore','ignore','ignore','ipc']});
+  writeFileSync(${JSON.stringify(pidFile)},String(child.pid));
+  await once(child,'message');
+  await t.test('bounded busy fixture',{timeout:20},async()=>{
+    const until=Date.now()+5000;while(Date.now()<until)await Promise.resolve()
+  })
+});\n`,
       )
       const preload = join(root, 'exited-group.mjs')
       if (exitedGroupEperm) await writeFile(preload, `
@@ -75,7 +83,21 @@ for (const exitedGroupEperm of [false, true]) test(
         cp.spawn=function(...args){const child=spawn.apply(this,args);child.once('exit',()=>exited.add(child.pid));return child};syncBuiltinESMExports();
         const kill=process.kill;process.kill=function(pid,signal){
           if(signal==='SIGKILL'&&pid<0&&exited.has(-pid)){
-            console.error('injected EPERM after owned runner exit');
+            // Leader exit does not prove that its descendants have terminated.
+            // Model an exited group only after the real SIGTERM has drained it.
+            const deadline=Date.now()+1000;
+            while(true){
+              const rows=cp.execFileSync('/bin/ps',['-A','-o','pgid=,stat='],{encoding:'utf8',timeout:1000}).trim().split('\\n');
+              const live=rows.some(line=>{
+                const fields=line.trim().split(/\\s+/);
+                if(fields.length!==2||!/^\\d+$/.test(fields[0]))throw Error('Invalid fixture process snapshot');
+                return Number(fields[0])===-pid&&!['Z','X'].includes(fields[1][0])
+              });
+              if(!live)break;
+              if(Date.now()>=deadline)throw Error('Fixture process group did not terminate before EPERM injection');
+              Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,10)
+            }
+            console.error('injected EPERM after owned group termination');
             throw Object.assign(new Error('exited fixture group EPERM'),{code:'EPERM'})
           }
           return kill.call(this,pid,signal)
@@ -90,7 +112,7 @@ for (const exitedGroupEperm of [false, true]) test(
         (error) => {
           assert.match(error.stderr, /wall-clock timeout \(2000 ms\)/)
           assert.equal(error.code, 1)
-          if (exitedGroupEperm) assert.match(error.stderr, /injected EPERM after owned runner exit/)
+          if (exitedGroupEperm) assert.match(error.stderr, /injected EPERM after owned group termination/)
           return true
         },
       )
