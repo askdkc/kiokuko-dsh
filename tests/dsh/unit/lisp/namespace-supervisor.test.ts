@@ -96,7 +96,9 @@ const [code,signal]=await childExit;process.exit(signal?128:code??70);
         if(gone){const birth=processIdentity(pid);if(!birth||!sameProcess(pid,birth))throw Error('fixture identity unavailable');process.kill(pid,'SIGKILL');
           const end=Date.now()+2500;while(sameProcess(pid,birth)){if(Date.now()>end)throw Error('fixture child did not terminate');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,5)}}
         const error=Error('fixture parentage lookup failed');error.code=${JSON.stringify(options.parentageError === 'goneESRCH' ? 'ESRCH' : options.parentageError === 'gone' ? 'ENOENT' : options.parentageError)};
-        console.error('fixture parentage '+error.code+' '+(gone?'dead':'live'));throw error
+        // The supervisor can exit as soon as the killed child's monitor exits.
+        // Commit phase evidence before throwing; buffered console output can be lost.
+        fs.writeSync(2,'fixture parentage '+error.code+' '+(gone?'dead':'live')+'\\n');throw error
       }
       fs.readFileSync=function(path,...args){const m=/^\\/proc\\/(\\d+)\\/stat$/.exec(String(path));if(m){const n=(counts.get(path)??0)+1;counts.set(path,n);if(n===4)inject(Number(m[1]))}return read.call(this,path,...args)};
       cp.execFileSync=function(command,args,...rest){if(command==='/bin/ps'&&args?.[3]==='ppid=')inject(Number(args[1]));return exec.call(this,command,args,...rest)};syncBuiltinESMExports()`)

@@ -29,7 +29,6 @@ AGENTS.md
 !templates/AGENTS.md
 CLAUDE.md
 GEMINI.md
-.kiokuko.json
 .orca
 .agenticreplay
 
@@ -38,3 +37,4 @@ GEMINI.md
 lisp/.native/
 lisp/.native-build-*/
 .kiokuko-ai.json
+.kiokuko.json
