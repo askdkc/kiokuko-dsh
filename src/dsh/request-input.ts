@@ -13,3 +13,18 @@ export function isRequestInput(message: any): boolean {
 export function hasRequestInput(messages: readonly unknown[]): boolean {
   return messages.some(isRequestInput)
 }
+
+/** Canonical request text shared by intake and memory ownership checks.
+ * Goal carriers contribute task text, never human consent. */
+export function requestTask(messages: readonly unknown[]): string {
+  return messages.filter(isRequestInput)
+    .flatMap((message: any) =>
+      typeof message.content === 'string'
+        ? [message.content]
+        : (message.content ?? [])
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text),
+    )
+    .join('\n')
+    .trim()
+}

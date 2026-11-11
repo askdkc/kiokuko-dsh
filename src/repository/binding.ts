@@ -7,8 +7,37 @@ import { validateRepositoryBindingIdentity } from './identity-value.js';
 /** A memory mapping conflict, not a native filesystem authorization denial. */
 export class RepositoryBindingConflict extends KiokukoError {
   constructor() {
-    super('CONFLICT', 'Repository root is already bound to another repository ID; rebind is required', { scope: 'repository_memory' });
+    super('CONFLICT', 'Repository root, repository ID or workspace conflicts with an existing binding; rebind is required', { scope: 'repository_memory' });
   }
+}
+
+export interface RepositoryBindingCandidate {
+  repositoryRoot: string;
+  repositoryId: string;
+  workspace: string;
+}
+
+/** Inspect all mapping directions without registering or touching timestamps. */
+export function inspectRepositoryBindingReadOnly(
+  database: SqliteDatabase,
+  candidate: RepositoryBindingCandidate,
+  options: { requireRegisteredRoot?: boolean } = {},
+): boolean {
+  validateRepositoryBindingIdentity(candidate.repositoryId, candidate.workspace);
+  const location = database.prepare(`SELECT l.repository_id AS repositoryId, r.workspace
+    FROM repository_locations l LEFT JOIN repositories r ON r.repository_id=l.repository_id
+    WHERE l.canonical_root=?`).get<{ repositoryId: string; workspace: string | null }>(candidate.repositoryRoot);
+  if (location && location.workspace === null)
+    throw new KiokukoError('INTEGRITY_ERROR', 'Repository location has no registered repository');
+  if (location && location.repositoryId !== candidate.repositoryId) throw new RepositoryBindingConflict();
+  const repository = database.prepare('SELECT workspace FROM repositories WHERE repository_id=?')
+    .get<{ workspace: string }>(candidate.repositoryId);
+  if (repository && repository.workspace !== candidate.workspace) throw new RepositoryBindingConflict();
+  const workspace = database.prepare('SELECT repository_id AS repositoryId FROM repositories WHERE workspace=?')
+    .get<{ repositoryId: string }>(candidate.workspace);
+  if (workspace && workspace.repositoryId !== candidate.repositoryId) throw new RepositoryBindingConflict();
+  return options.requireRegisteredRoot !== true || (location !== undefined
+    && location.repositoryId === candidate.repositoryId && location.workspace === candidate.workspace);
 }
 
 export interface RepositoryRegistration {
@@ -201,7 +230,7 @@ export function registerRepositoryAndLocation(
       }>(registration.repositoryId);
     if (repository !== undefined) validateStoredVersions(repository);
     if (repository && repository.workspace !== registration.workspace) {
-      conflict('Repository ID is already bound to another workspace');
+      throw new RepositoryBindingConflict();
     }
     if (repository !== undefined
       && (repository.bindingSchemaVersion > registration.bindingSchemaVersion
@@ -219,7 +248,7 @@ export function registerRepositoryAndLocation(
       .prepare('SELECT repository_id FROM repositories WHERE workspace = ?')
       .get<{ repository_id: string }>(registration.workspace);
     if (workspace && workspace.repository_id !== registration.repositoryId) {
-      conflict('Workspace is already bound to another repository ID');
+      throw new RepositoryBindingConflict();
     }
 
     const created = !repository;

@@ -1,3 +1,4 @@
+import { projectRuntimeContextMessages } from './runtime-context.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type AgentHandle, type AgentOptions,
   type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
@@ -99,13 +100,14 @@ export class KiokukoHarnessAgent implements Agent {
     const head=seed.find(e=>e.seq===session.surface.nodes[0]);if(head?.type==='system/message'){this.systemSeq=head.seq;this.systemText=head.data.message.content.map(b=>b.type==='text'?b.text:'').join('')}
   }
   /** Only the retained native surface proves that a snapshot was delivered. */
-  private retainedRuntimeContext():UserMessage|undefined {
+  private retainedRuntimeContextEvent() {
     const nodes=this.session.surface.nodes
     for(let index=nodes.length-1;index>=0;index--) {
       const event=this.session.eventAt(nodes[index]!)
-      if(event?.type==='user/message'&&event.data.source.kind==='runtime-context')return event.data
+      if(event?.type==='user/message'&&event.data.source.kind==='runtime-context')return event
     }
   }
+  private retainedRuntimeContext():UserMessage|undefined { return this.retainedRuntimeContextEvent()?.data }
   private projectRuntimeContext(sections:readonly ContextSnapshotSection[]):UserMessage|undefined {
     const retained=this.retainedRuntimeContext()
     if(!sections.length&&!retained&&!this.runtimeContextSeen)return
@@ -243,12 +245,19 @@ export class KiokukoHarnessAgent implements Agent {
   }
   private commitInput(message:UserMessage):void {
     if(message.source.kind==='runtime-context') {
-      const retained=this.retainedRuntimeContext(),block=message.content[0]
+      const previous=this.retainedRuntimeContextEvent(),retained=previous?.data,block=message.content[0]
       if(message.content.length===1&&block?.type==='text'&&retained?.content.length===1
         &&retained.content[0]?.type==='text'&&retained.content[0].text===block.text)return
+      // Replace only the prior state node, never the tools/messages between
+      // updates. The append-only event log keeps every original for audit;
+      // compaction and token estimation see the same current state as requests.
+      this.session.append('user/message',message,previous
+        ?{surfaceOp:{op:'replace',startSeq:previous.seq,endSeq:previous.seq},sourceEventSeqs:[previous.seq]}
+        :{surfaceOp:'append'})
+      this.runtimeContextSeen=true
+      return
     }
     this.session.append('user/message',message,{surfaceOp:'append'})
-    if(message.source.kind==='runtime-context')this.runtimeContextSeen=true
   }
   private async modelStep(messages:UserMessage[],signal:AbortSignal,assembly:any,modelSelection:Readonly<ModelSelection>,toolSet?:unknown):Promise<ModelStepResult> {
     if(this.systemSeq===undefined){const event=this.session.append('system/message',{turn:this.turn,step:this.step,message:createSystemMessage('')},{surfaceOp:'append'});this.systemSeq=event.seq;this.systemText=''}
@@ -271,6 +280,9 @@ export class KiokukoHarnessAgent implements Agent {
     const prepared=await this.ctx.llm.prepareCall(config,signal)
     this.retryPolicy=prepared.retryPolicy
     const tools=assembly?.tools??[]
+    // Preserve which native definitions this request actually admitted. The
+    // host's live view removes revoked/replaced registrations during streaming.
+    const admittedTools = new Set<string>((toolSet as { view?(scope: object): ReadonlyMap<string, unknown> } | undefined)?.view?.(this).keys() ?? [])
     this.session.append('request/header',{header:{config:prepared.config,...(tools.length?{tools}:{}),...(Object.keys(prepared.adapterDefaults??{}).length?{adapterDefaults:prepared.adapterDefaults}:{})},reason:this.headerSeen?'change':'initial'})
     this.headerSeen=true
     const text=assembly?renderPrompt(assembly):''
@@ -285,7 +297,7 @@ export class KiokukoHarnessAgent implements Agent {
     let count=0,settled=false
     this.audit('model','start');this.dispatch.emit('agent/assistant-stream',{frame:{type:'start',attemptId,revision,turn:this.turn,step:this.step}})
     try {
-      const history=projectRequestSourceMessages(this,this.session.deriveMessages());history.forEach(message=>deepFreeze(message));Object.freeze(history)
+      const history=projectRequestSourceMessages(this,projectRuntimeContextMessages(this.session.deriveMessages()));history.forEach(message=>deepFreeze(message));Object.freeze(history)
       const request=markAgentLoopRequest(Object.freeze({...prepared.config,messages:history,
         ...(tools.length?{tools:deepFreeze(structuredClone(tools))}:{}),toolHistory:this.session.toolHistory(),sessionId:this.session.id,signal}))
       for await(const chunk of prepared.stream(request)) {
@@ -317,7 +329,7 @@ export class KiokukoHarnessAgent implements Agent {
       this.audit('model','result')
       if(finish.kind==='max-tokens')return 'max-tokens'
       let concludesTurn=false
-      for(const call of calls)concludesTurn=await this.executeTool(call,signal,toolSet)||concludesTurn
+      for(const call of calls)concludesTurn=await this.executeTool(call,signal,toolSet,admittedTools)||concludesTurn
       return calls.length>0&&!concludesTurn?'continue':'completed'
     } catch(error) {
       if(!settled){const content=assembler.interruptedBlocks(),stream=[...accumulator.snapshot()]
@@ -326,7 +338,7 @@ export class KiokukoHarnessAgent implements Agent {
       this.audit('model',signal.aborted?'cancel':'error');throw error
     }
   }
-  private async executeTool(call:ToolCallBlock,signal:AbortSignal,toolSet?:unknown) {
+  private async executeTool(call:ToolCallBlock,signal:AbortSignal,toolSet?:unknown,admittedTools?:ReadonlySet<string>) {
     const recovery=new ToolCallRecovery();const off=this.ctx.on('session/event',(session:Session,event:SessionEvent)=>{if(session===this.session)recovery.observe(event)})
     let callSeq!:SessionSeq
     const record=(result:any)=>this.session.append('tool/result',{turn:this.turn,step:this.step,
@@ -341,7 +353,17 @@ export class KiokukoHarnessAgent implements Agent {
       let result:any,nativeConcluded:boolean|undefined
       // Executor selection is the batch API capability, not a version fence.
       // Never resend a failed dispatch through the other API.
-      if(typeof tools.setExecutor==='function') {
+      const currentTools = (toolSet as { view?(scope: object): ReadonlyMap<string, unknown> } | undefined)?.view?.(this)
+      if (!signal.aborted && admittedTools?.has(call.name) && currentTools && !currentTools.has(call.name)) {
+        // A human mode change or re-registration invalidates the old step.
+        // Never re-resolve here: that would authorize a replacement under a
+        // model request that only saw the previous implementation.
+        result = { isError: true, content: [{ type: 'text', text: JSON.stringify({
+          code: 'TOOL_SURFACE_CHANGED', tool: call.name, executed: false,
+          message: 'The tool registration changed while this model request was in progress. This call was not executed.',
+          recovery: 'Use the next step’s current tool list. If the tool remains available, issue a new call; do not replay earlier operations or override a disabled mode. For Lisp recovery, inspect lisp_status and saved result receipts before further execution.',
+        }) }] }
+      } else if(typeof tools.setExecutor==='function') {
         const batch=await tools.execute({calls:[call],agent:this,signal,...(toolSet===undefined?{}:{toolSet})})
         if(!Array.isArray(batch?.results)||batch.results.length!==1||batch.results[0].callId!==call.id)
           throw new Error('Tool executor did not settle the exact requested call')

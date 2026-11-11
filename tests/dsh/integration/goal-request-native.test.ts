@@ -14,7 +14,7 @@ import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
 
-test('goal-only native session executes tools across turns without the request-denial storm', { timeout: 30_000 }, async () => {
+for (const decision of ['OFF', 'ON'] as const) test(`decision ${decision}: goal-only native session executes tools across turns without the request-denial storm`, { timeout: 30_000 }, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
   const load = (name: string) => import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
   const [cordis, llm, session, projection, prompt, tools, agents, skills] = await Promise.all([
@@ -35,7 +35,7 @@ test('goal-only native session executes tools across turns without the request-d
     const loopFiber = ctx.plugin(loop.default, { agents: [] }); fibers.push(loopFiber); await loopFiber
     const questionFiber = ctx.plugin({ name: 'goal-request-startup', apply(context: any) {
       context.provide('userQuestions', { async ask(request: any) {
-        if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+        if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, `decision ${decision} / Lisp OFF`)
         return { answers: [] }
       } })
     } }); fibers.push(questionFiber); await questionFiber

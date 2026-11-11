@@ -7,7 +7,7 @@ import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarific
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
 import { isCodingWorkflowStatus } from './coding-workflow/host.js'
 import { symbols } from '@deepseek-ai/cordis'
-import { hasRequestInput, isRequestInput } from './request-input.js'
+import { hasRequestInput, isRequestInput, requestTask } from './request-input.js'
 import {
   requestInterpretationError,
   requestInterpretationRecovery,
@@ -266,18 +266,6 @@ function humanMessages(messages: readonly unknown[]): any[] {
 }
 function humanTask(messages: readonly unknown[]): string {
   return requestTask(humanMessages(messages))
-}
-function requestTask(messages: readonly unknown[]): string {
-  return messages.filter(isRequestInput)
-    .flatMap((message: any) =>
-      typeof message.content === 'string'
-        ? [message.content]
-        : (message.content ?? [])
-            .filter((block: any) => block.type === 'text')
-            .map((block: any) => block.text),
-    )
-    .join('\n')
-    .trim()
 }
 function humanId(message: any): string {
   return typeof message.id === 'string'

@@ -26,6 +26,47 @@ import {memoryApplicationStatus,recordMemoryApplicationReview} from '../../../sr
 const ownedPackageRoot=process.env.KIOKUKO_OWNED_PACKAGE_ROOT
 const OwnedExecutionService:typeof SourceOwnedExecutionService=ownedPackageRoot?(await import(pathToFileURL(join(ownedPackageRoot,'dist/dsh/owned-execution.js')).href)).OwnedExecutionService:SourceOwnedExecutionService
 
+test('seven real Node commands preserve TAP identity through owned receipts and reopened SQLite', async () => {
+  const f = await fixture()
+  try {
+    await writeFile(join(f.root, 'src/pass.test.mjs'), "import test from 'node:test';test('first passing case',()=>{});\n")
+    await writeFile(join(f.root, 'src/pass-two.test.mjs'), "import test from 'node:test';test('second passing case',()=>{});\n")
+    await writeFile(join(f.root, 'src/fail.test.mjs'), "import test from 'node:test';test('failing case',()=>{throw new Error('expected failure')});\n")
+    const pass = 'node --test --test-reporter=tap pass.test.mjs', fail = 'node --test --test-reporter=tap fail.test.mjs'
+    const sourcePaths = ['src/pass.test.mjs', 'src/pass-two.test.mjs', 'src/fail.test.mjs']
+    const cases = [
+      { name: 'single pass', command: pass, code: 0, tests: 1, passes: 1, fails: 0, verification: 'passed', state: 'satisfied' },
+      { name: 'single failure', command: fail, code: 1, tests: 1, passes: 0, fails: 1, verification: 'failed', state: 'unmet' },
+      { name: 'failure then pass', command: `${fail}; ${pass}`, code: 0, tests: null, verification: 'unknown', state: 'unknown' },
+      { name: 'failure or pass', command: `${fail} || ${pass}`, code: 0, tests: null, verification: 'unknown', state: 'unknown' },
+      { name: 'failure and pass', command: `${fail} && ${pass}`, code: 1, tests: 1, passes: 0, fails: 1, verification: 'failed', state: 'unmet' },
+      { name: 'pass and pass', command: `${pass} && ${pass}`, code: 0, tests: null, verification: 'unknown', state: 'unknown' },
+      { name: 'multiple files in one process', command: 'node --test --test-reporter=tap pass.test.mjs pass-two.test.mjs', code: 0, tests: 2, passes: 2, fails: 0, verification: 'passed', state: 'satisfied' },
+    ] as const
+    for (const [index, c] of cases.entries()) {
+      f.bind(c.command, 'src', sourcePaths)
+      const result = await f.execute('kioku_exec', { command: c.command, cwd: 'src' }, `seven-node-${index}`)
+      assert.equal(result.exitCode, c.code, c.name)
+      assert.equal(result.receipt.state, 'completed', c.name)
+      assert.equal(result.receipt.processStopped, true, c.name)
+      assert.equal(result.receipt.outputComplete, true, c.name)
+      const check = (receipt: typeof result.receipt) => {
+        if (c.tests === null) assert.equal(receipt.summary, undefined, c.name)
+        else assert.deepEqual(receipt.summary, {tests:c.tests, pass:c.passes, fail:c.fails, cancelled:0, skipped:0, todo:0}, c.name)
+        assert.equal(receipt.verification, c.verification, c.name)
+      }
+      check(result.receipt)
+      assert.equal(assessTaskCompletion(f.db, f.identity.runId).criteria[0]!.state, c.state, c.name)
+      await f.restart()
+      const row = f.db.prepare('SELECT state,receipt_json FROM dsh_owned_operations WHERE operation_id=?')
+        .get<{state:string;receipt_json:string}>(result.receipt.operationId)!
+      assert.equal(row.state, 'completed', c.name)
+      check(JSON.parse(row.receipt_json))
+      assert.equal(assessTaskCompletion(f.db, f.identity.runId).criteria[0]!.state, c.state, c.name)
+    }
+  } finally { await f.cleanup() }
+})
+
 const finalize=approvedOwnedMemory
 
 async function fixture(){

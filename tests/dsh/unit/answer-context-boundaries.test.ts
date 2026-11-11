@@ -87,3 +87,31 @@ test('parallel native sessions retain their own repository, request and cancella
     assert.ok(guard); guard.check()
   } finally { db.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+for (const mixed of [false, true]) test(`answer context accepts captured goal text (mixed human input: ${mixed}) and rejects changed requests`, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'goal-answer-context-'))
+  await mkdir(join(root, '.git'))
+  const db = openConnection(join(root, 'memory.sqlite3')); migrateDatabase(db)
+  const goal = { role: 'user', source: { kind: 'goal', goalId: 'goal', revision: 1, round: 2 }, content: [{ type: 'text', text: 'Continue the current goal.' }] }
+  const messages = [...(mixed ? [{ role: 'user', source: { kind: 'user' }, content: 'Check the tests.' }] : []), goal,
+    { role: 'user', source: { kind: 'runtime-context' }, content: 'This is not request text.' }]
+  const task = mixed ? 'Check the tests.\nContinue the current goal.' : 'Continue the current goal.'
+  const agent = { id: 'agent', session: { id: 'session', snapshotEvents: () => [] } }
+  const input = { agent, turn: 1, step: 1, signal: new AbortController().signal, messages }
+  const identity = { agentId: agent.id, sessionId: agent.session.id, turn: 1, requestDigest: canonicalContentHash(task) }
+  const context = new DshAnswerContext({ async withDatabase(fn) { return fn(db, createEmbeddingRuntime(db, { ...defaultEmbeddingConfig(), mode: 'off' })) } },
+    { root, projectOnly: true, memoryRetrieval: MemoryRetrievalConfig.parse({}) })
+  try {
+    await context.prepare(input, task)
+    const projected = await context.project(input, messages, identity)
+    assert.deepEqual(projected.slice(0, messages.length), messages)
+    await context.beforeRequest(input, identity)
+    const guard = await context.fence(input, { sessionId: agent.session.id, messages: projected }, identity)
+    assert.ok(guard); guard.check()
+    const changed = { ...input, messages: [{ ...goal, content: 'A different task.' }] }
+    await assert.rejects(context.project(changed, messages, identity), MemoryOwnerChanged)
+    await assert.rejects(context.fence(changed, { sessionId: agent.session.id, messages }, identity), MemoryOwnerChanged)
+    const malformed = { ...input, messages: [{ ...goal, source: { ...goal.source, round: 0 } }] }
+    await assert.rejects(context.project(malformed, messages, identity), MemoryOwnerChanged)
+  } finally { db.close(); await rm(root, { recursive: true, force: true }) }
+})

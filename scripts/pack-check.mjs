@@ -338,7 +338,7 @@ async function createAndSmokeTestTarball() {
     process.stderr.write(intent.stderr)
     const receipts=await exec(process.execPath,['scripts/run-tests.mjs','tests/dsh/integration/owned-execution.test.ts','tests/dsh/integration/lisp/owned-development.test.ts','tests/dsh/integration/lisp/conversation-intake.test.ts','tests/dsh/integration/owned-native-lifecycle.test.ts','tests/dsh/integration/lisp-coding-preparation-native.test.ts','tests/dsh/integration/coding-input-retry-native.test.ts','tests/dsh/integration/request-intent-document-continuation-native.test.ts'],{cwd:root,env:ownedEnv,timeout:180000,maxBuffer:16*1024*1024})
     process.stdout.write(receipts.stdout)
-    const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts', 'tests/dsh/integration/on-demand-file-read.test.ts'], {
+    const wire = await exec(process.execPath, ['scripts/run-tests.mjs', 'tests/dsh/integration/tool-exposure-native.test.ts', 'tests/dsh/integration/on-demand-file-read.test.ts', 'tests/dsh/integration/native-edit-memory-conflict.test.ts'], {
       cwd: root,
       env: { ...process.env, KIOKUKO_TOOL_EXPOSURE_ENTRY: join(packageRoot, 'dist/dsh/index.js'), KIOKUKO_TEST_PLUGIN_PACKAGE_ROOT: packageRoot },
       timeout: 120_000,

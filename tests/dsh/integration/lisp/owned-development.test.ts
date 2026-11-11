@@ -89,6 +89,24 @@ test('default development mode: native DSH, SBCL, shared file/process receipts, 
     const checked=await evaluate('(kioku.test:result-raw (kioku.test:run (kioku.test:spec :framework :node-test :files (list "check.test.mjs") :directory "src")))')
     assert.equal(checked.code,0);assert.equal(checked.testStatus,'passed')
     assert.equal(assessTaskCompletion(db,prepared.run.runId).criteria[0]!.state,'satisfied','typed Lisp test evidence must not depend on a command string')
+    await writeFile(join(root,'src/fail.test.mjs'),"import test from 'node:test';test('report failure',()=>{throw new Error('expected')});\n")
+    await writeFile(join(root,'src/skip-todo.test.mjs'),"import test from 'node:test';test.skip('skip',()=>{});test.todo('todo');\n")
+    const skipped = await evaluate('(kioku.test:node "skip-todo.test.mjs" :directory "src")')
+    assert.equal(skipped.testStatus,'unknown');assert.equal(skipped.summary.skipped,1);assert.equal(skipped.summary.todo,1)
+    // Exercise the same common-report RPC as public test helpers; the public
+    // typed node adapter intentionally only launches one Node process.
+    const combined = await evaluate(`(kioku.internal:rpc "run" (kioku.internal:object
+      "program" "bash" "testRunner" "node" "directory" "src" "timeoutMs" 120000
+      "argv" (vector "-c" "node --test --test-reporter=tap fail.test.mjs; node --test --test-reporter=tap check.test.mjs")))`)
+    assert.equal(combined.code,0)
+    assert.equal(combined.testStatus,'unknown')
+    assert.equal(combined.summary,null)
+    assert.match(combined.stdout,/not ok/u)
+    assert.ok(combined.receipt.operationId)
+    const savedCombined=JSON.parse(db.prepare('SELECT receipt_json FROM dsh_owned_operations WHERE operation_id=?').get<any>(combined.receipt.operationId).receipt_json)
+    assert.equal(savedCombined.state,'completed')
+    assert.equal(savedCombined.summary,undefined)
+    assert.notEqual(savedCombined.verification,'passed')
     const server=createServer((_request,response)=>response.end('LOCAL_CURL_FIXTURE'))
     await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve))
     try {

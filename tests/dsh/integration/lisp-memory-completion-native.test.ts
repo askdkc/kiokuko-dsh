@@ -11,7 +11,7 @@ import { nativeToolResults } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
-for (const conflict of [false, true]) test(`native Lisp finishes, compacts automatically, and reuses keyword memory after reload (binding conflict=${conflict})`, { timeout: 45000 }, async () => {
+for (const conflict of [false, true]) test(`native Lisp finishes across reload and isolates conflicting memory (binding conflict=${conflict})`, { timeout: 45000 }, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
   const f = await nativeSkillFixture({
     packages,
@@ -25,6 +25,10 @@ for (const conflict of [false, true]) test(`native Lisp finishes, compacts autom
     },
   })
   const fibers: any[] = []
+  const diagnostics: any[] = []
+  const off = f.ctx.on('session/event', (_session: any, event: any) => {
+    if (event.type === 'plugin:kiokuko-dsh/repository-learning') diagnostics.push(event.data)
+  }, { global: true })
   const original = f.model.stream.bind(f.model)
   let compactCalls = 0
   f.model.stream = async function* (request: any) {
@@ -73,19 +77,26 @@ for (const conflict of [false, true]) test(`native Lisp finishes, compacts autom
     await f.turn('artifact.json を作成して answer に42を入れてください。\n保存後にJSONとして読み直して検証してください。\n外部には公開しないでください。')
     assert.deepEqual(JSON.parse(await readFile(join(f.dir, 'artifact.json'), 'utf8')), { answer: 42 })
     const deadline = Date.now() + 10000
-    while (snapshot().turnCount === 0 && Date.now() < deadline) await delay(20)
-    assert.equal(snapshot().turnCount, 1)
-    assert.ok(snapshot().points.some(point => point.keywords?.includes('artifact.json')))
+    // Wait for the terminal capture observation, not for an arbitrary quiet interval.
+    const captured = () => diagnostics.find(value => value.phase === 'capture')
+    while (!captured() && Date.now() < deadline) await delay(20)
+    assert.equal(captured()?.status, conflict ? 'unavailable' : 'saved', JSON.stringify(diagnostics))
+    assert.equal(snapshot().turnCount, conflict ? 0 : 1)
+    if (conflict) assert.deepEqual(snapshot().points, [])
+    else assert.ok(snapshot().points.some(point => point.keywords?.includes('artifact.json')))
     assert.equal(f.memoryQuestions.length, 0)
-    assert.equal(compactCalls, 1)
+    assert.equal(compactCalls, conflict ? 0 : 1)
     await f.reload('compiled')
     f.responses.push((request: any) => {
       const memory = request.messages.find((message: any) => message.source?.sections?.some((section: any) => section.name === 'memory:repository-learning'))
-      assert.ok(memory, 'committed memory is retrieved through the normal model request')
-      assert.match(JSON.stringify(memory), /artifact.json/)
+      if (conflict) assert.equal(memory, undefined, 'conflicting memory must not reach the model after reload')
+      else {
+        assert.ok(memory, 'committed memory is retrieved through the normal model request')
+        assert.match(JSON.stringify(memory), /artifact.json/)
+      }
       return f.mock.textResponse('artifact.json は JSON として読み直して確認しました。')
     })
     await f.turn('artifact.json の検証結果を説明してください。変更は不要です。')
     assert.equal(f.memoryQuestions.length, 0)
-  } finally { for (const fiber of fibers.reverse()) await fiber.dispose(); await f.close() }
+  } finally { off(); for (const fiber of fibers.reverse()) await fiber.dispose(); await f.close() }
 })

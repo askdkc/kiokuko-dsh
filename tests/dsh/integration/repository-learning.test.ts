@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { registerRepositoryAndLocation } from "../../../src/repository/binding.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -230,6 +231,107 @@ function turn(
     },
   });
   a.append("turn/end", { turn: id, reason: { kind: outcome } });
+}
+
+async function changeBinding(f: Awaited<ReturnType<typeof fixture>>, registered: boolean) {
+  const target = { repositoryId: 'repo_learning_rebound', workspace: 'project:learning-rebound' };
+  if (registered) await f.runtime.withDatabase(db => {
+    const before = db.prepare('SELECT repository_id AS repositoryId, workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?')
+      .get<{ repositoryId: string; workspace: string }>(f.root)!;
+    registerRepositoryAndLocation(db, { ...target, canonicalRoot: f.root, displayName: 'rebound',
+      remoteFingerprint: null, bindingSchemaVersion: 1, agentTemplateVersion: 1, rebindFrom: before });
+  });
+  await writeFile(join(f.root, '.kiokuko.json'), JSON.stringify({ schemaVersion: 1, ...target, agentFile: 'AGENTS.md', templateVersion: 1 }));
+}
+
+for (const boundary of [1, 2, 3, 4, 5, 6]) test(`reset at retrieval read boundary ${boundary} never reinjects forgotten memory`, async () => {
+  const f = await fixture(false, {mode:'automatic'})
+  const original = f.runtime.withDatabase.bind(f.runtime)
+  try {
+    const a = f.agent('reset-read-boundary')
+    turn(a,1); await f.memory.whenIdle()
+    let calls=0, resetBeforeReturn=false
+    f.runtime.withDatabase = async operation => {
+      if (++calls === boundary) {
+        await original(db => resetRepositoryLearning(db,f.root))
+        resetBeforeReturn=true
+      }
+      return original(operation)
+    }
+    const result=await a.step(2,'output directory')
+    f.runtime.withDatabase=original
+    if(resetBeforeReturn) assert.deepEqual(result.messages,[])
+    else assert.match(JSON.stringify(result.messages),/Create output directory/)
+    await original(db => resetRepositoryLearning(db,f.root))
+    assert.deepEqual((await a.step(3,'output directory')).messages,[])
+  } finally { f.runtime.withDatabase=original;await f.close() }
+})
+
+for (const registered of [false, true]) {
+  test(`binding isolation prevents old recall and reflection input after ${registered ? 'rebind' : 'conflict'}`, async () => {
+    const f = await fixture(false, { mode: 'automatic' });
+    try {
+      const a = f.agent('binding-isolation');
+      turn(a, 1);
+      await f.memory.whenIdle();
+      assert.match(JSON.stringify((await a.step(2, 'output directory')).messages), /Create output directory/);
+      await changeBinding(f, registered);
+      assert.deepEqual((await a.step(2, 'output directory')).messages, []);
+      const calls = f.host.modelCalls.length;
+      turn(a, 2);
+      await f.memory.whenIdle();
+      if (!registered) {
+        assert.equal(f.host.modelCalls.length, calls);
+        assert.equal((await f.snapshot()).turnCount, 1);
+      } else {
+        const input = JSON.parse(f.host.modelCalls.at(-1).messages[0].content[0].text);
+        assert.doesNotMatch(input.priorCompact, /Create output directory|Fresh repository output/);
+        const rows = await f.runtime.withDatabase(db => db.prepare('SELECT workspace FROM repository_learning_turns ORDER BY revision').all<{workspace: string}>());
+        assert.equal(rows.length, 2);
+        assert.notEqual(rows[0]!.workspace, rows[1]!.workspace);
+        await f.restart();
+        const result = await a.step(3, 'output directory');
+        assert.doesNotMatch(JSON.stringify(result.messages), new RegExp(rows[0]!.workspace));
+        assert.match(JSON.stringify(result.messages), new RegExp(rows[1]!.workspace));
+        assert.match(JSON.stringify(result.messages), /Create output directory/);
+      }
+    } finally { await f.close(); }
+  });
+}
+
+for (const boundary of ['selection', 'queue', 'reflection', 'approval'] as const) {
+  test(`binding change during ${boundary} discards old work without retargeting`, async () => {
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const decisions = { bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, batch: any) => {
+      entered(); await gate;
+      return { status: 'completed', result: { answers: batch.questions.map((q: any) => ({ id: q.id, status: 'selected', choiceId: 'use' })) } };
+    } };
+    const f = await fixture(false, { mode: boundary === 'approval' ? 'review' : 'automatic', decisions });
+    try {
+      const a = f.agent('binding-race');
+      if (boundary === 'selection') {
+        turn(a, 1); await f.memory.whenIdle();
+        const step = a.step(2, 'output directory'); await started;
+        await changeBinding(f, true); release();
+        assert.deepEqual((await step).messages, []);
+      } else {
+        if (boundary === 'approval') {
+          f.host.answer = async request => { entered(); await gate; return { answers: [{ id: request.questions[0].id, selected: ['この内容を保存する'] }] }; };
+        } else {
+          const model = f.host.model!;
+          f.host.model = async function* (request) { entered(); await gate; yield* model(request); };
+        }
+        turn(a, 1); await started;
+        if (boundary === 'queue') turn(f.agent('queued-binding-race'), 1);
+        await changeBinding(f, true); release(); await f.memory.whenIdle();
+        assert.equal((await f.snapshot()).turnCount, 0);
+        assert.equal(f.host.modelCalls.length, 1, 'queued old binding must not dispatch a second summary');
+        if (boundary === 'reflection') assert.equal(f.host.questions.length, 0);
+      }
+    } finally { release(); await f.close(); }
+  });
 }
 
 test('automatic compaction saves after a native turn without a question service', async () => {

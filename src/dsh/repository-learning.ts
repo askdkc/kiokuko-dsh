@@ -4,6 +4,11 @@ import { observeNativeUserCancellation } from "./native-cancellation-observer.js
 import { withImmediateTransaction } from "../db/transaction.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
+import { join } from "node:path";
+import type { SqliteDatabase } from "../db/adapter.js";
+import { readRegularFile } from "../config/read-regular-file.js";
+import { parseProjectConfigText } from "../config/project-config.js";
+import { inspectRepositoryBindingReadOnly, type RepositoryBindingCandidate } from "../repository/binding.js";
 import { detectRepositoryRoot } from "../repository/detect-root.js";
 import type { DshCoreRuntime } from "./core-runtime.js";
 import { isNativeSubagent } from "./native-subagent.js";
@@ -179,6 +184,27 @@ export class DshRepositoryLearning {
       this.roots.set(canonical, root);
     }
     return root;
+  }
+  /** Re-read config at every boundary. Validation and callback share one synchronous DB scope. */
+  private async withBinding<T>(expected: RepositoryBindingCandidate | undefined,
+    operation: (db: SqliteDatabase, binding: RepositoryBindingCandidate) => T, write = false): Promise<T> {
+    const file = await readRegularFile(join(this.root, '.kiokuko.json'));
+    const configured = file === undefined ? undefined : parseProjectConfigText(file.content);
+    return this.runtime.withDatabase(db => {
+      const checked = () => {
+        const identity = configured ?? db.prepare(
+          'SELECT repository_id AS repositoryId, workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?',
+        ).get<{ repositoryId: string; workspace: string }>(this.root);
+        if (!identity) throw new Error('repository_learning_binding_changed');
+        const binding = { repositoryRoot: this.root, repositoryId: identity.repositoryId, workspace: identity.workspace };
+        if (!inspectRepositoryBindingReadOnly(db, binding, { requireRegisteredRoot: true })
+          || expected && (expected.repositoryRoot !== binding.repositoryRoot
+            || expected.repositoryId !== binding.repositoryId || expected.workspace !== binding.workspace))
+          throw new Error('repository_learning_binding_changed');
+        return operation(db, binding);
+      };
+      return write ? withImmediateTransaction(db, checked) : checked();
+    });
   }
   private owned(agent: Agent): boolean {
     try {
@@ -397,28 +423,31 @@ export class DshRepositoryLearning {
     };
     const controller = new AbortController();
     this.controllers.set(controller, agent);
-    const admitted = this.runtime
-      .withDatabase((db) => {
-        const row = db
-          .prepare(
-            "SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?",
-          )
-          .get<{ workspace: string }>(this.root);
-        if (!row) throw new Error("repository_unavailable");
+    let binding: RepositoryBindingCandidate | undefined;
+    // Pin identity and epoch before asynchronous configuration I/O, so queued
+    // old turns cannot become new work when a reset/rebind overtakes that read.
+    const admitted = this.runtime.withDatabase(db => {
+      const row = db.prepare('SELECT repository_id AS repositoryId, workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?')
+        .get<{ repositoryId: string; workspace: string }>(this.root);
+      if (!row) throw new Error('repository_learning_binding_changed');
+      binding = { repositoryRoot: this.root, ...row };
+      return db.prepare('SELECT epoch FROM repository_learning_admission WHERE id=1').get<{ epoch: number }>()!.epoch;
+    }).then(epoch => this.withBinding(binding, (db, row) => {
         const exists = db
           .prepare(
-            "SELECT revision FROM repository_learning_turns WHERE repository_key=? AND session_id=? AND turn_id=?",
+            "SELECT workspace, revision FROM repository_learning_turns WHERE repository_key=? AND session_id=? AND turn_id=?",
           )
-          .get<{ revision: number }>(
+          .get<{ workspace: string; revision: number }>(
             repositoryLearningKey(this.root),
             input.sessionId,
             String(input.turnId),
           );
+        if (exists && exists.workspace !== row.workspace) throw new Error('repository_learning_binding_changed');
         if (exists)
           return {
             workspace: row.workspace,
             revision: 0,
-            prior: readRepositoryLearning(db, this.root, { maxChars: 8192 }),
+            prior: readRepositoryLearning(db, this.root, { maxChars: 8192, workspace: row.workspace }),
             duplicate: exists.revision,
           };
         if (
@@ -432,20 +461,20 @@ export class DshRepositoryLearning {
           input.sessionId,
           policy.revision,
         );
-        const prior = readRepositoryLearning(db, this.root, { maxChars: 8192 });
+        const prior = readRepositoryLearning(db, this.root, { maxChars: 8192, workspace: row.workspace });
         admitRepositoryTurn(
           db,
           this.root,
           input.sessionId,
           input.turnId,
-          prior.admissionEpoch,
+          epoch,
         );
         return {
           workspace: row.workspace,
           revision: policy.revision,
           prior,
         };
-      })
+      }))
       .then(
         (value) => ({ value }),
         (error) => ({ error }),
@@ -458,6 +487,8 @@ export class DshRepositoryLearning {
         if (this.stopped) return;
         if ("error" in result) throw result.error;
         const admission = result.value;
+        await this.withBinding(binding, () => undefined);
+        if (!this.owned(agent) || controller.signal.aborted) throw new Error('repository_learning_discarded');
 
         if ("duplicate" in admission) {
           this.diagnostic(agent, {
@@ -479,8 +510,8 @@ export class DshRepositoryLearning {
             this.diagnostic(agent, { phase: "capture", turn: input.turnId, status: "review_unavailable", saveState: "not_saved" });
             return;
           }
-          const latest = await this.runtime.withDatabase((db) =>
-            readRepositoryLearning(db, this.root, { maxChars: 8192 }),
+          const latest = await this.withBinding(binding, (db) =>
+            readRepositoryLearning(db, this.root, { maxChars: 8192, workspace: admission.workspace }),
           );
           if (latest.admissionEpoch !== admission.prior.admissionEpoch)
             throw new Error("repository_learning_admission_stale");
@@ -494,6 +525,8 @@ export class DshRepositoryLearning {
           );
           if (controller.signal.aborted) throw controller.signal.reason;
           if (this.stopped) return;
+          await this.withBinding(binding, () => undefined);
+          if (!this.owned(agent) || controller.signal.aborted) throw new Error('repository_learning_discarded');
           if (reflection.status !== "model" || reflection.lessons.length === 0) {
             this.diagnostic(agent, {
               phase: "capture", turn: input.turnId,
@@ -513,7 +546,7 @@ export class DshRepositoryLearning {
             reflectionStatus: reflection.status,
           };
           if (this.options.mode !== 'automatic' && !await this.approve(agent, input, controller.signal, proposal)) return;
-          const saved = await this.runtime.withDatabase((db) => {
+          const saved = await this.withBinding(binding, (db) => {
             if (!this.owned(agent) || controller.signal.aborted)
               throw new Error("repository_learning_discarded");
             assertCaptureAllowed(
@@ -532,7 +565,7 @@ export class DshRepositoryLearning {
               terminalSeq,
               ...proposal,
             });
-          });
+          }, true);
           this.diagnostic(agent, {
             phase: "capture",
             turn: input.turnId,
@@ -555,12 +588,13 @@ export class DshRepositoryLearning {
           await this.runtime.withDatabase((db) => {
             const saved = db
               .prepare(
-                "SELECT revision FROM repository_learning_turns WHERE repository_key=? AND session_id=? AND turn_id=?",
+                "SELECT revision FROM repository_learning_turns WHERE repository_key=? AND session_id=? AND turn_id=? AND workspace=?",
               )
               .get<{ revision: number }>(
                 repositoryLearningKey(this.root),
                 input.sessionId,
                 String(input.turnId),
+                binding?.workspace ?? '',
               );
             if (saved) {
               saveState = "saved";
@@ -569,7 +603,7 @@ export class DshRepositoryLearning {
             }
             if (
               (error instanceof Error &&
-                error.message === "repository_learning_discarded") ||
+                ['repository_learning_discarded', 'repository_learning_binding_changed'].includes(error.message)) ||
               isRetiredRepositoryTurn(
                 db,
                 this.root,
@@ -712,9 +746,10 @@ export class DshRepositoryLearning {
                   },
                 );
             }
-            const snapshot = await this.runtime.withDatabase((db) =>
-              readRepositoryLearning(db, this.root),
-            );
+            const captured = await this.withBinding(undefined, (db, binding) => ({
+              binding, snapshot: readRepositoryLearning(db, this.root, { workspace: binding.workspace }),
+            }));
+            const { binding, snapshot } = captured;
             const currentInput = (step.messages ?? []).filter((message: any) => message.source?.kind === 'user')
               .map((message: any) => compactText(message.content, 4000)).join('\n');
             // Later tool-only steps have no new inbox messages. Keep this turn's
@@ -729,15 +764,17 @@ export class DshRepositoryLearning {
               : { points: snapshot.points, source: 'keywords' as const };
             // Selection can await a provider. A concurrent forget/reset or
             // capture refusal drops those candidates; it never retries work.
+            const current = await this.withBinding(binding, db => readRepositoryLearning(db, this.root, { workspace: binding.workspace }));
             if (this.options.mode === 'automatic' && selected.points.length) {
-              const current = await this.runtime.withDatabase(db => readRepositoryLearning(db, this.root));
               const visible = new Set(current.points.map(point => JSON.stringify(point)));
               selected.points = selected.points.filter(point => visible.has(JSON.stringify(point)));
             }
             const compact = JSON.stringify({ ...JSON.parse(snapshot.compact), points: selected.points,
               omitted: snapshot.omitted + snapshot.points.length - selected.points.length,
               selection: selected.source });
-            if (step.signal?.aborted || !this.owned(agent)) return decision;
+            // No additional await after binding and visibility were checked
+            // together: reset/forget must not slip into a second I/O window.
+            if (step.signal?.aborted || !this.owned(agent)) return clean;
             this.diagnostic(agent, {
               phase: "retrieval",
               turn: step.turn,

@@ -32,7 +32,7 @@ export function nativeExecutionOwnership(db: SqliteDatabase, sessionId: string, 
     for (const operation of db.prepare('SELECT state,receipt_json FROM dsh_owned_operations WHERE run_id=?').all<{ state: string; receipt_json: string }>(run.run_id)) {
       const receipt = JSON.parse(operation.receipt_json)
       if (operation.state !== 'completed' || !receipt || typeof receipt !== 'object' || receipt.state !== 'completed' || receipt.runId !== run.run_id
-        || !['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_remove', 'kioku_exec'].includes(receipt.kind)
+        || !['kioku_read', 'kioku_write', 'kioku_edit', 'kioku_remove', 'kioku_exec', 'native_child'].includes(receipt.kind)
         || receipt.kind === 'kioku_exec' && receipt.processStopped !== true) return 'owned'
     }
   }

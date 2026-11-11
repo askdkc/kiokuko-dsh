@@ -46,6 +46,21 @@ test('ownership proof distinguishes completed history from holds, enrollment, un
       db.prepare("UPDATE dsh_owned_operations SET receipt_json=? WHERE operation_id='uncertain'")
         .run(JSON.stringify({ runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: true }))
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned')
+      const child = { runId: task.runId, kind: 'native_child', state: 'completed' };
+      const setChild = (state: string, receipt: unknown) => db.prepare("UPDATE dsh_owned_operations SET state=?,receipt_json=? WHERE operation_id='uncertain'").run(state, JSON.stringify(receipt));
+      setChild('completed', child);
+      assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned', 'completed child is history');
+      for (const [state, receipt] of [
+        ['started', child], ['unknown', child], ['completed', { ...child, state: 'started' }],
+        ['completed', { ...child, runId: 'foreign-run' }], ['completed', { ...child, kind: 'unknown' }],
+        ['completed', null], ['completed', []],
+      ] as const) {
+        setChild(state, receipt);
+        assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned');
+      }
+      assert.throws(() => db.prepare("UPDATE dsh_owned_operations SET receipt_json='broken' WHERE operation_id='uncertain'").run(), /json_valid/);
+      assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned');
+      setChild('completed', child);
       initializeCodingWorkflow(db, { ...task, repositoryRoot: root, task: 'Explicit enrolled coding work' })
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned', 'an optional unfinished record cannot claim authority over a completed task')
       const row = db.prepare('SELECT snapshot_json FROM dsh_coding_workflows WHERE run_id=?').get<{snapshot_json: string}>(task.runId)!

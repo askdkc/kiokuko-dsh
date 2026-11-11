@@ -42,9 +42,12 @@ function nodeReport(output: string): Report | undefined {
   if (!summary) return
   const failures: Failure[] = []
   let failureCount = 0
+  let failed = summary.fail > 0 || summary.cancelled > 0
   for (const match of output.matchAll(/^( *)not ok \d+ - (.+)\n(?:\1  ---\r?\n([\s\S]*?)^\1  \.\.\.$)?/gmu)) {
     const name = match[2]!.trimEnd(), detail = match[3] ?? ''
-    if (/ # (?:TODO|SKIP)\b/iu.test(name) || tapField(detail, 'failureType') === 'subtestsFailed') continue
+    if (/ # (?:TODO|SKIP)\b/iu.test(name)) continue
+    failed = true
+    if (tapField(detail, 'failureType') === 'subtestsFailed') continue
     failureCount++
     if (failures.length >= MAX_FAILURES) continue
     const where = location(tapField(detail, 'location') ?? '')
@@ -52,7 +55,7 @@ function nodeReport(output: string): Report | undefined {
     failures.push({ name, ...where, ...(message && message !== '|-' && message !== '>' ? { message } : {}) })
   }
   return { summary, failures, failuresOmitted: Math.max(0, failureCount - failures.length),
-    hasCases: hasExplicitTestCases(output), failed: summary.fail > 0 || summary.cancelled > 0 }
+    hasCases: hasExplicitTestCases(output), failed }
 }
 
 function vitestResult(output: string): Report | undefined {

@@ -671,3 +671,132 @@ for (const followup of [false,true]) test(`consumed steering schedules no empty 
   if(followup)assert.ok(JSON.stringify(requests[2].messages).includes('A separate queued request'))
  } finally {await handle?.dispose();await f.close()}
 })
+
+for (const change of ['replace', 'disable', 'unknown'] as const) test(`Lisp tool registration ${change} during a model request settles without replay`, async () => {
+  const f = await fixture(false, undefined, true)
+  let handle: any, release: (() => void) | undefined, bodies = 0, requests = 0
+  const register = () => f.ctx.tools.register({
+    name: 'lisp_inspect', description: 'Read a saved result without starting Lisp.', parameters: { type: 'object' },
+    output: { schema: {}, render: () => [{ type: 'text' as const, text: 'saved result: 42' }] },
+    execute: async () => { bodies++; return 42 },
+  })
+  try {
+    if (change !== 'unknown') release = register()
+    f.ctx.on('llm/stream', async function* (_options, next) {
+      requests++
+      if (requests === 1) {
+        // Human mode changes can revoke a registration while the model is replying.
+        release?.(); release = undefined
+        if (change === 'replace') release = register()
+      } else if (change !== 'replace' || requests > 2) { yield* next(); return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `inspect-${requests}` as any,
+        name: 'lisp_inspect', arguments: '{"resultOperationId":"saved-before-recovery"}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    })
+    handle = await f.ctx.agents.create({ sessionId: SessionId(`lisp-registration-${change}`) })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Inspect the saved result.' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    const results = handle.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result')
+    assert.equal(results.length, change === 'replace' ? 2 : 1)
+    assert.equal(results[0].data.message.isError, true)
+    const first = JSON.stringify(results[0].data.message.content)
+    if (change === 'unknown') assert.match(first, /unknown tool/)
+    else {
+      assert.match(first, /TOOL_SURFACE_CHANGED/)
+      assert.match(first, /not executed/)
+      assert.doesNotMatch(first, /unknown tool/)
+    }
+    assert.equal(bodies, change === 'replace' ? 1 : 0, 'never execute a revoked registration or replay automatically')
+    if (change === 'replace') {
+      assert.equal(results[1].data.message.isError, false)
+      assert.match(JSON.stringify(results[1].data.message.content), /saved result: 42/)
+    }
+  } finally { release?.(); await handle?.dispose(); await f.close() }
+})
+
+test('50 changing runtime snapshots keep one current frame in requests and all original audit events', async () => {
+  const f = await fixture(true)
+  let handle: any, state = 'A', reads = 0
+  try {
+    f.ctx.systemPrompt.context({ name: 'fixture:fixed', order: 0, text: 'FIXED_INSTRUCTION_ONCE' })
+    f.ctx.systemPrompt.context({ name: 'fixture:reading', order: 1, text: () => `LATEST_STATE=${state}` })
+    f.ctx.tools.register({ name: 'read_state', description: 'Change the observed fixture state.', parameters: {},
+      output: { schema: {}, render: (_args, value) => [{ type: 'text', text: String(value) }] },
+      execute: async () => { reads++; state = reads === 50 ? 'A' : `B${reads}`; return `TOOL_EVIDENCE_${reads}` } })
+    let requests = 0
+    f.ctx.on('llm/stream', async function* (request, next) {
+      requests++
+      const contexts = request.messages.filter(message => message.role === 'user' && message.source?.kind === 'runtime-context')
+      assert.equal(contexts.length, 1, 'old full snapshots must not accumulate in any provider request')
+      const text = JSON.stringify(contexts[0]?.content)
+      assert.equal(text.split('FIXED_INSTRUCTION_ONCE').length - 1, 1)
+      assert.ok(text.includes(`LATEST_STATE=${state}`), text)
+      const evidence = request.messages.filter(message => message.role === 'tool')
+      assert.equal(evidence.length, reads, 'actual tool results remain available')
+      if (requests > 50) { yield* next(); return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `state-${requests}` as any, name: 'read_state', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    })
+    handle = await f.ctx.agents.create({ sessionId: SessionId('runtime-state-history') })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Observe fifty updates.' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    assert.equal(requests, 51)
+    assert.equal(handle.agent.session.deriveMessages().filter((message: any) => message.source?.kind === 'runtime-context').length, 1, 'native compaction and token estimation must not retain superseded snapshots')
+    const events = handle.agent.session.snapshotEvents()
+    assert.equal(events.filter((event: any) => event.type === 'user/message' && event.data.source.kind === 'runtime-context').length, 51)
+    assert.equal(events.filter((event: any) => event.type === 'turn/end').at(-1).data.reason.kind, 'completed')
+    const sessionId = handle.agent.session.id, seed = structuredClone(events)
+    await handle.dispose()
+    handle = await f.ctx.agents.create({ sessionId, seed })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Continue after resume.' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    assert.equal(requests, 52)
+  } finally { await handle?.dispose(); await f.close() }
+})
+
+test('owned Goal rounds pass real answer-memory projection and dispatch fences across native turns', async () => {
+  const { mkdtemp, mkdir, rm } = await import('node:fs/promises')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const { openConnection } = await import('../../../src/db/connection.js')
+  const { migrateDatabase } = await import('../../../src/db/migrate.js')
+  const { DshAnswerContext } = await import('../../../src/dsh/answer-context.js')
+  const { OnDemandIntake } = await import('../../../src/dsh/on-demand-intake.js')
+  const { mountDshComposition } = await import('../../../src/dsh/composition.js')
+  const { MemoryRetrievalConfig } = await import('../../../src/memory/retrieval-contracts.js')
+  const { createEmbeddingRuntime } = await import('../../../src/embedding/runtime.js')
+  const { defaultEmbeddingConfig } = await import('../../../src/embedding/settings.js')
+  const f = await fixture(true), root = await mkdtemp(join(tmpdir(), 'owned-goal-answer-'))
+  await mkdir(join(root, '.git'))
+  const db = openConnection(join(root, 'memory.sqlite3')); migrateDatabase(db)
+  let prepared = 0, fenced = 0, handle: any, composition: any
+  const answerContext = new DshAnswerContext({ async withDatabase(fn) { return fn(db, createEmbeddingRuntime(db, { ...defaultEmbeddingConfig(), mode: 'off' })) } },
+    { root, projectOnly: true, memoryRetrieval: MemoryRetrievalConfig.parse({}), instructions: async () => { prepared++; return ['GOAL_ANSWER_CONTEXT'] } })
+  const demand = new OnDemandIntake({ answerContext, validate: async () => {}, existing: async () => false,
+    classify: async () => ({ deferInference: true }), ready: () => false, prepare: async () => false, nativeOwnership: async () => 'owned' })
+  const errors: unknown[] = []
+  try {
+    f.ctx.on('agent/error', event => errors.push(String(event.error)))
+    composition = await mountDshComposition(f.ctx, { onDemandIntake: demand,
+      intakeGate: { preStep() { throw Error('Goal capture was bypassed') } } as any,
+      mapPreStep: () => { throw Error('Goal capture was bypassed') } })
+    f.ctx.on('llm/stream', async function* (request, next) {
+      await demand.beforeRequest(handle.agent)
+      const guard = await demand.fence(handle.agent, request)
+      guard?.check(); fenced++
+      yield* next()
+    })
+    handle = await f.ctx.agents.create({ sessionId: SessionId('owned-goal-answer') })
+    for (const round of [1, 2, 3]) {
+      handle.agent.followup(createUserMessage({ source: { kind: 'goal', goalId: 'goal', revision: 1, round } as any,
+        content: [{ type: 'text', text: `<goal_round>Continue the requested verification. Round ${round}</goal_round>` }] }))
+      await handle.agent.whenIdle()
+      assert.deepEqual(errors, [])
+      assert.equal(f.requests.length, round)
+      assert.equal(prepared, round, 'test must exercise real answer memory, not the unowned bypass')
+      assert.equal(fenced, round)
+    }
+  } finally { await handle?.dispose(); await composition?.dispose(); await demand.dispose(); await f.close(); db.close(); await rm(root, { recursive: true, force: true }) }
+})

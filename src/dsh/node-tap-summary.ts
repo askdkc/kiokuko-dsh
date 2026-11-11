@@ -5,11 +5,27 @@ const TAP_KEYS = ['tests', 'pass', 'fail', 'cancelled', 'skipped', 'todo'] as co
 /** Accept only a complete final Node TAP trailer, never a previewed progress line. */
 export function parseNodeTapSummary(output: string, completeHostOutput = false): TapSummary | undefined {
   if (!completeHostOutput && (Buffer.byteLength(output) > 64_000 || /(?:truncated|Output capped|middle pruned)/iu.test(output))) return undefined
+  const matches = [...output.matchAll(/^# (tests|pass|fail|cancelled|skipped|todo)(?:[\t ]([^\r\n]*))?\r?$/gmu)]
+  if (matches.length !== TAP_KEYS.length) return undefined
+  // A counter-less partial run must not borrow another execution's trailer.
+  if ([...output.matchAll(/^TAP version \d+\r?$/gmu)].length > 1) return undefined
+  const last = matches.at(-1)!
+  if (/^(?:TAP version |# Subtest:|(?:not )?ok\b|\d+\.\.)/mu.test(output.slice(last.index! + last[0].length))) return undefined
   const values = new Map<string, number>()
-  for (const match of output.matchAll(/^# (tests|pass|fail|cancelled|skipped|todo) (\d+)\s*$/gmu)) {
-    values.set(match[1]!, Number(match[2]))
+  for (const [index, match] of matches.entries()) {
+    if (match[1] !== TAP_KEYS[index] || !/^\d+[\t ]*$/u.test(match[2] ?? '')) return undefined
+    const value = Number(match[2])
+    if (!Number.isSafeInteger(value)) return undefined
+    if (index > 0) {
+      const previous = matches[index - 1]!
+      const gap = output.slice(previous.index! + previous[0].length, match.index)
+      // Node emits suites between tests and pass. No execution fragments may
+      // be spliced into a trailer to manufacture a complete summary.
+      if (!(index === 1 ? /^\n(?:# suites \d+[\t ]*\r?\n)?$/u : /^\n$/u).test(gap)) return undefined
+    }
+    values.set(match[1]!, value)
   }
-  if (TAP_KEYS.some(key => !Number.isSafeInteger(values.get(key))) || !values.get('tests')) return undefined
+  if (!values.get('tests')) return undefined
   const summary = Object.fromEntries(TAP_KEYS.map(key => [key, values.get(key)!])) as unknown as TapSummary
   return summary.tests === summary.pass + summary.fail + summary.cancelled + summary.skipped + summary.todo ? summary : undefined
 }

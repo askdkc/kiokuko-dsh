@@ -3,7 +3,7 @@ import path from 'node:path';
 import { readProjectConfig } from '../config/project-config.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
-import { registerRepositoryAndLocation, RepositoryBindingConflict } from '../repository/binding.js';
+import { registerRepositoryAndLocation, RepositoryBindingConflict, inspectRepositoryBindingReadOnly } from '../repository/binding.js';
 import { detectRepositoryRoot, type RootSource } from '../repository/detect-root.js';
 import { readGitOrigin } from '../repository/git-origin.js';
 import { createRepositoryIdentity } from '../repository/identity.js';
@@ -154,24 +154,24 @@ export async function resolveProjectWorkspaceReadOnly(
     throw error;
   }
   const repositoryRoot = detected.root;
+  const checked = (candidate: ResolvedProjectWorkspace): ResolvedProjectWorkspace | undefined => {
+    try {
+      inspectRepositoryBindingReadOnly(database, candidate);
+      return candidate;
+    } catch (error) {
+      if (!(error instanceof RepositoryBindingConflict) || options.rejectBindingConflict) throw error;
+      return undefined;
+    }
+  };
 
   if (detected.source === 'binding') {
     const binding = await readProjectConfig(path.join(repositoryRoot, '.kiokuko.json'));
-    const location = database.prepare(`SELECT r.repository_id AS repositoryId, r.workspace AS workspace
-      FROM repository_locations l JOIN repositories r ON r.repository_id=l.repository_id
-      WHERE l.canonical_root=?`).get<RepositoryRow>(repositoryRoot);
-    // Conflicting identities are unavailable for recall, not interchangeable.
-    // The native session and filesystem retain their own authorization.
-    if (location && (location.repositoryId !== binding.repositoryId || location.workspace !== binding.workspace)) {
-      if (options.rejectBindingConflict) throw new RepositoryBindingConflict();
-      return undefined;
-    }
-    return {
+    return checked({
       repositoryRoot,
       repositoryId: binding.repositoryId,
       workspace: binding.workspace,
       source: 'binding',
-    };
+    });
   }
 
   const location = database.prepare(`
@@ -181,7 +181,7 @@ export async function resolveProjectWorkspaceReadOnly(
     WHERE l.canonical_root = ?
   `).get<RepositoryRow>(repositoryRoot);
   if (location) {
-    return { repositoryRoot, repositoryId: location.repositoryId, workspace: location.workspace, source: 'location' };
+    return checked({ repositoryRoot, repositoryId: location.repositoryId, workspace: location.workspace, source: 'location' });
   }
 
   const remote = readGitOrigin(repositoryRoot);
@@ -195,23 +195,23 @@ export async function resolveProjectWorkspaceReadOnly(
       LIMIT 1
     `).get<RepositoryRow>(remoteFingerprint);
     if (remoteOwner) {
-      return { repositoryRoot, repositoryId: remoteOwner.repositoryId, workspace: remoteOwner.workspace, source: 'remote' };
+      return checked({ repositoryRoot, repositoryId: remoteOwner.repositoryId, workspace: remoteOwner.workspace, source: 'remote' });
     }
     const identity = createRepositoryIdentity({ repositoryRoot, remoteUrl: remote });
-    return {
+    return checked({
       repositoryRoot,
       repositoryId: identity.repositoryId,
       workspace: identity.workspace,
       source: 'remote',
-    };
+    });
   }
 
   const repositoryId = `repo_local_${shortHash(repositoryRoot)}`;
   const identity = createRepositoryIdentity({ repositoryRoot, repositoryId });
-  return {
+  return checked({
     repositoryRoot,
     repositoryId: identity.repositoryId,
     workspace: identity.workspace,
     source: 'local-path',
-  };
+  });
 }
