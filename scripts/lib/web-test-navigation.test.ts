@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { chromium, type Page } from 'playwright'
-import { declineOptionalMemoryOffers, declinePendingMemoryOffer, openSettings } from './web-test-navigation.mjs'
+import { answerFixtureQuestions, declineOptionalMemoryOffers, declinePendingMemoryOffer, fixtureQuestionCardsVisible, installFixtureQuestionAnswers, openSettings } from './web-test-navigation.mjs'
 
 // A real browser drives the shell contract that failed in CI: a late onboarding
 // close dismisses an already-open account menu before Settings can be clicked.
@@ -103,4 +103,41 @@ test('Settings navigation reconciles onboarding and account-menu state', { timeo
       assert.equal(await page.evaluate(() => (window as any).submissions), 0)
     } finally { await page.close() }
   })
+})
+
+for (const mode of ['poll', 'handler']) test(`fixture question ${mode} defers an offer covered by the mobile drawer`, { timeout: 35000 }, async t => {
+  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) })
+  t.after(() => browser.close())
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } })
+  page.setDefaultTimeout(2000)
+  await page.setContent(`<main id="frame" data-sidebar-drawer>
+    <aside id="drawer" style="position:fixed;inset:0;background:white;z-index:71"><button id="close">Close sidebar</button></aside>
+    <section id="offer" role="region" aria-label="作業は完了しました。今回の記憶を整理してよいですか？">
+      <button id="decline">今回は保存しない</button><button id="confirm" disabled>確定（Enter）</button>
+    </section>
+    <button id="next">Next action</button>
+    </main><script>
+      window.declines = 0;
+      document.querySelector('#close').onclick = () => { document.querySelector('#frame').setAttribute('data-sidebar-collapsed', ''); document.querySelector('#drawer').hidden = true; };
+      document.querySelector('#decline').onclick = () => { document.querySelector('#confirm').disabled = false; };
+      document.querySelector('#confirm').onclick = () => { window.declines++; document.querySelector('#offer').hidden = true; };
+    </script>`)
+  await installFixtureQuestionAnswers(page)
+  assert.equal(await fixtureQuestionCardsVisible(page), 1, 'covered questions still block unrelated digit shortcuts')
+  if (mode === 'poll') await answerFixtureQuestions(page)
+  await page.getByRole('button', { name: 'Close sidebar', exact: true }).click()
+  assert.equal(await page.evaluate(() => (window as any).declines), 0, 'navigation must not answer through an overlay')
+  if (mode === 'poll') await answerFixtureQuestions(page)
+  else await page.getByRole('button', { name: 'Next action', exact: true }).click()
+  assert.equal(await fixtureQuestionCardsVisible(page), 0)
+  assert.equal(await page.evaluate(() => (window as any).declines), 1, 'the exposed offer is still answered exactly once')
+  await page.evaluate(() => {
+    document.querySelector('#frame')!.removeAttribute('data-sidebar-drawer')
+    document.querySelector('#frame')!.removeAttribute('data-sidebar-collapsed')
+    document.querySelector<HTMLElement>('#offer')!.hidden = false
+    document.querySelector<HTMLButtonElement>('#confirm')!.disabled = true
+  })
+  if (mode === 'poll') await answerFixtureQuestions(page)
+  else await page.getByRole('button', { name: 'Next action', exact: true }).click()
+  assert.equal(await page.evaluate(() => (window as any).declines), 2, 'an expanded desktop sidebar does not defer answers')
 })

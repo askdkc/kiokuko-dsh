@@ -80,6 +80,9 @@ export async function answerTaskStartupForTest(page, selected = 'decision OFF / 
 
 // Explicit test-user answers for checks whose subject is not Akinator or memory.
 function fixtureQuestions(page) {
+  // Native mobile navigation covers the conversation with a drawer. A visible
+  // question behind it must not intercept the click that completes navigation.
+  const exposedConversation = page.locator('body:not(:has([data-sidebar-drawer]:not([data-sidebar-collapsed])))')
   return [
     ['対象のリポジトリ、ファイル、機能、またはサービスは何ですか？', 'the fixture repository source'],
     ['完了と判断する成功条件は何ですか？', 'the requested fixture result is verified'],
@@ -87,8 +90,9 @@ function fixtureQuestions(page) {
     ['作業は完了しました。今回の記憶を整理してよいですか？', null],
   ].map(([name, answer]) => {
     const card = page.getByRole('region', { name, exact: true })
+    const trigger = exposedConversation.getByRole('region', { name, exact: true })
     const confirm = card.getByRole('button', { name: '確定（Enter）', exact: true })
-    return { card, async respond() {
+    return { card, trigger, async respond() {
       if (answer === null) {
         // A rerender can detach the offer between click attempts; each attempt
         // re-resolves the control against the current card.
@@ -167,13 +171,13 @@ export async function fixtureQuestionCardsVisible(page) {
 }
 export async function answerFixtureQuestions(page) {
   if (!page) return
-  for (const { card, respond } of fixtureQuestions(page)) if (await card.isVisible()) {
+  for (const { trigger, respond } of fixtureQuestions(page)) if (await trigger.isVisible()) {
     // Polls can answer without an actionability check. Temporarily remove the
     // handler so it cannot consume the same card ahead of this explicit answer.
-    await page.removeLocatorHandler(card)
-    try { await respond() } finally { await addQuestionHandler(page, card, respond) }
+    await page.removeLocatorHandler(trigger)
+    try { await respond() } finally { await addQuestionHandler(page, trigger, respond) }
   }
 }
 export async function installFixtureQuestionAnswers(page) {
-  for (const { card, respond } of fixtureQuestions(page)) await addQuestionHandler(page, card, respond)
+  for (const { trigger, respond } of fixtureQuestions(page)) await addQuestionHandler(page, trigger, respond)
 }
