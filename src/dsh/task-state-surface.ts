@@ -21,7 +21,8 @@ export function taskWorkflowCommand(service: DshTaskWorkflow): DshNativeCommandD
         const [operation = 'status', ...parts] = invocation.rawInput.trim().split(/\s+/u).filter(Boolean)
         if (operation === 'status') {
           if (parts.length > 0) throw new Error(usage)
-          return { kind: 'success', text: JSON.stringify(await service.snapshot(agent)) }
+          const result = await service.snapshot(agent)
+          return { kind: 'success', text: JSON.stringify({ ...result, task: result.task ? service.operationView(result.task, 'explicit_user') : null }) }
         }
         if (operation === 'create') {
           const parsed = invocation.rawInput.trim().match(/^create\s+(\S+)\s+([\s\S]+)$/u)
@@ -49,7 +50,7 @@ export function taskWorkflowCommand(service: DshTaskWorkflow): DshNativeCommandD
         if (!(TASK_OPERATIONS as readonly string[]).includes(operation) || parts.length > 1) throw new Error(usage)
         const task = await service.operate(agent, { operation: operation as TaskOperation,
           ...(parts[0] ? { taskId: parts[0] } : {}) }, invocation.signal)
-        return { kind: 'success', text: JSON.stringify(task) }
+        return { kind: 'success', text: JSON.stringify(service.operationView(task, 'explicit_user', operation === 'resume')) }
       } catch (error) { return { kind: 'error', text: error instanceof Error ? error.message : 'Task operation failed' } }
     } }
 }
@@ -69,10 +70,10 @@ export function mountTaskWorkflowSurface(ctx: Context, service: DshTaskWorkflow,
   if (commands?.register) disposers.push(commands.register(taskWorkflowCommand(service)))
   if (tools?.register && demand) {
     const definition = { name: TASK_OPERATION_TOOL,
-      description: 'Parent-only: explicit structured operation on the exact current SQLite task. Read its current taskId, revision, generation and allowedOps. Create uses the original human request; it accepts no rewritten request. State changes do not grant native permission. Explicit completion and stop require current host-observed evidence. Ordinary coding can end with a report of observed results and unverified checks. If only run_code is exposed, use only return await tools.task_operation(<one JSON object>) as the entire code; the host intercepts it without program evaluation.',
+      description: 'Parent-only: structured operation on the exact current SQLite task. Read taskId, revision, generation and callerEligibleOps. allowedOps/stateEligibleOps are state candidates only, not authority. A terminal run requires the human command /kioku-task resume <taskId>; the model cannot set explicit=true or treat its own selection as human approval. Resume changes references: follow preparationRequired and preparation before writing. Create uses the original human request; it accepts no rewritten request. State changes do not grant native permission. Completion and stop require current host-observed evidence. Ordinary coding can end with observed results and unverified checks. If only run_code is exposed, use only return await tools.task_operation(<one JSON object>) as the entire code; the host intercepts it without program evaluation.',
       parameters: { ...JSON.parse(JSON.stringify(z.toJSONSchema(TaskModelOperationSchema))), type: 'object' },
       output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
-      execute: (args: unknown, execution: any) => service.modelOperation(execution.agent, args, execution),
+      execute: async (args: unknown, execution: any) => service.operationView(await service.modelOperation(execution.agent, args, execution), 'model', (args as { operation?: string })?.operation === 'resume'),
     }
     disposers.push(tools.register(definition))
     disposers.push(demand.registerControlTool(definition))

@@ -102,6 +102,7 @@ export const Config = z.object({
   efficiency: EfficiencyConfig.prefault({}),
   continuity: ContinuityConfig.prefault({}),
   finalization: FinalizationConfig.prefault({}),
+  repositoryLearning: z.object({ mode: z.enum(['automatic', 'review', 'off']).default('automatic') }).strict().prefault({}),
   memoryEvolution: MemoryEvolutionConfig.prefault({}),
   memoryIndexReasoning: MemoryIndexReasoningConfig.prefault({}),
   autoGlobalization: z.object({ enabled: z.boolean().default(true) }).strict().prefault({}),

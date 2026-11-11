@@ -43,6 +43,21 @@ function fixture(migrationsDirectory?: string) {
   return { root, db, now, scope, config, service, request, seed, close() { db.close(); rmSync(root, { recursive: true, force: true }); } };
 }
 
+test('multiline Akinator source target survives the host profile and durable intake boundaries', async () => {
+  const { resolveGroundedIntakeProfile } = await import('../../../src/dsh/intake-profile-resolver.js');
+  const f = fixture();
+  try {
+    const task = 'kiokuko-dsh の resume を修正してください。\n準備状態を復旧する。\ndsh-cli は変更しない。';
+    const grounded = resolveGroundedIntakeProfile({ task, cwd: f.root, profileHints: { taskType: 'debug', target: task, expected: 'Resume works' } });
+    const input = f.request('multiline-source', grounded.profileHints.target);
+    input.request.task.title = task;
+    input.request.task.query = task;
+    const result = f.service.openRun(input);
+    assert.equal(readAkinatorSession(f.db, { workspace: f.scope.workspace, sessionId: result.intakeSessionId }).profile.target, task);
+    assert.equal(f.service.openRun(input).runId, result.runId);
+  } finally { f.close(); }
+});
+
 test('target adoption persists memory provenance without fake answers; replay ignores history and mode changes', () => {
   const f = fixture();
   try {

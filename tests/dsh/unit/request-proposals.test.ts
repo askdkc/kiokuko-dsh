@@ -68,7 +68,6 @@ test('native plan body survives a later ordinary reply and is not confused with 
 for (const content of [
   [call('{')],
   [call({ plan: '' })],
-  [call({ plan: 'x'.repeat(8193) })],
   [call({ plan: 123 })],
 ]) {
   test('invalid native plan content is excluded', () => {
@@ -78,6 +77,15 @@ for (const content of [
     )
   })
 }
+
+test('a megabyte plan retains its middle and final constraints with exact source evidence', () => {
+  const longPlan = '# 実行計画\n' + '要件と検証手順\n'.repeat(100_000) + '\n禁止: dsh-cli は変更しない。最後の受入テストを省略しない。'
+  const proposals = nativeRequestProposals([event(1, [call({ plan: longPlan })])], 2, 'session')
+  assert.equal(proposals[0]?.text, longPlan)
+  const context = createRequestIntentContext({ task: 'この計画を実行してください', messageRefs: [{ id: 'human', digest: 'a'.repeat(64) }], proposals })
+  assert.ok(context)
+  assert.equal(context.proposals[0]?.text, longPlan)
+})
 
 test('a current or future assistant event cannot become a prior plan proposal', () => {
   assert.deepEqual(

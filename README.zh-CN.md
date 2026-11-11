@@ -10,7 +10,7 @@ dsh --profile dsh-cli --dump-config
 dsh-cli
 ```
 
-配置中应只有一个启用的 `kiokuko-dsh/harness`，且 `agent-loop` 已禁用。传统插件模式需在 bundle 之后应用安装目录中的 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`。支持该功能的 CLI 可用 `dsh-cli --ignore-kiokuko` 仅在当前启动中排除 Kiokuko。保留记忆生成、保存、检索与利用；辅助服务失败不阻止无关的已授权工作，整理后的记忆仍需批准。[配置与验证边界](docs/kiokuko-harness.md)说明了 SBCL 前提、固定响应与实时 AI 判断的区别。
+配置中应只有一个启用的 `kiokuko-dsh/harness`，且 `agent-loop` 已禁用。传统插件模式需在 bundle 之后应用安装目录中的 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`。支持该功能的 CLI 可用 `dsh-cli --ignore-kiokuko` 仅在当前启动中排除 Kiokuko。保留记忆生成、保存、检索与利用；辅助服务失败不阻止无关的已授权工作，原生轮次结束后会在后台自动保存摘要、标签和关键词；`repositoryLearning.mode: review` 可保留保存前确认。[配置与验证边界](docs/kiokuko-harness.md)说明了 SBCL 前提、固定响应与实时 AI 判断的区别。
 
 记忆正文默认上限为 16,000 个 Unicode 字符，关系元数据有独立限额。请参阅[记忆传递预算](docs/memory-delivery.md)。
 

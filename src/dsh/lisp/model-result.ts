@@ -159,7 +159,7 @@ export function renderResult(value: unknown): string {
     } : {}), ...(omitted.length ? {
       truncated: true, omitted: [...new Set(omitted)].slice(0, 30),
       ...(typeof core.operationId === 'string' ? { inspect: { tool: 'lisp_inspect', resultOperationId: core.operationId,
-        section: 'result', pointer: inspectionPointer(omitted), offset: 0, limit: 2000 } }
+        section: 'result', pointer: testLogPointers[0] ?? inspectionPointer(omitted), offset: 0, limit: 2000 } }
         : { detail: 'Use the returned pagination fields or the human diagnostics command; do not repeat execution.' }),
     } : {}) }
     const json = JSON.stringify(result)

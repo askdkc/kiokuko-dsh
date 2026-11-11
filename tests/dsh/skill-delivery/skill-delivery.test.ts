@@ -31,7 +31,7 @@ const names: string[] = artifact.resources.filter((r: any) => r.id.endsWith('/SK
 const expectedLispTools = ['coding_workflow', 'coding_workflow_apply', 'coding_workflow_blocker', 'correction_check', 'kioku_edit', 'kioku_exec', 'kioku_read', 'kioku_result', 'kioku_write', 'lisp_apply', 'lisp_call', 'lisp_cancel', 'lisp_compare', 'lisp_define', 'lisp_describe', 'lisp_eval',
   'lisp_fallback', 'lisp_hot_call', 'lisp_hot_contract', 'lisp_hot_deactivate', 'lisp_hot_install', 'lisp_hot_status',
   'lisp_inspect', 'lisp_observe', 'lisp_recover', 'lisp_reset', 'lisp_resume', 'lisp_stage', 'lisp_status', 'lisp_verify',
-  'observation_read', 'prepare_requested_work', 'skill', 'task_completion', 'task_memory_review']
+  'observation_read', 'prepare_requested_work', 'read_request_source', 'skill', 'task_completion', 'task_memory_review', 'task_operation']
 const textOf = (request: any): string => [request.system ?? '', ...request.messages.flatMap((m: any) => m.content.flatMap((b: any) =>
   b.type === 'text' ? [b.text] : b.type === 'tool-result' ? b.content.filter((c:any)=>c.type==='text').map((c:any)=>c.text) : []))].join('\n')
 function requireBody(request: any, name: string, detail = '') {

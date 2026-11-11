@@ -5,7 +5,7 @@ import { answerTaskStartup } from '../helpers/task-startup-fixture.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { existsSync, realpathSync } from 'node:fs'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -36,8 +36,10 @@ const preparationValue = (result: any) => {
   const text = resultText(result)
   return JSON.parse(text.slice(text.indexOf('{')))
 }
-const plan =
-  '# Parser implementation\nCreate src/parser.ts with an identity function. Preserve all other files. Do not publish.'
+const longPlan =
+  '# Parser implementation\nCreate src/parser.ts with an identity function. Preserve all other files. Do not publish.\n' +
+  'Reference detail: retain the parser public API; verify the implementation before finishing.\n'.repeat(12000) +
+  '\nFinal acceptance: native and PTC must both work. Do not modify dsh-cli.'
 
 for (const mode of ['core', 'adapter'] as const)
   for (const presentation of ['native', 'ptc'] as const)
@@ -47,6 +49,7 @@ for (const mode of ['core', 'adapter'] as const)
         { skip: !available, timeout: 30_000 },
         async (t) =>
           withIsolatedSkillHome(async () => {
+            const plan = legacy === 'assessment' ? '# Parser implementation\nCreate src/parser.ts with an identity function. Preserve all other files. Do not publish.' : longPlan
             const modules = await Promise.all(
               [
                 'cordis',
@@ -94,6 +97,7 @@ for (const mode of ['core', 'adapter'] as const)
             try {
               await mkdir(join(root, '.git'))
               await mkdir(join(root, 'src'))
+              await writeFile(join(root, 'PLAN.md'), plan)
               for (const plugin of [
                 fsLocal,
                 workingDirectory,
@@ -290,6 +294,18 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
               await agent.whenIdle()
               assert.deepEqual(errors, [])
               assert.equal(existsSync(join(root, 'src/parser.ts')), false)
+              // Remove the plan from the retained prompt surface while keeping
+              // its real native source events. Intake must recover the original.
+              if (legacy !== 'assessment') {
+                const planEvent = agent.session.snapshotEvents().find((event: any) => event.type === 'assistant/message' &&
+                  event.data.message.content.some((block: any) => block.type === 'tool-call' && block.name === 'exit_plan_mode'))!
+                const end = agent.session.surface.nodes.at(-1)!
+                agent.session.append('user/message', llm.createUserMessage({ source: { kind: 'plugin:kiokuko-dsh', form: 'snapshot',
+                  sections: [{ name: 'compaction', text: 'A parser implementation plan was reviewed. Read its exact source before execution.' }] },
+                  content: [{ type: 'text', text: 'A parser implementation plan was reviewed. Read its exact source before execution.' }] }),
+                { surfaceOp: { op: 'replace', startSeq: planEvent.seq, endSeq: end },
+                  sourceEventSeqs: agent.session.surface.nodes.slice(agent.session.surface.nodes.indexOf(planEvent.seq)) })
+              }
               if (presentation === 'ptc') {
                 for (const name of [
                   'dsh-subprocess-local',
@@ -314,7 +330,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                   ),
                 )
               }
-              let repairedPreparation: any
+              let repairedPreparation: any, sourcePage: any, planReferences: string[]
               if (legacy === true)
                 responses.push(
                   toolCall('unresolved-legacy', 'prepare_requested_work', {
@@ -323,6 +339,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                 )
               responses.push(
                 (request: any) => {
+                  if (legacy !== 'assessment') assert.ok(JSON.stringify(request.messages).length < 200_000,
+                    'the provider receives bounded source projections, not the megabyte plan body')
                   if (legacy === true) {
                     assert.equal(
                       preparationValue(resultFor(request, 'unresolved-legacy'))
@@ -340,12 +358,16 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                     section.text.split('advisory only):\n')[1].split('\n')[0],
                   )
                   assert.ok(
-                    bound.proposals.some((p: any) => p.text === plan),
-                    'the full reviewed plan must survive the ordinary assistant reply',
+                    bound.proposals.some((p: any) => p.text === plan.slice(0, 1024) && p.length === plan.length && p.truncated === (plan.length > 1024)),
+                    'the reviewed plan remains available by exact source reference without unbounded prompt injection',
                   )
                   const proposal = bound.proposals.find(
-                    (p: any) => p.text === plan,
+                    (p: any) => p.length === plan.length,
                   )
+                  const source = bound.sources.find((s: any) => s.id === proposal.id)
+                  assert.ok(source)
+                  sourcePage = { id: source.id, digest: source.digest, offset: Math.max(0, plan.length - 4096), limit: 4096 }
+                  planReferences = bound.requiredReferences
                   repairedPreparation = {
                     requestIntent: {
                       relation: 'scope_change',
@@ -357,13 +379,21 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                       ],
                     },
                   }
+                  return toolCall('read-plan-end', 'read_request_source', sourcePage)
+                },
+                (request: any) => {
+                  const page = preparationValue(resultFor(request, 'read-plan-end'))
+                  assert.equal(page.text, plan.slice(sourcePage.offset))
+                  assert.equal(page.nextOffset, null)
+                  assert.equal(page.authority, 'source_only_not_approval')
+                  assert.equal(existsSync(join(root, 'src/parser.ts')), false)
                   return legacy === 'assessment'
                     ? toolCall('inconclusive-plan', 'prepare_requested_work', {
                         requestIntent: {
                           relation: 'same_scope_continuation',
                           action: 'change',
                           changeScope: 'implementation',
-                          evidenceRefs: bound.requiredReferences,
+                          evidenceRefs: planReferences,
                         },
                       })
                     : toolCall(
@@ -506,6 +536,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
               await adapter?.host.runtime.drain?.()
               assert.deepEqual(errors, [])
               assert.equal(written, true)
+              assert.equal(await readFile(join(root, 'PLAN.md'), 'utf8'), plan)
               assert.equal(
                 await readFile(join(root, 'src/parser.ts'), 'utf8'),
                 'export const parse = (value: string) => value\n',

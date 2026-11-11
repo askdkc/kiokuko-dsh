@@ -15,6 +15,12 @@ import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
 
+test('native repository compaction defaults to automatic with explicit review and off modes', () => {
+  assert.equal(dshPlugin.Config.parse({}).repositoryLearning.mode, 'automatic')
+  for (const mode of ['review', 'off']) assert.equal(dshPlugin.Config.parse({ repositoryLearning: { mode } }).repositoryLearning.mode, mode)
+  assert.throws(() => dshPlugin.Config.parse({ repositoryLearning: { mode: 'unknown' } }))
+})
+
 test('default intake: root, DSH, core and configured-module exports agree without activation', () => {
   assert.equal(publicPlugin.Config, dshPlugin.Config)
   for (const schema of [publicPlugin.Config, dshPlugin.Config, CoreConfig, createConfiguredPlugin([]).Config]) {

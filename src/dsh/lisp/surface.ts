@@ -22,6 +22,7 @@ import { savedPageVersion, savedResultVersion, type SavedResultPage } from './in
 import type { InspectionReceipt } from './prototype-review.js'
 import { dshTurnRequestId } from '../intake-profile-resolver.js'
 import { TASK_PREPARE_TOOL } from '../on-demand-intake.js'
+import { REQUEST_SOURCE_TOOL } from '../request-sources.js'
 import type { DecisionService } from '../decisions/service.js'
 import { DecisionError } from '../decisions/contracts.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -76,6 +77,7 @@ const LISP_READ_TOOLS = [
   'grep',
   'skill',
   'observation_read',
+  REQUEST_SOURCE_TOOL,
 ] as const
 const NATIVE_SHELL_TOOLS = new Set(['bash', 'zsh', 'pwsh'])
 // Keep host-owned review, questions and Plan approval reachable while Lisp blocks native effects.
@@ -84,6 +86,7 @@ const LISP_NATIVE_TOOLS = [
   ...LISP_READ_TOOLS,
   'todo_write',
   TASK_PREPARE_TOOL,
+  'task_operation',
   'correction_check',
   'task_memory_review',
   'task_completion',

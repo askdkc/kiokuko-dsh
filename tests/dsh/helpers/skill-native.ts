@@ -97,6 +97,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   if (hostPlugin) fibers.push(await ctx.plugin(hostPlugin))
   if(explicit===true) {
     adapterOptions = {databasePath:join(dir,'state.sqlite3'),repositoryRoot:workspace,agenticReplay:{enabled:false},
+      repositoryLearning: subject.Config.parse(extra).repositoryLearning,
       ...('typedDecisions' in extra ? {typedDecisions:subject.Config.parse(extra).typedDecisions} : {}), ...(decisions ? { decisions } : {}), ...(prompts ? {
       skillPrompts: prompts, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, typedDecisions: { mode: 'off' },
       // Auxiliary finalization must not consume evaluation scripts or provider

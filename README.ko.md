@@ -10,7 +10,7 @@ dsh --profile dsh-cli --dump-config
 dsh-cli
 ```
 
-설정에는 활성 `kiokuko-dsh/harness` 하나와 비활성 `agent-loop`가 있어야 합니다. 기존 플러그인 모드는 설치된 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`을 bundle 뒤에 적용합니다. 지원하는 CLI의 `dsh-cli --ignore-kiokuko`는 이번 실행에서만 Kiokuko를 제외합니다. 기억 생성·저장·검색·활용은 유지하며 보조 서비스 장애로 무관한 허용 작업을 막지 않습니다. 정리된 기억 저장에는 승인이 필요합니다. [설정과 검증 한계](docs/kiokuko-harness.md)에서 SBCL 전제와 고정 응답·실시간 AI 판단의 차이를 확인하세요.
+설정에는 활성 `kiokuko-dsh/harness` 하나와 비활성 `agent-loop`가 있어야 합니다. 기존 플러그인 모드는 설치된 `kiokuko-dsh/dsh/cordis.legacy.patch.yml`을 bundle 뒤에 적용합니다. 지원하는 CLI의 `dsh-cli --ignore-kiokuko`는 이번 실행에서만 Kiokuko를 제외합니다. 기억 생성·저장·검색·활용은 유지하며 보조 서비스 장애로 무관한 허용 작업을 막지 않습니다. 기본적으로 턴 종료 후 요약·태그·키워드를 백그라운드에서 자동 저장합니다. `repositoryLearning.mode: review`는 저장 전 확인을 유지합니다. [설정과 검증 한계](docs/kiokuko-harness.md)에서 SBCL 전제와 고정 응답·실시간 AI 판단의 차이를 확인하세요.
 
 메모리 본문의 기본 한도는 Unicode 16,000자이며 관계 메타데이터에는 별도 한도가 적용됩니다. [메모리 전달 예산](docs/memory-delivery.md)을 참고하세요.
 

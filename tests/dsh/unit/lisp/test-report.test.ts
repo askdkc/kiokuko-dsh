@@ -1,8 +1,23 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { reportTestResult } from '../../../../src/dsh/test-report.js'
+import { renderResult } from '../../../../src/dsh/lisp/model-result.js'
 
 const processResult = (code: number | null, stdout: string, stderr = '') => ({ code, stdout, stderr })
+
+test('saved test inspection prioritizes reporter output over incidental stderr warnings', () => {
+  for (const runner of ['node', 'vitest']) {
+    const value = { ok: true, operationId: 'test-report', value: { json: {
+      runner, testStatus: 'failed', code: 1, stdout: 'test failure report', stderr: 'runtime warning',
+    } } };
+    const rendered = JSON.parse(renderResult(value));
+    assert.equal(rendered.inspect.pointer, '/value/json/stdout');
+    assert.equal(rendered.value.json.testStatus, 'failed');
+    assert.deepEqual(rendered.omitted, ['/value/json/stdout', '/value/json/stderr']);
+    value.value.json.stdout = '';
+    assert.equal(JSON.parse(renderResult(value)).inspect.pointer, '/value/json/stderr');
+  }
+});
 
 test('selected tests preserve process failures, unknowns and reports independently', () => {
   const missing = reportTestResult('vitest', processResult(2, '', 'Could not load config'))

@@ -339,6 +339,7 @@ async function startDshPlugin(ctx: Context, config: DshConfig): Promise<void> {
       efficiency: resolvedConfig.efficiency,
       continuity: resolvedConfig.continuity,
       finalization: resolvedConfig.finalization,
+      repositoryLearning: resolvedConfig.repositoryLearning,
       memoryEvolution: resolvedConfig.memoryEvolution,
       memoryIndexReasoning: resolvedConfig.memoryIndexReasoning,
       autoGlobalization: resolvedConfig.autoGlobalization,

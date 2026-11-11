@@ -26,6 +26,8 @@ export interface TaskAuthorityExecution { [TASK_AUTHORITY]?: TaskLease }
 export interface TaskSnapshot extends TaskIdentity {
   runId: string; type: TaskType | null; state: TaskState; revision: number; generation: number;
   runStatus: RunStatus; reason: string; evidence: string[]; allowedOps: TaskOperation[];
+  /** allowedOps is the legacy alias of stateEligibleOps, never caller authority. */
+  stateEligibleOps?: TaskOperation[] | undefined;
   request: string | null; resumedFromTerminal: boolean; sourceSessionId: string
   pendingStop?: TaskPendingStop | undefined
   unresolved?: TaskUnresolved | undefined
@@ -40,6 +42,7 @@ export const TaskSnapshotSchema = z.object({ taskId: text, runId: text, sessionI
   type: z.enum(TASK_TYPES).nullable(), state: z.enum(TASK_STATES), revision: z.number().int().positive(),
   generation: z.number().int().positive(), runStatus: z.enum(['intake','active','completed','failed','cancelled','interrupted']),
   reason: z.string(), evidence: z.array(z.string()), allowedOps: z.array(z.enum(TASK_OPERATIONS)),
+  stateEligibleOps: z.array(z.enum(TASK_OPERATIONS)).optional(),
   request: z.string().nullable(), sourceSessionId: text, resumedFromTerminal: z.boolean(), pendingStop: z.object({ operationId: text,
     operation: z.enum(['wait','ignore']), requestedRevision: z.number().int().positive(), requestedGeneration: z.number().int().positive(),
     reason: text, evidence: z.array(z.string()) }).optional(), unresolved: z.object({ requestId: text,
@@ -77,6 +80,18 @@ export function taskAllowedOperations(task: Pick<TaskSnapshot, 'state' | 'runSta
   if (task.state === 'Working') return ['wait', 'complete', 'ignore']
   return ['resume', 'ignore']
 }
+/** Caller identity is selected by the host boundary, never from model arguments.
+ * Eligibility does not replace CAS, intake, ownership or receipt validation. */
+export function taskOperationEligibility(task: Pick<TaskSnapshot, 'taskId' | 'state' | 'runStatus' | 'resumedFromTerminal' | 'pendingStop'>,
+  caller: 'model' | 'explicit_user') {
+  const stateEligibleOps = taskAllowedOperations(task)
+  const explicitResumeRequired = caller === 'model' && stateEligibleOps.includes('resume') &&
+    (isTaskTerminal(task) || executionTerminal(task.runStatus))
+  return { stateEligibleOps, callerEligibleOps: stateEligibleOps.filter(operation => !(operation === 'resume' && explicitResumeRequired)),
+    caller, allowedOpsMeaning: 'state_candidates_only' as const,
+    ...(explicitResumeRequired ? { resumeRequirement: { code: 'EXPLICIT_USER_RESUME_REQUIRED' as const,
+      command: `/kioku-task resume ${task.taskId}`, message: 'A terminal task requires an explicit resume operation by the user. Model selection is not human approval.' } } : {}) }
+}
 function snapshot(row: TaskRow): TaskSnapshot {
   const result: TaskSnapshot = { taskId: row.run_id, runId: row.run_id, sessionId: row.task_owner_session_id ?? row.dsh_session_id,
     sourceSessionId: row.dsh_session_id,
@@ -88,6 +103,7 @@ function snapshot(row: TaskRow): TaskSnapshot {
     ...(row.task_unresolved_json ? { unresolved: JSON.parse(row.task_unresolved_json) as TaskUnresolved } : {}),
     ...(row.task_previous_outcome_json ? { previousOutcome: JSON.parse(row.task_previous_outcome_json) as TaskPreviousOutcome } : {}) }
   result.allowedOps = taskAllowedOperations(result)
+  result.stateEligibleOps = [...result.allowedOps]
   return result
 }
 function rowFor(db: SqliteDatabase, taskId: string): TaskRow {
@@ -130,9 +146,11 @@ export function validateTaskOperation(task: TaskSnapshot, raw: TaskOperationInpu
   const input = TaskOperationSchema.parse(raw)
   if (input.expectedRevision !== task.revision || input.expectedGeneration !== undefined && input.expectedGeneration !== task.generation)
     conflict('Stale task revision or generation')
-  if (!taskAllowedOperations(task).includes(input.operation)) conflict(`Operation ${input.operation} is not allowed in ${task.state}`)
-  if (input.operation === 'resume' && (isTaskTerminal(task) || executionTerminal(task.runStatus)) && input.explicit !== true)
-    conflict('A terminal task requires an explicit resume operation')
+  const eligibility = taskOperationEligibility(task, input.explicit === true ? 'explicit_user' : 'model')
+  if (!eligibility.stateEligibleOps.includes(input.operation)) conflict(`Operation ${input.operation} is not allowed in ${task.state}`)
+  if (!eligibility.callerEligibleOps.includes(input.operation) && eligibility.resumeRequirement)
+    throw new KiokukoError('EXPLICIT_USER_RESUME_REQUIRED',
+      `EXPLICIT_USER_RESUME_REQUIRED: ${eligibility.resumeRequirement.message} Ask the user to run ${eligibility.resumeRequirement.command}. Do not retry model resume.`, eligibility.resumeRequirement)
   return input
 }
 export function captureTaskLease(db: SqliteDatabase, identity: TaskIdentity): TaskLease {

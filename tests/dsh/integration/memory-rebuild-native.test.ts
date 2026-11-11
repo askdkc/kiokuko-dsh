@@ -18,6 +18,9 @@ import { nativeToolResults } from '../helpers/native-mock.js'
 import { DshAnswerContext } from '../../../src/dsh/answer-context.js'
 import { readRepositoryLearning } from '../../../src/memory/repository-learning.js'
 import { setTimeout as delay } from 'node:timers/promises'
+import { isolateSkillHome } from '../helpers/skill-home.js'
+
+isolateSkillHome()
 
 const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
 const packageRoot = process.env.KIOKUKO_OWNED_PACKAGE_ROOT
@@ -118,7 +121,7 @@ for (const mode of ['core', 'adapter'] as const) for (const [changes, timing] of
 
 for (const explicit of [false, true]) for (const changes of [1, 3]) test(`${explicit ? 'adapter' : 'core'}: execution refresh never repeats a completed write (${changes})`, { timeout: 30000 }, async () => {
   const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), explicit, approveMemory: changes === 3, startupChoice: 'decision OFF / Lisp OFF',
-    extra: { lisp: { enabled: false }, answerReview: { mode: 'off' }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' }, modelAutoMode: { mode: 'off' } } })
+    extra: { repositoryLearning: { mode: 'review' }, lisp: { enabled: false }, answerReview: { mode: 'off' }, memoryReview: { mode: 'off' }, memoryEvolution: { mode: 'off' }, memoryIndexReasoning: { mode: 'off' }, modelAutoMode: { mode: 'off' } } })
   const db = openConnection(join(f.dir, explicit ? 'state.sqlite3' : 'kiokuko-dsh.sqlite3'))
   let updates = 0, writes = 0
   let reflections = 0

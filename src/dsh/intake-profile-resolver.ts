@@ -56,7 +56,8 @@ export function resolveGroundedIntakeProfile(input: GroundedIntakeProfileInput):
     taskType: hints.taskType ?? null,
     // A workspace identifies execution location, not the user's intended target.
     // Preserve missing answers so Akinator can actually clarify the request.
-    target: optionalText(hints.target),
+    // Akinator answers are source text, not necessarily a single file path.
+    target: optionalText(hints.target, true),
     expected: optionalText(hints.expected, true, MAX_TEXT_LENGTH),
     constraints: optionalText(hints.constraints, true),
   }, { inferTaskType: !input.deferTaskTypeInference })

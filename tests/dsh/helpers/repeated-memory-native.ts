@@ -121,6 +121,7 @@ export async function repeatedNativeHost(root: string, inputMode: FinalizationIn
   const knownRequests = new Set(Array.from({length:30},(_,index)=>{const number=index+1;return [false,true].map(readonly=>`通常実行で、${APPLICABILITY}。${readonly ? '読み取りのみで過去の観測の適用範囲を検証' : `fixtures/${(number - 1) % 3}.txt を検証`}してください。${BOUNDARY}。依頼 ${number}。`)}).flat())
   const decisions = intentFixtureDecisions(task => knownRequests.has(task) ? {action:'verify',taskType:'review'} : undefined)
   const adapter = createDshHostAdapter(ctx, { decisions, repositoryRoot: root, databasePath: join(root, '.git', 'state.sqlite3'),
+    repositoryLearning: { mode: 'review' },
     ...options,
     modelRoutes: mockModelRoutes, agenticReplay: { enabled: true, askOnStart: false }, efficiency: { observe: true }, finalization: { inputMode },
     llm: { async *stream(request) {

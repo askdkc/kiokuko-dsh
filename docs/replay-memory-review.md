@@ -1,5 +1,7 @@
 # Optional replay memory review
 
+The normal native harness now uses automatic post-turn compaction (`repositoryLearning.mode: automatic`). See [the native memory flow](native-memory-flow.md). The approval procedures below apply to manual curated memory and explicit `repositoryLearning.mode: review`; they are never prerequisites for ordinary Lisp work.
+
 Memory lookup and saving never authorize tools or block ordinary work or task completion. Native permissions, current task evidence, explicit Stop, and durable user holds remain authoritative. Ordinary native work does not need a Goal or a memory-preparation call.
 
 ## Save a completed experience
@@ -23,6 +25,6 @@ A failed approved save remains `unavailable`. Its read-only status can include t
 
 ## Legacy compatibility
 
-Automatic observation, finalization, evolution, semantic index derivation and globalization no longer create new memories. Old configuration flags do not re-enable them. Legacy model-facing review/checkpoint calls are non-writing compatibility responses. Existing memories and historical proof records remain available for inspection; their missing or stale application status cannot veto native execution or completion.
+Legacy finalization, evolution, semantic index derivation and globalization do not create new curated memories. Native repository compaction is a separate, explicitly configured post-turn writer. Legacy model-facing review/checkpoint calls are non-writing compatibility responses. Existing memories and historical proof records remain available for inspection; their missing or stale application status cannot veto native execution or completion.
 
 The full preview is transported through native user questions. Very large previews may be difficult to inspect in a particular browser or TUI; presentation at the maximum proposal size is not verified by the source-level and native transport tests.

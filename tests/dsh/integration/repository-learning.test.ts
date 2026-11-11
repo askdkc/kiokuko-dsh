@@ -68,7 +68,7 @@ class Host {
     for (const fn of this.handlers.get(name) ?? []) fn(...args);
   }
 }
-async function fixture(nestedLaunch = false) {
+async function fixture(nestedLaunch = false, learningOptions: any = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "repo-learning-")));
   execFileSync("git", ["init", "-q", root]);
   const launchCwd = nestedLaunch ? join(root, "nested") : root;
@@ -135,7 +135,7 @@ async function fixture(nestedLaunch = false) {
       a,
       events,
       append: session.append,
-      async step(turn: number, query = "unrelated keyword") {
+      async step(turn: number, query: string | null = "unrelated keyword") {
         let next = async () => ({ kind: "enter", messages: [] });
         for (const fn of [
           ...(local.handlers.get("agent/pre-step") ?? []),
@@ -147,7 +147,7 @@ async function fixture(nestedLaunch = false) {
                 agent: a,
                 turn,
                 signal: new AbortController().signal,
-                messages: [
+                messages: query === null ? [] : [
                   {
                     role: "user",
                     content: [{ type: "text", text: query }],
@@ -162,7 +162,7 @@ async function fixture(nestedLaunch = false) {
       },
     };
   }
-  memory = new DshLifecycleMemory(host as any, runtime, launchCwd);
+  memory = new DshLifecycleMemory(host as any, runtime, launchCwd, learningOptions);
   return {
     root,
     host,
@@ -186,7 +186,7 @@ async function fixture(nestedLaunch = false) {
         migrationsDirectory: join(process.cwd(), "migrations"),
       });
       await runtime.start();
-      memory = new DshLifecycleMemory(host as any, runtime, launchCwd);
+      memory = new DshLifecycleMemory(host as any, runtime, launchCwd, learningOptions);
     },
     async close() {
       memory.stop();
@@ -231,6 +231,75 @@ function turn(
   });
   a.append("turn/end", { turn: id, reason: { kind: outcome } });
 }
+
+test('automatic compaction saves after a native turn without a question service', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  try {
+    delete f.host.answer;
+    const a = f.agent('automatic');
+    turn(a, 1);
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, 1);
+    assert.equal(f.host.questions.length, 0);
+  } finally { await f.close(); }
+});
+
+test('automatic references survive tool-only steps within the same turn, never another turn', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  try {
+    const a = f.agent('continuing-reference');
+    turn(a, 1);
+    await f.memory.whenIdle();
+    a.append('turn/start', { turn: 2 });
+    a.append('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'output directory' }] });
+    assert.match(JSON.stringify((await a.step(2, 'output directory')).messages), /Create output directory/);
+    assert.match(JSON.stringify((await a.step(2, null)).messages), /Create output directory/);
+    a.append('turn/start', { turn: 3 });
+    assert.deepEqual((await a.step(3, null)).messages, []);
+  } finally { await f.close(); }
+});
+
+test('a pending compaction cannot hold another chat or cancel a completed turn on new input', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const model = f.host.model!;
+  f.host.model = async function* (request) { entered(); await gate; yield* model(request); };
+  try {
+    const a = f.agent('background'), b = f.agent('foreground');
+    turn(a, 1);
+    await started;
+    const result = await Promise.race([b.step(1), new Promise(resolve => setTimeout(() => resolve('blocked'), 150))]);
+    assert.notEqual(result, 'blocked');
+    a.append('turn/start', { turn: 2 });
+    release();
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, 1);
+  } finally { release(); await f.close(); }
+});
+
+test('forgetting during Akinator selection discards the reference without blocking work', async () => {
+  let enter!: () => void, release!: () => void;
+  const entered = new Promise<void>(resolve => { enter = resolve; });
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  const decisions = { bind: async () => ({ mode: 'on' }), evaluate: async (_id: string, batch: any) => {
+    enter(); await wait;
+    return { status: 'completed', result: { answers: batch.questions.map((q: any) => ({ id: q.id, status: 'selected', choiceId: 'use' })) } };
+  } };
+  const f = await fixture(false, { mode: 'automatic', decisions });
+  try {
+    const a = f.agent('forget-selection');
+    turn(a, 1);
+    await f.memory.whenIdle();
+    const step = a.step(2, 'output directory');
+    await entered;
+    await f.runtime.withDatabase(db => resetRepositoryLearning(db, f.root));
+    release();
+    assert.deepEqual((await step).messages, []);
+  } finally { release(); await f.close(); }
+});
 test("greetings leave the conversation usable without a memory question or save", async () => {
   const f = await fixture();
   try {

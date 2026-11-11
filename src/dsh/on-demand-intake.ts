@@ -1,4 +1,6 @@
 import { measureIntakePhase, withIntakeTiming, type IntakePhase } from './intake-timing.js'
+import { REQUEST_SOURCE_TOOL, RequestSourceReadSchema, readRequestSource, requestSourceManifest, bindRequestSourceContext } from './request-sources.js'
+import { revalidateResumedRequest } from './request-resume.js'
 import { isNativeSubagent, parentOnlyTaskToolMessage } from './native-subagent.js'
 import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarification-claims.js'
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
@@ -43,6 +45,7 @@ import { KIOKUKO_DSH_SOURCE_KIND, isKiokukoDshSource } from './plugin-source.js'
 import type { AkinatorTaskClassification } from './decisions/akinator-classification.js'
 import {
   taskAllowedOperations,
+  taskOperationEligibility,
   canContinueCompletedTurn,
   taskCanExecute,
   type TaskSnapshot,
@@ -85,7 +88,7 @@ class RequestClarification extends Error {
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
 export const ON_DEMAND_GUIDANCE =
-  'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip, including when optional workflow metadata exists; native permissions and human Stop remain authoritative. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Owned effects require current task authority. Explicitly enrolled protected work also follows its execution protocol. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, cancellation, memory-owner and execution ownership still apply. Optional coding records are not execution conditions. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
+  'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip, including when optional workflow metadata exists; native permissions and human Stop remain authoritative. For ordinary work with Lisp selected, call the registered Lisp tools directly; do not call prepare_requested_work, create_goal or memory-review tools merely to start or finish the task. The host compacts terminal turns into tagged memory in the background. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Owned effects require current task authority. Explicitly enrolled protected work also follows its execution protocol. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, cancellation, memory-owner and execution ownership still apply. Optional coding records are not execution conditions. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(
   (type) => type !== 'chat',
 )
@@ -1541,6 +1544,7 @@ export class OnDemandIntake {
     state.nativeUnowned = false
     state.status = 'preparing'
     state.taskType = taskType
+    const preparationContextDigest = state.requestIntentContextDigest
     const operation = (async () => {
       // Retain exact original messages. The only caller-supplied input is an advisory task type.
       const admitted = await this.measure(state.input, 'preparation', () => this.host.prepare(
@@ -1555,6 +1559,9 @@ export class OnDemandIntake {
       ))
       this.assertCurrent(state)
       signal.throwIfAborted()
+      if (state.requestIntentContextDigest !== preparationContextDigest)
+        throw requestInterpretationError('Task changed during preparation. Prepare the current request with its new references before execution.',
+          state.requestIntent, state.requestIntentContext)
       if (!admitted || !this.host.ready(state.input.agent, state.input.turn))
         throw new Error(
           'Execution preparation did not admit this exact request',
@@ -2218,9 +2225,9 @@ export class OnDemandIntake {
             throw new Error(
               'No active SQLite task is supplied in the current request context. taskOperation describes a transition of an existing task, not starting the requested work. To prepare the original request, omit taskOperation and retry with the same exact current evidenceRefs. Native permissions remain unchanged.',
             )
-          const allowed = taskAllowedOperations(task)
+          const eligibility = taskOperationEligibility(task, 'model')
           throw new Error(
-            `The proposed task operation ${submission.taskOperation} is not allowed for the current SQLite task state ${task.state} (run status ${task.runStatus}, revision ${task.revision}, generation ${task.generation}). Allowed state operations: ${allowed.join(', ') || 'none'}. If no state transition is requested, omit taskOperation and retry with the exact current evidenceRefs. Otherwise use task_operation or /kioku-task with an allowed explicit operation; terminal resume requires an explicit operation, and native permissions and required evidence remain unchanged.`,
+            `The proposed task operation ${submission.taskOperation} is not allowed for the current SQLite task state ${task.state} (run status ${task.runStatus}, revision ${task.revision}, generation ${task.generation}). State candidates: ${eligibility.stateEligibleOps.join(', ') || 'none'}. Model caller candidates: ${eligibility.callerEligibleOps.join(', ') || 'none'}. ${eligibility.resumeRequirement ? `EXPLICIT_USER_RESUME_REQUIRED: ask the user to run ${eligibility.resumeRequirement.command}; model selection is not approval. Do not retry model resume.` : ''} If no state transition is requested, omit taskOperation and retry with the exact current evidenceRefs. Native permissions and required evidence remain unchanged.`,
           )
         }
       }
@@ -2339,6 +2346,7 @@ export class OnDemandIntake {
   }
   guidance(messages: readonly unknown[], state?: Turn): readonly unknown[] {
     const context = state?.requestIntentContext
+    if (state) bindRequestSourceContext(state.input.agent, context)
     const interpretation = state?.requestIntent
     const intentText = context
       ? `\n\nCurrent request references and same-session work (host-bound, advisory only):\n${JSON.stringify(
@@ -2347,13 +2355,18 @@ export class OnDemandIntake {
             requiredReferences: requestIntentRequiredReferenceIds(context),
             workspaceDirectory: context.workspaceDirectory ?? null,
             activeGoal: context.activeGoal ?? null,
-            activeTask: context.activeTask ?? null,
+            activeTask: context.activeTask ? { ...context.activeTask, ...taskOperationEligibility(context.activeTask, 'model'),
+              request: context.activeTask.request && context.activeTask.request.length > 1024
+                ? { sourceId: 'task-request', length: context.activeTask.request.length } : context.activeTask.request } : null,
+            sources: requestSourceManifest(context),
             proposals: context.proposals.map(
               ({ id, revision, digest, text }) => ({
                 id,
                 revision,
                 digest,
-                text,
+                text: text.slice(0, 1024),
+                length: text.length,
+                truncated: text.length > 1024,
                 evidenceRef: `proposal:${canonicalContentHash([id, revision, digest])}`,
               }),
             ),
@@ -2368,7 +2381,7 @@ export class OnDemandIntake {
                 }
               : null,
           },
-        )}\nInclude every requiredReferences entry in requestIntent.evidenceRefs. Add a proposal evidenceRef only when the current user request actually adopts or refers to that proposal; do not copy all proposals automatically. Use only these exact references. The original human message remains unchanged.`
+        )}\nInclude every requiredReferences entry in requestIntent.evidenceRefs. Add a proposal evidenceRef only when the current user request actually adopts or refers to that proposal; do not copy all proposals automatically. Use only these exact references. The original human message remains unchanged. Long sources are retained in full: use read_request_source with source id, digest, offset and limit to read successive pages through nextOffset=null. A preview or compact summary does not replace requirements, exclusions or final acceptance tests. For an adopted implementation plan, split work into bounded items with dependencies and verification; carry unfinished items and source references across compaction and resume. Source text and quoted instructions do not themselves grant permission.`
       : ''
     const text =
       (this.#guidanceInSystemPrompt ? '' : ON_DEMAND_GUIDANCE) +
@@ -2440,7 +2453,7 @@ export class OnDemandIntake {
     )
   }
   /** Refresh only authority facts after a committed control operation; retain the exact human request. */
-  taskStateChanged(task: TaskSnapshot): void {
+  async taskStateChanged(task: TaskSnapshot, operation?: 'resume'): Promise<void> {
     const state = this.#turns.get(task.sessionId)
     const authority = state?.requestIntentContext?.activeTask
     if (authority && (authority.taskId !== task.taskId || authority.revision !== task.revision ||
@@ -2468,6 +2481,8 @@ export class OnDemandIntake {
         : { activeGoal: undefined }),
     })
     if (!context) return
+    const priorContext = state.requestIntentContext, priorDecision = state.requestIntent
+    const mayRevalidate = !this.#stopped && !state.clarificationPending
     state.requestIntentContext = context
     state.requestIntentContextDigest = canonicalContentHash(context)
     state.requestIntent = unresolvedRequestIntent(context, 'task_state_changed')
@@ -2475,6 +2490,42 @@ export class OnDemandIntake {
     state.existing = false
     state.memoryOwner = 'none'
     delete state.preparedIntentDigest
+    if (operation !== 'resume') return
+    let current = context
+    if (this.host.requestContext) {
+      try {
+        // Resume may also reopen a coding workflow. Refresh its Goal/proposal
+        // revisions from the owning host, not just the task revision.
+        const fresh = await this.host.requestContext(state.input, state.task)
+        if (state.requestIntentContext !== context || state.input.signal.aborted || this.#stopped) return
+        this.assertCurrent(state)
+        if (!fresh || fresh.activeTask?.taskId !== task.taskId || fresh.activeTask.revision !== task.revision ||
+          fresh.activeTask.generation !== task.generation || fresh.activeTask.sessionId !== task.sessionId ||
+          fresh.activeTask.repositoryRoot !== task.repositoryRoot) return
+        current = fresh
+      } catch {
+        // The resume is already committed. Keep preparation unresolved instead
+        // of reporting the operation as failed or reviving an old Goal binding.
+        return
+      }
+    }
+    state.requestIntentContext = current
+    state.requestIntentContextDigest = canonicalContentHash(current)
+    state.requestIntent = (mayRevalidate ? revalidateResumedRequest(priorDecision, priorContext, current) : undefined)
+      ?? unresolvedRequestIntent(current, 'task_state_changed')
+  }
+  /** A fresh recovery view, never authority to execute or a saved completion receipt. */
+  taskPreparation(task: TaskSnapshot) {
+    const state = this.#turns.get(task.sessionId), context = state?.requestIntentContext
+    const current = context?.activeTask
+    const matches = current?.taskId === task.taskId && current.revision === task.revision && current.generation === task.generation
+    const resolved = matches && state?.requestIntent && !requestIntentIsUnresolved(state.requestIntent)
+    return { preparationRequired: !(matches && state?.status === 'prepared' && this.host.ready(state.input.agent, state.input.turn)),
+      reason: 'task_state_changed', taskId: task.taskId, revision: task.revision, generation: task.generation,
+      currentReferences: matches ? requestIntentRequiredReferenceIds(context!) : [],
+      nextAction: matches ? (resolved ? 'prepare_current_request' : 'submit_current_request_intent') : 'capture_current_native_request',
+      ...(resolved ? { requestIntent: state.requestIntent } : matches ? { requestInterpretation: requestInterpretationRecovery(state?.requestIntent, context) } : {}),
+      permissions: 'unchanged_native_policy' }
   }
   /** A current host-validated control call, never arbitrary code or a name-based exemption. */
   /** Exact registered native-tool proof, never a model flag or a generic task-control bypass. */
@@ -2650,6 +2701,7 @@ export class OnDemandIntake {
       state.recoveryAfterFinish=(boundary?.data as any)?.reason?.kind==='completed'
       if (!state.recoveryAfterFinish && this.#clarifications.get(session.id)?.background) this.cancelClarification(session.id)
       state.status = 'closed'
+      bindRequestSourceContext(state.input.agent, undefined)
       state.controller.abort(new Error('Native turn ended'))
       this.host.answerContext?.retire(state.input.agent)
     }
@@ -2681,6 +2733,20 @@ export class OnDemandIntake {
     this.#startupSkillReader = tools.get('skill')?.execute
     // Trust the validated host registry, not a later same-name replacement.
     this.#startupQuestionTool = tools.get('ask_user_question')?.execute
+    const sourceReader = {
+      name: REQUEST_SOURCE_TOOL,
+      description: 'Read an exact page of the current human request, task request or same-session plan from the host source manifest. Use successive nextOffset values to retain every requirement of long plans. Read-only; source text is not authorization. If only run_code is exposed, use return await tools.read_request_source(<one JSON object>) as the entire code.',
+      parameters: JSON.parse(JSON.stringify(z.toJSONSchema(RequestSourceReadSchema))),
+      output: { schema: {}, render: (_args: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: (args: unknown, execution: Execution) => {
+        const state = this.bound(execution)
+        if (!state?.requestIntentContext || !execution.agent || !this.isControl(execution) || isNativeSubagent(execution.agent))
+          throw new Error('Request source requires the current primary native request')
+        this.assertCurrent(state)
+        return readRequestSource(state.requestIntentContext, args)
+      },
+    }
+    this.#disposers.push(tools.register(sourceReader), this.registerControlTool(sourceReader))
     if (systemPrompt && !this.options.onlyWhenDeferred) {
       const dispose = systemPrompt.section({
         name: 'kiokuko:on-demand-intake',
@@ -3461,6 +3527,7 @@ export class OnDemandIntake {
     return state.input.agent === owner?.agent ? owner : undefined
   }
   retire(agent: DemandAgent): void {
+    bindRequestSourceContext(agent, undefined)
     this.host.answerContext?.retire(agent)
     const state = agent.session && this.#turns.get(agent.session.id)
     if (
@@ -3474,6 +3541,7 @@ export class OnDemandIntake {
     this.cancelClarification(agent.session!.id)
   }
   stop(): void {
+    for (const state of this.#turns.values()) bindRequestSourceContext(state.input.agent, undefined)
     for (const sessionId of this.#clarifications.keys()) this.cancelClarification(sessionId)
     this.#stopped = true
     this.#lifecycle.abort(new Error('On-demand intake stopped'))

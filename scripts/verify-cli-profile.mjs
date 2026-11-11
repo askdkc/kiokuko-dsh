@@ -175,6 +175,7 @@ const fixture = resolve(import.meta.dirname, 'cli-profile-fixture.mjs')
 const overlay = join(root, 'probe.patch.yml')
 const overlayDocument=new YAML.Document([
   ...(kiokukoEnabled?[{ id: 'kiokuko-dsh', config: { enabled: true, typedDecisions: { mode: 'off' }, memoryReview: { mode: 'off' },
+    repositoryLearning: { mode: 'review' },
     memoryEvolution: { mode: 'off' }, agenticReplay: { enabled: false }, lisp: { enabled: true } } }]:[]),
   { insert: [{ id: 'kiokuko-cli-profile-fixture', name: fixture, inject: ['llm', 'agents', 'sessions', 'tools', 'commands'] }] },
   { id: 'dsh-cli', inject: [...cli.inject, 'kiokukoProfileFixture'], config: { provider: 'kiokuko-profile-fixture', model: 'fixture',

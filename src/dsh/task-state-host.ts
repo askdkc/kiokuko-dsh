@@ -39,6 +39,7 @@ import {
   transferTaskOwner,
   TASK_OPERATIONS,
   TaskSnapshotSchema,
+  taskOperationEligibility,
   type TaskIdentity,
   type TaskOperation,
   type TaskSnapshot,
@@ -215,16 +216,27 @@ export class DshTaskWorkflow {
     }
     return this.options.demand?.isControl(execution as any) === true;
   }
-  private publish(task: TaskSnapshot): TaskSnapshot {
+  private async publish(task: TaskSnapshot, operation?: 'resume'): Promise<TaskSnapshot> {
     if (!this.#closed) {
-      this.options.demand?.taskStateChanged(task);
+      const preparation = this.options.demand?.taskStateChanged(task, operation);
       try {
         this.options.emit(task);
       } catch {
         /* A UI observer cannot roll back a committed operation. */
       }
+      await preparation;
     }
     return task;
+  }
+  /** Public diagnostics are caller-specific; stored CAS/idempotency receipts stay caller-neutral. */
+  operationView(task: TaskSnapshot, caller: 'model' | 'explicit_user', resumed = false) {
+    const preparation = resumed ? this.options.demand?.taskPreparation?.(task) ?? {
+      preparationRequired: true, reason: 'task_state_changed', taskId: task.taskId,
+      revision: task.revision, generation: task.generation, currentReferences: [], nextAction: 'capture_current_native_request',
+      permissions: 'unchanged_native_policy',
+    } : undefined;
+    return { ...task, ...taskOperationEligibility(task, caller),
+      ...(preparation ? { preparationRequired: preparation.preparationRequired, preparation } : {}) };
   }
   /** Durable public-call receipts share the mutation's transaction. Reading a
    * receipt still requires the exact current native owner and repository, but
@@ -617,7 +629,7 @@ export class DshTaskWorkflow {
       }),
     );
     if (source.replay?.replayed) return result;
-    this.publish(result);
+    await this.publish(result, input.operation === 'resume' ? 'resume' : undefined);
     if (result.pendingStop) {
       if (source.explicit && agent.status !== "idle")
         agent.cancel?.({ kind: "hook", reason: "Explicit Kiokuko task stop" });
@@ -714,7 +726,7 @@ export class DshTaskWorkflow {
           return confirmed;
         }),
       );
-      if (result) this.publish(result);
+      if (result) await this.publish(result);
     })()
       .catch(() => {
         /* Preserve the durable unresolved stop and its denied authority. */

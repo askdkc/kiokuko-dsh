@@ -1,6 +1,7 @@
 import { MemorySnapshotStale } from '../../../src/dsh/memory-request-fence.js'
 import { retainedEvents } from '../../../src/dsh/context-projection.js'
 import { executionRequestAction, codingToolEffect } from '../../../src/dsh/coding-workflow/intent.js'
+import { requestSourceManifest } from '../../../src/dsh/request-sources.js'
 import { ExecutionSelectionPending } from '../../../src/dsh/execution-pending.js'
 import { mountOwnedExecution } from '../../../src/dsh/owned-execution.js'
 /** Independent intake-boundary regressions using the actual published native tool registry.
@@ -59,6 +60,88 @@ const [cordis, nativeTools, nativeScope] = nativeAvailable
   ? await Promise.all([load('cordis'), load('dsh-tools'), load('dsh-scope')])
   : [undefined, undefined, undefined]
 const signal = () => new AbortController().signal
+test('a delayed preparation cannot overwrite the new task references after a state change', async t => {
+  const task = 'Verify the original parser scope.'
+  const message = human('prepare-race', task)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task), activeTask: {
+    taskId: 'task', runId: 'task', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/repo',
+    type: 'research', state: 'Working', revision: 1, generation: 1, runStatus: 'active', reason: 'Start', evidence: [],
+    allowedOps: ['wait', 'complete', 'ignore'], request: task, resumedFromTerminal: false,
+  } })!
+  const decision = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'verify',
+    evidenceRefs: requestIntentReferenceIds(context) }, context)!
+  let enter!: () => void, release!: () => void, calls = 0
+  const entered = new Promise<void>(resolve => { enter = resolve })
+  const released = new Promise<void>(resolve => { release = resolve })
+  const f = await fixture(t, { interpret: async () => ({ context, decision }),
+    prepare: async () => { if (++calls === 1) { enter(); await released } return true }, ready: () => true })
+  await f.capture([message])
+  const old = f.execute(TASK_PREPARE_TOOL, { requestIntent: { relation: 'same_scope_continuation', action: 'verify',
+    evidenceRefs: requestIntentReferenceIds(context) } })
+  await entered
+  const pending = { ...context.activeTask!, state: 'Pending' as const, revision: 2, generation: 2 }
+  await f.intake.taskStateChanged(pending)
+  const resumed = { ...pending, state: 'Working' as const, revision: 3, generation: 3 }
+  await f.intake.taskStateChanged(resumed, 'resume')
+  release()
+  const stale = await old
+  assert.equal(stale.isError, true)
+  assert.match(JSON.stringify(stale), /Task changed during preparation/)
+  assert.equal(f.intake.snapshot(f.session.id)!.status, 'answer')
+  assert.equal(f.intake.snapshot(f.session.id)!.requestIntent!.evidence.taskGeneration, 3)
+  const current = createRequestIntentContext({ ...context, activeTask: resumed })!
+  const fresh = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { relation: 'same_scope_continuation', action: 'verify',
+    evidenceRefs: requestIntentReferenceIds(current) } })
+  assert.equal(fresh.isError, false, JSON.stringify(fresh))
+  assert.equal(fresh.value.prepared, true)
+  assert.equal(calls, 2)
+})
+test('long request source reads preserve native ownership, strict arguments and host policy', async t => {
+  const task = '要件\n'.repeat(20000) + '最終条件: dsh-cli は変更しない。'
+  const message = human('long-request', task)
+  const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+  const f = await fixture(t, { interpret: async () => ({ context, decision: unresolvedRequestIntent(context, 'test') }) })
+  await f.capture([message])
+  const source = requestSourceManifest(context)[0]!
+  const args = { id: source.id, digest: source.digest, offset: task.length - 100, limit: 100 }
+  const page = await f.execute('read_request_source', args)
+  assert.equal(page.isError, false, JSON.stringify(page))
+  assert.equal(page.value.text, task.slice(-100))
+  assert.equal(f.admissions.length, 0)
+  assert.equal((await f.execute('read_request_source', { ...args, explicit: true })).isError, true)
+  assert.equal((await f.execute('read_request_source', args, { agent: { ...f.agent, id: 'forged' } })).isError, true)
+  const controller = new AbortController(); controller.abort()
+  assert.equal((await f.execute('read_request_source', args, { signal: controller.signal })).isError, true)
+  const deny = f.ctx.on('tools/pre-execute', () => ({ kind: 'cancel', reason: 'Native permission denied' }))
+  try { assert.equal((await f.execute('read_request_source', args)).isError, true) } finally { deny() }
+})
+
+test('resume refreshes reopened Goal references before preparing instead of copying its old revisions', async t => {
+  const task = 'Verify the same parser plan and its acceptance tests.', message = human('goal-resume', task)
+  const original = activeIntent([message], task, 'same_scope_continuation', 'verify')
+  const before = createRequestIntentContext({ ...original.context, activeTask: {
+    taskId: 'run-current', runId: 'run-current', sessionId: 'review-session', sourceSessionId: 'review-session', repositoryRoot: '/repo',
+    type: 'research', state: 'Pending', revision: 4, generation: 3, runStatus: 'failed', reason: 'Failed', evidence: [],
+    allowedOps: ['resume', 'ignore'], request: task, resumedFromTerminal: false,
+  } })!
+  const decision = bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'verify', evidenceRefs: requestIntentReferenceIds(before) }, before)!
+  const resumed = { ...before.activeTask!, state: 'Working' as const, runStatus: 'active' as const, revision: 5, generation: 4 }
+  const fresh = createRequestIntentContext({ ...before, activeTask: resumed,
+    activeGoal: { ...before.activeGoal!, workflowRevision: 5, goalRevision: 3 } })!
+  const f = await fixture(t, { interpret: async () => ({ context: before, decision }), requestContext: async () => fresh })
+  await f.capture([message])
+  await f.intake.taskStateChanged(resumed, 'resume')
+  const recovery = f.intake.taskPreparation(resumed)
+  assert.equal(recovery.preparationRequired, true)
+  assert.equal(recovery.nextAction, 'submit_current_request_intent')
+  assert.deepEqual(recovery.currentReferences, requestIntentReferenceIds(fresh))
+  const result = await f.execute(TASK_PREPARE_TOOL, { requestIntent: { relation: 'same_scope_continuation', action: 'verify',
+    evidenceRefs: recovery.currentReferences } })
+  assert.equal(result.isError, false, JSON.stringify(result))
+  assert.equal(result.value.prepared, true)
+  assert.equal(result.value.requestIntent.evidence.goalRevision, 3)
+  assert.equal(f.prepareRequests[0]!.context!.activeGoal!.workflowRevision, 5)
+})
 test('clarification replies are admitted once in the same turn without entering the next instruction queue', async t => {
   const task = 'Update src/parser.ts; clarify whether the change is documentation or implementation.'
   const message = human('inline-question-source', task)
@@ -1876,13 +1959,13 @@ for (const sample of [
     assert.match(JSON.stringify(result), /revision 4, generation 7/)
     assert.ok(
       JSON.stringify(result).includes(
-        `Allowed state operations: ${sample.allowed}.`,
+        `State candidates: ${sample.allowed}.`,
       ),
     )
     if (sample.state === 'Done')
       assert.match(
         JSON.stringify(result),
-        /terminal resume requires an explicit operation/,
+        /EXPLICIT_USER_RESUME_REQUIRED: ask the user to run \/kioku-task resume/,
       )
     assert.equal(f.admissions.length, 0)
     assert.deepEqual(

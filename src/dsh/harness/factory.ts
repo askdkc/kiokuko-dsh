@@ -14,6 +14,7 @@ import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
 import { memoryFailureDiagnostic } from '../memory-failure.js'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import {withoutInheritedTaskAuthority} from '../task-authority-context.js'
+import { projectRequestSourceMessages } from '../request-sources.js'
 
 declare module '@deepseek-ai/dsh-session' {
   interface PluginRecordMap { 'plugin:kiokuko-dsh/harness-action': { action:string; phase:string; turn:number; step:number; parentSession?:string; callId?:string; diagnostic?:LlmFailure } }
@@ -284,7 +285,7 @@ export class KiokukoHarnessAgent implements Agent {
     let count=0,settled=false
     this.audit('model','start');this.dispatch.emit('agent/assistant-stream',{frame:{type:'start',attemptId,revision,turn:this.turn,step:this.step}})
     try {
-      const history=this.session.deriveMessages();history.forEach(message=>deepFreeze(message));Object.freeze(history)
+      const history=projectRequestSourceMessages(this,this.session.deriveMessages());history.forEach(message=>deepFreeze(message));Object.freeze(history)
       const request=markAgentLoopRequest(Object.freeze({...prepared.config,messages:history,
         ...(tools.length?{tools:deepFreeze(structuredClone(tools))}:{}),toolHistory:this.session.toolHistory(),sessionId:this.session.id,signal}))
       for await(const chunk of prepared.stream(request)) {

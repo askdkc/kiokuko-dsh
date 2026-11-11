@@ -80,6 +80,7 @@ for (const intakeMode of ['on-demand', 'eager'] as const) {
       async mount({ host, defer }) {
         host.claimNativeIngress()
         const service = { dispose() { disposed++ },
+          operationView(value: unknown, caller: string) { assert.equal(caller, 'model'); return value },
           async modelOperation(agent: unknown, args: unknown, execution: any) {
             assert.equal(agent, f.agent)
             assert.equal(execution.agent, f.agent)

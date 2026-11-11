@@ -44,6 +44,8 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     const agent = handle.agent
     let effects = 0
     ctx.tools.register({ name: 'bash', description: 'forbidden effect', parameters: {}, output: { schema: {}, render: () => [] }, execute: () => ++effects })
+    ctx.tools.register({ name: 'read_request_source', description: 'host source reader fixture', parameters: { type: 'object' },
+      output: { schema: {}, render: () => [] }, execute: () => ({ text: 'Retained plan source', nextOffset: null }) })
     const call = async (name: string, args: any = {}, signal = new AbortController().signal) => {
       // Current DSH conditionally admits Plan tools at step preparation. Use its
       // real selection rather than pretending an out-of-step call is admitted.
@@ -65,10 +67,11 @@ for (const mode of ['persistent', 'task'] as const) test(`Lisp ${mode}: native q
     const enabled = (await ctx.commands.execute(agent, `/kioku-lisp ${mode === 'task' ? 'enable-task' : 'enable'}`, [], new AbortController().signal)).result
     assert.equal(enabled.kind, 'success', enabled.text)
     ctx.planMode.set(agent, true)
-    for (const name of ['exit_plan_mode', 'ask_user_question']) {
+    for (const name of ['exit_plan_mode', 'ask_user_question', 'read_request_source']) {
       assert.ok(ctx.tools.schemas(agent).some((s: any) => s.name === name), name)
       assert.ok((await ctx.get(LISP_ASSEMBLY_SERVICE).project(agent, { sections: [], variables: {}, tools: ctx.tools.schemas(agent) })).tools.some((s: any) => s.name === name), 'request projection retains ' + name)
     }
+    assert.equal((await call('read_request_source')).isError, false, 'Lisp keeps its pinned source reader reachable')
     const childHandle = await ctx.agents.create({ sessionId: session.SessionId('plan-child'), agentOptions: { provider: 'mock', model: 'qwen3-coder' }, meta: { cwd: root, parentSession: agent.session.id } }); handles.push(childHandle)
     const child = childHandle.agent
     for (const name of ['exit_plan_mode', 'ask_user_question']) {

@@ -41,6 +41,7 @@ const turnSchema = z
     outcome: outcomeSchema,
     summary: z.string().trim().min(1).max(2000),
     tags: z.array(z.string().trim().min(1).max(80)).max(16).optional(),
+    keywords: z.array(z.string().trim().min(1).max(80)).max(24).optional(),
     evidenceRefs: z.array(ref).min(1).max(64),
     lessons: z.array(lessonSchema).max(8).optional(),
     reflectionStatus: z
@@ -55,6 +56,7 @@ export interface RepositoryLearningPoint {
   workspace: string;
   captureRevision: number;
   tags: string[];
+  keywords?: string[];
   summary?: string;
   lesson?: RepositoryLearningLesson;
   evidenceRefs: string[];
@@ -204,6 +206,7 @@ export function saveTurn(
     ...rest,
     turnId: String(input.turnId),
     tags: [...new Set(input.tags ?? [])].sort(),
+    ...(input.keywords ? { keywords: [...new Set(input.keywords)].sort() } : {}),
     evidenceRefs: [...new Set(input.evidenceRefs)].sort(),
     lessons: input.lessons ?? [],
     reflectionStatus: input.reflectionStatus ?? "not_requested",
@@ -258,6 +261,7 @@ export function saveTurn(
       workspace: turn.workspace,
       captureRevision: turn.captureRevision,
       tags: turn.tags,
+      ...(turn.keywords ? { keywords: turn.keywords } : {}),
       sessionId: turn.sessionId,
       turnId: turn.turnId,
       outcome: turn.outcome,

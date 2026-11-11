@@ -384,6 +384,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     return { answers }
   } }) } }); await questionHost
   const options = { decisions: intentFixtureDecisions(task => ['README.mdを修正してください。','README.mdの追記も実装してください。'].includes(task) ? {action:'change',changeScope:'document'} : undefined), repositoryRoot: h.root, databasePath: join(h.root, 'state.sqlite3'), migrationsDirectory: join(process.cwd(), 'migrations'),
+    repositoryLearning: { mode: 'review' as const },
     llm: { async *stream() { throw new Error('Optional memory backend unavailable in this fixture') } } }
   let adapter = createDshHostAdapter(h.ctx, options)
   let composition = await mountDshComposition(h.ctx, adapter.host)

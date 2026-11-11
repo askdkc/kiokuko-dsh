@@ -44,7 +44,6 @@ export function nativeRequestProposals(
     if (
       !assistantText &&
       text &&
-      text.length <= 8192 &&
       findSecret(text) === undefined
     ) {
       assistantText = {
@@ -73,7 +72,6 @@ export function nativeRequestProposals(
     if (
       typeof plan !== 'string' ||
       !plan.trim() ||
-      plan.length > 8192 ||
       findSecret(plan) !== undefined
     )
       continue

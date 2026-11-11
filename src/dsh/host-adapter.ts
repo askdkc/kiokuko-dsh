@@ -247,6 +247,7 @@ export interface DshHostAdapterOptions {
   readonly autoGlobalization?: { enabled?: boolean };
   readonly memoryReview?: import("zod").z.input<typeof MemoryReviewConfig>;
   readonly finalization?: import("zod").z.input<typeof FinalizationConfig>;
+  readonly repositoryLearning?: { mode?: 'automatic' | 'review' | 'off' };
   readonly modelRoutes?: readonly ModelRoute[];
   readonly modelCompatibility?: DshModelCompatibility;
   readonly agenticReplay?: import("zod").z.input<typeof AgenticReplayConfig>;
@@ -572,7 +573,9 @@ export function createDshHostAdapter(
     root,
     options.modelHandoff,
   );
-  const lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root);
+  const lifecycleMemory = new DshLifecycleMemory(ctx as any, runtime, root, {
+    mode: options.repositoryLearning?.mode ?? 'automatic', decisions,
+  });
   const deepPlanning = new DeepPlanningController({
     runtime,
     decisions,

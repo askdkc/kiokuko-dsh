@@ -76,7 +76,7 @@ const transportSchema = z
   })
   .strict();
 export const MEMORY_APPLICATION_GUIDANCE =
-  "Memory references and past application status are optional advisory data. Missing, stale or failed memory evidence never blocks tools or task completion. Native permissions, explicit Stop and actual task verification remain authoritative. correction_check checks compiler compatibility and completion judgments against host-delivered corrections and actual verification; self-reported use is not proof. A supported literal conflicting version-only write asks a scoped native question. New memory saving happens only after task completion, permission to organize, and approval of the exact shown revision.";
+  "Memory references and past application status are optional advisory data. Missing, stale or failed memory evidence never blocks tools or task completion. Native permissions, explicit Stop and actual task verification remain authoritative. correction_check checks compiler compatibility and completion judgments against host-delivered corrections and actual verification; self-reported use is not proof. A supported literal conflicting version-only write asks a scoped native question. The host compacts completed native turns and saves repository memory in the background according to repositoryLearning.mode. Only review mode requires approval of the exact proposal. Memory application bookkeeping is never an execution prerequisite.";
 
 interface NativeExecution extends TaskAuthorityExecution {
   callId: string;

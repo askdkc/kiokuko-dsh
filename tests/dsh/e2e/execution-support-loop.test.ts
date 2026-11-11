@@ -96,6 +96,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       : { relation, action: 'research', taskType: mode }
   })
   const options = { decisions, repositoryRoot: root, databasePath, migrationsDirectory: join(process.cwd(), 'migrations'),
+    repositoryLearning: { mode: 'review' as const },
     agenticReplay: { askOnStart: true },
     llm: { async *stream() { throw new Error('Memory backend deliberately unavailable after completion') } } }
   let adapter = createDshHostAdapter(ctx, options)

@@ -13,7 +13,7 @@ import { pathToFileURL } from 'node:url'
 import { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
 import { DshTaskWorkflow, TASK_OPERATION_TOOL, TaskModelOperationSchema, type TaskNativeAgent } from '../../../src/dsh/task-state-host.js'
 import { taskWorkflowCommand, mountTaskWorkflowSurface } from '../../../src/dsh/task-state-surface.js'
-import { createRequestIntentContext, requestIntentMessageRefs, unresolvedRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
+import { bindMainModelRequestIntent, requestIntentReferenceIds, createRequestIntentContext, requestIntentMessageRefs, unresolvedRequestIntent } from '../../../src/dsh/decisions/request-intent.js'
 import { OnDemandIntake } from '../../../src/dsh/on-demand-intake.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { captureTaskLease, authorizeTaskLease, readTaskSnapshot, type TaskSnapshot } from '../../../src/dsh/task-state.js'
@@ -287,6 +287,12 @@ test('native task schema streams through the managed OpenCode Go route while hos
 
 for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task control executor crosses ToDo/Pending while native denial and spoofed tools cannot`, { skip: !available, timeout: 30_000 }, async () => {
   const f = await fixture(), [cordis, tools, prompt] = await Promise.all(['cordis', 'dsh-tools', 'dsh-system-prompt'].map(load))
+  const { Session } = await load('dsh-session')
+  const session = new Session(f.agent.session.id, undefined, { version: 4, id: f.agent.session.id,
+    createdAt: Date.now(), isSeeded: false, cwd: f.root })
+  ;(f.agent as any).session = session
+  f.sessions.set(session.id, session)
+  session.append('turn/start', { turn: 1 })
   const ctx = new cordis.Context(), fibers: any[] = []
   let disposeSurface: (() => void) | undefined, disposeOwned: (() => Promise<void>) | undefined, restoreRuntime: (() => void) | undefined
   let intake: OnDemandIntake | undefined, programs = 0, writes = 0
@@ -305,13 +311,14 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
     const nativeScope = (await load('dsh-scope')).createScope(ctx, f.agent)
     ;(f.agent as any).ctx = nativeScope.ctx
     fibers.push(nativeScope)
-    let taskForIntent: TaskSnapshot | undefined
+    let taskForIntent: TaskSnapshot | undefined, resumeIntent = false, prepared = false, preparations = 0
     intake = new OnDemandIntake({ validate: async () => {}, existing: async () => false, classify: async () => ({ deferInference: true }),
       interpret: async (_input, task) => {
         const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([], task), ...(taskForIntent ? { activeTask: taskForIntent } : {}) })!
-        return { context, decision: unresolvedRequestIntent(context, 'decision_service_disabled') }
+        return { context, decision: resumeIntent ? bindMainModelRequestIntent({ relation: 'same_scope_continuation', action: 'verify',
+          evidenceRefs: requestIntentReferenceIds(context) }, context)! : unresolvedRequestIntent(context, 'decision_service_disabled') }
       },
-      prepare: async () => { throw new Error('Task control must not prepare a new execution run') }, ready: () => false })
+      prepare: async () => { assert.equal(resumeIntent, true, 'controls cannot prepare'); preparations++; prepared = true; return true }, ready: () => prepared })
     const service = new DshTaskWorkflow({ ...f.options, demand: intake })
     disposeSurface = mountTaskWorkflowSurface(ctx, service, intake)
     await ctx.tools.schemas(f.agent) // Native lossless schema projection, as used before real model requests.
@@ -361,12 +368,46 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
     const pending = await pendingEvent
     assert.equal((await invoke('complete', pending, ['fake'])).isError, true)
     assert.equal(programs, 0, 'The canonical control carrier never evaluates code')
+    for (const [index, status] of (['completed', 'failed', 'cancelled', 'interrupted'] as const).entries()) {
+      session.append('turn/end', { turn: index + 1, reason: { kind: 'completed' } })
+      intake.finish(f.agent.session, index + 1)
+      session.append('turn/start', { turn: index + 2 })
+      await f.runtime.withDatabase(db => db.prepare("UPDATE ledger_runs SET status=?,task_state='Pending' WHERE run_id=?").run(status, pending.runId))
+      taskForIntent = (await service.snapshot(f.agent)).task!
+      resumeIntent = true; prepared = false
+      await intake.capture({ agent: f.agent, messages: [{ id: `continue-${status}`, role: 'user',
+        content: 'Continue verification of the original scope; no source edits.' }], turn: index + 2, step: 0, signal: signal() })
+      const denied = await invoke('resume', taskForIntent)
+      assert.equal(denied.isError, true)
+      assert.match(JSON.stringify(denied.content), /EXPLICIT_USER_RESUME_REQUIRED/)
+      assert.match(JSON.stringify(denied.content), /kioku-task resume/)
+      assert.equal(prepared, false)
+      const command = await taskWorkflowCommand(service).handler({ agent: f.agent, rawInput: `resume ${taskForIntent.taskId}`, signal: signal() })
+      assert.equal(command.kind, 'success', command.text)
+      const resumed = JSON.parse(command.text!)
+      assert.equal(resumed.preparationRequired, true)
+      assert.equal(resumed.preparation.reason, 'task_state_changed')
+      assert.equal(resumed.preparation.nextAction, 'prepare_current_request')
+      assert.ok(resumed.preparation.currentReferences.some((ref: string) => ref.startsWith('task:')))
+      assert.equal(intake.snapshot(f.agent.session.id)!.requestIntent!.relation, 'same_scope_continuation')
+      assert.equal(intake.snapshot(f.agent.session.id)!.requestIntent!.evidence.taskGeneration, resumed.generation)
+      const releaseProbe = ctx.tools.register({ name: 'resume_probe', parameters: { type: 'object', properties: {}, additionalProperties: false },
+        output: { schema: {}, render: () => [] }, execute: () => { writes++; return 'continued' } })
+      try {
+        const probe = await executeNativeTool(ctx, packages, { callId: `probe-${status}`, name: mode === 'ptc' ? 'run_code' : 'resume_probe',
+          arguments: mode === 'ptc' ? { description: 'Continue the revalidated task', code: 'return await tools.resume_probe({})' } : {}, agent: f.agent, signal: signal() })
+        assert.equal(probe.isError, false, JSON.stringify(probe))
+        assert.equal(preparations, index + 1, 'same-scope continuation must still pass preparation')
+        assert.equal(writes, index + 1)
+      } finally { releaseProbe() }
+    }
+    prepared = false; resumeIntent = false
     disposeSurface(); disposeSurface = undefined
     const releaseSpoof = ctx.tools.register({ name: TASK_OPERATION_TOOL, parameters: {}, output: { schema: {}, render: () => [] }, execute() { writes++; return 'spoof' } })
     const result = await executeNativeTool(ctx, packages, { callId: 'spoof', name: mode === 'ptc' ? 'run_code' : TASK_OPERATION_TOOL,
       arguments: mode === 'ptc' ? { description: 'spoof', code: 'return await tools.task_operation({})' } : {}, agent: f.agent, signal: signal() })
-    assert.equal(result.isError, true); assert.equal(writes, 0); assert.equal(programs, 0); releaseSpoof()
-    assert.equal((await f.runtime.withDatabase(db => readTaskSnapshot(db, pending))).state, 'Pending')
+    assert.equal(result.isError, true); assert.equal(writes, 4); assert.equal(programs, mode === 'ptc' ? 4 : 0); releaseSpoof()
+    assert.equal((await f.runtime.withDatabase(db => readTaskSnapshot(db, pending))).state, 'Working')
   } finally { disposeSurface?.(); await intake?.dispose(); await disposeOwned?.(); restoreRuntime?.(); for (const fiber of fibers.reverse()) await fiber.dispose(); await f.cleanup() }
 })
 

@@ -37,6 +37,15 @@ const response = (value: unknown) => [
   { type: "text-delta", index: 0, text: JSON.stringify(value) },
   { type: "finish", reason: { kind: "stop" } },
 ];
+
+test('compaction returns a concise summary and searchable metadata with grounded lessons', async () => {
+  const compact = { lessons: [lesson], summary: 'JSON serialization fixed escaping.', tags: ['json'], keywords: ['escaping', 'JSON.parse'] };
+  const result = await reflectRepositoryTurn(host(response(compact)), agent(), input);
+  assert.equal(result.status, 'model');
+  assert.equal((result as any).summary, compact.summary);
+  assert.deepEqual((result as any).tags, compact.tags);
+  assert.deepEqual((result as any).keywords, compact.keywords);
+});
 function host(chunks: unknown[] = response({ lessons: [lesson] })) {
   const requests: any[] = [];
   return {

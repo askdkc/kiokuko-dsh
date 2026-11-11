@@ -11,6 +11,7 @@ import { TASK_TYPES, type TaskType } from '../../../src/ledger/types.js'
 import { bindTaskRepository, readTaskSnapshot, findSessionTask, transitionTask, validateTaskOperation,
   captureTaskLease, authorizeTaskLease, recordTaskEvidence, requestTaskStop, confirmTaskStop, transferTaskOwner,
   taskCanExecute, isTaskTerminal, recordTaskUnresolved, clearTaskUnresolved, type TaskSnapshot } from '../../../src/dsh/task-state.js'
+import { taskOperationEligibility, TASK_STATES, TASK_OPERATIONS } from '../../../src/dsh/task-state.js'
 import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
 import { AkinatorMemoryConfig } from '../../../src/akinator/memory-probe-types.js'
 
@@ -60,6 +61,52 @@ test('all task types use the same ledger run and intake, without manufacturing c
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM ledger_runs').get()!.n, TASK_TYPES.length)
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM run_intakes').get()!.n, TASK_TYPES.length)
     assert.equal(f.db.prepare('SELECT count(*) AS n FROM dsh_coding_workflows').get()!.n, 0)
+  } finally { f.close() }
+})
+
+for (const status of ['completed', 'failed', 'cancelled', 'interrupted'] as const) test(`${status}: terminal resume denial identifies the required human command`, () => {
+  const f = fixture()
+  try {
+    const identity = f.create(), working = start(f, identity)
+    f.db.prepare("UPDATE ledger_runs SET status=?, task_state='Pending' WHERE run_id=?").run(status, working.runId)
+    const terminal = readTaskSnapshot(f.db, identity)
+    assert.throws(() => transitionTask(f.db, identity, { operation: 'resume', operationId: 'model-resume',
+      expectedRevision: terminal.revision, expectedGeneration: terminal.generation, explicit: false, reason: 'Continue' }),
+    (error: any) => error.code === 'EXPLICIT_USER_RESUME_REQUIRED' && error.message.includes(`/kioku-task resume ${terminal.taskId}`))
+    assert.deepEqual(readTaskSnapshot(f.db, identity), terminal)
+    const input = { operation: 'resume' as const, operationId: 'human-resume', expectedRevision: terminal.revision,
+      expectedGeneration: terminal.generation, explicit: true, reason: 'Explicit user resume' }
+    const resumed = transitionTask(f.db, identity, input)
+    assert.equal(resumed.state, 'Working'); assert.equal(resumed.runStatus, 'active')
+    assert.equal(resumed.generation, terminal.generation + 1)
+    assert.throws(() => authorizeTaskLease(f.db, { ...identity, revision: working.revision, generation: working.generation }), /stale/)
+    f.reopen()
+    assert.deepEqual(readTaskSnapshot(f.db, identity), resumed)
+    assert.deepEqual(transitionTask(f.db, identity, input), resumed)
+    assert.throws(() => transitionTask(f.db, identity, { ...input, reason: 'Different contents' }), /different|reus|conflict/i)
+    assert.throws(() => transitionTask(f.db, identity, { ...input, operationId: 'old-cas' }), /Stale/)
+  } finally { f.close() }
+})
+
+test('state eligibility and caller eligibility agree with validation for every state/run/stop/caller/operation combination', () => {
+  const f = fixture()
+  try {
+    const original = bindTaskRepository(f.db, f.create())
+    for (const state of TASK_STATES) for (const runStatus of ['intake', 'active', 'completed', 'failed', 'cancelled', 'interrupted'] as const)
+      for (const stopped of [false, true]) for (const explicit of [false, true]) {
+        const task = { ...original, state, runStatus, ...(stopped ? { pendingStop: { operation: 'wait' as const,
+          operationId: 'stop', requestedRevision: 1, requestedGeneration: 1, reason: 'Stop', evidence: [] } } : {}) }
+        const eligibility = taskOperationEligibility(task, explicit ? 'explicit_user' : 'model')
+        if (stopped) assert.deepEqual(eligibility.callerEligibleOps, [])
+        if (!explicit && (['Done', 'Ignore'].includes(state) || !['intake', 'active'].includes(runStatus)))
+          assert.equal(eligibility.callerEligibleOps.includes('resume'), false)
+        for (const operation of TASK_OPERATIONS) {
+          const apply = () => validateTaskOperation(task, { operation, operationId: 'matrix', expectedRevision: task.revision,
+            expectedGeneration: task.generation, reason: 'Matrix', explicit })
+          if (eligibility.callerEligibleOps.includes(operation)) assert.doesNotThrow(apply)
+          else assert.throws(apply)
+        }
+      }
   } finally { f.close() }
 })
 

@@ -6,7 +6,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) に、記憶・計画・検証・動作記録を追加するプラグインです。
 
-記憶は補助情報です。native turnの観察とリポジトリ学習を維持し、整理済み記憶は表示した案の承認済み改訂だけを保存します。検索・生成の障害で無関係な許可済み作業を止めず、記憶を操作権限として扱いません。[確認・検索・忘却の仕様](docs/replay-memory-review.md)。
+記憶は補助情報です。native turn が終わると、有用な根拠を要約・タグ・キーワードに整理し、バックグラウンドで自動保存します。次の依頼では関連する候補を検索し、利用可能な Akinator が選別します。`repositoryLearning.mode: review` は内容確認後の保存、`off` はこの処理を停止します。記憶処理で次の作業を待たせません。[自動記憶の流れ](docs/native-memory-flow.md)、[手動での確認・検索・忘却](docs/replay-memory-review.md)。
 
 ## Kiokukoが制御するハーネス（未公開）
 

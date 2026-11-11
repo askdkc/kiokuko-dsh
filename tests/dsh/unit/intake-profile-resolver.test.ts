@@ -21,3 +21,10 @@ test('explicit grounded intake answers remain intact', () => {
   const hints = { taskType: 'debug' as const, target: 'login', expected: 'login succeeds', constraints: null }
   assert.deepEqual(resolveGroundedIntakeProfile({ task: 'Fix login', cwd: '/repo', profileHints: hints }).profileHints, hints)
 })
+
+test('Akinator source answers accept a multiline target without losing the request or exclusions', () => {
+  const task = 'kiokuko-dsh の resume を修正してください。\n準備状態を復旧する。\ndsh-cli は変更しない。'
+  const resolved = resolveGroundedIntakeProfile({ task, cwd: '/repo', profileHints: { taskType: 'debug', target: task } })
+  assert.equal(resolved.task, task)
+  assert.equal(resolved.profileHints.target, task)
+})

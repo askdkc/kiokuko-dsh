@@ -8,6 +8,7 @@ import {
   TaskSnapshotSchema,
   TASK_OPERATIONS,
   validateTaskOperation,
+  taskOperationEligibility,
   type TaskOperation,
 } from '../task-state.js'
 import {
@@ -55,7 +56,8 @@ const proposalReference = z
     id: safeId,
     revision: z.number().int().min(0).nullable(),
     digest: z.string().regex(/^[a-f0-9]{64}$/u),
-    text: boundedText,
+    // Exact source is retained; provider budgets apply to projections, not admission.
+    text: z.string().min(1),
     field: z
       .enum([
         'readPaths',
@@ -329,7 +331,7 @@ export function buildRequestIntentBatch(
                   id: 'none',
                   description: 'No task state operation is requested.',
                 },
-                ...parsed.data.activeTask.allowedOps.map((operation) => ({
+                ...taskOperationEligibility(parsed.data.activeTask, 'model').callerEligibleOps.map((operation) => ({
                   id: operation,
                   description: `Propose ${operation} for this exact task revision; host validation and evidence still apply.`,
                 })),

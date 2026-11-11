@@ -167,6 +167,7 @@ export class DshLifecycleMemory {
     private readonly host: Host,
     private readonly runtime: Pick<DshCoreRuntime, "withDatabase">,
     private readonly root: string,
+    private readonly learningOptions: import('./repository-learning.js').RepositoryLearningOptions = {},
   ) {
     const shared = host.get("tools", false)?.get?.("memory_context")?.[
       OWNER
@@ -175,7 +176,7 @@ export class DshLifecycleMemory {
       shared.owners++;
       return shared;
     }
-    this.repositoryLearning = new DshRepositoryLearning(host, runtime, root);
+    this.repositoryLearning = new DshRepositoryLearning(host, runtime, root, learningOptions);
     this.disposers.push(mountMemorySidebar(host, runtime));
     const configured = host.get(REPLAY_REFLECTOR_SERVICE, false);
     if (
@@ -708,6 +709,9 @@ export class DshLifecycleMemory {
     task?: { revision: number; generation: number; repositoryRoot: string },
     native?: NativeReviewScope,
   ): void {
+    // Native terminal-turn compaction owns automatic capture. Do not enqueue a
+    // second, per-run approval workflow after the harness has finished.
+    if (this.learningOptions.mode === 'automatic' || this.learningOptions.mode === 'off') return;
     if (native && this.repositoryLearning.observesNativeTurns(sessionId))
       return;
     const state = this.states.get(sessionId),

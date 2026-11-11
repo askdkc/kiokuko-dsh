@@ -16,6 +16,7 @@ const packages =
   join(process.cwd(), "tests/fixtures/dsh-runtime/node_modules");
 const packageRoot = process.env.KIOKUKO_SKILL_PACKAGE_ROOT;
 const extra = {
+  repositoryLearning: { mode: 'review' },
   lisp: { enabled: false },
   typedDecisions: { mode: "off" },
   modelHandoff: { mode: "off" },
