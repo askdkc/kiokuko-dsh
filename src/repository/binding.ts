@@ -4,6 +4,13 @@ import type { SqliteDatabase } from '../db/adapter.js';
 import { withImmediateTransaction } from '../db/transaction.js';
 import { validateRepositoryBindingIdentity } from './identity-value.js';
 
+/** A memory mapping conflict, not a native filesystem authorization denial. */
+export class RepositoryBindingConflict extends KiokukoError {
+  constructor() {
+    super('CONFLICT', 'Repository root is already bound to another repository ID; rebind is required', { scope: 'repository_memory' });
+  }
+}
+
 export interface RepositoryRegistration {
   repositoryId: string;
   workspace: string;
@@ -169,7 +176,7 @@ export function registerRepositoryAndLocation(
         conflict('Repository root changed after rebind planning');
       }
     } else if (location && location.repositoryId !== registration.repositoryId) {
-      conflict('Repository root is already bound to another repository ID; rebind is required');
+      throw new RepositoryBindingConflict();
     }
     if (location !== undefined
       && (location.bindingSchemaVersion > registration.bindingSchemaVersion

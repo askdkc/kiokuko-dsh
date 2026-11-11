@@ -1755,7 +1755,7 @@ test('recoverable preparation failure preserves the request but retry must reacq
   assert.equal(f.bodies(), 1)
 })
 
-for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch'] as const)
+for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch', 'write', 'edit'] as const)
   test(`unowned native ${name} needs no optional classifier but keeps native denial and current ownership`, async (t) => {
     let owner: 'unowned' | 'owned' = 'unowned',
       bodies = 0
@@ -1789,13 +1789,13 @@ for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch'] as const)
     assert.equal((await f.execute(name)).isError, true)
     assert.equal(bodies, 1)
   })
-for (const change of ['arguments', 'stop', 'owner'] as const)
-  test(`unowned native read rejects a ${change} change after native pre-execute`, async (t) => {
+for (const tool of ['read', 'write', 'edit']) for (const change of ['arguments', 'stop', 'owner'] as const)
+  test(`unowned native ${tool} rejects a ${change} change after native pre-execute`, async (t) => {
     let owner: 'unowned' | 'owned' = 'unowned',
       bodies = 0
     const f = await fixture(t, { nativeOwnership: async () => owner })
     const release = f.ctx.tools.register({
-      name: 'read',
+      name: tool,
       parameters: { type: 'object' },
       output: { schema: {}, render: () => [] },
       execute: () => {
@@ -1806,7 +1806,7 @@ for (const change of ['arguments', 'stop', 'owner'] as const)
     t.after(release)
     await f.capture()
     const mutate = f.ctx.tools.guard((execution: any) => {
-      if (execution.name === 'read') {
+      if (execution.name === tool) {
         if (change === 'stop') f.intake.stop()
         else if (change === 'owner') owner = 'owned'
         else execution.arguments.changed = true
@@ -1814,7 +1814,7 @@ for (const change of ['arguments', 'stop', 'owner'] as const)
       return undefined
     })
     t.after(mutate)
-    assert.equal((await f.execute('read', {})).isError, true)
+    assert.equal((await f.execute(tool, {})).isError, true)
     assert.equal(bodies, 0)
   })
 
@@ -3314,7 +3314,7 @@ test('only branded coding status is conversational; workflow effects and spoofed
   for (const args of [{ action: 'next' }, { action: 'status', extra: true }]) {
     const blocked = await f.execute('coding_workflow', args)
     assert.equal(blocked.isError, true)
-    assert.match(JSON.stringify(blocked), /Before tool-backed work/)
+    assert.match(JSON.stringify(blocked), /This tool requires a Kiokuko task record/)
   }
   const readsBeforeReplacement = reads
   release()
@@ -4338,4 +4338,18 @@ test('intake records monotonic phase timings without request or provider text', 
   assert.ok(timing.timing.elapsedMs >= 10)
   assert.equal(timing.timing.outcome, 'completed')
   assert.doesNotMatch(JSON.stringify(observations.filter(o => o.kind === 'timing')), /private-token-fixture/)
+})
+
+for (const name of ['write', 'edit']) test(`optional preparation failure leaves native ${name} usable without admitting unknown tools`, async t => {
+  let calls = 0
+  const f = await fixture(t, { nativeOwnership: async () => 'unowned',
+    prepare: async () => { throw new Error('Optional preparation unavailable') } })
+  t.after(f.ctx.tools.register({ name, parameters: {type:'object'}, output: {schema:{},render:()=>[]}, execute: () => ++calls }))
+  const task = 'Fix parser.ts', messages = [human('native-edit', task)]
+  await f.capture(messages)
+  const context = createRequestIntentContext({task, messageRefs: requestIntentMessageRefs(messages, task)})!
+  assert.equal((await f.execute(TASK_PREPARE_TOOL, {requestIntent: {relation:'new', action:'change', changeScope:'implementation', evidenceRefs:requestIntentReferenceIds(context)}})).isError, true)
+  assert.equal((await f.execute(name)).isError, false)
+  assert.equal(calls, 1)
+  assert.equal((await f.execute('review_probe')).isError, true)
 })

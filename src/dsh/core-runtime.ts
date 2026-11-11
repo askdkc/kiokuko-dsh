@@ -14,6 +14,7 @@ import { WriteQueue } from './write-queue.js'
 import { DshAgentStateRegistry, type DshAgentIdentity, type DshAgentState } from './agent-state.js'
 import { resolveProjectWorkspace } from '../memory/workspaces.js'
 import { AuxiliaryRecovery } from './auxiliary-recovery.js'
+import { RepositoryBindingConflict } from '../repository/binding.js'
 
 export interface DshRuntimeOptions extends DshPathEnvironment {
   readonly repositoryRoot: string
@@ -41,7 +42,7 @@ interface RuntimeResources {
   readonly embeddingRuntime: EmbeddingRuntime
   readonly worker: EmbeddingWorker | undefined
   readonly queue: WriteQueue<unknown>
-  readonly binding: RepositoryBinding
+  readonly binding: RepositoryBinding | RepositoryBindingConflict
 }
 
 function requireRepositoryRoot(root: string): string {
@@ -138,11 +139,19 @@ export class DshCoreRuntime {
         ...(this.#options.embeddingBackend === undefined ? {} : { backend: this.#options.embeddingBackend }),
       })
       database = opened.database
+      let bindingConflict: RepositoryBindingConflict | undefined
       if (this.#options.autoRegisterRepository === true) {
-        const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot, { allowDirectory: true })
-        if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
+        try {
+          const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot, { allowDirectory: true })
+          if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
+        } catch (error) {
+          if (!(error instanceof RepositoryBindingConflict)) throw error
+          // Retain the database for execution ownership/Stop checks. Never
+          // rebind or borrow either repository's memory to recover native work.
+          bindingConflict = error
+        }
       }
-      const binding = findRepositoryBinding(database, repositoryRoot)
+      const binding = bindingConflict ?? findRepositoryBinding(database, repositoryRoot)
       queue = new WriteQueue<unknown>(64)
       embeddingRuntime = createEmbeddingRuntime(database, this.#options.embeddingConfig, {
         ...(this.#options.embeddingProvider === undefined ? {} : { provider: this.#options.embeddingProvider }),
@@ -202,6 +211,7 @@ export class DshCoreRuntime {
 
   async openAgent(identity: DshAgentIdentity): Promise<DshAgentState> {
     const resources = await this.#requireResources()
+    if (resources.binding instanceof RepositoryBindingConflict) throw resources.binding
     return this.#agents.open(identity, resources.binding.repositoryId, resources.binding.workspace, this.#options.now?.())
   }
 

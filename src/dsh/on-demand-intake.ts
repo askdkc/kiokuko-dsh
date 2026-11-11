@@ -2,6 +2,7 @@ import { measureIntakePhase, withIntakeTiming, type IntakePhase } from './intake
 import { REQUEST_SOURCE_TOOL, RequestSourceReadSchema, readRequestSource, requestSourceManifest, bindRequestSourceContext } from './request-sources.js'
 import { revalidateResumedRequest } from './request-resume.js'
 import { isNativeSubagent, parentOnlyTaskToolMessage } from './native-subagent.js'
+import { RepositoryBindingConflict } from '../repository/binding.js'
 import { CLARIFICATION_REPLY_PREFIX, type clarificationClaims } from './clarification-claims.js'
 import { observeNativeUserCancellation } from './native-cancellation-observer.js'
 import { isCodingWorkflowStatus } from './coding-workflow/host.js'
@@ -88,7 +89,7 @@ class RequestClarification extends Error {
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
 export const ON_DEMAND_GUIDANCE =
-  'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip, including when optional workflow metadata exists; native permissions and human Stop remain authoritative. For ordinary work with Lisp selected, call the registered Lisp tools directly; do not call prepare_requested_work, create_goal or memory-review tools merely to start or finish the task. The host compacts terminal turns into tagged memory in the background. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Owned effects require current task authority. Explicitly enrolled protected work also follows its execution protocol. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, cancellation, memory-owner and execution ownership still apply. Optional coding records are not execution conditions. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
+  'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip. Unowned native write/edit and PTC calls also need no task record; native permissions and human Stop remain authoritative. For ordinary work with Lisp selected, call the registered Lisp tools directly; do not call prepare_requested_work, create_goal or memory-review tools merely to start or finish the task. The host compacts terminal turns into tagged memory in the background. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Owned effects require current task authority. Explicitly enrolled protected work also follows its execution protocol. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, cancellation, memory-owner and execution ownership still apply. Optional coding records are not execution conditions. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(
   (type) => type !== 'chat',
 )
@@ -352,6 +353,9 @@ const NATIVE_EVIDENCE_READS = new Set([
   'get_goal',
 ])
 const UNOWNED_NATIVE_TOOLS = new Set([
+  'run_code',
+  'write',
+  'edit',
   'cordis_inspect_list',
   'cordis_inspect_query',
   'kioku_read',
@@ -380,6 +384,13 @@ function unownedNativeTool(execution: Execution): boolean {
 }
 function denied(reason: string): { kind: 'deny'; reason: string } {
   return { kind: 'deny', reason }
+}
+function unavailableRepositoryMemory(error: unknown) {
+  if (!(error instanceof RepositoryBindingConflict)) return undefined
+  return { prepared: false, status: 'repository_memory_unavailable', code: 'REPOSITORY_BINDING_CONFLICT',
+    blockedScope: 'repository_memory', permissions: 'unchanged_native_policy',
+    nextAction: 'continue_native_work',
+    detail: 'Repository memory could not be prepared because its saved binding conflicts with .kiokuko.json. No binding was changed and no memory was adopted. Continue the original authorized task using native write/edit and the selected Lisp or Bash route. Do not retry preparation or ask the user to rebind merely to code. Existing task ownership, protected workflows, native permissions and Stop still apply.' }
 }
 /** A protocol carrier, not JavaScript evaluation. Only this exact JSON-literal call is recognized. */
 function preparationEnvelope(value: unknown): { input: unknown } | undefined {
@@ -437,6 +448,7 @@ function preparationResponse(value: any) {
 
 /** Conversation entry and execution intake are distinct; neither this mode nor a type hint grants native permission. */
 export class OnDemandIntake {
+  readonly #nativePrograms = new Map<symbol, Execution>()
   private measure<T>(input: DemandInput, phase: IntakePhase, operation: () => Promise<T>): Promise<T> {
     return withIntakeTiming(input.signal, async timing => { await this.host.diagnostic?.(input, {kind:'timing', timing}) },
       () => measureIntakePhase(phase, operation, input.signal))
@@ -1541,7 +1553,8 @@ export class OnDemandIntake {
       this.assertCurrent(state)
       return
     }
-    state.nativeUnowned = false
+    // Preparation does not revoke native authority. If it fails before creating
+    // an owner, native tools remain usable; every dispatch rechecks ownership.
     state.status = 'preparing'
     state.taskType = taskType
     const preparationContextDigest = state.requestIntentContextDigest
@@ -1573,6 +1586,7 @@ export class OnDemandIntake {
         requestIntent: state.requestIntent ?? null,
       })
       state.status = 'prepared'
+      state.nativeUnowned = false
       for (const message of humanMessages(state.input.messages)) {
         const deliveries = this.#answerDelivery.get(state.input.agent)
         const delivery = deliveries?.get(humanId(message))
@@ -2529,6 +2543,12 @@ export class OnDemandIntake {
   }
   /** A current host-validated control call, never arbitrary code or a name-based exemption. */
   /** Exact registered native-tool proof, never a model flag or a generic task-control bypass. */
+  private nativeParent(execution: Execution): boolean {
+    if (execution.parent === undefined) return true
+    if (typeof execution.parent !== 'symbol') return false
+    const parent = this.#nativePrograms.get(execution.parent)
+    return !!parent && parent.agent === execution.agent && this.unownedNative(parent)
+  }
   unownedNative(execution: Execution): boolean {
     const state = this.bound(execution),
       proof = this.#executions.get(execution)
@@ -2537,7 +2557,7 @@ export class OnDemandIntake {
       !execution.signal.aborted &&
       unownedNativeTool(execution) &&
       (!state?.clarificationPending || nativeEvidenceRead(execution) || execution.name === 'skill') &&
-      execution.parent === undefined &&
+      this.nativeParent(execution) &&
       !!state &&
       state.nativeUnowned === true &&
       state.status === 'answer' &&
@@ -2763,7 +2783,7 @@ export class OnDemandIntake {
       name: TASK_PREPARE_TOOL,
       modelFacing: true,
       description:
-        'Parent-only: prepare the exact original user request for tool-backed work. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
+        'Parent-only: optionally prepare a Kiokuko task record for the exact original user request. Ordinary native write/edit, PTC, Bash and selected Lisp work do not require this record. Supply either legacy advisory taskType or requestIntent with exact evidenceRefs from the host context; never rewrite the task or invent a target. This does not grant native tool permissions. Answer ordinary questions directly; clarify unknown actions or targets first.',
       parameters: {
         ...JSON.parse(JSON.stringify(z.toJSONSchema(preparationFieldsSchema))),
         anyOf: [{ required: ['taskType'] }, { required: ['requestIntent'] }],
@@ -2945,6 +2965,8 @@ export class OnDemandIntake {
             permissions: 'unchanged_native_policy',
           })
         } catch (error) {
+          const unavailable = unavailableRepositoryMemory(error)
+          if (unavailable) return unavailable
           if (!(error instanceof RequestClarification)) throw error
           return this.clarify(state, execution.signal, error)
         }
@@ -3077,10 +3099,18 @@ export class OnDemandIntake {
                 ? denied('Native tool policy cancelled this call')
                 : decision
             }
+            const skillReader = this.#skillReaders.get(state.input.agent)
+            const skillRead =
+              execution.name === 'skill' &&
+              skillReader !== undefined &&
+              actual.execute === skillReader &&
+              state.status === 'answer'
             if (
+              !skillRead &&
               state.nativeUnowned &&
               unownedNativeTool(execution) &&
-              execution.parent === undefined
+              this.nativeParent(execution) &&
+              !(execution.name === 'run_code' && preparationEnvelope(execution.arguments))
             ) {
               if (
                 (await this.host.nativeOwnership?.(state.input)) !== 'unowned'
@@ -3103,12 +3133,6 @@ export class OnDemandIntake {
                 ? denied('Native tool policy cancelled this call')
                 : decision
             }
-            const skillReader = this.#skillReaders.get(state.input.agent)
-            const skillRead =
-              execution.name === 'skill' &&
-              skillReader !== undefined &&
-              actual.execute === skillReader &&
-              state.status === 'answer'
             const carrier =
               execution.name === 'run_code'
                 ? preparationEnvelope(execution.arguments)
@@ -3157,7 +3181,7 @@ export class OnDemandIntake {
                 )
                 if (!type)
                   return denied(
-                    'Before tool-backed work, call prepare_requested_work with its advisory taskType. Clarify unknown actions or targets first; the original request is preserved.',
+                    'This tool requires a Kiokuko task record; call prepare_requested_work only when that record is needed. Ordinary native write/edit, PTC, Bash and selected Lisp work can continue without it. Clarify unknown actions or targets first; native permissions and Stop remain authoritative.',
                   )
                 await this.prepare(
                   state,
@@ -3295,7 +3319,11 @@ export class OnDemandIntake {
               )
             }
             this.assertCurrent(state)
-            return next()
+            if (execution.name !== 'run_code') return next()
+            if (typeof execution.token !== 'symbol') throw new Error('Native program token is unavailable')
+            this.#nativePrograms.set(execution.token, execution)
+            try { return await next() }
+            finally { this.#nativePrograms.delete(execution.token) }
           }
           if (!proof.carrier) return next()
           const envelope = preparationEnvelope(execution.arguments)
@@ -3403,6 +3431,11 @@ export class OnDemandIntake {
               content: [{ type: 'text', text: JSON.stringify(result) }],
             }
           } catch (error) {
+            const unavailable = unavailableRepositoryMemory(error)
+            if (unavailable) {
+              const result = { ...unavailable, programExecuted: false }
+              return { isError: false, value: { logs: [], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+            }
             if (!(error instanceof RequestClarification)) throw error
             const result = {
               ...((await this.clarify(

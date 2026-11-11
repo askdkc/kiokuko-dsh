@@ -637,7 +637,7 @@ export function mountOwnedExecution(ctx:{tools:{register(tool:any):()=>void;get?
   },{prepend:true}))
   if (ctx.on) disposers.push(ctx.on('tools/execute',async(execution:NativeExecution,next:()=>Promise<unknown>)=>{
     if (host.isTaskControl?.(execution) === true) return next()
-    if (host.nativeCommand?.(execution) === true || execution.name === 'bash' && host.unownedNative?.(execution) === true) return withNoTaskAuthority(next)
+    if (host.nativeCommand?.(execution) === true || host.unownedNative?.(execution) === true) return withNoTaskAuthority(next)
     if (execution.name === 'run_code') return service.composite(execution,next)
     if (!taskEffectTool(execution.name, execution.arguments)) return next()
     const lease = await service.captureAuthority(execution)

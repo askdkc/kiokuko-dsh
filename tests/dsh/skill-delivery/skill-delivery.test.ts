@@ -93,9 +93,9 @@ for(const explicit of [false,true]) test(`compiled Skill delivery: production en
     f.responses.push(f.mock.textResponse('確認しました。'))
     await f.turn('Inspect every installed bundled Skill with the native skill tool and report its contents.')
     for(const name of names) {
-      requireBody(f.model.requests.at(-1),name)
       const result = nativeToolResults(f.model.requests.at(-1).messages).find((block: any) => block.toolCallId === `load-${name}`)
-      assert.equal(result?.isError, false, `${name}: native Skill reader must succeed`)
+      assert.equal(result?.isError, false, `${name}: native Skill reader must succeed: ${JSON.stringify(result)}`)
+      requireBody(f.model.requests.at(-1),name)
       assert.ok(result.content.some((block: any) => block.type === 'text' && block.text.includes(content(name))),
         `${name}: compiled body must arrive through the native tool result, not only automatic injection`)
     }

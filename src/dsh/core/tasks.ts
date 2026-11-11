@@ -253,7 +253,7 @@ export class CoreTasks {
       for (const id of legacyModuleRequirements(db, input.sessionId)) {
         if (!this.moduleIds.includes(id)) throw new Error(`Required module unavailable for persisted session: ${id}`)
       }
-      const project = await resolveProjectWorkspaceReadOnly(db, cwd, { allowDirectory: true })
+      const project = await resolveProjectWorkspaceReadOnly(db, cwd, { allowDirectory: true, rejectBindingConflict: true })
       if (!project) throw new Error('Task workspace is not registered')
       const intake = new DshRunIntakeService(db, {
         deferTaskTypeInference,

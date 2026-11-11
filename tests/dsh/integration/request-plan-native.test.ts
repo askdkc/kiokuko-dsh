@@ -421,8 +421,8 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                           0,
                         )
                         if (presentation === 'ptc')
-                          return mock.toolCallResponse('unsafe-while-waiting', 'run_code', {
-                            description: 'Attempt execution during clarification',
+                          return mock.toolCallResponse('native-calculation-after-assessment', 'run_code', {
+                            description: 'Calculate without claiming task preparation',
                             code: 'return 42',
                           })
                         return toolCall(
@@ -440,12 +440,13 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                   : []),
                 ...(legacy === 'assessment' && presentation === 'ptc'
                   ? [(request: any) => {
-                      const blocked = nativeToolResults(request.messages).find(
-                        (result) => result.toolCallId === 'unsafe-while-waiting',
+                      const calculation = nativeToolResults(request.messages).find(
+                        (result) => result.toolCallId === 'native-calculation-after-assessment',
                       )
-                      assert.ok(blocked)
-                      assert.equal(blocked.isError, true)
-                      assert.match(resultText(blocked), /Clarify the requested work before code execution/iu)
+                      assert.ok(calculation)
+                      assert.equal(calculation.isError, false, resultText(calculation))
+                      assert.equal(JSON.parse(resultText(calculation)), 42)
+                      assert.equal(existsSync(join(root, 'src/parser.ts')), false, 'a native calculation is not task admission or a file edit')
                       return toolCall('missing-scope-plan', 'prepare_requested_work', {
                         requestIntent: { ...repairedPreparation.requestIntent, changeScope: 'unknown' },
                       })

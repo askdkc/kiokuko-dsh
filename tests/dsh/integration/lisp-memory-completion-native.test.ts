@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { pathToFileURL } from 'node:url'
@@ -11,7 +11,7 @@ import { nativeToolResults } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 
 isolateSkillHome()
-test('native Lisp finishes, compacts automatically, and reuses keyword memory after reload', { timeout: 45000 }, async () => {
+for (const conflict of [false, true]) test(`native Lisp finishes, compacts automatically, and reuses keyword memory after reload (binding conflict=${conflict})`, { timeout: 45000 }, async () => {
   const packages = process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(), 'tests/fixtures/dsh-runtime/node_modules')
   const f = await nativeSkillFixture({
     packages,
@@ -48,6 +48,10 @@ test('native Lisp finishes, compacts automatically, and reuses keyword memory af
     try { return readRepositoryLearning(db, f.dir) } finally { db.close() }
   }
   try {
+    if (conflict) {
+      await writeFile(join(f.dir, '.kiokuko.json'), JSON.stringify({schemaVersion:1, repositoryId:'repo_foreign', workspace:'project:foreign', agentFile:'AGENTS.md', templateVersion:1}))
+      await f.reload('compiled')
+    }
     // Supply the ordinary DSH foreground process service, including its native
     // permission/Stop path; the minimal fixture deliberately has no Bash tool.
     for (const name of ['dsh-subprocess-local', 'dsh-bash-local', 'dsh-shell-env', 'dsh-tool-bash']) {

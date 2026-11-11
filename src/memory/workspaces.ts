@@ -3,7 +3,7 @@ import path from 'node:path';
 import { readProjectConfig } from '../config/project-config.js';
 import type { SqliteDatabase, SqliteRow } from '../db/adapter.js';
 import { KiokukoError } from '../errors.js';
-import { registerRepositoryAndLocation } from '../repository/binding.js';
+import { registerRepositoryAndLocation, RepositoryBindingConflict } from '../repository/binding.js';
 import { detectRepositoryRoot, type RootSource } from '../repository/detect-root.js';
 import { readGitOrigin } from '../repository/git-origin.js';
 import { createRepositoryIdentity } from '../repository/identity.js';
@@ -22,6 +22,8 @@ export interface ResolvedProjectWorkspace {
 export interface ResolveProjectWorkspaceOptions {
   /** Treat the exact cwd as a local workspace when no binding or Git root exists. */
   allowDirectory?: boolean;
+  /** Task-record admission reports a conflict; optional reads withhold memory. */
+  rejectBindingConflict?: boolean;
 }
 
 interface RepositoryRow extends SqliteRow {
@@ -155,6 +157,15 @@ export async function resolveProjectWorkspaceReadOnly(
 
   if (detected.source === 'binding') {
     const binding = await readProjectConfig(path.join(repositoryRoot, '.kiokuko.json'));
+    const location = database.prepare(`SELECT r.repository_id AS repositoryId, r.workspace AS workspace
+      FROM repository_locations l JOIN repositories r ON r.repository_id=l.repository_id
+      WHERE l.canonical_root=?`).get<RepositoryRow>(repositoryRoot);
+    // Conflicting identities are unavailable for recall, not interchangeable.
+    // The native session and filesystem retain their own authorization.
+    if (location && (location.repositoryId !== binding.repositoryId || location.workspace !== binding.workspace)) {
+      if (options.rejectBindingConflict) throw new RepositoryBindingConflict();
+      return undefined;
+    }
     return {
       repositoryRoot,
       repositoryId: binding.repositoryId,
