@@ -1,3 +1,4 @@
+import { auxiliaryDatabase } from '../auxiliary-database.js'
 import { projectModelBinding } from '../model-auto/policy.js'
 import { failureDiagnostic } from '../failure-diagnostic.js'
 import { humanInput } from '../../memory/review/evidence.js'
@@ -66,11 +67,12 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
     // execution flags across assembly, pre-step, steering, and plugin reload.
     const snapshot = initial
     try {
-      const stored = await runtime.withDatabase(database => withImmediateTransaction(database, () => (
+      const stored = await auxiliaryDatabase(runtime, database => withImmediateTransaction(database, () => (
         readInputClaim(database, sessionId, turn) ?? backupInputClaimInTransaction(database, {
           dshSessionId: sessionId, nativeTurn: turn, messages: snapshot.messages,
         })
-      )))
+      )), () => inMemoryClaims.get(key) === snapshot)
+      if (inMemoryClaims.get(key) !== snapshot) return
       snapshot.messages = stored.messages
       snapshot.providerStarted ||= stored.providerStarted
       snapshot.sideEffectStarted ||= stored.sideEffectStarted

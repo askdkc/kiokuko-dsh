@@ -100,3 +100,13 @@ test('memory presentation removes exact duplicates only, preserves exceptions an
     '保存条件\n検証後に保存🙂\n検証後に保存🙂\nただし失敗した場合は保存しない。')
   assert.equal(await render({ ...item, bodyPreview: `-----BEGIN PRIVATE KEY-----\n${'a'.repeat(80)}\n-----END PRIVATE KEY-----` }), undefined)
 })
+
+test('runtime context metrics count only user snapshots and serialize UTF-8 metadata', () => {
+  const context = { role: 'user', source: { kind: 'runtime-context', sections: [{ name: 'state', text: '日本語🙂' }] }, content: '日本語🙂' }
+  const request = { messages: [context, { ...context, role: 'assistant' }, { ...context, source: { kind: 'user' } }] }
+  const size = requestSize(request)
+  assert.equal(size.runtimeContextCopies, 1)
+  assert.equal(size.runtimeContextBytes, Buffer.byteLength(JSON.stringify(context), 'utf8'))
+  assert.equal(requestSize({}).runtimeContextBytes, 0)
+  assert.equal(requestSize({}).runtimeContextCopies, 0)
+})

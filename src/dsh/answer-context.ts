@@ -225,9 +225,14 @@ export class DshAnswerContext {
     const session = agent.session
     if (session && this.#contexts.get(session.id)?.agent === agent) this.#contexts.delete(session.id)
     if (!session) return
-    try { pruneDshMemorySurface(session, new Map()) } catch { return }
-    try {
-      pruneExplainedMemorySurface(session, await this.runtime.withDatabase(db => retiredExplanationCalls(db, session.id)))
-    } catch { /* Explanation retirement stays optional; the request fence still blocks stale results. */ }
+    pruneDshMemorySurface(session, new Map())
+    // Quarantine every owned explanation conservatively without consulting the
+    // unavailable database. Ordinary execution evidence remains on the surface.
+    const calls = new Set<string>()
+    for (const event of session.snapshotEvents?.() ?? []) {
+      const data = event.data as { name?: string; callId?: string }
+      if (event.type === 'tool/call' && data.name === 'memory_explain' && typeof data.callId === 'string') calls.add(data.callId)
+    }
+    pruneExplainedMemorySurface(session, calls, 'Kiokuko memory validation is unavailable; its earlier explanation is excluded from this request.')
   }
 }

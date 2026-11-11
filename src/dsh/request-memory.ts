@@ -132,19 +132,19 @@ export function filterExplainedMemory<T>(messages: readonly T[], retired: Readon
     return {...message, content: forgottenExplanationContent(message.content,message.role)} as T
   })
 }
-function forgottenExplanationContent(content: unknown, role?: string): unknown[] {
-  if (role === 'tool') return [{type:'text',text:FORGOTTEN_EXPLANATION}]
+function forgottenExplanationContent(content: unknown, role?: string, text = FORGOTTEN_EXPLANATION): unknown[] {
+  if (role === 'tool') return [{type:'text',text}]
   if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== 'tool-result') throw new Error('Unexpected native explanation result shape')
-  return [{...content[0], content: [{type:'text',text:FORGOTTEN_EXPLANATION}]}]
+  return [{...content[0], content: [{type:'text',text}]}]
 }
-export function pruneExplainedMemorySurface(session: Parameters<typeof retainedEvents>[0] & {append?: Function}, retired: ReadonlySet<string>): void {
+export function pruneExplainedMemorySurface(session: Parameters<typeof retainedEvents>[0] & {append?: Function}, retired: ReadonlySet<string>, text = FORGOTTEN_EXPLANATION): void {
   if (!retired.size) return
   for (const event of retainedEvents(session)) {
     if (event.type !== 'tool/result') continue
     const data = event.data as {message?: {source?: {callId?: string}; role?: string; content?: unknown}; callId?: string}
     const callId = data.message?.source?.callId ?? data.callId
     if (!callId || !retired.has(callId) || !data.message) continue
-    const content = forgottenExplanationContent(data.message.content,data.message.role)
+    const content = forgottenExplanationContent(data.message.content,data.message.role,text)
     if (JSON.stringify(data.message.content) === JSON.stringify(content)) continue
     if (typeof session.append !== 'function') throw new Error('Memory explanation retirement requires the native Session append API')
     const v3 = ((session as {header?:{version?:number}}).header?.version ?? 0) >= 3

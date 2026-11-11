@@ -1,4 +1,4 @@
-import { projectRuntimeContextMessages } from './runtime-context.js'
+import { projectRuntimeContextMessages, retireLegacyRuntimeContexts } from './runtime-context.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type AgentHandle, type AgentOptions,
   type CreateAgentOptions, type ResumeAgentOptions, type AgentCancelCause, type CancelOptions, type ModelSelection, type SessionStartSource } from '@deepseek-ai/dsh-agent'
@@ -450,6 +450,7 @@ export class KiokukoAgentFactory implements AgentFactory {
       // The Session must be store-owned and announced before those records;
       // the Agent itself remains unpublished and cannot run until setup commits.
       signal.throwIfAborted();detachSession=agent.ctx.sessions.enter(session);agent.ctx.sessions.announce(session)
+      retireLegacyRuntimeContexts(session)
       const commit=await duringSetup(options.setup?.(agent.ctx,agent),signal);signal.throwIfAborted();ownerCtx.fiber.assertActive();commit?.commit()
       // Older DSH accepts an explicit parent; current DSH owns the handle through ownerCtx.
       const registration = 'parentAgent' in options ? [agent, options.parentAgent] : [agent]

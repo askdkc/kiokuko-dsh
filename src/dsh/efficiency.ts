@@ -21,6 +21,8 @@ export interface EfficiencyBinding {
   readonly task: EfficiencyTask
 }
 export interface RequestSize {
+  readonly runtimeContextCopies?: number
+  readonly runtimeContextBytes?: number
   readonly systemBytes: number
   readonly toolsBytes: number
   readonly messagesBytes: number
@@ -54,7 +56,12 @@ export function requestSize(request: Record<string, unknown>): RequestSize {
   const systemBytes = bytes(request.system ?? '')
   const toolsBytes = bytes(request.tools ?? [])
   const messagesBytes = bytes(request.messages ?? [])
+  const contexts = (Array.isArray(request.messages) ? request.messages : []).filter(value => {
+    const message = efficiencyRecord(value)
+    return message.role === 'user' && efficiencyRecord(message.source).kind === 'runtime-context'
+  })
   return Object.freeze({ systemBytes, toolsBytes, messagesBytes,
+    runtimeContextCopies: contexts.length, runtimeContextBytes: contexts.reduce((sum, value) => sum + bytes(value), 0),
     totalBytes: bytes({ system: request.system ?? '', tools: request.tools ?? [], messages: request.messages ?? [] }) })
 }
 /** DSH counters are disjoint; missing cache counters remain unknown, not zero. */

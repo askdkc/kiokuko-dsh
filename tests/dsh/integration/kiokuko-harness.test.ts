@@ -30,6 +30,7 @@ async function fixture(productionPlugin = false, maxSteps?: number, nativeTools 
   if (nativeTools) for (const plugin of [SystemPrompt, Tools]) await ctx.plugin(plugin)
   if (nativeTools) await ctx.plugin(NativeExecutor)
   ctx.llm.registerAdapter(['harness-fixture'], new class extends LlmAdapter {
+    override async resolveModel(provider: string, model: string) { return { provider, id: model, name: model, context: { contextWindow: 32768 } } }
     async *stream(options: any) {
       requests.push(options)
       yield { type: 'block-start' as const, index: 0, blockType: 'text' as const }
@@ -799,4 +800,60 @@ test('owned Goal rounds pass real answer-memory projection and dispatch fences a
       assert.equal(fenced, round)
     }
   } finally { await handle?.dispose(); await composition?.dispose(); await demand.dispose(); await f.close(); db.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+test('legacy resume retires fifty interleaved snapshots before real token pressure and preserves evidence', async () => {
+  const { default: TokenMeter } = await import('@deepseek-ai/dsh-token-meter')
+  // Load the installed integration backend without merging its optional type
+  // augmentation into unrelated production Lisp compilation.
+  const compactionPackage = '@deepseek-ai/dsh-compaction-basic'
+  const { default: BasicCompaction } = await import(compactionPackage)
+  const { retireLegacyRuntimeContexts } = await import('../../../src/dsh/harness/runtime-context.js')
+  const f = await fixture(true)
+  let handle: any, calls = 0
+  try {
+    f.ctx.systemPrompt.context({ name: 'legacy:frame', order: 0, text: () => `STATE=${calls} ` + 'OLD_CONTEXT '.repeat(1000) })
+    f.ctx.tools.register({ name: 'legacy_work', description: 'Record real evidence', parameters: {},
+      output: { schema: {}, render: (_args, value) => [{ type: 'text', text: String(value) }] },
+      execute: async () => `EVIDENCE_${++calls}` })
+    const off = f.ctx.on('llm/stream', async function* (_request, next) {
+      if (calls === 50) { yield* next(); return }
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' }
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: `legacy-${calls}` as any, name: 'legacy_work', arguments: '{}' } }
+      yield { type: 'finish', reason: { kind: 'tool-calls' } }
+    })
+    handle = await f.ctx.agents.create({ sessionId: SessionId('legacy-interleaved') })
+    handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Preserve this human instruction.' }] }))
+    await handle.agent.whenIdle(); off()
+    assert.equal(calls, 50)
+    const seed: any[] = structuredClone(handle.agent.session.snapshotEvents())
+    for (const event of seed) if (event.type === 'user/message' && event.data.source.kind === 'runtime-context') {
+      event.surfaceOp = 'append'; delete event.sourceEventSeqs
+    }
+    const evidence = seed.filter(e => e.type === 'tool/result')
+    await handle.dispose()
+    await f.ctx.plugin(TokenMeter)
+    await f.ctx.plugin(BasicCompaction, { auto: true, thresholdRatio: 0.8, headroomTokens: 0, retainTokens: 20, maxTokens: 32 })
+    let summaries = 0
+    f.ctx.on('llm/stream', async function* (request, next) { if (request.purpose === 'compaction') summaries++; yield* next() })
+    handle = await f.ctx.agents.create({ sessionId: SessionId('legacy-interleaved'), seed })
+    const session = handle.agent.session
+    const count = () => session.deriveMessages().filter((m: any) => m.role === 'user' && m.source.kind === 'runtime-context').length
+    assert.equal(count(), 1)
+    assert.equal(f.ctx.tokenMeter.measure(session).nodes.filter((n: any) => session.eventAt(n.seq)?.data?.source?.kind === 'runtime-context').length, 1)
+    assert.deepEqual(session.snapshotEvents().slice(0, seed.length), seed)
+    assert.deepEqual(session.deriveMessages().filter((m: any) => m.role === 'tool'), evidence.map(e => e.data.message))
+    const seq = session.seq
+    retireLegacyRuntimeContexts(session); assert.equal(session.seq, seq)
+    // Replay a partially persisted normalization, then finish the remaining nodes.
+    const partial = structuredClone(session.snapshotEvents().slice(0, seed.length + 17))
+    await handle.dispose()
+    handle = await f.ctx.agents.create({ sessionId: SessionId('legacy-interleaved'), seed: partial })
+    assert.equal(handle.agent.session.deriveMessages().filter((m: any) => m.source?.kind === 'runtime-context').length, 1)
+    handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Resume without unnecessary compaction.' }] }))
+    await handle.agent.whenIdle()
+    assert.equal(summaries, 0)
+    assert.equal((f.requests.at(-1) as any).messages.filter((m: any) => m.source?.kind === 'runtime-context').length, 1)
+    assert.equal(handle.agent.session.snapshotEvents().filter((e: any) => e.type === 'turn/end').at(-1).data.reason.kind, 'completed')
+  } finally { await handle?.dispose(); await f.close() }
 })
