@@ -10,7 +10,7 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import Tools from '@deepseek-ai/dsh-tools'
 import * as NativeExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import * as Harness from '../../../src/dsh/harness/index.js'
-import Llm, { LlmAdapter, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import Llm, { LlmAdapter, LlmError, createUserMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import { KiokukoAgentFactory } from '../../../src/dsh/harness/factory.js'
 import {currentTaskAuthority,withTaskAuthority} from '../../../src/dsh/task-authority-context.js'
 
@@ -249,6 +249,29 @@ test('provider recovery uses the DSH request-error contract without duplicating 
     assert.equal(events.filter(e=>e.type==='assistant/attempt').length,1)
     assert.equal(events.filter(e=>e.type==='turn/end').at(-1)?.data.reason.kind,'completed')
   } finally {await f.close()}
+})
+
+test('custom provider failure facts reach recovery, notifications and durable turn records', async () => {
+  const f = await fixture()
+  try {
+    const failure = { message: 'Provider-specific rejection', code: 'CUSTOM_PROVIDER_FAILURE', status: 503, providerRetryAfterMs: 1250 }
+    const recoveries: unknown[] = [], errors: unknown[] = []
+    f.ctx.on('llm/stream', async function* () { yield { type: 'finish', reason: { kind: 'error', failure } } })
+    f.ctx.on('agent/request-error', async (event, next) => { recoveries.push(event.failure); return next() })
+    f.ctx.on('agent/error', event => { assert.ok(event.error instanceof LlmError); errors.push(event.error.failure) })
+    const { agent } = await f.ctx.agents.create({ sessionId: SessionId('kiokuko-custom-provider-failure') })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Keep the provider diagnosis.' }], source: { kind: 'user' } }))
+    await agent.whenIdle()
+    const events = agent.session.snapshotEvents()
+    // The existing diagnostic projection prefixes a structured HTTP status.
+    const expected = { ...failure, message: 'HTTP 503: Provider-specific rejection' }
+    assert.deepEqual(recoveries, [expected])
+    assert.deepEqual(errors, [expected])
+    assert.deepEqual(events.filter(event => event.type === 'turn/end').map(event => event.data.reason),
+      [{ kind: 'error', error: expected }])
+    assert.equal(events.filter(event => event.type === 'assistant/attempt').length, 1)
+    assert.equal(events.filter(event => event.type === 'assistant/message' || event.type === 'tool/call').length, 0)
+  } finally { await f.close() }
 })
 
 for (const finish of ['max-tokens', 'stop'] as const) {

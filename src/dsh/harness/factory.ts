@@ -1,3 +1,4 @@
+import { clearCompletedGoal, discardRejectedGoalRounds } from './goal-lifecycle.js'
 import { llmError } from '../llm-error.js'
 import { projectRuntimeContextMessages, retireLegacyRuntimeContexts } from './runtime-context.js'
 import type { Context } from '@deepseek-ai/cordis'
@@ -129,7 +130,7 @@ export class KiokukoHarnessAgent implements Agent {
       // diagnostic and its absence never changes session state.
     }
   }
-  release() { this.ready=true;this.audit('lifecycle','ready');if(this.wake)this.start() }
+  release() { clearCompletedGoal(this.ctx,this);this.ready=true;this.audit('lifecycle','ready');if(this.wake)this.start() }
   send(message:UserMessage,target:'next-turn'|'next-step',wakeup:boolean) {
     if(this.disposed)throw new Error('Kiokuko agent is disposed')
     this.inbox.append(this.abort?.signal.aborted&&wakeup?'next-turn':target,message)
@@ -216,6 +217,11 @@ export class KiokukoHarnessAgent implements Agent {
             if(internal.kind==='enter') {
               const stepPayload={...payload,messages:internal.messages,modelSelection}
               decision=await this.dispatch.waterfall('agent/pre-step',stepPayload,async()=>internal)
+              if(decision.kind==='reject'&&!handled&&!signal.aborted) {
+                // Do not park a spent Goal reservation ahead of fresh human input.
+                // Internal intake rejections still retain their original claims.
+                this.wake=discardRejectedGoalRounds(this,payload.messages)||this.wake
+              }
             }
             signal.throwIfAborted()
             if(decision.kind==='reject'&&!handled){reason={kind:'blocked'};blocked=true;break}
@@ -251,7 +257,10 @@ export class KiokukoHarnessAgent implements Agent {
           const message=memoryFailureDiagnostic(error).message
           this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:llmError(message,failure.code,failure)})
         }
-      } finally { this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result') }
+      } finally {
+        this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result')
+        clearCompletedGoal(this.ctx,this)
+      }
       if(blocked||signal.aborted&&!this.wake)break
       this.abort=undefined
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
