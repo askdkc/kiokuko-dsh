@@ -857,3 +857,79 @@ test('legacy resume retires fifty interleaved snapshots before real token pressu
     assert.equal(handle.agent.session.snapshotEvents().filter((e: any) => e.type === 'turn/end').at(-1).data.reason.kind, 'completed')
   } finally { await handle?.dispose(); await f.close() }
 })
+
+const stopRaceMessage=(text:string)=>createUserMessage({content:[{type:'text' as const,text}],source:{kind:'user' as const}})
+const acceptedStopRaceInputs=(agent:any)=>agent.session.snapshotEvents().filter((event:any)=>event.type==='user/message'&&event.data.source.kind==='user').map((event:any)=>event.data.id)
+const settleStopRace=()=>new Promise<void>(resolve=>setImmediate(resolve))
+
+for(const keepInbox of [false,true])test(`same-tick Stop cancels reserved turn before any provider request (keepInbox=${keepInbox})`,async()=>{
+  const f=await fixture(true)
+  try {
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId(`reserved-stop-${keepInbox}`)})
+    const input=stopRaceMessage('Do not run before resume')
+    agent.followup(input);agent.cancel({kind:'user'},{keepInbox})
+    await agent.whenIdle();await settleStopRace()
+    assert.equal(f.requests.length,0)
+    assert.deepEqual(agent.session.snapshotEvents().filter(e=>e.type==='turn/end').map(e=>e.data.reason.kind),['aborted'])
+    assert.deepEqual(agent.inbox.nextTurn.map(m=>m.id),keepInbox?[input.id]:[])
+    assert.equal(agent.status,'idle')
+  } finally {await f.close()}
+})
+
+for(const keepInbox of [false,true])test(`Stop aborts provider even when inbox mutation throws (keepInbox=${keepInbox})`,async()=>{
+  const f=await fixture(),entered=deferred(),release=deferred()
+  let signal!:AbortSignal
+  try {
+    f.ctx.on('llm/stream',async function*(options,next){signal=options.signal!;entered.resolve();await release.promise;signal.throwIfAborted();yield*next()})
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId(`failed-stop-${keepInbox}`)})
+    agent.followup(stopRaceMessage('Start'));await entered.promise
+    const inbox=agent.inbox as any,key=keepInbox?'discardClaimed':'clear',original=inbox[key],error=new Error('inbox persistence failed')
+    inbox[key]=()=>{throw error}
+    try {
+      assert.throws(()=>agent.cancel({kind:'user'},{keepInbox}),value=>value===error)
+      assert.equal(signal.aborted,true)
+    } finally {inbox[key]=original;release.resolve()}
+    await agent.whenIdle()
+    assert.equal(agent.session.snapshotEvents().filter(e=>e.type==='turn/end').at(-1)?.data.reason.kind,'aborted')
+  } finally {release.resolve();await f.close()}
+})
+
+for(const keepInbox of [false,true])test(`same-tick Stop and fresh followup drain exactly once across 100 resumes (keepInbox=${keepInbox})`,{timeout:15000},async()=>{
+  const f=await fixture(true),expected:string[]=[]
+  let active=0,maximum=0
+  try {
+    f.ctx.on('llm/stream',async function*(options,next){active++;maximum=Math.max(maximum,active);try{await settleStopRace();yield*next()}finally{active--}})
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId(`repeat-stop-${keepInbox}`)})
+    for(let i=0;i<100;i++) {
+      const old=stopRaceMessage(`old-${i}`),fresh=stopRaceMessage(`fresh-${i}`)
+      agent.followup(old);agent.cancel({kind:'user'},{keepInbox});agent.followup(fresh)
+      if(keepInbox)expected.push(old.id)
+      expected.push(fresh.id)
+      await agent.whenIdle()
+      assert.deepEqual(acceptedStopRaceInputs(agent),expected)
+      assert.equal(f.requests.length,expected.length)
+      assert.equal(agent.inbox.nextTurn.length+agent.inbox.nextStep.length,0)
+    }
+    assert.equal(maximum,1)
+    assert.equal(active,0)
+    const events=agent.session.snapshotEvents()
+    assert.equal(events.filter(e=>e.type==='turn/end'&&e.data.reason.kind==='aborted').length,100)
+    assert.equal(events.filter(e=>e.type==='turn/end'&&e.data.reason.kind==='completed').length,expected.length)
+    await settleStopRace();await new Promise(resolve=>setTimeout(resolve,30))
+    assert.equal(f.requests.length,expected.length,'completion with no input must not schedule another request')
+    assert.equal(agent.session.snapshotEvents().length,events.length,'idle must not create empty turns')
+  } finally {await f.close()}
+})
+
+test('same-tick disposal rejects new input and never calls provider',async()=>{
+  const f=await fixture()
+  try {
+    const {agent}=await f.ctx.agents.create({sessionId:SessionId('dispose-reserved')})
+    agent.followup(stopRaceMessage('old'));agent.cancel({kind:'disposed'})
+    assert.throws(()=>agent.followup(stopRaceMessage('new')),/disposed/)
+    await agent.whenIdle();await settleStopRace()
+    assert.equal(f.requests.length,0)
+    assert.equal(agent.inbox.nextTurn.length,0)
+    assert.equal(agent.session.snapshotEvents().filter(e=>e.type==='turn/end').at(-1)?.data.reason.kind,'aborted')
+  } finally {await f.close()}
+})

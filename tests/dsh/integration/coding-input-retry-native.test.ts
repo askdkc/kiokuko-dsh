@@ -104,7 +104,20 @@ test('parser prints 42', () => {
         return f.mock.textResponse('The command now prints 42. The formal checks in the optional record are unbound.')
       },
     )
+    let providerCalls=0
+    const stopCounting=f.ctx.on('llm/stream',async function*(options:any,next:any){if(f.llm.isAgentLoopRequest(options))providerCalls++;yield*next()})
     await f.turn(request)
+    const executionEvents=()=>f.agent.session.snapshotEvents().filter((event:any)=>['turn/start','turn/end','step/start','step/end','request/header','tool/result'].includes(event.type))
+    const completedEvents=executionEvents().length,completedCalls=providerCalls
+    await new Promise(resolve=>setTimeout(resolve,40))
+    await f.agent.whenIdle()
+    stopCounting()
+    assert.ok(completedCalls>0)
+    assert.equal(providerCalls,completedCalls,'finished coding must not restart the provider')
+    assert.equal(executionEvents().length,completedEvents,'finished coding must not create another turn or tool effect')
+    assert.equal(f.agent.status,'idle')
+    assert.equal(f.agent.inbox.nextTurn.length+f.agent.inbox.nextStep.length,0)
+    assert.equal(f.agent.session.snapshotEvents().filter((e:any)=>e.type==='turn/end').at(-1).data.reason.kind,'completed')
     assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), repairedSource)
     const db = openConnection(path)
     try {

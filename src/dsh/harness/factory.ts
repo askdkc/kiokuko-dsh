@@ -140,10 +140,14 @@ export class KiokukoHarnessAgent implements Agent {
   inject(message:UserMessage) { this.send(message,'next-step',false) }
   cancel(cause:AgentCancelCause,options:CancelOptions={}) {
     if(!this.abort&&!this.driver&&!this.maintenance)return
-    if(options.keepInbox)this.inbox.discardClaimed(this.claimedInputs)
-    else this.inbox.clear()
-    if(cause.kind==='disposed'){this.disposed=true;this.wake=false}
-    this.audit('cancel',cause.kind);this.abort?.abort(cause)
+    try {
+      if(options.keepInbox)this.inbox.discardClaimed(this.claimedInputs)
+      else this.inbox.clear()
+    } finally {
+      if(!options.keepInbox)this.wake=false
+      if(cause.kind==='disposed'){this.disposed=true;this.wake=false}
+      this.audit('cancel',cause.kind);this.abort?.abort(cause)
+    }
   }
   async whenIdle():Promise<void> { while(this.driver||this.maintenance)await (this.driver??this.maintenance) }
   runMaintenance<T>(task:(signal:AbortSignal)=>Promise<T>):Promise<T> {
@@ -155,6 +159,7 @@ export class KiokukoHarnessAgent implements Agent {
   }
   private start() {
     if(this.driver||this.disposed||!this.ready||this.maintenance)return
+    this.wake=false
     this.abort=new AbortController()
     // Install status synchronously; execution starts after this reservation.
     this.driver=Promise.resolve().then(()=>withoutInheritedTaskAuthority(()=>this.ownerCtx.agents.withInitiator(this,()=>this.drain())))
@@ -165,12 +170,18 @@ export class KiokukoHarnessAgent implements Agent {
     this.dispatch.emit('agent/status',{status:'running'})
   }
   private async drain() {
+    let firstTurn=true
     do {
-      this.wake=false;this.abort=new AbortController();this.turn++;this.step=0
+      // Keep the controller reserved by start(): Stop may already have aborted
+      // it. Only later turns consume their wake and reserve a fresh controller.
+      if(!firstTurn)this.wake=false
+      firstTurn=false
+      this.abort??=new AbortController();this.turn++;this.step=0
       this.session.append('turn/start',{turn:this.turn});this.audit('turn','start')
       let reason:TurnEndReason={kind:'completed'},blocked=false
       const signal=this.abort.signal
       try {
+        signal.throwIfAborted()
         let first=true, again=true
         while(again&&!this.disposed) {
           signal.throwIfAborted();this.step++
@@ -242,6 +253,7 @@ export class KiokukoHarnessAgent implements Agent {
         }
       } finally { this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result') }
       if(blocked||signal.aborted&&!this.wake)break
+      this.abort=undefined
     } while(!this.disposed&&(this.wake||this.inbox.nextTurn.length>0))
   }
   private commitInput(message:UserMessage):void {
