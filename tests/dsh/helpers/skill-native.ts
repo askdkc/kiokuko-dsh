@@ -7,11 +7,11 @@ import { pathToFileURL } from 'node:url'
 import type { DshSkillPrompts } from '../../../src/dsh/skill-prompts.js'
 import type { DecisionService } from '../../../src/dsh/decisions/service.js'
 import { nativeMock } from './native-mock.js'
-import { mountNativeTools } from './native-tools.js'
+import { mountNativeTools, mountToolExecutor } from './native-tools.js'
 import { answerTaskStartup, type StartupFixtureChoice } from './task-startup-fixture.js'
 
 /** The same native host, model loop and Lisp boundary serve delivery and behavior probes. */
-export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; driver?: 'kiokuko'|'legacy'; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; approveMemory?: boolean; intakeAnswers?: boolean; prompts?: DshSkillPrompts; decisions?: DecisionService; startupChoice?: StartupFixtureChoice; startupChoices?: readonly StartupFixtureChoice[] }) {
+export async function nativeSkillFixture(options: { packages: string; packageRoot?: string; driver?: 'kiokuko'|'legacy'; core?: boolean; ptc?: boolean; explicit?: boolean|'prompt-only'; mode?: 'full'|'compiled'; extra?: object; hostPlugin?: any; skillToolPlacement?: 'global' | 'late' | 'agent'; nativeAnswer?: (request: any) => Promise<any>; approveMemory?: boolean; intakeAnswers?: boolean; prompts?: DshSkillPrompts; decisions?: DecisionService; startupChoice?: StartupFixtureChoice; startupChoices?: readonly StartupFixtureChoice[] }) {
   const { packages, packageRoot, driver: driverMode = 'kiokuko', explicit = false, mode = 'compiled', extra = {}, skillToolPlacement = 'global', hostPlugin, nativeAnswer, prompts, decisions } = options
   if (prompts && explicit !== true) throw new Error('Custom source snapshots require the explicit production host')
   const subject: typeof import('../../../src/dsh/index.js') = await import(packageRoot
@@ -46,6 +46,12 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     const previousCwd = process.cwd()
     try {
       process.chdir(workspace)
+      if (options.core) {
+        const core = await import(packageRoot ? pathToFileURL(join(packageRoot, 'dist/dsh/core/index.js')).href : '../../../src/dsh/core/index.js')
+        const { lisp, memoryReview, memoryEvolution, ...coreOptions } = extra as Record<string, unknown>
+        const { lispModule } = await import(packageRoot ? pathToFileURL(join(packageRoot, 'dist/dsh/modules/lisp.js')).href : '../../../src/dsh/modules/lisp.js')
+        return await core.mountCore(ctx, { repositoryRoot: workspace, databasePath: join(dir, 'state.sqlite3'), intakeMode: 'on-demand', typedDecisions: { mode: 'off' }, ...coreOptions }, lisp ? [{ module: lispModule, configuration: lisp }] : [])
+      }
       return await ctx.plugin(subject, { enabled: true, skillPrompts: { mode: nextMode }, agenticReplay: { enabled: false }, ...extra })
     } finally { process.chdir(previousCwd) }
   }
@@ -88,7 +94,13 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
   }
   const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
   for(const m of initial) {
-    if (m === tools) await mountNativeTools(ctx, tools, packages, fibers)
+    if (m === tools && options.ptc) {
+      for (const name of ['dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node']) {
+        const module = await import(pathToFileURL(join(packages, '@deepseek-ai', name, 'lib/index.js')).href)
+        fibers.push(await ctx.plugin(module.default ?? module, name === 'dsh-sandbox-policy' ? { mode: 'danger-full-access' } : {}))
+      }
+      await mountToolExecutor(ctx, tools, packages, 'ptc', fibers)
+    } else if (m === tools) await mountNativeTools(ctx, tools, packages, fibers)
     else if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m, m===prompt?{persona:''}:undefined))
   }
   if(explicit!=='prompt-only'){fibers.push(await ctx.plugin(driver,{agents:[]}));fibers.push(await ctx.plugin(spawn,{providerName:'spawn'}))}

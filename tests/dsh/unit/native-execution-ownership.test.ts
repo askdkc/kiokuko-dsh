@@ -8,6 +8,20 @@ import { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
 import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { existsSync } from 'node:fs'
 import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
+import { hasUnclassifiedNativeJobs } from '../../../src/dsh/native-execution-ownership.js'
+
+test('native jobs require exact session registration; activity alone never grants managed authority', () => {
+  const job = { id: 'bash-one', kind: 'bash', status: 'running', owner: 'session', startedAt: 123 }
+  const data = { jobId: job.id, kind: 'bash', owner: 'session', startedAt: 123, toolCall: { callId: 'nested', rootCallId: 'root' } }
+  const classify = (value = job, registrations: any[] = [data]) => hasUnclassifiedNativeJobs([value], {
+    id: 'session', snapshotEvents: () => registrations.map(data => ({ type: 'job/registered', data })),
+  })
+  assert.equal(classify(), false)
+  assert.equal(classify({ ...job, status: 'stopping' }), false)
+  for (const value of [{ ...job, owner: 'foreign' }, { ...job, kind: 'managed' }, { ...job, status: 'unknown' }]) assert.equal(classify(value), true)
+  for (const registrations of [[], [data, data], [{ ...data, owner: 'foreign' }], [{ ...data, startedAt: 124 }], [{ ...data, toolCall: undefined }]]) assert.equal(classify(job, registrations), true)
+  for (const status of ['completed', 'failed', 'killed']) assert.equal(classify({ ...job, status }, []), false)
+})
 
 test('ownership proof distinguishes completed history from holds, enrollment, uncertain effects and unavailable authority', { timeout: 30_000 }, async () => {
   assert.ok(existsSync(new URL('../../../src/dsh/native-execution-ownership.ts',import.meta.url)),'Host native ownership proof must be installed')
@@ -37,20 +51,27 @@ test('ownership proof distinguishes completed history from holds, enrollment, un
         assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned', field)
         completed()
       }
+      const taskRow = db.prepare('SELECT task_generation,task_revision,task_repository_root FROM ledger_runs WHERE run_id=?').get<any>(task.runId)!
+      const binding = { sessionId: task.sessionId, generation: 'generation', taskAuthority: { taskId: task.runId, sessionId: task.sessionId, repositoryRoot: taskRow.task_repository_root, generation: taskRow.task_generation, revision: taskRow.task_revision } }
       db.prepare("INSERT INTO dsh_owned_operations VALUES('uncertain',?,?,?,'digest','unknown',?,'now')")
-        .run(task.runId, task.sessionId, 'generation', JSON.stringify({ runId: task.runId, kind: 'kioku_exec', state: 'unknown' }))
+        .run(task.runId, task.sessionId, 'generation', JSON.stringify({ ...binding, runId: task.runId, kind: 'kioku_exec', state: 'unknown' }))
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned')
       db.prepare("UPDATE dsh_owned_operations SET state='completed',receipt_json=? WHERE operation_id='uncertain'")
-        .run(JSON.stringify({ runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: false }))
+        .run(JSON.stringify({ ...binding, runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: false }))
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'owned', 'completed receipt is not stop proof')
       db.prepare("UPDATE dsh_owned_operations SET receipt_json=? WHERE operation_id='uncertain'")
-        .run(JSON.stringify({ runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: true }))
+        .run(JSON.stringify({ ...binding, runId: task.runId, kind: 'kioku_exec', state: 'completed', processStopped: true }))
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned')
-      const child = { runId: task.runId, kind: 'native_child', state: 'completed' };
+      const child = { ...binding, runId: task.runId, kind: 'native_child', state: 'completed' };
       const setChild = (state: string, receipt: unknown) => db.prepare("UPDATE dsh_owned_operations SET state=?,receipt_json=? WHERE operation_id='uncertain'").run(state, JSON.stringify(receipt));
       setChild('completed', child);
       assert.equal(nativeExecutionOwnership(db, task.sessionId), 'unowned', 'completed child is history');
       for (const [state, receipt] of [
+        ['completed', { ...child, sessionId: 'foreign' }],
+        ['completed', { ...child, generation: 'stale' }],
+        ['completed', { ...child, taskAuthority: { ...binding.taskAuthority, generation: binding.taskAuthority.generation + 1 } }],
+        ['completed', { ...child, taskAuthority: { ...binding.taskAuthority, taskId: 'foreign' } }],
+        ['completed', { ...child, taskAuthority: undefined }],
         ['started', child], ['unknown', child], ['completed', { ...child, state: 'started' }],
         ['completed', { ...child, runId: 'foreign-run' }], ['completed', { ...child, kind: 'unknown' }],
         ['completed', null], ['completed', []],

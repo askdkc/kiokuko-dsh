@@ -14,6 +14,32 @@ import { ManagedOperationJournal } from '../../../../src/dsh/managed-operation-j
 import { workingLispTask } from '../../helpers/lisp-task.js'
 import { requestTaskStop } from '../../../../src/dsh/task-state.js'
 
+test('job authority rejection before dispatch does not leave Lisp requiring reconciliation', { timeout: 90000 }, async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'managed-job-denied-'))), root = join(base, 'work')
+  await mkdir(root)
+  const db = new NodeSqliteAdapter(join(base, 'db'), new DatabaseSync(join(base, 'db')))
+  const owner = { sessionId: 'denied-job-session', agentId: 'denied-job-agent', root }
+  const task = workingLispTask(db, owner)
+  let dispatched = 0
+  const manager = new LispManager({ store: new LispStore(async fn => fn(db)), dataRoot: join(base, 'runtime'),
+    config: LispConfig.parse({ enabled: true, executionMode: 'development', startupTimeoutMs: 60000 }),
+    toolCall: async () => { dispatched++; throw new Error('Rejected job must not dispatch') } })
+  try {
+    await manager.start(); await manager.enable(owner)
+    requestTaskStop(db, { taskId: task.taskId, sessionId: owner.sessionId, repositoryRoot: root },
+      { operation: 'wait', operationId: 'stop-before-job', expectedRevision: task.revision, reason: 'Stop before process dispatch' })
+    const result = await manager.execute(owner, 'lisp_eval', { operationId: 'denied-job',
+      code: '(kioku.process:start-job "sh" (list "-c" "touch must-not-exist"))' }) as any
+    assert.equal(result.ok, false)
+    assert.equal(dispatched, 0)
+    await assert.rejects(readFile(join(root, 'must-not-exist')), { code: 'ENOENT' })
+    const rows = db.prepare('SELECT operation_json FROM dsh_managed_operations').all<{ operation_json: string }>()
+    assert.equal(rows.length, 1)
+    assert.equal(JSON.parse(rows[0]!.operation_json).state, 'denied')
+    assert.equal((await manager.status(owner) as any).managedReconciliationRequired, false)
+  } finally { await manager.dispose(); db.close(); await rm(base, { recursive: true, force: true }) }
+})
+
 test('real SBCL returning 42 retains native process operation and a complete zero-operation evaluation', {
   skip:process.env.KIOKUKO_REQUIRE_LISP_RUNTIME !== '1' ? 'requires SBCL' : false,timeout:90000,
 },async () => {

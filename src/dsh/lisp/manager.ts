@@ -703,8 +703,10 @@ export class LispManager {
           ...(input.operation === undefined ? {} : { operation: input.operation }) }
         return this.ownedDispatch(state, signal => native.run(nativeInput, AbortSignal.any([signal, context.signal])))
       }
-      const lease = await this.taskAuthority.authorizeEffect(state.owner, 'owned')
-      context.signal.throwIfAborted()
+      // No adapter has been entered yet. Preserve this host-observed boundary
+      // so an authority/Stop rejection cannot become an unknown process effect.
+      const lease = await this.taskAuthority.authorizeEffect(state.owner, 'owned').catch(managedAdmissionDenied)
+      if (context.signal.aborted) managedAdmissionDenied(new LispError('CANCELLED', 'Process dispatch was cancelled before it began.'))
       const argv = [input.program, ...input.argv]
       const value=await this.ownedDispatch(state,signal=>this.options.toolCall!(state.owner,'kioku_exec',{command:argv.map(quote).join(' '),cwd:isAbsolute(directory)?directory:join(state.owner.root,directory),timeoutMs:input.timeoutMs,background:method==='start-job'},method==='start-job'?signal:AbortSignal.any([signal,context.signal]),`lisp-rpc:${context.generation}:${context.evaluationId}:${context.rpcId}`,lease,argv,input.operation)) as any
       // A launched job must remain cancellable even if task authority changed

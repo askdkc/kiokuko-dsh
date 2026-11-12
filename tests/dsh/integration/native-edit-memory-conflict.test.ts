@@ -55,7 +55,8 @@ for (const outcome of (kind === 'root' ? ['write', 'prepare-then-write', 'native
           await seed.withDatabase(db => {
             // Controlled historical state; natural child settlement has its own integration test.
             db.prepare("UPDATE ledger_runs SET status='completed',task_state='Done',task_revision=task_revision+1,task_pending_stop_json=NULL,task_unresolved_json=NULL WHERE run_id=?").run(prior.runId)
-            db.prepare("INSERT INTO dsh_owned_operations VALUES('native-child:history',?,?,?,'history','completed',?,'now')").run(prior.runId,sessionId,'history',JSON.stringify({runId:prior.runId,sessionId,kind:'native_child',state:'completed'}))
+            const authority = db.prepare('SELECT task_revision,task_generation FROM ledger_runs WHERE run_id=?').get<{ task_revision: number; task_generation: number }>(prior.runId)!
+            db.prepare("INSERT INTO dsh_owned_operations VALUES('native-child:history',?,?,?,'history','completed',?,'now')").run(prior.runId,sessionId,'history',JSON.stringify({runId:prior.runId,sessionId,generation:'history',kind:'native_child',state:'completed',taskAuthority:{taskId:prior.runId,sessionId,repositoryRoot:root,revision:authority.task_revision,generation:authority.task_generation}}))
           })
         } else await seed.withDatabase(db => {
           const workspace = db.prepare('SELECT workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?').get<{workspace:string}>(ownerRoot)!.workspace

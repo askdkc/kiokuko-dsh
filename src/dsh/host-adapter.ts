@@ -4,7 +4,7 @@ import { stableNativeToolCapabilities } from './native-tool-surface.js'
 import { assessRequestIntent } from "./decisions/intent-assessment.js";
 import { TaskStartup } from "./task-startup.js";
 import { answerAkinatorQuestion } from "./decisions/akinator-answers.js";
-import { nativeExecutionOwnership } from "./native-execution-ownership.js";
+import { nativeExecutionOwnership, hasUnclassifiedNativeJobs, type NativeJobView } from "./native-execution-ownership.js";
 import { NativeTaskAuthority } from "./native-task-authority.js";
 import { readOwnedIdentity } from "./owned-read-owner.js";
 import type { RoutableAgent } from "./model-routing.js";
@@ -905,18 +905,8 @@ export function createDshHostAdapter(
               };
               if (header.parentSession || header.isSeeded) return "owned";
               const jobs = native.get("jobs", false) as
-                | { list(sessionId: string): Array<{ status: string }> }
+                | { list(sessionId: string): NativeJobView[] }
                 | undefined;
-              if (
-                jobs &&
-                jobs
-                  .list(session.id)
-                  .some(
-                    (job) =>
-                      !["completed", "killed", "failed"].includes(job.status),
-                  )
-              )
-                return "owned";
               const current = currentSession(session.id);
               const ownership = await runtime.withDatabase((db) =>
                 nativeExecutionOwnership(db, session.id, current?.runId),
@@ -930,7 +920,7 @@ export function createDshHostAdapter(
                 currentSession(session.id) === current
               )
                 turnState.releaseRun(current.runId, current.authority);
-              return ownership;
+              return (jobs && hasUnclassifiedNativeJobs(jobs.list(session.id), session)) ? "owned" : ownership;
             },
             nativeChildRejection: (agent) => nativeTaskAuthority.unregisteredChildReason(agent as NativeAgent),
             nativeChild: (agent) =>

@@ -6,7 +6,7 @@ import { noteScopedMemory } from '../memory-sidebar.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
 import { TaskStartup } from '../task-startup.js'
-import { nativeExecutionOwnership } from '../native-execution-ownership.js'
+import { nativeExecutionOwnership, hasUnclassifiedNativeJobs, type NativeJobView } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
 import { hasRequestInput } from '../request-input.js'
@@ -659,16 +659,7 @@ export async function mountCore(
         }
         if (header.parentSession || header.isSeeded) return 'owned'
         const jobs = get('jobs') as
-          { list(sessionId: string): Array<{ status: string }> } | undefined
-        if (
-          jobs &&
-          jobs
-            .list(session.id)
-            .some(
-              (job) => !['completed', 'killed', 'failed'].includes(job.status),
-            )
-        )
-          return 'owned'
+          { list(sessionId: string): NativeJobView[] } | undefined
         const current = active.get(session.id)
         const ownership = await runtime.withDatabase((db) =>
           nativeExecutionOwnership(db, session.id, current?.task.runId),
@@ -682,7 +673,7 @@ export async function mountCore(
           active.get(session.id) === current
         )
           active.delete(session.id)
-        return ownership
+        return (jobs && hasUnclassifiedNativeJobs(jobs.list(session.id), session)) ? 'owned' : ownership
       },
       nativeChildRejection: (agent) => childTaskAuthority?.unregisteredChildReason(agent as NativeAgent) ?? 'Native child authority is unavailable [authority_unavailable]',
       nativeChild: (agent) =>
@@ -1776,7 +1767,6 @@ export async function mountCore(
             lisp: () =>
               get(LISP_CODING_SERVICE) as LispCodingService | undefined,
             nativeCommand: (execution) =>
-              execution.parent !== undefined &&
               demand.nativeCommand(execution) === true,
             nativeLisp: (execution) => demand.nativeLisp(execution) === true,
             preparationOnly: (execution) =>
@@ -1921,7 +1911,6 @@ export async function mountCore(
             unownedNative: (execution) =>
               demand?.unownedNative(execution as any) === true,
             nativeCommand: (execution) =>
-              (execution as any).parent !== undefined &&
               demand.nativeCommand(execution as any) === true,
             nativeLisp: (execution) =>
               demand.nativeLisp(execution as any) === true,

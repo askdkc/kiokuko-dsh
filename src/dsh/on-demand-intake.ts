@@ -1251,10 +1251,33 @@ export class OnDemandIntake {
     state.input.signal.throwIfAborted()
     if (
       this.#stopped ||
+      state.input.agent.session !== state.session ||
       this.#turns.get(state.input.agent.session!.id) !== state ||
       ['closed', 'stale'].includes(state.status)
     )
       throw new Error('On-demand request changed or closed')
+  }
+  /** Refresh authority for the original request, never replay an already
+   * admitted effect under a newly acquired owner. Recovery stays in this turn. */
+  private async revalidateNativeOwnership(state: Turn): Promise<boolean> {
+    this.assertCurrent(state)
+    const ownership = await this.host.nativeOwnership?.(state.input)
+    this.assertCurrent(state)
+    if (ownership === 'unowned') return true
+    await this.host.validate(state.input)
+    this.assertCurrent(state)
+    for (const message of state.input.messages.filter(isRequestInput)) {
+      if (state.requestContents.get(humanId(message)) !== canonicalContentHash(message))
+        throw new Error('Original native request changed during authority revalidation')
+    }
+    const context = await this.host.requestContext?.(state.input, state.task)
+    this.assertCurrent(state)
+    if (context) {
+      state.requestIntentContext = context
+      state.requestIntentContextDigest = canonicalContentHash(context)
+      state.requestIntent = unresolvedRequestIntent(context, 'task_state_changed')
+    }
+    return false
   }
   private bound(execution: Execution): Turn | undefined {
     const agent = execution.agent,
@@ -2541,7 +2564,9 @@ export class OnDemandIntake {
     if (execution.parent === undefined) return true
     if (typeof execution.parent !== 'symbol') return false
     const parent = this.#nativePrograms.get(execution.parent)
-    return !!parent && parent.agent === execution.agent && this.unownedNative(parent)
+    return !!parent && parent.agent === execution.agent &&
+      (this.unownedNative(parent) ||
+        (this.bound(parent)?.nativeUnowned === true && this.nativeLisp(parent)))
   }
   unownedNative(execution: Execution): boolean {
     const state = this.bound(execution),
@@ -3107,14 +3132,14 @@ export class OnDemandIntake {
               !(execution.name === 'run_code' && preparationEnvelope(execution.arguments))
             ) {
               if (
-                (await this.host.nativeOwnership?.(state.input)) !== 'unowned'
+                !(await this.revalidateNativeOwnership(state))
               ) {
-                state.nativeUnowned = false
                 return denied(
-                  'Native execution acquired a Kiokuko owner; its current authority is required',
+                  'Native execution acquired a Kiokuko owner; current authority must be bound to the retained original request before retrying this operation',
                 )
               }
               this.assertCurrent(state)
+              execution.signal.throwIfAborted()
               if (this.definition(execution)?.execute !== actual.execute)
                 return denied('Native tool definition changed')
               this.#executions.set(execution, {
@@ -3283,11 +3308,14 @@ export class OnDemandIntake {
           if (proof.nativeLispDigest !== undefined) {
             if (!this.nativeLisp(execution))
               throw new Error('Native Lisp identity or arguments changed')
-            return withRootLispAdmission(
-              execution,
-              () => this.nativeLisp(execution),
-              next,
-            )
+            // The native dispatcher mints this token. Retain it only for the
+            // lifetime of the exact root; every child still checks ownership.
+            if (typeof execution.token === 'symbol') this.#nativePrograms.set(execution.token, execution)
+            try {
+              return await withRootLispAdmission(execution, () => this.nativeLisp(execution), next)
+            } finally {
+              if (typeof execution.token === 'symbol') this.#nativePrograms.delete(execution.token)
+            }
           }
           if (proof.evidenceReadDigest !== undefined) {
             if (
@@ -3305,14 +3333,14 @@ export class OnDemandIntake {
           if (proof.nativeUnownedDigest !== undefined) {
             if (
               !this.unownedNative(execution) ||
-              (await this.host.nativeOwnership?.(state.input)) !== 'unowned'
+              !(await this.revalidateNativeOwnership(state))
             ) {
-              state.nativeUnowned = false
               throw new Error(
                 'Native unowned authority changed or became unavailable',
               )
             }
             this.assertCurrent(state)
+            execution.signal.throwIfAborted()
             if (execution.name !== 'run_code') return next()
             if (typeof execution.token !== 'symbol') throw new Error('Native program token is unavailable')
             this.#nativePrograms.set(execution.token, execution)

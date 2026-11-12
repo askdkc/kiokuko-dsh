@@ -93,13 +93,13 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           assert.deepEqual(names, ['run_code'], 'pending memory keeps the native PTC transport')
           row.preparation = messageResult('prepare')
           assert.equal(row.preparation.isError, false)
-          response = mock.toolCallResponse('status', 'run_code', { description: 'Inspect pending memory review', code: 'inspect(JSON.stringify(await tools.task_memory_review({ action: "status" })))' })
+          response = mock.toolCallResponse('status', 'run_code', { description: 'Inspect pending memory review', code: 'console.log(JSON.stringify(await tools.task_memory_review({ action: "status" })))' })
         } else if (step === 3) {
           const statusResult = messageResult('status')
           if (statusResult.isError) throw new Error(`status subdispatch failed: ${JSON.stringify(statusResult)}`)
           row.status = JSON.parse(statusResult.text)
           assert.equal(row.status.supported,false);assert.equal(row.status.ready,true);assert.deepEqual(row.status.pending,[])
-          response = mock.toolCallResponse('premature', 'run_code', { description: 'Attempt arbitrary program before memory review', code: 'inspect("MUST_NOT_RUN")' })
+          response = mock.toolCallResponse('premature', 'run_code', { description: 'Attempt arbitrary program before memory review', code: 'console.log("MUST_NOT_RUN")' })
         } else if (step === 4) {
           row.premature = messageResult('premature'); assert.equal(row.premature.isError, false)
           assert.ok(row.premature.text.includes('MUST_NOT_RUN'), 'an unresolved decision must never block the program')
@@ -113,7 +113,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
         } else if (step === 5) {
           row.review = messageResult('review'); assert.equal(row.review.isError, false)
           assert.deepEqual(names, ['run_code'], 'PTC presentation stays unchanged after memory decisions')
-          response = mock.toolCallResponse('work', 'run_code', { description: 'Perform prepared work after memory review', code: 'inspect("PTC_MEMORY_REVIEW_COMPLETE")' })
+          response = mock.toolCallResponse('work', 'run_code', { description: 'Perform prepared work after memory review', code: 'console.log("PTC_MEMORY_REVIEW_COMPLETE")' })
         } else if (step === 6) {
           row.work = messageResult('work'); assert.equal(row.work.isError, false)
           assert.ok(row.work.text.includes('PTC_MEMORY_REVIEW_COMPLETE'))

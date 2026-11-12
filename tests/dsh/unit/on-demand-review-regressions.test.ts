@@ -1789,7 +1789,7 @@ for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch', 'write', 
     assert.equal((await f.execute(name)).isError, true)
     assert.equal(bodies, 1)
   })
-for (const tool of ['read', 'write', 'edit']) for (const change of ['arguments', 'stop', 'owner'] as const)
+for (const tool of ['read', 'write', 'edit']) for (const change of ['arguments', 'stop', 'owner', 'session'] as const)
   test(`unowned native ${tool} rejects a ${change} change after native pre-execute`, async (t) => {
     let owner: 'unowned' | 'owned' = 'unowned',
       bodies = 0
@@ -1809,6 +1809,7 @@ for (const tool of ['read', 'write', 'edit']) for (const change of ['arguments',
       if (execution.name === tool) {
         if (change === 'stop') f.intake.stop()
         else if (change === 'owner') owner = 'owned'
+        else if (change === 'session') execution.agent.session = { ...execution.agent.session }
         else execution.arguments.changed = true
       }
       return undefined
@@ -1817,6 +1818,37 @@ for (const tool of ['read', 'write', 'edit']) for (const change of ['arguments',
     assert.equal((await f.execute(tool, {})).isError, true)
     assert.equal(bodies, 0)
   })
+
+test('owner acquisition revalidates and retains the original request without replaying its stale effect', async t => {
+  let owner: 'owned' | 'unowned' = 'unowned', validations = 0, effects = 0
+  const f = await fixture(t, { nativeOwnership: async () => owner, validate: async () => { validations++ } })
+  t.after(f.ctx.tools.register({ name: 'edit', parameters: { type: 'object' }, output: { schema: {}, render: () => [] },
+    execute: () => { effects++; return 'edited' } }))
+  await f.capture()
+  const before = validations
+  owner = 'owned'
+  assert.equal((await f.execute('edit')).isError, true)
+  assert.ok(validations > before, 'changed authority revalidates the original input')
+  assert.equal(effects, 0)
+  owner = 'unowned'
+  assert.equal((await f.execute('edit')).isError, false, 'same captured request recovers after the owner releases')
+  assert.equal(effects, 1)
+})
+
+test('abort during the final ownership lookup cannot dispatch an admitted edit', async t => {
+  const controller = new AbortController()
+  let dispatching = false, effects = 0
+  const f = await fixture(t, { nativeOwnership: async () => {
+    if (dispatching) controller.abort(new Error('Stopped during authority lookup'))
+    return 'unowned'
+  } })
+  t.after(f.ctx.tools.register({ name: 'edit', parameters: { type: 'object' }, output: { schema: {}, render: () => [] },
+    execute: () => { effects++; return 'edited' } }))
+  await f.capture()
+  t.after(f.ctx.tools.guard(() => { dispatching = true; return undefined }))
+  assert.equal((await f.execute('edit', {}, { signal: controller.signal })).isError, true)
+  assert.equal(effects, 0)
+})
 
 test('unowned preparation explains absent task and recovers without taskOperation', async (t) => {
   let classifications = 0,
