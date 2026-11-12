@@ -9,23 +9,57 @@ export interface NativeJobView {
   readonly startedAt: number
 }
 
+export type NativeJobClassificationReason =
+  | 'job_status_unknown' | 'job_kind_not_bash' | 'job_owner_mismatch'
+  | 'registration_missing' | 'registration_ambiguous'
+  | 'registration_owner_mismatch' | 'registration_kind_not_bash'
+  | 'registration_started_at_mismatch' | 'tool_call_id_invalid' | 'root_call_id_invalid'
+
+/** Fixed codes only: never forward job/event fields into diagnostics. */
+function unclassifiedNativeJobReason(
+  job: NativeJobView,
+  sessionId: string,
+  events: readonly { type: string; data?: any }[],
+): NativeJobClassificationReason | undefined {
+  if (['completed', 'killed', 'failed'].includes(job.status)) return undefined
+  if (!['running', 'stopping'].includes(job.status)) return 'job_status_unknown'
+  if (job.kind !== 'bash') return 'job_kind_not_bash'
+  if (job.owner !== sessionId) return 'job_owner_mismatch'
+  const registrations = events.filter(event => event.type === 'job/registered' && event.data?.jobId === job.id)
+  if (registrations.length === 0) return 'registration_missing'
+  if (registrations.length !== 1) return 'registration_ambiguous'
+  const registration = registrations[0]!.data
+  if (registration.owner !== sessionId) return 'registration_owner_mismatch'
+  if (registration.kind !== 'bash') return 'registration_kind_not_bash'
+  if (registration.startedAt !== job.startedAt) return 'registration_started_at_mismatch'
+  if (typeof registration.toolCall?.callId !== 'string') return 'tool_call_id_invalid'
+  if (typeof registration.toolCall?.rootCallId !== 'string') return 'root_call_id_invalid'
+  return undefined
+}
+
 /** Job liveness is not task authority. Only a native Bash registration in
  * this exact session proves ordinary provenance; unknown producers remain
- * guarded. Managed execution is independently checked in authority storage. */
+ * guarded. Managed execution is independently checked in authority storage.
+ * Report only the first blocking reason, preserving the original short circuit. */
 export function hasUnclassifiedNativeJobs(
   jobs: readonly NativeJobView[],
   session: { id: string; snapshotEvents?(): readonly { type: string; data?: any }[] },
+  diagnostic?: (reason: NativeJobClassificationReason) => void,
 ): boolean {
   const events = session.snapshotEvents?.() ?? []
   return jobs.some(job => {
-    if (['completed', 'killed', 'failed'].includes(job.status)) return false
-    if (!['running', 'stopping'].includes(job.status) || job.kind !== 'bash' || job.owner !== session.id) return true
-    const registrations = events.filter(event => event.type === 'job/registered' && event.data?.jobId === job.id)
-    if (registrations.length !== 1) return true
-    const registration = registrations[0]!.data
-    return registration.owner !== session.id || registration.kind !== 'bash' || registration.startedAt !== job.startedAt
-      || typeof registration.toolCall?.callId !== 'string' || typeof registration.toolCall?.rootCallId !== 'string'
+    const reason = unclassifiedNativeJobReason(job, session.id, events)
+    if (reason === undefined) return false
+    // Diagnostic failures must never change authority or interrupt native work.
+    try { diagnostic?.(reason) } catch { /* best-effort diagnostics */ }
+    return true
   })
+}
+
+/** Opt-in host diagnostic; no command, identity, event payload or error text. */
+export function reportNativeJobClassification(reason: NativeJobClassificationReason): void {
+  if (process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG !== '1') return
+  console.info(`[kiokuko-dsh] ${JSON.stringify({ schema: 'kiokuko.native-ownership.v1', reason })}`)
 }
 
 /** A live or unconfirmed native child still needs its parent task authority. */

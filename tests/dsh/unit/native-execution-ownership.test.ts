@@ -8,7 +8,7 @@ import { DshCoreRuntime } from '../../../src/dsh/core-runtime.js'
 import { CoreTasks } from '../../../src/dsh/core/tasks.js'
 import { existsSync } from 'node:fs'
 import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
-import { hasUnclassifiedNativeJobs } from '../../../src/dsh/native-execution-ownership.js'
+import { hasUnclassifiedNativeJobs, reportNativeJobClassification } from '../../../src/dsh/native-execution-ownership.js'
 
 test('native jobs require exact session registration; activity alone never grants managed authority', () => {
   const job = { id: 'bash-one', kind: 'bash', status: 'running', owner: 'session', startedAt: 123 }
@@ -95,4 +95,57 @@ test('ownership proof distinguishes completed history from holds, enrollment, un
       assert.throws(() => nativeExecutionOwnership(db, task.sessionId), /no such table/)
     })
   } finally { await runtime.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+
+test('native job diagnostics preserve classification, precedence and short circuit with fixed reasons', () => {
+  const job = { id: 'secret-job', kind: 'bash', status: 'running', owner: 'secret-session', startedAt: 123 }
+  const data = { jobId: job.id, kind: 'bash', owner: job.owner, startedAt: 123, toolCall: { callId: '', rootCallId: '' }, command: 'secret-command', token: 'secret-token' }
+  const cases: [Partial<typeof job>, any[], string | undefined][] = [
+    [{}, [data], undefined], [{ status: 'stopping' }, [data], undefined],
+    [{ status: 'unknown', kind: 'other' }, [], 'job_status_unknown'],
+    [{ kind: 'other', owner: 'other' }, [], 'job_kind_not_bash'],
+    [{ owner: 'other' }, [], 'job_owner_mismatch'],
+    [{}, [], 'registration_missing'], [{}, [data, data], 'registration_ambiguous'],
+    [{}, [{ ...data, owner: 'other' }], 'registration_owner_mismatch'],
+    [{}, [{ ...data, kind: 'other' }], 'registration_kind_not_bash'],
+    [{}, [{ ...data, startedAt: 124 }], 'registration_started_at_mismatch'],
+    [{}, [{ ...data, toolCall: null }], 'tool_call_id_invalid'],
+    [{}, [{ ...data, toolCall: { callId: 1, rootCallId: 'root' } }], 'tool_call_id_invalid'],
+    [{}, [{ ...data, toolCall: { callId: 'call' } }], 'root_call_id_invalid'],
+    ...['completed', 'killed', 'failed'].map(status => [{ status, kind: 'other' }, [], undefined] as [Partial<typeof job>, any[], undefined]),
+  ]
+  for (const [patch, registrations, expected] of cases) {
+    const reasons: string[] = []
+    const session = { id: job.owner, snapshotEvents: () => registrations.map(data => ({ type: 'job/registered', data })) }
+    const jobs = [{ ...job, ...patch }]
+    assert.equal(hasUnclassifiedNativeJobs(jobs, session, reason => reasons.push(reason)), expected !== undefined)
+    assert.deepEqual(reasons, expected ? [expected] : [])
+    assert.equal(hasUnclassifiedNativeJobs(jobs, session, () => { throw new Error('secret-error') }), expected !== undefined)
+  }
+  assert.equal(hasUnclassifiedNativeJobs([], { id: job.owner }), false)
+  const reasons: string[] = []
+  assert.equal(hasUnclassifiedNativeJobs([job, { ...job, status: 'unknown' }], { id: job.owner }, reason => reasons.push(reason)), true)
+  assert.deepEqual(reasons, ['registration_missing'])
+})
+
+test('host diagnostic is opt-in and emits only the fixed schema and reason', t => {
+  const original = process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG
+  const lines: string[] = []
+  t.mock.method(console, 'info', (line: string) => lines.push(line))
+  try {
+    for (const value of [undefined, '0', 'true']) {
+      if (value === undefined) delete process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG
+      else process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG = value
+      reportNativeJobClassification('registration_missing')
+    }
+    assert.deepEqual(lines, [])
+    process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG = '1'
+    const job = { id: 'secret-job', kind: 'bash', status: 'running', owner: 'secret-session', startedAt: 123, command: 'secret-command', token: 'secret-token' }
+    assert.equal(hasUnclassifiedNativeJobs([job], { id: job.owner }, reportNativeJobClassification), true)
+    assert.deepEqual(lines, ['[kiokuko-dsh] {"schema":"kiokuko.native-ownership.v1","reason":"registration_missing"}'])
+  } finally {
+    if (original === undefined) delete process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG
+    else process.env.KIOKUKO_NATIVE_OWNERSHIP_DEBUG = original
+  }
 })

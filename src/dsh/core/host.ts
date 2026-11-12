@@ -6,7 +6,7 @@ import { noteScopedMemory } from '../memory-sidebar.js'
 import { nativeRequestProposals } from '../request-proposals.js'
 import { assessRequestIntent } from '../decisions/intent-assessment.js'
 import { TaskStartup } from '../task-startup.js'
-import { nativeExecutionOwnership, hasUnclassifiedNativeJobs, type NativeJobView } from '../native-execution-ownership.js'
+import { nativeExecutionOwnership, hasUnclassifiedNativeJobs, reportNativeJobClassification, type NativeJobView } from '../native-execution-ownership.js'
 import { NativeTaskAuthority } from '../native-task-authority.js'
 import { readOwnedIdentity } from '../owned-read-owner.js'
 import { hasRequestInput } from '../request-input.js'
@@ -673,7 +673,7 @@ export async function mountCore(
           active.get(session.id) === current
         )
           active.delete(session.id)
-        return (jobs && hasUnclassifiedNativeJobs(jobs.list(session.id), session)) ? 'owned' : ownership
+        return (jobs && hasUnclassifiedNativeJobs(jobs.list(session.id), session, reportNativeJobClassification)) ? 'owned' : ownership
       },
       nativeChildRejection: (agent) => childTaskAuthority?.unregisteredChildReason(agent as NativeAgent) ?? 'Native child authority is unavailable [authority_unavailable]',
       nativeChild: (agent) =>
