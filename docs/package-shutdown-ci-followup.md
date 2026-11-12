@@ -63,3 +63,11 @@ npm run publint
 - `scripts/verify-agenticreplay-consumer.mjs` cannot install the clean consumer because `registry.npmjs.org` returns `ENOTFOUND`. The existing npm/pnpm consumer suite is not established as passing.
 - Hosted run 43131871349 is the baseline f9335f2 run, not this working-tree change. The API reports 14 successful jobs, six failing verification jobs and the additional failed aggregate gate. Its integration logs show the PTC failures; native assessment cases passed there. Its consumer log confirms the optional-module loading defect.
 - No complete CI pass, real-provider test, or interactive macOS/Lisp validation is claimed. No commit or push was performed.
+
+## d63a3a0: remaining PTC output fixture correction
+
+Verified [run 43136607436](https://github.com/askdkc/kiokuko-dsh/actions/runs/43136607436): 19 jobs passed; main integration and the aggregate gate failed. Integration job 130913823299 failed only the core/full pending-memory cases at the expected `MUST_NOT_RUN` output assertion. All four request-plan assessment variants passed in that hosted run.
+
+Changed the two output-asserted fixture programs from `return "MUST_NOT_RUN"` / `return "PTC_MEMORY_REVIEW_COMPLETE"` to `inspect(...)`. Production code and assertions are unchanged. The preparation carrier and review submission do not assert returned text and retain their existing program forms.
+
+Local `npm run typecheck` and `git diff --check` passed. Re-executed the two native cases with `KIOKUKO_DSH_PACKAGE_ROOT="$PWD/tests/fixtures/dsh-runtime/node_modules" KIOKUKO_EXPECTED_DSH_VERSION=0.2.2-alpha.2 KIOKUKO_REQUIRE_DSH_NATIVE=1 node --import tsx --test tests/dsh/integration/ptc-pending-memory-native.test.ts`. Both fail earlier at status execution because macOS denies `sandbox-exec` (`sandbox_apply: Operation not permitted`). The installed official DSH remains f3803c9; no local e8f7b93 pass or new hosted CI pass is claimed. The user's independent two-case pass on e8f7b93 is reported evidence, not a test executed here.
