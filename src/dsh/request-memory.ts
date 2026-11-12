@@ -1,3 +1,4 @@
+import { ownedExplanationCalls } from './explanation-provenance.js'
 import { renderModelMemory, renderModelRelations } from '../context/model-memory.js'
 import { filterRelationDelivery } from '../memory/relation-delivery.js'
 import { KiokukoError } from '../errors.js'
@@ -119,10 +120,20 @@ export function pruneDshMemorySurface(session: Parameters<typeof retainedEvents>
 }
 
 /** Explanation tool results are native logs; retire their active surface only. */
-export function retiredExplanationCalls(db: SqliteDatabase, sessionId: string): ReadonlySet<string> {
-  if (!db.prepare("SELECT 1 FROM sqlite_master WHERE name='memory_explain_receipts'").get()) return new Set()
-  return new Set(db.prepare('SELECT r.call_id FROM memory_explain_receipts r JOIN memory_forget_tombstones t ON t.entry_id=r.entry_id WHERE r.session_id=?')
-    .all<{call_id: string}>(sessionId).map(row => row.call_id))
+export function retiredExplanationCalls(db: SqliteDatabase, session: { id: string }): ReadonlySet<string> {
+  const owned = ownedExplanationCalls(session)
+  const entries = new Map<string, Set<string>>()
+  for (const event of (session as { snapshotEvents?: () => readonly any[] }).snapshotEvents?.() ?? []) {
+    const proof = event.type === 'tool/result' ? event.data?.meta?.kiokukoExplanation : undefined
+    if (!proof || !owned.has(proof.callId) || typeof proof.entryId !== 'string' || !proof.entryId) continue
+    const values = entries.get(proof.callId) ?? new Set<string>()
+    values.add(proof.entryId); entries.set(proof.callId, values)
+  }
+  const retired = new Set<string>()
+  if (!entries.size || !db.prepare("SELECT 1 FROM sqlite_master WHERE name='memory_forget_tombstones'").get()) return retired
+  const tombstone = db.prepare('SELECT 1 FROM memory_forget_tombstones WHERE entry_id=?')
+  for (const [callId, values] of entries) if (values.size === 1 && tombstone.get([...values][0]!)) retired.add(callId)
+  return retired
 }
 const FORGOTTEN_EXPLANATION = 'Kiokuko memory was forgotten; its earlier explanation is no longer available.'
 export function filterExplainedMemory<T>(messages: readonly T[], retired: ReadonlySet<string>): T[] {

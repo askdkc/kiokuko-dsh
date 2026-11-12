@@ -1,3 +1,4 @@
+import type { CaptureInitialInput } from './session-observation.js'
 import { KIOKUKO_DSH_SOURCE_KIND } from '../plugin-source.js'
 import { observeVerificationContinuation, isVerificationContinuation, acceptsVerificationContinuation } from '../verification-continuation.js'
 import { nativeRequestProposals } from '../request-proposals.js'
@@ -193,11 +194,7 @@ interface AdmissionDependencies {
     value: StoredExecutionSelection,
   ) => void
   readonly executionBinding: (item: TurnRecord) => ExecutionBinding
-  readonly captureInitialInput: (
-    sessionId: string,
-    turn: number,
-    messages: readonly unknown[],
-  ) => Promise<void>
+  readonly captureInitialInput: CaptureInitialInput
   readonly contextMessages: (
     event: DshPreStepEvent,
     pending: readonly unknown[],
@@ -1248,7 +1245,13 @@ export function createAdmission({
       if (event.nativeAgent && isSelectionBlocked(event.nativeAgent))
         return pendingSelection(downstream)
       const nativeMessages = Object.freeze([...(event.nativeMessages ?? [])])
-      await captureInitialInput(event.sessionId, event.turn, nativeMessages)
+      const captureAgent = event.nativeAgent as { session?: object } | undefined
+      const captureSession = captureAgent?.session
+      const captureTurn = currentSession(event.sessionId), captureGeneration = captureTurn?.prepareGeneration
+      if (captureAgent && captureSession) await captureInitialInput(event.sessionId, event.turn, nativeMessages, {
+        signal: event.signal, agent: captureAgent, session: captureSession,
+        current: () => currentSession(event.sessionId) === captureTurn && captureTurn?.prepareGeneration === captureGeneration,
+      })
       const humanPresent =
         nativeMessages.some(isHumanMessage) ||
         downstream.messages.some(isHumanMessage)

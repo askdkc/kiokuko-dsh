@@ -1,5 +1,6 @@
+import { llmError } from '../../llm-error.js'
 /** Versioned history projection. Durable DSH blocks remain authoritative. */
-import { LlmError, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SharedV4ProviderOptions } from '@ai-sdk/provider'
 import type { OpenCodeModel } from './opencode-catalog.js'
 export function record(value: unknown): Record<string, unknown> | undefined {
@@ -105,6 +106,6 @@ export function projectReplay(source: unknown, content: readonly ContentBlock[],
 export function requireReplaySignature(block: ContentBlock, protocol: OpenCodeModel['protocol'], options: SharedV4ProviderOptions | undefined): void {
   if (block.type !== 'reasoning') return
   const native = options?.[protocol === 'messages' ? 'anthropic' : 'openai']
-  if (protocol === 'messages' && !native?.signature && !native?.redactedData) throw new LlmError('Cannot replay Anthropic reasoning without its verified signature', 'INVALID_REPLAY_STATE')
-  if (protocol === 'responses' && !native?.reasoningEncryptedContent) throw new LlmError('Cannot replay Responses reasoning without its verified encrypted payload', 'INVALID_REPLAY_STATE')
+  if (protocol === 'messages' && !native?.signature && !native?.redactedData) throw llmError('Cannot replay Anthropic reasoning without its verified signature', 'INVALID_REPLAY_STATE')
+  if (protocol === 'responses' && !native?.reasoningEncryptedContent) throw llmError('Cannot replay Responses reasoning without its verified encrypted payload', 'INVALID_REPLAY_STATE')
 }

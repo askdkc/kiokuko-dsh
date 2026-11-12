@@ -1,3 +1,4 @@
+import { KiokukoError } from '../../errors.js'
 import { auxiliaryDatabase } from '../auxiliary-database.js'
 import { projectModelBinding } from '../model-auto/policy.js'
 import { failureDiagnostic } from '../failure-diagnostic.js'
@@ -47,20 +48,32 @@ interface ObservationDependencies {
   readonly eventContinuationId: (value: unknown) => string | undefined
 }
 
+export interface InputCaptureSource {
+  readonly signal: AbortSignal
+  readonly agent: { session?: unknown }
+  readonly session: object
+  readonly current: () => boolean
+}
+export type CaptureInitialInput = (sessionId: string, turn: number, messages: readonly unknown[], source?: InputCaptureSource) => Promise<void>
+
 export function createSessionObservation(runtime: DshCoreRuntime) {
 
   const inMemoryClaims = new Map<string, {
+    source?: InputCaptureSource
     messages: readonly unknown[]
     providerStarted: boolean
     sideEffectStarted: boolean
     recovered: boolean
   }>()
-  const captureInitialInput = async (sessionId: string, turn: number, messages: readonly unknown[]): Promise<void> => {
+  const captureInitialInput: CaptureInitialInput = async (sessionId, turn, messages, source) => {
+    const current = () => !source || (!source.signal.aborted && source.agent.session === source.session && source.current())
+    source?.signal.throwIfAborted()
+    if (!current()) throw new KiokukoError('CONFLICT', 'input_owner_changed')
     const key = `${sessionId}\u0000${turn}`
     let initial = inMemoryClaims.get(key)
-    if (!initial) {
+    if (!initial || (source && initial.source && (initial.source.agent !== source.agent || initial.source.session !== source.session || !initial.source.current()))) {
       if (messages.length === 0) return
-      initial = { messages: Object.freeze([...messages]), providerStarted: false, sideEffectStarted: false, recovered: false }
+      initial = { ...(source ? { source } : {}), messages: Object.freeze([...messages]), providerStarted: false, sideEffectStarted: false, recovered: false }
       inMemoryClaims.set(key, initial)
     }
     // Inbox claims are step-local. Preserve the first turn input and monotonic
@@ -71,13 +84,17 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
         readInputClaim(database, sessionId, turn) ?? backupInputClaimInTransaction(database, {
           dshSessionId: sessionId, nativeTurn: turn, messages: snapshot.messages,
         })
-      )), () => inMemoryClaims.get(key) === snapshot)
-      if (inMemoryClaims.get(key) !== snapshot) return
+      )), () => current() && inMemoryClaims.get(key) === snapshot)
+      source?.signal.throwIfAborted()
+      if (!current() || inMemoryClaims.get(key) !== snapshot) throw new KiokukoError('CONFLICT', 'input_owner_changed')
       snapshot.messages = stored.messages
       snapshot.providerStarted ||= stored.providerStarted
       snapshot.sideEffectStarted ||= stored.sideEffectStarted
       snapshot.recovered ||= stored.recoveryCount !== 0 || (stored.status !== 'claimed' && stored.status !== 'recoverable')
-    } catch {
+    } catch (error) {
+      source?.signal.throwIfAborted()
+      if (!current() || inMemoryClaims.get(key) !== snapshot) throw new KiokukoError('CONFLICT', 'input_owner_changed')
+      if (error instanceof KiokukoError && error.code === 'CONFLICT') throw error
       // Auxiliary persistence cannot veto native assembly or admission. The
       // original process-local snapshot still covers a pre-provider failure.
     }

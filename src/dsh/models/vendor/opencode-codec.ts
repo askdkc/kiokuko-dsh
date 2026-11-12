@@ -1,5 +1,6 @@
+import { llmError } from '../../llm-error.js'
 /** Convert DSH conversation blocks into low-level SDK prompts without an agent loop. */
-import { LlmError, projectToolUpdates, fileHandleText, type GenerateOptions, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import { projectToolUpdates, fileHandleText, type GenerateOptions, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { LanguageModelV4Prompt } from '@ai-sdk/provider'
 import type { OpenCodeModel } from './opencode-catalog.js'
@@ -76,11 +77,11 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
     let imageBytes = 0
     const imagePart = async (block: Extract<ContentBlock, { type: 'image' }>) => {
       if (block.offloaded || !model.inputModalities.includes('image')) return { type: 'text' as const, text: '[image omitted from this request]' }
-      const store = attachments?.(); if (!store) throw new LlmError('Image attachment service unavailable', 'ATTACHMENT_UNAVAILABLE')
+      const store = attachments?.(); if (!store) throw llmError('Image attachment service unavailable', 'ATTACHMENT_UNAVAILABLE')
       const { requestImageDimensions } = await import('@deepseek-ai/dsh-attachment')
       const image = await store.readImageRequest(block.attachment, { ...requestImageDimensions(block.attachment.width, block.attachment.height, 4_194_304), maxBytes: 1024 * 1024 }, options.signal)
       imageBytes += Math.ceil(image.bytes / 3) * 4
-      if (imageBytes > 20 * 1024 * 1024) throw new LlmError('Image request exceeds 20 MiB', 'IMAGE_OFFLOAD_REQUIRED', { offloadImages: 1 })
+      if (imageBytes > 20 * 1024 * 1024) throw llmError('Image request exceeds 20 MiB', 'IMAGE_OFFLOAD_REQUIRED', { offloadImages: 1 })
       return { type: 'file' as const, mediaType: image.mediaType, data: { type: 'data' as const, data: image.data } }
     }
     for (const message of projection.messages) {
@@ -93,7 +94,7 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
       if (message.role === 'tool') {
         if (recoveredCalls.has(message.toolCallId)) continue
         const toolName = names.get(message.toolCallId)
-        if (!toolName) throw new LlmError('Stored tool result has no matching call', 'INVALID_REPLAY_STATE')
+        if (!toolName) throw llmError('Stored tool result has no matching call', 'INVALID_REPLAY_STATE')
         const parts = []
         for (const block of message.content) {
           if (block.type === 'text') parts.push({ type: 'text' as const, text: block.text })
@@ -123,17 +124,17 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
           // Foreign pi Responses ids contain an opaque item suffix. Give the
           // call/result pair a portable id without restoring that foreign item.
           if (replay.foreign && model.protocol === 'responses' && block.id.includes('|')) callIds.set(block.id, `dsh_${createHash('sha256').update(block.id).digest('hex').slice(0, 48)}`)
-          if (model.protocol === 'responses' && block.id.includes('|') && !callIds.has(block.id)) throw new LlmError('Cannot restore legacy Responses tool call pairing', 'INVALID_REPLAY_STATE')
-          if (names.has(block.id)) throw new LlmError('Duplicate stored tool call id', 'INVALID_REPLAY_STATE')
+          if (model.protocol === 'responses' && block.id.includes('|') && !callIds.has(block.id)) throw llmError('Cannot restore legacy Responses tool call pairing', 'INVALID_REPLAY_STATE')
+          if (names.has(block.id)) throw llmError('Duplicate stored tool call id', 'INVALID_REPLAY_STATE')
           const wireId = callIds.get(block.id) ?? block.id
-          if (wireIds.has(wireId)) throw new LlmError('Duplicate wire tool call id', 'INVALID_REPLAY_STATE')
+          if (wireIds.has(wireId)) throw llmError('Duplicate wire tool call id', 'INVALID_REPLAY_STATE')
           wireIds.add(wireId)
-          if (model.protocol === 'google' && model.reasoning && !providerOptions?.google?.thoughtSignature && !message.content.slice(0, index).some(part => part.type === 'tool-call')) throw new LlmError('Cannot replay Google tool call without its verified thought signature', 'INVALID_REPLAY_STATE')
+          if (model.protocol === 'google' && model.reasoning && !providerOptions?.google?.thoughtSignature && !message.content.slice(0, index).some(part => part.type === 'tool-call')) throw llmError('Cannot replay Google tool call without its verified thought signature', 'INVALID_REPLAY_STATE')
           names.set(block.id, block.name); let input: unknown
-          try { input = JSON.parse(block.arguments) } catch { throw new LlmError('Stored tool arguments are not valid JSON', 'INVALID_REPLAY_STATE') }
+          try { input = JSON.parse(block.arguments) } catch { throw llmError('Stored tool arguments are not valid JSON', 'INVALID_REPLAY_STATE') }
           content.push({ type: 'tool-call', toolCallId: wireId, toolName: block.name, input, ...(providerOptions ? {providerOptions} : {}) })
         } else if (block.type === 'image') {
-          if (message.role === 'assistant') throw new LlmError('Structured assistant image output is unsupported', 'UNSUPPORTED_CONTENT')
+          if (message.role === 'assistant') throw llmError('Structured assistant image output is unsupported', 'UNSUPPORTED_CONTENT')
           content.push(await imagePart(block))
         }
       }

@@ -1,3 +1,5 @@
+import { ownedExplanationCalls } from '../explanation-provenance.js'
+import { auxiliaryDatabase } from '../auxiliary-database.js'
 import { clarificationClaims } from '../clarification-claims.js'
 import { observeVerificationContinuation, acceptsVerificationContinuation, continueVerification, isVerificationContinuation } from '../verification-continuation.js'
 import { noteScopedMemory } from '../memory-sidebar.js'
@@ -1012,7 +1014,7 @@ export async function mountCore(
     }
     pruneDshMemorySurface(current.agent.session, allowed)
     const retired = await runtime.withDatabase((db) =>
-      retiredExplanationCalls(db, current.agent.session.id),
+      retiredExplanationCalls(db, current.agent.session),
     )
     pruneExplainedMemorySurface(current.agent.session, retired)
     result = {
@@ -2094,7 +2096,15 @@ export async function mountCore(
                 current.turn === memoryFence.turn &&
                 current.task.admitted
               ) {
-                const allowed = await runtime.withDatabase((db) =>
+                const memorySession = agent.session, memoryTask = current.task
+                const currentMemorySource = () => agent.session === memorySession && active.get(memorySession.id) === current && current.task === memoryTask
+                const assertMemorySource = () => {
+                  lifecycle.signal.throwIfAborted()
+                  if (!currentMemorySource()) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+                }
+                try {
+                  if (!memoryFence.withoutMemory) {
+                const allowed = await auxiliaryDatabase(runtime,(db) =>
                   currentContextMemory(
                     db,
                     current.task.workspace,
@@ -2102,12 +2112,23 @@ export async function mountCore(
                     undefined,
                     current.task.context ?? undefined,
                   ),
-                )
+                  () => !lifecycle.signal.aborted && currentMemorySource(), lifecycle.signal)
+                assertMemorySource()
                 pruneDshMemorySurface(agent.session, allowed)
-                const retired = await runtime.withDatabase((db) =>
-                  retiredExplanationCalls(db, agent.session.id),
+                const retired = await auxiliaryDatabase(runtime,(db) =>
+                  retiredExplanationCalls(db, agent.session),
+                  () => !lifecycle.signal.aborted && currentMemorySource(), lifecycle.signal
                 )
+                assertMemorySource()
                 pruneExplainedMemorySurface(agent.session, retired)
+                  }
+                } catch (error) {
+                  assertMemorySource()
+                  if (error instanceof KiokukoError && error.code === 'CONFLICT') throw error
+                  memoryFence.omitMemory()
+                  pruneDshMemorySurface(agent.session, new Map())
+                  pruneExplainedMemorySurface(agent.session, ownedExplanationCalls(agent.session))
+                }
               } else await demand?.beforeRequest(agent)
               if (!autoRoute || !binding) return
               const pendingManual = manualChanges.get(autoRoute.sessionId)
@@ -2140,8 +2161,22 @@ export async function mountCore(
         const fence = agent.ctx.on(
           'llm/stream',
           (request: any, next: () => AsyncIterable<unknown>) =>
-            memoryFence.stream(async function validateMemory(): Promise<void | MemoryDispatchGuard> {
-              const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory)
+            memoryFence.stream(async function validateMemory(recoverySignal?: AbortSignal): Promise<void | MemoryDispatchGuard> {
+              let validateOwner = () => { request.signal?.throwIfAborted() }
+              const database = async <T,>(operation: (db: import('../../db/adapter.js').SqliteDatabase) => T) => {
+                const signal: AbortSignal = recoverySignal ?? request.signal
+                try { return await auxiliaryDatabase(runtime, db => { validateOwner(); return operation(db) }, () => !signal.aborted, signal) }
+                catch (error) {
+                  request.signal?.throwIfAborted()
+                  if (error instanceof KiokukoError && error.code === 'CONFLICT') throw error
+                  validateOwner()
+                  memoryFence.omitMemory()
+                  pruneDshMemorySurface(agent.session, new Map())
+                  pruneExplainedMemorySurface(agent.session, ownedExplanationCalls(agent.session))
+                  throw new MemorySnapshotStale()
+                }
+              }
+              const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory, recoverySignal)
               const current = active.get(agent.session.id)
               if (
                 !demand?.pending(agent) &&
@@ -2153,6 +2188,7 @@ export async function mountCore(
               ) {
                 const session = agent.session, task = current.task
                 const assertCurrent = () => {
+                  recoverySignal?.throwIfAborted()
                   if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
                   if (agent.session !== session || active.get(session.id) !== current || current.turn !== memoryFence.turn)
                     throw new KiokukoError('CONFLICT', 'memory_owner_changed')
@@ -2170,7 +2206,14 @@ export async function mountCore(
                   },
                   'execution',
                 )
-                const readMemory = await runtime.withDatabase((db) => () =>
+                validateOwner = assertCurrent
+                assertCurrent()
+                if (memoryFence.withoutMemory) {
+                  if (filterRequestMemory(request.messages, new Map()).length !== request.messages.length
+                    || JSON.stringify(filterExplainedMemory(request.messages, ownedExplanationCalls(session))) !== JSON.stringify(request.messages)) throw new MemorySnapshotStale()
+                  return {check: assertCurrent, rebuild: validateMemory}
+                }
+                const readMemory = await database((db) => () =>
                   currentContextMemory(
                     db,
                     current.task.workspace,
@@ -2190,7 +2233,7 @@ export async function mountCore(
                   )
                   current.task = { ...current.task, corrections: receipt }
                   try {
-                    await runtime.withDatabase((db) =>
+                    await database((db) =>
                       recordCorrectionObservation(db, receipt),
                     )
                   } catch {
@@ -2198,8 +2241,8 @@ export async function mountCore(
                       request.signal.throwIfAborted()
                   }
                 }
-                const readRetired = await runtime.withDatabase((db) => () =>
-                  retiredExplanationCalls(db, session.id),
+                const readRetired = await database((db) => () =>
+                  retiredExplanationCalls(db, session),
                 )
                 const retired = readRetired()
                 assertCurrent()
@@ -2214,10 +2257,7 @@ export async function mountCore(
                   pruneExplainedMemorySurface(agent.session, retired)
                   if (current.memoryRebuildAttempts > 0)
                     throw new MemorySnapshotStale()
-                  const requestSignal =
-                    request.signal instanceof AbortSignal
-                      ? request.signal
-                      : lifecycle.signal
+                  const requestSignal = recoverySignal ?? (request.signal instanceof AbortSignal ? request.signal : lifecycle.signal)
                   const refreshed = await tasks.refresh(
                     current.task,
                     current.taskText,
@@ -2274,7 +2314,7 @@ export async function mountCore(
                   current.task = { ...current.task, ...refreshed }
                   current.contextDelivered = false
                   current.memoryRebuildAttempts++
-                  const refreshedAllowed = await runtime.withDatabase(db => currentContextMemory(db,
+                  const refreshedAllowed = await database(db => currentContextMemory(db,
                     current.task.workspace, current.task.context?.items ?? [], undefined, current.task.context ?? undefined))
                   requestSignal.throwIfAborted()
                   assertCurrent()

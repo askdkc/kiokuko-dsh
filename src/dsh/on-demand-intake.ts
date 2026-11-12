@@ -548,13 +548,17 @@ export class OnDemandIntake {
       && this.#turns.get(state.input.agent.session?.id??'')===state && state.status!=='stale'
       && (state.status!=='closed'||state.recoveryAfterFinish===true)
   }
-  private memoryCheck<T>(state:Turn,operation:(input:DemandInput)=>Promise<T>):Promise<T> {
-    const signal=AbortSignal.any([state.input.signal,AbortSignal.timeout(1000)])
+  private memoryCheck<T>(state:Turn,operation:(input:DemandInput)=>Promise<T>, budgetSignal?:AbortSignal):Promise<T> {
+    const signal=AbortSignal.any([state.input.signal,AbortSignal.timeout(1000),...(budgetSignal ? [budgetSignal] : [])])
     return abortable(operation({...state.input,signal}),signal)
   }
-  private async deferMemory(state:Turn):Promise<void> {
+  private async deferMemory(state:Turn, budgetSignal?:AbortSignal):Promise<void> {
     this.assertCurrent(state)
-    await this.host.validate(state.input)
+    const input = budgetSignal ? {...state.input, signal: AbortSignal.any([state.input.signal, budgetSignal])} : state.input
+    input.signal.throwIfAborted()
+    await this.host.validate(input)
+    input.signal.throwIfAborted()
+    this.assertCurrent(state)
     state.memoryDeferred=true;state.answerContextReady=false
     // A rebuilt request replays the native surface verbatim, so quarantined
     // memory must leave that surface or the single native retry never converges.
@@ -2309,9 +2313,11 @@ export class OnDemandIntake {
     request: {
       sessionId?: string
       purpose?: string
+      signal?: AbortSignal
       messages?: readonly unknown[]
     },
     omitMemory = false,
+    budgetSignal?: AbortSignal,
   ): Promise<void | MemoryDispatchGuard> {
     if (request.sessionId !== agent.session?.id || request.purpose === 'compaction') return
     const state = agent.session && this.#turns.get(agent.session.id)
@@ -2338,10 +2344,10 @@ export class OnDemandIntake {
         request,
         this.ownerIdentity(state),
         omitMemory,
-      )??Promise.resolve()).catch(async error => {
+      )??Promise.resolve(), budgetSignal).catch(async error => {
         state.input.signal.throwIfAborted()
         if (error instanceof MemorySnapshotStale || error instanceof MemoryOwnerChanged) throw error
-        await this.deferMemory(state)
+        await this.deferMemory(state, budgetSignal)
         requireRebuild()
       })
     }

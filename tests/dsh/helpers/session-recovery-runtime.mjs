@@ -57,3 +57,20 @@ if (process.argv[2] === '--crash') {
   await h.ctx.sessions.flush(session)
   process.exit(73)
 }
+if (process.argv[2] === '--legacy-crash') {
+  const root = process.argv[3], h = await recoveryRuntime(root)
+  const { retireLegacyRuntimeContexts } = await import('../../../src/dsh/harness/runtime-context.ts')
+  const { agent } = await h.ctx.agents.create({sessionId:'legacy-crashed',meta:{cwd:root},agentOptions:{provider:'fixture',model:'fixture'}})
+  const session=agent.session
+  session.append('turn/start',{turn:1})
+  for(let i=0;i<50;i++) {
+    for(const [kind,text] of [['runtime-context',`state ${i}`],['user',`human ${i}`]]) session.append('user/message',h.llm.createUserMessage({source:{kind},content:[{type:'text',text}]}),{surfaceOp:'append'})
+  }
+  let writes=0
+  try { retireLegacyRuntimeContexts({surface:session.surface,eventAt:session.eventAt.bind(session),append(...args){
+    if(writes++===17)throw new Error('injected interruption')
+    return session.append(...args)
+  }}) } catch(error) {if(error.message!=='injected interruption')throw error}
+  await h.ctx.sessions.flush(session)
+  process.exit(73)
+}

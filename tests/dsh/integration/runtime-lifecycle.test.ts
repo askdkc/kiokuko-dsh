@@ -175,3 +175,38 @@ test('runtime HMR-style dispose is idempotent and does not retain a live handle'
   assert.equal(runtime.activeAgentCount, 0)
   await assert.rejects(runtime.start(), /runtime is closed/u)
 })
+
+test('core close cancels unstarted database callbacks and rejects new work', async () => {
+  const { DshCoreRuntime } = await import('../../../src/dsh/core-runtime.js')
+  const fixture = await makeRegisteredDatabase()
+  let release!: () => void, writes = 0
+  const held = new Promise<void>(resolve => { release = resolve })
+  const runtime = new DshCoreRuntime({repositoryRoot:fixture.root,databasePath:fixture.databasePath,
+    initializeDatabase:()=>held})
+  const work = runtime.withDatabase(() => { writes++ })
+  const rejected = assert.rejects(work)
+  const closing = runtime.close()
+  await rejected
+  await assert.rejects(runtime.withDatabase(() => { writes++ }))
+  release()
+  try { await closing; assert.equal(writes,0) }
+  finally { release(); await runtime.close(); await rm(fixture.root,{recursive:true,force:true}) }
+})
+
+test('core close waits for actual executing transactions before closing the shared database', async () => {
+  const { DshCoreRuntime } = await import('../../../src/dsh/core-runtime.js')
+  const fixture = await makeRegisteredDatabase()
+  const runtime = new DshCoreRuntime({repositoryRoot:fixture.root,databasePath:fixture.databasePath})
+  let release!: () => void, started!: () => void, closed = false
+  const held = new Promise<void>(resolve=>{release=resolve}), entered=new Promise<void>(resolve=>{started=resolve})
+  try {
+    const work=runtime.withDatabase(async db=>{started();await held;db.exec('CREATE TABLE close_order_test(value TEXT)');return db.prepare("SELECT 1 AS n").get()!.n})
+    await entered
+    const closing=runtime.close().then(()=>{closed=true})
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.equal(closed,false)
+    release();assert.equal(await work,1);await closing
+    const check=openConnection(fixture.databasePath)
+    try {assert.ok(check.prepare("SELECT name FROM sqlite_master WHERE name='close_order_test'").get())}finally{check.close()}
+  } finally {release();await runtime.close();await rm(fixture.root,{recursive:true,force:true})}
+})

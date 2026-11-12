@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+import { explanationProof } from './explanation-provenance.js';
 import { detectRepositoryRoot } from "../repository/detect-root.js";
 import {
   readRepositoryLearning,
@@ -197,6 +199,7 @@ export function mountMemoryApplication(
   ctx: SurfaceContext,
   host: ApplicationHost,
 ): () => void {
+  const explanationRegistration = randomUUID();
   const pending = new WeakMap<
     object,
     { identity: MemoryApplicationIdentity; lease: TaskLease }
@@ -527,9 +530,11 @@ export function mountMemoryApplication(
       ),
       output: {
         schema: {},
-        render: (_: unknown, value: unknown) => [
-          { type: "text", text: JSON.stringify(value) },
-        ],
+        render: (_: unknown, value: unknown) => {
+          const { kiokukoExplanationProof: _proof, ...explanation } = value as Record<string, unknown>;
+          return [{ type: "text", text: JSON.stringify(explanation) }];
+        },
+        presentationMeta: (_: unknown, value: any) => ({ kiokukoExplanation: { ...value.kiokukoExplanationProof, entryId: value.entryId, revision: value.revision } }),
       },
       execute: async (args: unknown, execution: NativeExecution) => {
         const identity = host.resolve(execution);
@@ -547,7 +552,11 @@ export function mountMemoryApplication(
           .strict()
           .parse(args);
         execution.signal.throwIfAborted();
+        const session = execution.agent?.session;
+        const proof = explanationProof(session, execution.callId, explanationRegistration);
         return host.runtime.withDatabase((db) => {
+          execution.signal.throwIfAborted();
+          if (execution.agent?.session !== session) throw new Error("Native session changed");
           if (host.resolve(execution)?.runId !== identity.runId)
             throw new Error("Native task changed");
           const value = explainMemory(db, {
@@ -563,7 +572,7 @@ export function mountMemoryApplication(
             value.entryId,
             value.revision,
           );
-          return value;
+          return { ...value, kiokukoExplanationProof: proof };
         });
       },
     }),

@@ -1,3 +1,6 @@
+import { ownedExplanationCalls } from '../explanation-provenance.js'
+import { auxiliaryDatabase } from '../auxiliary-database.js'
+import type { CaptureInitialInput } from './session-observation.js'
 import { noteScopedMemory } from '../memory-sidebar.js'
 import { createNativeToolSurface } from '../native-tool-surface.js'
 import type { ToolExposureContext } from '../tool-exposure-diagnostics.js'
@@ -65,7 +68,7 @@ interface RoutingDependencies {
   readonly setSelection: (runId: string, selection: StoredExecutionSelection) => void
   readonly hasSelection: (runId: string) => boolean
   readonly getPolicyState: (runId: string) => DshToolPolicyState | undefined
-  readonly captureInitialInput: (sessionId: string, turn: number, messages: readonly unknown[]) => Promise<void>
+  readonly captureInitialInput: CaptureInitialInput
   readonly prepareTurn: (event: DshPreStepEvent) => Promise<DshIntakeGateResult>
   readonly mapPreStep: (payload: DshNativePreStepPayload) => Promise<DshPreStepEvent>
   readonly currentSession: (sessionId: string) => TurnRecord | undefined
@@ -134,11 +137,28 @@ export function createRouting({
       if (!prepared || !agent.session) return request
       // A unavailable memory catalog degrades to no owned memory, never to a
       // stale snapshot retained by the native session's historical surface.
-      let allowed: ReadonlyMap<string, string> = new Map()
-      allowed = await runtime.withDatabase(db => currentRequestMemory(db, prepared))
-      pruneDshMemorySurface(agent.session, allowed)
-      const retired=await runtime.withDatabase(db=>retiredExplanationCalls(db,agent.session!.id))
-      pruneExplainedMemorySurface(agent.session,retired)
+      const memorySession = agent.session, memoryGeneration = item?.prepareGeneration
+      const currentMemorySource = () => agent.session === memorySession && currentSession(memorySession.id) === item && item?.prepareGeneration === memoryGeneration
+      const assertMemorySource = () => {
+        event.signal?.throwIfAborted()
+        if (!currentMemorySource()) throw new KiokukoError('CONFLICT', 'memory_owner_changed')
+      }
+      try {
+        if (!memoryFence.withoutMemory) {
+          const allowed = await auxiliaryDatabase(runtime, db => currentRequestMemory(db, prepared), () => !event.signal?.aborted && currentMemorySource(), event.signal)
+          assertMemorySource()
+          pruneDshMemorySurface(agent.session, allowed)
+          const retired = await auxiliaryDatabase(runtime, db => retiredExplanationCalls(db, agent.session!), () => !event.signal?.aborted && currentMemorySource(), event.signal)
+          assertMemorySource()
+          pruneExplainedMemorySurface(agent.session, retired)
+        }
+      } catch (error) {
+        assertMemorySource()
+        if (error instanceof KiokukoError && error.code === 'CONFLICT') throw error
+        memoryFence.omitMemory()
+        pruneDshMemorySurface(agent.session, new Map())
+        pruneExplainedMemorySurface(agent.session, ownedExplanationCalls(agent.session))
+      }
       return request
     }, { prepend: true })
     const disposeClaim = onNativeEvent(agent.ctx, 'agent/inbox/claimed', (event: { agent: RoutableAgent; turn: number; message: unknown }) => {
@@ -312,7 +332,9 @@ export function createRouting({
       // DSH claims input before assembly. Persist it before showing any UI so
       // cancellation and restart cannot lose a prompt before the native log append.
       if (agent.session && messages.length) {
-        await captureInitialInput(agent.session.id, turn, messages)
+        const session = agent.session, generation = current?.prepareGeneration
+        await captureInitialInput(session.id, turn, messages, { signal, agent, session,
+          current: () => agents?.get(agent.id) === agent && currentSession(session.id) === current && current?.prepareGeneration === generation })
       }
       let admitted: DshIntakeGateResult | undefined
       try {
@@ -405,12 +427,27 @@ export function createRouting({
         return assembly
       },
     })
-    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async function validateMemory(): Promise<void | MemoryDispatchGuard> {
-      const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory)
+    const disposeMemoryFence = onNativeEvent(agent.ctx, 'llm/stream', (request: any, next: () => AsyncIterable<any>) => memoryFence.stream(async function validateMemory(recoverySignal?: AbortSignal): Promise<void | MemoryDispatchGuard> {
+      let validateOwner = () => { request.signal?.throwIfAborted() }
+      const database = async <T,>(operation: (db: import('../../db/adapter.js').SqliteDatabase) => T) => {
+        const signal: AbortSignal = recoverySignal ?? request.signal
+        try { return await auxiliaryDatabase(runtime, db => { validateOwner(); return operation(db) }, () => !signal.aborted, signal) }
+        catch (error) {
+          request.signal?.throwIfAborted()
+          if (error instanceof KiokukoError && error.code === 'CONFLICT') throw error
+          validateOwner()
+          memoryFence.omitMemory()
+          pruneDshMemorySurface(agent.session!, new Map())
+          pruneExplainedMemorySurface(agent.session!, ownedExplanationCalls(agent.session))
+          throw new MemorySnapshotStale()
+        }
+      }
+      const conversationGuard = await demand?.fence(agent, request, memoryFence.withoutMemory, recoverySignal)
       const item = agent.session ? currentSession(agent.session.id) : undefined
       if (!demand?.pending(agent) && item && item.prepared.memoryOwner?.kind === 'execution' && !item.closed && item.turn === memoryFence.turn && request.sessionId === agent.session?.id && request.purpose !== 'compaction') {
         const session = agent.session, turn = item.turn, generation = item.prepareGeneration
         const assertCurrent = () => {
+          recoverySignal?.throwIfAborted()
           if (request.signal instanceof AbortSignal) request.signal.throwIfAborted()
           if (agent.session !== session || currentSession(item.sessionId) !== item || item.closed || item.turn !== turn || item.prepareGeneration !== generation)
             throw new KiokukoError('CONFLICT', 'memory_owner_changed')
@@ -418,24 +455,31 @@ export function createRouting({
         let allowed: ReadonlyMap<string,string> = new Map()
         if (item.nativeAgent !== agent || item.nativeSession !== agent.session || item.prepared.memoryOwner?.kind !== 'execution') throw new KiokukoError('CONFLICT', 'memory_owner_changed')
         assertMemoryOwner(item.prepared.memoryOwner, { agentId: agent.id, sessionId: item.sessionId, turn: memoryFence.turn, requestDigest: canonicalContentHash(item.task), runId: item.runId }, 'execution')
-        const readMemory = await runtime.withDatabase(db => () => currentRequestMemory(db, item.prepared))
+        validateOwner = assertCurrent
+        assertCurrent()
+        if (memoryFence.withoutMemory) {
+          if (filterRequestMemory(request.messages, new Map()).length !== request.messages.length
+            || JSON.stringify(filterExplainedMemory(request.messages, ownedExplanationCalls(session))) !== JSON.stringify(request.messages)) throw new MemorySnapshotStale()
+          return {check: assertCurrent, rebuild: validateMemory}
+        }
+        const readMemory = await database(db => () => currentRequestMemory(db, item.prepared))
         allowed = readMemory()
         assertCurrent()
         if (memoryFence.withoutMemory) allowed = new Map()
         if(item.prepared.corrections){
           const receipt=observeCorrectionInput(item.prepared.corrections,allowed,request.messages)
           item.prepared={...item.prepared,corrections:receipt}
-          try {await runtime.withDatabase(db=>recordCorrectionObservation(db,receipt))}catch {if(request.signal instanceof AbortSignal)request.signal.throwIfAborted()}
+          try {await database(db=>recordCorrectionObservation(db,receipt))}catch {if(request.signal instanceof AbortSignal)request.signal.throwIfAborted()}
         }
-        const readRetired=await runtime.withDatabase(db=>()=>retiredExplanationCalls(db,session!.id))
+        const readRetired=await database(db=>()=>retiredExplanationCalls(db,session!))
         const retired=readRetired()
         assertCurrent()
         if (JSON.stringify(filterExplainedMemory(request.messages,retired))!==JSON.stringify(request.messages)) {
           pruneExplainedMemorySurface(agent.session!,retired)
           if (item.memoryRebuildAttempts === 0) {
-            await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
+            await refreshMemoryOwner(item, recoverySignal ?? (request.signal instanceof AbortSignal ? request.signal : new AbortController().signal))
             item.memoryRebuildAttempts++
-            const refreshed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+            const refreshed = await database(db => currentRequestMemory(db, item.prepared))
             assertCurrent()
             reconcileDshMemorySurface(agent.session!, refreshed)
           }
@@ -444,9 +488,9 @@ export function createRouting({
         if (filterRequestMemory(request.messages, allowed).length !== request.messages.length) {
           pruneDshMemorySurface(agent.session!, allowed)
           if (item.memoryRebuildAttempts === 0) {
-            await refreshMemoryOwner(item, request.signal instanceof AbortSignal ? request.signal : new AbortController().signal)
+            await refreshMemoryOwner(item, recoverySignal ?? (request.signal instanceof AbortSignal ? request.signal : new AbortController().signal))
             item.memoryRebuildAttempts++
-            const refreshed = await runtime.withDatabase(db => currentRequestMemory(db, item.prepared))
+            const refreshed = await database(db => currentRequestMemory(db, item.prepared))
             assertCurrent()
             reconcileDshMemorySurface(agent.session!, refreshed)
           }

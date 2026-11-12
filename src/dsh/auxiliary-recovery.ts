@@ -1,3 +1,4 @@
+import { auxiliaryDatabase } from './auxiliary-database.js'
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readdir, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -33,17 +34,9 @@ export class AuxiliaryRecovery {
     readonly options:{budgetMs?:number;retryMs?:number;now?:()=>number}={}){}
   private now(){return this.options.now?.()??Date.now()}
   private database<T>(operation:(db:SqliteDatabase)=>T):Promise<T>{
-    const signal=AbortSignal.timeout(250)
-    return abortable(this.runtime.withDatabase(db=>{
-      signal.throwIfAborted()
-      // A JS timer cannot interrupt synchronous SQLite's normal 5s busy wait.
-      // This callback is synchronous; restore the shared connection before
-      // yielding, so native authority transactions retain their own policy.
-      const timeout=Number(db.prepare('PRAGMA busy_timeout').get()!.timeout)
-      db.exec('PRAGMA busy_timeout=25')
-      try{return operation(db)}finally{db.exec(`PRAGMA busy_timeout=${timeout}`)}
-    }),signal)
+    return auxiliaryDatabase(this.runtime, operation, () => !this.stopped)
   }
+
   private receipt(id:string,storage:Receipt['storage'],state:string):Receipt {
     const value:Receipt={id,storage,state,workMayContinue:true,memoryAdopted:false}
     this.receipts.set(id,value);return value

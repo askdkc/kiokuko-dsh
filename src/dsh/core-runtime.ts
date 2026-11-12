@@ -1,3 +1,4 @@
+import { abortable } from './http-json.js'
 import { measureIntakePhase } from './intake-timing.js'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve, dirname, join } from 'node:path'
@@ -103,6 +104,7 @@ export class DshCoreRuntime {
   readonly #agents = new DshAgentStateRegistry()
   #initialization: Promise<RuntimeResources> | undefined
   #resources: RuntimeResources | undefined
+  readonly #databaseAdmission = new AbortController()
   #closing = false
   #closed = false
   #closePromise: Promise<void> | undefined
@@ -194,7 +196,8 @@ export class DshCoreRuntime {
     this.#activeDatabaseOperations += 1
     try {
       return await measureIntakePhase('database', async () => {
-        const resources = await this.#requireResources()
+        const resources = await abortable(this.#requireResources(), this.#databaseAdmission.signal)
+        this.#databaseAdmission.signal.throwIfAborted()
         return await operation(resources.database, resources.embeddingRuntime)
       })
     } finally {
@@ -227,6 +230,7 @@ export class DshCoreRuntime {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise
     this.#closing = true
+    this.#databaseAdmission.abort()
     this.#agents.closeAll()
     this.#closePromise = (async () => {
       await this.auxiliaryRecovery.close()

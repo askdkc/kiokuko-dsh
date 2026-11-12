@@ -946,6 +946,7 @@ export function createDshHostAdapter(
                 session!.id,
                 input.turn,
                 input.messages,
+                { signal: input.signal, agent, session: session!, current: () => agents?.get(agent.id) === agent && sessions?.get(session!.id) === session },
               );
             },
             advance: async (input) => {

@@ -41,3 +41,27 @@ test('a real process crash after an effect resumes without re-executing that unk
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test('partially retired runtime contexts survive process exit and repeated JSONL resume', async () => {
+  const helper = new URL('../helpers/session-recovery-runtime.mjs', import.meta.url)
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'kiokuko-marker-recovery-')))
+  const child = spawnSync(process.execPath, ['--import', 'tsx', fileURLToPath(helper), '--legacy-crash', root], { encoding: 'utf8', timeout: 15000 })
+  assert.equal(child.status,73,child.stdout+child.stderr)
+  const { recoveryRuntime } = await import(helper.href)
+  try {
+    for(let round=0;round<2;round++) {
+      const h=await recoveryRuntime(root)
+      try {
+        const {agent}=await h.ctx.agents.resume({resumeSessionId:'legacy-crashed'})
+        const messages=agent.session.deriveMessages()
+        assert.equal(messages.filter((m:any)=>m.source?.kind==='runtime-context').length,1)
+        assert.equal(messages.filter((m:any)=>m.source?.kind==='user').length,50)
+        const events=agent.session.snapshotEvents()
+        assert.equal(events.filter((e:any)=>e.type==='user/message'&&e.data.source.kind==='runtime-context').length,50)
+        const {retireLegacyRuntimeContexts}=await import('../../../src/dsh/harness/runtime-context.js')
+        const seq=agent.session.seq;retireLegacyRuntimeContexts(agent.session);assert.equal(agent.session.seq,seq)
+        await h.ctx.sessions.flush(agent.session)
+      }finally{await h.ctx.fiber.dispose()}
+    }
+  } finally {rmSync(root,{recursive:true,force:true})}
+})

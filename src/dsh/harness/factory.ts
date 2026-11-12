@@ -1,3 +1,4 @@
+import { llmError } from '../llm-error.js'
 import { projectRuntimeContextMessages, retireLegacyRuntimeContexts } from './runtime-context.js'
 import type { Context } from '@deepseek-ai/cordis'
 import { agentEvents, assembleContextFor, type Agent, type AgentFactory, type AgentHandle, type AgentOptions,
@@ -226,7 +227,7 @@ export class KiokukoHarnessAgent implements Agent {
             await this.dispatch.serial('agent/turn-stopping',{turn:this.turn,signal});signal.throwIfAborted()}
           again=again||this.inbox.nextStep.length>0
           if(again&&this.options.maxSteps!==undefined&&this.step>=this.options.maxSteps){
-            throw new LlmError(`Kiokuko configured step budget reached (maxSteps=${this.options.maxSteps}); inspect the recorded work before continuing. Remove or raise the harness maxSteps setting for longer turns.`, 'KIOKUKO_STEP_BUDGET_REACHED')
+            throw llmError(`Kiokuko configured step budget reached (maxSteps=${this.options.maxSteps}); inspect the recorded work before continuing. Remove or raise the harness maxSteps setting for longer turns.`, 'KIOKUKO_STEP_BUDGET_REACHED')
           }
           } finally {toolSet?.dispose()}
         }
@@ -237,7 +238,7 @@ export class KiokukoHarnessAgent implements Agent {
         this.audit('turn',signal.aborted?'cancel':'error',undefined,signal.aborted?undefined:failure)
         if(!signal.aborted){
           const message=memoryFailureDiagnostic(error).message
-          this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:new LlmError(message,failure.code,failure)})
+          this.dispatch.emit('agent/error',{turn:this.turn,step:this.step,error:llmError(message,failure.code,failure)})
         }
       } finally { this.session.append('turn/end',{turn:this.turn,reason});this.audit('turn','result') }
       if(blocked||signal.aborted&&!this.wake)break
@@ -310,7 +311,7 @@ export class KiokukoHarnessAgent implements Agent {
       if(finish.kind==='error'||finish.kind==='aborted') {
         // Classify only failed model output, before any tool effect is admitted.
         const failure=finish.kind==='error'?normalizeModelStreamFailure(finish.failure):finish.failure
-        throw new LlmError(memoryFailureDiagnostic(failure).message,failure.code,failure)
+        throw llmError(memoryFailureDiagnostic(failure).message,failure.code,failure)
       }
       const calls=content.filter((block):block is ToolCallBlock=>block.type==='tool-call')
       // Some providers put unfinished reasoning in text blocks even with a
@@ -321,7 +322,7 @@ export class KiokukoHarnessAgent implements Agent {
           const message=finish.kind==='max-tokens'
             ? 'The model reached its output limit before answering.'
             : 'The model stopped before finishing its reasoning or returning an answer.'
-          throw new LlmError(message,'INCOMPLETE_ASSISTANT_RESPONSE')
+          throw llmError(message,'INCOMPLETE_ASSISTANT_RESPONSE')
         }
       }
       const event=content.length?this.session.append('assistant/message',{turn:this.turn,step:this.step,message:assembler.message({provider:prepared.config.provider,model:prepared.config.model,...(assembler.replayState?{replayState:assembler.replayState}:{})}),stream,...(assembler.usage?{usage:assembler.usage}:{})},{surfaceOp:'append'}):this.session.append('assistant/attempt',{turn:this.turn,step:this.step,stream})

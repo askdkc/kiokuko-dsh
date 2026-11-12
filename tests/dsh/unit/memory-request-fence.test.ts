@@ -93,3 +93,22 @@ test('native Stop during validation or omission prevents dispatch and further re
     }
   }
 })
+
+test('validation and rebuild share one deadline, including native retries', async () => {
+  const fence = new MemoryRequestFence(70), controller = new AbortController()
+  fence.begin({turn:1,step:1})
+  let dispatched = 0
+  const keepalive = setTimeout(() => {}, 1000)
+  const start = performance.now()
+  const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+  try {
+    const chunks: any[] = []
+    for await (const chunk of fence.stream(async () => { await delay(20); return {check(){throw new MemorySnapshotStale()},async rebuild(){await delay(20)}} }, async function* () { dispatched++; yield 1 }, undefined, controller.signal)) chunks.push(chunk)
+    assert.deepEqual(fence.retry({turn:1,step:1,failure:chunks[0].reason.failure,signal:controller.signal}),{kind:'retry'})
+    await assert.rejects(async () => {
+      for await (const _ of fence.stream(async () => { await delay(60) }, async function* () { dispatched++; yield 1 }, undefined, controller.signal)) {}
+    })
+    assert.ok(performance.now() - start < 160)
+    assert.equal(dispatched,0)
+  } finally { clearTimeout(keepalive) }
+})

@@ -1,3 +1,4 @@
+import { ownedExplanationCalls } from './explanation-provenance.js'
 import { requestTask } from './request-input.js'
 import { noteScopedMemory } from './memory-sidebar.js'
 import { MemorySnapshotStale, type MemoryDispatchGuard } from './memory-request-fence.js'
@@ -104,7 +105,7 @@ export class DshAnswerContext {
         const fingerprint = items.some(item => item.origin !== 'project')
           ? resolveProjectFingerprint(db, currentProject, captureProjectManifestSnapshot(currentProject), { readOnly: true }) : undefined
         return { allowed: state.owner.kind === 'none' ? new Map<string, string>() : currentContextMemory(db, state.project.workspace, items, fingerprint, state.context ?? undefined),
-          retired: retiredExplanationCalls(db, session.id) }
+          retired: retiredExplanationCalls(db, session) }
       }
       return { ...read(), read }
     })
@@ -226,13 +227,7 @@ export class DshAnswerContext {
     if (session && this.#contexts.get(session.id)?.agent === agent) this.#contexts.delete(session.id)
     if (!session) return
     pruneDshMemorySurface(session, new Map())
-    // Quarantine every owned explanation conservatively without consulting the
-    // unavailable database. Ordinary execution evidence remains on the surface.
-    const calls = new Set<string>()
-    for (const event of session.snapshotEvents?.() ?? []) {
-      const data = event.data as { name?: string; callId?: string }
-      if (event.type === 'tool/call' && data.name === 'memory_explain' && typeof data.callId === 'string') calls.add(data.callId)
-    }
+    const calls = ownedExplanationCalls(session)
     pruneExplainedMemorySurface(session, calls, 'Kiokuko memory validation is unavailable; its earlier explanation is excluded from this request.')
   }
 }

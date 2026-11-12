@@ -1,3 +1,4 @@
+import { isRuntimeContextMarker } from './harness/runtime-context.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { findSecret } from '../memory/secrets.js'
@@ -21,6 +22,8 @@ export interface EfficiencyBinding {
   readonly task: EfficiencyTask
 }
 export interface RequestSize {
+  readonly runtimeContextMarkerCopies?: number
+  readonly runtimeContextMarkerBytes?: number
   readonly runtimeContextCopies?: number
   readonly runtimeContextBytes?: number
   readonly systemBytes: number
@@ -60,7 +63,9 @@ export function requestSize(request: Record<string, unknown>): RequestSize {
     const message = efficiencyRecord(value)
     return message.role === 'user' && efficiencyRecord(message.source).kind === 'runtime-context'
   })
+  const markers = (Array.isArray(request.messages) ? request.messages : []).filter(isRuntimeContextMarker)
   return Object.freeze({ systemBytes, toolsBytes, messagesBytes,
+    runtimeContextMarkerCopies: markers.length, runtimeContextMarkerBytes: markers.reduce((sum, value) => sum + bytes(value), 0),
     runtimeContextCopies: contexts.length, runtimeContextBytes: contexts.reduce((sum, value) => sum + bytes(value), 0),
     totalBytes: bytes({ system: request.system ?? '', tools: request.tools ?? [], messages: request.messages ?? [] }) })
 }
