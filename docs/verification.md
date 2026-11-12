@@ -15,24 +15,31 @@ Native fixture preparation is deferred until a selected, executable check declar
 root dependencies (`npm ci`), not the DSH runtime fixture. Missing or invalid native
 fixtures remain `prerequisite-missing` for checks that require them.
 
-CI schedules **Linux x64** and **macOS ARM64**. Full selection has 21 jobs:
-selection, two native micro-judge builds, 17 verification lanes and the aggregate.
+CI schedules **Linux x64** and **macOS ARM64**. Full selection has 25 jobs:
+selection, two native micro-judge builds, two shared DSH builds, 19 verification
+lanes and the aggregate. The two native Lisp shards run in separate jobs on each
+OS, retaining the same test inventory.
 Every CI run resolves the latest official DSH `master` before selecting coverage.
 That SHA is an independent input to the plan and its digest: repository-only
 diffs, including prose-only changes, cannot reduce GitHub compatibility coverage.
-All lanes build that run's resolved SHA; the next run resolves upstream again.
+DSH is built once per selected OS/architecture at that SHA. Consumers install
+the frozen dependency graph, then restore the shared compiled tree; node_modules
+is never transferred between runners. The receipt binds the selected plan,
+upstream SHA, OS/architecture, Node/ABI, package manager, lockfile and archive
+hash. A mismatch fails before restoration. The next run resolves upstream again.
 Resolution failure fails the run rather than falling back to a locked fixture.
 A daily GitHub run at 03:17 UTC also checks upstream-only changes. Depot keeps its
 Linux-only coverage, but likewise resolves latest DSH and never skips it for prose.
 Linux ARM64 is not scheduled or claimed as CI coverage. Its runtime/build support
 remains in the native target registry; this workflow does not produce its binary.
 
-The required `verify` aggregate consumes `select`, `micro-judge-native` and `checks`.
+The required `verify` aggregate consumes `select`, `micro-judge-native`, `dsh-build` and `checks`.
 Every selected lane and native artifact must be present, successful, fresh and
 bound to the same selected plan and source. Failure, cancellation, a missing
 selected report, an extra target or an altered artifact fails acceptance. Local
 diff-only plans without an upstream input may skip prose-only work; CI may not. The
-remaining Linux x64/macOS ARM64 check inventories and their deadlines are unchanged.
+Linux x64/macOS ARM64 check inventories and test deadlines are unchanged.
+Consumer job setup allowances also remain unchanged; compilation now runs in `dsh-build`.
 The CI review bundle contains exactly its selected targets; standalone native
 bundle verification still requires the complete supported-target inventory.
 
@@ -103,12 +110,12 @@ Ordinary npm/pnpm preparation still builds, including in CI without this explici
 flag, and build failure remains a failed prepare. The verifier's source/build
 digests, packed-artifact receipts and stale-source rejection remain mandatory.
 
-For full coverage, Linux ARM64 removal changes the planned job count from 27 to
-21 and official DSH fixture builds from 19 to 15. Deferring prepare removes one
-redundant plugin build in each of the remaining 17 verification lanes. This is an
-execution-plan comparison, not a measured hosted-CI duration improvement. Official
-DSH still builds separately for each selected fixture lane; no OS/architecture,
-Node/ABI or native dependency is reused across platforms.
+Compared with the preceding 21-job plan, the full plan now has 25 jobs: two shared
+DSH producers and two additional Lisp lanes. Official DSH compilation decreases
+from 15 fixture-local builds to two platform builds. Deferring prepare continues
+to avoid a redundant plugin build in each of the 19 verification lanes. These are
+execution-plan counts, not measured hosted-CI duration improvements. Builds are
+never reused across OS/architecture or Node/ABI boundaries.
 
 
 - `skill-prompts` is covered by `native-unit`: `tests/dsh/unit/skill-compiler.test.ts`, `tests/dsh/unit/skill-snapshot.test.ts`.

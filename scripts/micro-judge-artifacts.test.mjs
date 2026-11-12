@@ -14,7 +14,7 @@ test('selected native consumers merge CI targets while preserving the supported 
   const full=createCiPlan(c,{full:true},{});assert.deepEqual(full.nativeTargets.map(t=>t.key).sort(),['darwin-arm64','linux-x64']);
   const native=workflow.jobs['micro-judge-native'];assert.equal(native.strategy.matrix.include,'${{ fromJSON(needs.select.outputs.native) }}');
   assert.ok(native.steps.some(s=>s.run?.includes('build-verify-micro-judge.mjs')&&s.run.includes('--ci-plan=')));
-  const job=workflow.jobs.checks;assert.deepEqual(job.needs,['select','micro-judge-native']);const merge=job.steps.findIndex(s=>s.run?.includes('merge-micro-judge-artifacts.mjs'));assert.ok(merge>=0&&merge<job.steps.findIndex(s=>s.run==='npm ci'));
+  const job=workflow.jobs.checks;assert.deepEqual(job.needs,['select','micro-judge-native','dsh-build']);const merge=job.steps.findIndex(s=>s.run?.includes('merge-micro-judge-artifacts.mjs'));assert.ok(merge>=0&&merge<job.steps.findIndex(s=>s.run==='npm ci'));
   assert.ok(workflow.jobs.verify.needs.includes('micro-judge-native'));assert.ok(workflow.jobs.verify.steps.some(s=>s.run?.includes('merge-micro-judge-artifacts.mjs')));
   assert.ok(depotWorkflow.jobs.select.steps.some(s=>s.run?.includes('ci-plan.mjs')&&s.run.includes('--ci-platform=linux-x64')));
 });

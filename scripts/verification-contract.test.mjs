@@ -338,7 +338,7 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   const actual=JSON.parse(readFileSync(new URL('./verification.json',import.meta.url)));
   const text=readFileSync(new URL('../.github/workflows/ci.yml',import.meta.url),'utf8');
   const workflow=createRequire(import.meta.url)('yaml').parse(text),jobs=workflow.jobs;
-  assert.deepEqual(Object.keys(jobs),['select','micro-judge-native','checks','verify']);
+  assert.deepEqual(Object.keys(jobs),['select','micro-judge-native','dsh-build','checks','verify']);
   assert.ok(jobs.select.steps.some(s=>s.run?.includes('scripts/ci-plan.mjs')));
   assert.equal(jobs.select.steps.find(s=>s.id==='plan').env?.KIOKUKO_EXPECTED_DSH_SHA,'${{ steps.dsh.outputs.sha }}');
   assert.ok(workflow.on.schedule?.length,'upstream-only changes must receive regular compatibility coverage');
@@ -365,17 +365,25 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
   assert.ok(fixture.dependencies['@deepseek-ai/dsh']);
   assert.deepEqual(lock.packages[''].dependencies,fixture.dependencies);assert.equal(lock.packages['node_modules/@askdkc/dsh-cli'].version,'0.14.11');assert.ok(lock.packages['node_modules/@deepseek-ai/cordis-plugin-group'].version);
   assert.equal(jobs.select.steps.find(s=>s.id==='dsh').run,'node scripts/resolve-dsh-upstream.mjs');
-  const checkout=jobs.checks.steps.find(s=>s.with?.repository==='deepseek-ai/deepseek-harness');
+  const checkout=jobs['dsh-build'].steps.find(s=>s.with?.repository==='deepseek-ai/deepseek-harness');
   assert.equal(checkout.with.ref,'${{ needs.select.outputs.dsh_sha }}');
-  const upstreamBuild=jobs.checks.steps.find(s=>s.name==='Build current official DSH from its frozen dependency graph');
+  const upstreamBuild=jobs['dsh-build'].steps.find(s=>s.name==='Build current official DSH from its frozen dependency graph');
   assert.match(upstreamBuild.run,/pnpm install --frozen-lockfile/);assert.match(upstreamBuild.run,/pnpm run build:artifacts/);
   assert.ok(jobs.checks.steps.some(s=>s.run?.includes('scripts/stage-dsh-upstream.mjs')));
+  assert.deepEqual(jobs['dsh-build'].needs,'select','DSH build runs alongside native micro-judge');
+  assert.ok(jobs.checks.needs.includes('dsh-build'));
+  assert.ok(jobs.checks.if.includes("needs.dsh-build.result == 'success'"));
+  assert.ok(jobs['dsh-build'].steps.some(s=>s.run?.includes('dsh-build-artifact.mjs pack')));
+  assert.ok(jobs.checks.steps.some(s=>s.run?.includes('dsh-build-artifact.mjs restore')));
+  assert.ok(!jobs.checks.steps.some(s=>s.run?.includes('build:artifacts')),'consumer never recompiles official DSH');
+  assert.deepEqual(depot.jobs['dsh-build'],jobs['dsh-build']);
+  assert.deepEqual(depot.jobs.verify.needs,jobs.verify.needs);
   assert.equal(jobs.checks.steps.find(s=>s.run?.includes('scripts/verify.mjs --ci-plan')).env.KIOKUKO_EXPECTED_DSH_SHA,'${{ needs.select.outputs.dsh_sha }}');
   const cli=actual.checks.find(c=>c.id==='dsh-cli-profile');assert.equal(cli.argv[1],'scripts/verify-cli-profile.mjs');assert.equal(cli.argv.at(-1),'source');
   assert.deepEqual(cli.completionEvidence,{profile:'dsh-cli',interactive:true,cliVersion:'0.14.11',sourceEntry:true});
   assert.ok(actual.checks.find(c=>c.id==='verification-contract').profiles.includes('semantic'));
-  const complete=createCiPlan(actual,{full:true},{});assert.equal(complete.jobCount,21);assert.equal(complete.lanes.length,17);
-  const ordinary=createCiPlan(actual,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},{});assert.equal(ordinary.jobCount,5);assert.equal(ordinary.lanes.length,2);
+  const complete=createCiPlan(actual,{full:true},{});assert.equal(complete.jobCount,25);assert.equal(complete.lanes.length,19);
+  const ordinary=createCiPlan(actual,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},{});assert.equal(ordinary.jobCount,8);assert.equal(ordinary.lanes.length,4);
   const aggregate=jobs.verify;assert.deepEqual(aggregate.needs,requiredJobs);assert.equal(aggregate.if,'always()');
   const gate=aggregate.steps.find(s=>s.run?.includes('scripts/verify-ci-results.mjs'));assert.equal(gate.env.NEEDS_JSON,'${{ toJSON(needs) }}');assert.ok(gate.run.includes('--ci-plan'));
   assert.ok(aggregate.steps.some(s=>s.with?.pattern==='verification-ci-*'));assert.ok(aggregate.steps.some(s=>s.run?.includes('merge-micro-judge-artifacts.mjs')&&s.run.includes('--ci-plan')));
@@ -385,6 +393,7 @@ test('CI workflow schedules the explicit selected plan and retains blocking full
 
 await import('./ci-partitions.test.mjs');
 await import('./stage-dsh-upstream.test.mjs');
+await import('./dsh-build-artifact.test.mjs');
 
 test('request-intent evaluation covers exact change scopes and writes a check-bound completion receipt', async () => {
   const { validCompletion } = await import('./verification-completion.mjs');

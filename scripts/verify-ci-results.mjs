@@ -7,18 +7,18 @@ import { digest, sourceDigest } from './verification-contract.mjs';
 import { readCiPlan, lanePlan, validateCiPlan, nativeSelection } from './ci-plan.mjs';
 import { sourceDigest as nativeSourceDigest, validateNativeArtifact } from './micro-judge-artifacts.mjs';
 
-export const requiredJobs = ['select', 'micro-judge-native', 'checks'];
+export const requiredJobs = ['select', 'micro-judge-native', 'dsh-build', 'checks'];
 export function requiredJobsSucceeded(needs, selection) {
-  if (!Array.isArray(selection?.lanes) || !Array.isArray(selection?.nativeTargets) || !needs || Object.keys(needs).length !== requiredJobs.length) return false;
+  if (!Array.isArray(selection?.lanes) || !Array.isArray(selection?.nativeTargets) || !Array.isArray(selection?.dshTargets) || !needs || Object.keys(needs).length !== requiredJobs.length) return false;
   return requiredJobs.every(id => needs[id]?.result === (id === 'select' ||
-    (id === 'checks' ? selection.lanes.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped'));
+    (id === 'checks' ? selection.lanes.length : id === 'dsh-build' ? selection.dshTargets.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped'));
 }
 const key = report => [report.profile, report.partition, report.platform, report.architecture].join('/');
 // Diagnostics precede the job gate: a failed matrix still publishes its report.
 // Keep validation below authoritative; diagnostics must never make a run pass.
 function reportCiFailures(needs, selection, directory) {
   for (const id of requiredJobs) {
-    const expected = id === 'select' || (id === 'checks' ? selection.lanes.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped';
+    const expected = id === 'select' || (id === 'checks' ? selection.lanes.length : id === 'dsh-build' ? selection.dshTargets.length : selection.nativeTargets.length) > 0 ? 'success' : 'skipped';
     const actual = needs?.[id]?.result || (needs?.[id] ? 'unknown' : 'missing');
     if (actual !== expected) console.error(`job ${id}: ${actual} (expected ${expected})`);
   }

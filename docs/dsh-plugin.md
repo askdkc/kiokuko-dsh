@@ -523,21 +523,23 @@ disabled for the current session. Task resume changes task state only. The
 runner checks that input stays blocked, invokes the displayed
 `/kioku-lisp enable` recovery command, and then verifies admitted input.
 
-CI uses a source-bound selected plan. Known application changes run five jobs:
-selection, one Linux native build, combined Linux core/Lisp checks, combined
-consumer/runtime/terminal checks, and the required aggregate. UI changes add
-the browser job. Host/platform boundaries add the affected CPU/OS checks.
-Only genuine prose documentation can select the two lightweight jobs; Skills
-Markdown remains runtime input. Dependency, exports, package, build, test or
-verification changes, releases and manual runs select complete CI coverage.
-Unknown paths, unavailable/empty diffs, renames and deletions also select full.
-Consequently this CI/fixture repair itself selects full coverage.
+CI uses a source-bound selected plan. GitHub resolves the latest official DSH
+SHA for every run and selects full compatibility coverage, including prose-only
+changes. Depot retains its Linux-only coverage. Resolution failure fails the run.
+Local diff-only selection can use representative coverage: eight jobs and four
+reports for application changes, with one additional browser job for UI changes.
+Host/platform boundaries add the affected CPU/OS checks. Dependency, exports,
+package, build, test or verification changes, releases and manual runs select
+complete coverage. Unknown paths, unavailable/empty diffs, renames and deletions
+also select full.
 
-Full mode has 27 jobs, including selection, and 22 required verification
-reports. It retains all Main partitions, all four Lisp partitions on each OS,
-three semantic platforms, macOS runtime and browser coverage. Lisp still tests
-`macos-latest`; source and packed Skills remain separate. Ordinary mode has
-two required reports, each combining existing checks with a shared build.
+Full GitHub mode has 25 jobs and 19 required verification reports. It retains all
+Main partitions, both semantic platforms, macOS runtime and browser coverage.
+Each OS has five Lisp partitions: the two existing native shards now run in
+independent jobs, while the test inventory remains unchanged. Lisp still tests
+`macos-latest`; source and packed Skills remain separate. Official DSH is built
+once per OS/architecture and shared with consumers after identity and hash checks.
+Consumers install their own frozen dependencies before restoring compiled outputs.
 Required selected jobs cannot be missing, skipped, failed or cancelled.
 Unselected jobs remain explicitly unselected, never reported as executed tests.
 

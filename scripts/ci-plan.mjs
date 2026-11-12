@@ -85,6 +85,9 @@ export function createCiPlan(contract, request, identity) {
   const baseline = identity.validationPlatform ?? identity.ciPlatform ?? 'linux-x64';
   const select = (profile, partition) => ({ profile, ...(partition ? { partition } : {}) });
   const add = (id, key, selectors, release = false) => lanes.push({ id, key, ...ciPlatforms[key], selectors, release });
+  const addLispNative = key => {
+    for (const partition of ['native-1', 'native-2']) add(`lisp-${key}-${partition}`, key, [select('lisp', partition)]);
+  };
   if (chosen.mode === 'full') {
     for (const plan of partitionPlans(contract, 'ci-main', 'linux')) add(`main-${plan.partition}`, 'linux-x64', [select('ci-main', plan.partition)], plan.partition === 'consumers');
     for (const key of Object.keys(ciPlatforms)) {
@@ -97,10 +100,13 @@ export function createCiPlan(contract, request, identity) {
     add('runtime-darwin-arm64', 'darwin-arm64', [select('runtime')]);
     add('browser', 'linux-x64', [select('browser')]);
   } else if (chosen.mode === 'representative') {
-    add(`core-${baseline}`, baseline, [select('ci-main', 'unit-evaluations'), select('ci-main', 'integration'), select('lisp', 'native')]);
+    add(`core-${baseline}`, baseline, [select('ci-main', 'unit-evaluations'), select('ci-main', 'integration')]);
+    addLispNative(baseline);
     add(`consumer-${baseline}`, baseline, [select('runtime')]);
-    for (const key of chosen.platforms.filter(key => key !== baseline))
-      add(`host-${key}`, key, [select('lisp', 'native'), select('semantic'), select('runtime')]);
+    for (const key of chosen.platforms.filter(key => key !== baseline)) {
+      add(`host-${key}`, key, [select('semantic'), select('runtime')]);
+      addLispNative(key);
+    }
     if (chosen.browser) add('browser', 'linux-x64', [select('browser')]);
   }
   const result = { schema: 'selected-ci-v1', request, ...chosen, identity,
@@ -114,12 +120,13 @@ export function createCiPlan(contract, request, identity) {
     lane.pnpm = checks.some(check => check.requires?.includes('pnpm')) || lane.browser;
     lane.pnpmVersion = lane.browser ? '11.24.0' : '11.7.0';
     lane.timeout = chosen.mode === 'representative' && (lane.id.startsWith('core-') || lane.id.startsWith('host-')) ? 40
-      : lane.selectors.some(selector => selector.profile === 'lisp' && selector.partition === 'native') ? 25
+      : lane.selectors.some(selector => selector.profile === 'lisp' && selector.partition?.startsWith('native-')) ? 25
       : lane.selectors.every(selector => selector.profile === 'semantic') ? 15 : 20;
-    // Current upstream installation and artifact compilation precede existing test budgets.
+    // Keep the existing setup allowance; sharing removes work, not test budgets.
     if (lane.fixture) lane.timeout += 30;
   }
-  result.jobCount = 2 + result.nativeTargets.length + lanes.length;
+  result.dshTargets = result.nativeTargets.filter(target => lanes.some(lane => lane.key === target.key && lane.fixture));
+  result.jobCount = 2 + result.nativeTargets.length + result.dshTargets.length + lanes.length;
   result.digest = digest(JSON.stringify(result));
   return result;
 }
@@ -190,6 +197,6 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
   assert.equal(process.version, ciToolchain.node); assert.equal(execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(), ciToolchain.npm);
   writeFileSync(output, JSON.stringify(selection, null, 2) + '\n');
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `native=${JSON.stringify(selection.nativeTargets)}\nlanes=${JSON.stringify(selection.lanes)}\nhas_native=${selection.nativeTargets.length > 0}\nhas_lanes=${selection.lanes.length > 0}\nfull=${selection.mode === 'full'}\n`);
+    `dsh=${JSON.stringify(selection.dshTargets)}\nhas_dsh=${selection.dshTargets.length > 0}\nnative=${JSON.stringify(selection.nativeTargets)}\nlanes=${JSON.stringify(selection.lanes)}\nhas_native=${selection.nativeTargets.length > 0}\nhas_lanes=${selection.lanes.length > 0}\nfull=${selection.mode === 'full'}\n`);
   console.log(JSON.stringify({ mode: selection.mode, reason: selection.reason, jobs: selection.jobCount, native: selection.nativeTargets.map(x => x.key), lanes: selection.lanes.map(x => x.id), digest: selection.digest }));
 }

@@ -1060,12 +1060,14 @@
         }
       },
       "lanes": {
-        "native": [
+        "native-1": [
           "lisp-native-1",
           "owned-native",
           "native-search",
           "laya-worker",
-          "lisp-vendor",
+          "lisp-vendor"
+        ],
+        "native-2": [
           "lisp-native-2"
         ],
         "distribution": [

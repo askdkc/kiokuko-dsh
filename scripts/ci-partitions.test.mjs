@@ -114,7 +114,7 @@ test('all required job outcomes are checked without spawning a shell for each tr
 });
 
 test('CI evidence requires each complete, fresh OS/lane and rejects altered archives or build receipts',()=>{
-  const entries=goodEntries();assert.equal(entries.length,17);assert.equal(validateCiEvidence(contract,entries,state,full),true);
+  const entries=goodEntries();assert.equal(entries.length,19);assert.equal(validateCiEvidence(contract,entries,state,full),true);
   assert.equal(validateCiEvidence(contract,[],state,full),false);
   for(let i=0;i<entries.length;i++){
     assert.equal(validateCiEvidence(contract,entries.filter((_,n)=>n!==i),state,full),false,'missing lane '+i);
@@ -139,7 +139,7 @@ test('CI evidence requires each complete, fresh OS/lane and rejects altered arch
 test('the aggregate CLI reports failed selection before trying to read its absent plan',()=>{
   const directory=mkdtempSync(path.join(tmpdir(),'missing-ci-plan-'));
   try{
-    const needs={select:{result:'failure'},'micro-judge-native':{result:'skipped'},checks:{result:'skipped'}};
+    const needs={select:{result:'failure'},'micro-judge-native':{result:'skipped'},'dsh-build':{result:'skipped'},checks:{result:'skipped'}};
     const run=()=>spawnSync(process.execPath,[path.join(root,'scripts/verify-ci-results.mjs'),'--ci-plan',path.join(directory,'selected.json'),directory],{cwd:root,env:{...process.env,NEEDS_JSON:JSON.stringify(needs)},encoding:'utf8'});
     const failed=run();assert.equal(failed.status,1);assert.match(failed.stderr,/job select: failure \(expected success\)/);
     needs.select.result='success';const missing=run();assert.equal(missing.status,1);assert.match(missing.stderr,/Selected CI plan artifact is missing/);
@@ -178,7 +178,7 @@ test('the actual aggregate CLI rejects missing jobs/reports, stale selection and
       const observed=run(success);assert.equal(observed.status,0,observed.stderr);assert.equal(observed.stderr,'');
       for(const id of requiredJobs){const bad=structuredClone(success);delete bad[id];const failed=run(bad);assert.equal(failed.status,1);assert.ok(failed.stderr.includes(`job ${id}: missing`),failed.stderr)}
       for(const result of ['failure','cancelled','skipped','']){const failed=run({...success,checks:{result}});assert.equal(failed.status,1);assert.ok(failed.stderr.includes(`job checks: ${result||'unknown'}`),failed.stderr)}
-      const failedIndex=entries.findIndex(e=>e.report.partition==='lisp-linux-x64-native');
+      const failedIndex=entries.findIndex(e=>e.report.partition==='lisp-linux-x64-native-1');
       assert.ok(failedIndex>=0);
       const failedFile=path.join(evidence,String(failedIndex),'result.json'),originalReport=readFileSync(failedFile);
       const failedReport=structuredClone(entries[failedIndex].report);failedReport.status='failed';
@@ -217,7 +217,7 @@ test('pnpm prerequisites provision full main and representative core lanes',()=>
   const request=path=>({available:true,changes:[{status:'M',path}]});
   const representative=createCiPlan(contract,request('src/dsh/task-state.ts'),selectionIdentity);
   const ui=createCiPlan(contract,request('src/client.ts'),selectionIdentity);
-  assert.equal(full.jobCount,21);assert.equal(representative.jobCount,5);assert.equal(ui.jobCount,6);
+  assert.equal(full.jobCount,25);assert.equal(representative.jobCount,8);assert.equal(ui.jobCount,9);
   for (const selection of [full, ui]) {
     const sidebar = lanePlan(contract, selection, 'browser').checks.find(check => check.id === 'memory-sidebar-web');
     assert.equal(sidebar?.packed, true);
@@ -245,15 +245,15 @@ test('selected coverage fails safe and retains the complete inventory in full mo
     assert.notEqual(current.digest,next.digest,'a new upstream revision cannot reuse the previous plan identity');
   }
   for(const dshSha of ['', 'master', 'a'.repeat(39)])assert.throws(()=>createCiPlan(contract,{...request('docs/guide.md'),dshSha},selectionIdentity));
-  for(const [file,count,reports]of [['docs/guide.md',2,0],['src/dsh/task-state.ts',5,2],['src/client.ts',6,3],['src/dsh/lisp/sandbox.darwin.ts',7,3],['src/dsh/lisp/sandbox.ts',7,3]]){
+  for(const [file,count,reports]of [['docs/guide.md',2,0],['src/dsh/task-state.ts',8,4],['src/client.ts',9,5],['src/dsh/lisp/sandbox.darwin.ts',13,7],['src/dsh/lisp/sandbox.ts',13,7]]){
     const p=createCiPlan(contract,request(file),selectionIdentity);assert.equal(p.jobCount,count,file);assert.equal(p.lanes.length,reports,file);
     assert.equal(validateCiEvidence(contract,goodEntries(state,p),state,p),true,file);
-    const jobs=Object.fromEntries(requiredJobs.map(id=>[id,{result:id==='select'||(id==='checks'?p.lanes.length:p.nativeTargets.length)?'success':'skipped'}]));assert.equal(requiredJobsSucceeded(jobs,p),true);
+    const jobs=Object.fromEntries(requiredJobs.map(id=>[id,{result:id==='select'||(id==='checks'?p.lanes.length:id==='dsh-build'?p.dshTargets.length:p.nativeTargets.length)?'success':'skipped'}]));assert.equal(requiredJobsSucceeded(jobs,p),true);
     for(const id of requiredJobs){const bad=structuredClone(jobs);bad[id].result='cancelled';assert.equal(requiredJobsSucceeded(bad,p),false)}
     for(const entry of goodEntries(state,p)){const missing=goodEntries(state,p).filter(x=>x.report.partition!==entry.report.partition);assert.equal(validateCiEvidence(contract,missing,state,p),false)}
   }
   for(const r of [request('unknown/new-file.ts'),request('skills/kiokuko/SKILL.md'),request('src/serialization/validate.ts'),request('package-lock.json'),request('scripts/verify.mjs'),request('tests/fixtures/dsh-runtime/package.json'),request('docs/guide.md','D'),request('src/dsh/task-state.ts','R100'),{available:false,changes:[]},{available:true,changes:[]},{...request('docs/guide.md'),full:true}])assert.equal(createCiPlan(contract,r,selectionIdentity).mode,'full');
-  assert.equal(full.jobCount,21);assert.equal(full.lanes.length,17);
+  assert.equal(full.jobCount,25);assert.equal(full.lanes.length,19);
   for(const [key,target]of Object.entries(ciPlatforms)){
     for(const plan of partitionPlans(contract,'lisp',target.platform)){const lane=full.lanes.find(l=>l.key===key&&l.selectors[0].profile==='lisp'&&l.selectors[0].partition===plan.partition);assert.deepEqual(lanePlan(contract,full,lane.id).checks,plan.checks);if(key==='darwin-arm64')assert.equal(lane.runner,'macos-latest')}
     const lane=full.lanes.find(l=>l.key===key&&l.selectors[0].profile==='semantic');assert.deepEqual(lanePlan(contract,full,lane.id).checks,verificationPlan(contract,'semantic',target.platform).checks);
@@ -261,7 +261,9 @@ test('selected coverage fails safe and retains the complete inventory in full mo
   for(const plan of partitionPlans(contract,'ci-main','linux'))assert.deepEqual(lanePlan(contract,full,'main-'+plan.partition).checks,plan.checks);
   for(const [profile,id,platform]of [['runtime','runtime-darwin-arm64','darwin'],['browser','browser','linux']])assert.deepEqual(lanePlan(contract,full,id).checks,verificationPlan(contract,profile,platform).checks);
   const representative=createCiPlan(contract,request('src/dsh/task-state.ts'),selectionIdentity),core=lanePlan(contract,representative,'core-linux-x64').checks;
-  assert.equal(core.filter(c=>c.id==='build').length,1);for(const id of ['ci-native-unit','ci-native-integration-1','ci-native-integration-2','lisp-native-1','lisp-native-2','owned-native'])assert.ok(core.some(c=>c.id===id),id);
+  assert.equal(core.filter(c=>c.id==='build').length,1);for(const id of ['ci-native-unit','ci-native-integration-1','ci-native-integration-2'])assert.ok(core.some(c=>c.id===id),id);
+  const nativeChecks=representative.lanes.filter(l=>l.id.startsWith('lisp-')).flatMap(l=>lanePlan(contract,representative,l.id).checks);
+  for(const id of ['lisp-native-1','lisp-native-2','owned-native'])assert.ok(nativeChecks.some(c=>c.id===id),id);
   for(const id of ['consumer-npm','consumer-pnpm','dsh-cli-profile'])assert.ok(lanePlan(contract,representative,'consumer-linux-x64').checks.some(c=>c.id===id),id);
 });
 test('Depot CI selects one Linux native producer instead of relabeling unsupported macOS work',()=>{
@@ -302,4 +304,19 @@ test('CI schedules Linux x64 and macOS ARM64 while runtime native target support
   assert.deepEqual(linux.platforms,['linux-x64']);
   const {nativeTargets}=await import('./micro-judge-artifacts.mjs');
   assert.ok(Object.hasOwn(nativeTargets,'linux-arm64'),'CI scope does not remove runtime/native-build support');
+});
+
+test('official DSH builds once per platform and Lisp shards run in independent lanes without losing checks',()=>{
+  const selection=createCiPlan(contract,{full:true,dshSha:'a'.repeat(40)},selectionIdentity);
+  assert.deepEqual(selection.dshTargets?.map(target=>target.key).sort(),['darwin-arm64','linux-x64']);
+  for(const platform of ['linux','darwin']) {
+    const lanes=plans(selection).filter(lane=>lane.platform===platform && lane.selectors.some(s=>s.profile==='lisp'));
+    const shards=lanes.filter(lane=>lane.checks.some(check=>/^lisp-native-\d+$/.test(check.id)));
+    assert.equal(shards.length,2,'the two shards must be independent matrix jobs');
+    assert.ok(shards.every(lane=>lane.checks.filter(check=>/^lisp-native-\d+$/.test(check.id)).length===1));
+    const observed=lanes.flatMap(lane=>lane.checks.filter(check=>check.id!=='build').map(check=>check.id));
+    const expected=verificationPlan(contract,'lisp',platform).checks.filter(check=>check.id!=='build').flatMap(check=>
+      check.id==='lisp-native'?['lisp-native-1','lisp-native-2']:check.id==='skill-delivery'?['skill-delivery-source','skill-delivery-packed']:[check.id]);
+    assert.deepEqual(observed.sort(),expected.sort(),'all checks still have exactly one owner per OS');
+  }
 });

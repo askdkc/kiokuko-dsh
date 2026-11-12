@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      dsh: ${{ steps.plan.outputs.dsh }}
+      has_dsh: ${{ steps.plan.outputs.has_dsh }}
       native: ${{ steps.plan.outputs.native }}
       lanes: ${{ steps.plan.outputs.lanes }}
       has_native: ${{ steps.plan.outputs.has_native }}
@@ -75,9 +77,53 @@ jobs:
           name: micro-judge-${{ matrix.key }}
           path: ${{ runner.temp }}/native-${{ matrix.key }}
           if-no-files-found: error
+  dsh-build:
+    needs: select
+    if: needs.select.outputs.has_dsh == 'true'
+    name: Build official DSH (${{ matrix.key }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.dsh) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24.16.0
+      - uses: actions/download-artifact@v8
+        with:
+          name: selected-ci-plan
+          path: ${{ runner.temp }}/ci-plan
+      - name: Check out the selected current official DSH revision
+        uses: actions/checkout@v6
+        with:
+          repository: deepseek-ai/deepseek-harness
+          ref: ${{ needs.select.outputs.dsh_sha }}
+          path: .artifacts/official-dsh
+          persist-credentials: false
+      - name: Install the package manager declared by official DSH
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: .artifacts/official-dsh/package.json
+          run_install: false
+      - name: Build current official DSH from its frozen dependency graph
+        working-directory: .artifacts/official-dsh
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build:artifacts
+      - name: Package the platform-bound official DSH build
+        run: node scripts/dsh-build-artifact.mjs pack .artifacts/official-dsh "${{ runner.temp }}/dsh-build" "${{ runner.temp }}/ci-plan/selected-ci.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dsh-build-${{ matrix.key }}
+          path: ${{ runner.temp }}/dsh-build
+          compression-level: 0
+          if-no-files-found: error
   checks:
-    needs: [select, micro-judge-native]
-    if: always() && needs.select.result == 'success' && needs.select.outputs.has_lanes == 'true' && needs.micro-judge-native.result == 'success'
+    needs: [select, micro-judge-native, dsh-build]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.has_lanes == 'true' && needs.micro-judge-native.result == 'success' && (needs.select.outputs.has_dsh != 'true' || needs.dsh-build.result == 'success')
     name: Verify (${{ matrix.id }})
     strategy:
       fail-fast: false
@@ -137,12 +183,18 @@ jobs:
         with:
           package_json_file: .artifacts/official-dsh/package.json
           run_install: false
-      - name: Build current official DSH from its frozen dependency graph
+      - name: Install the unchanged official DSH dependency graph
         if: matrix.fixture
         working-directory: .artifacts/official-dsh
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run build:artifacts
+        run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        if: matrix.fixture
+        with:
+          name: dsh-build-${{ matrix.key }}
+          path: ${{ runner.temp }}/dsh-build
+      - name: Restore the exact platform-bound official DSH build
+        if: matrix.fixture
+        run: node scripts/dsh-build-artifact.mjs restore .artifacts/official-dsh "${{ runner.temp }}/dsh-build" "${{ runner.temp }}/ci-plan/selected-ci.json"
       - name: Stage current official runtime and retain exact source identity
         if: matrix.fixture
         run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
@@ -173,6 +225,9 @@ jobs:
           if [[ -f tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json ]]; then
             cp tests/fixtures/dsh-runtime/node_modules/.kiokuko-dsh-upstream.json "${{ runner.temp }}/verification/dsh-upstream.json"
           fi
+          if [[ -f "${{ runner.temp }}/dsh-build/dsh-build.json" ]]; then
+            cp "${{ runner.temp }}/dsh-build/dsh-build.json" "${{ runner.temp }}/verification/dsh-build.json"
+          fi
           if [[ -d "${{ runner.temp }}/ci-setup" ]]; then
             cp -R "${{ runner.temp }}/ci-setup" "${{ runner.temp }}/verification/setup"
           fi
@@ -187,7 +242,7 @@ jobs:
           if-no-files-found: error
   verify:
     name: Required selected verification
-    needs: [select, micro-judge-native, checks]
+    needs: [select, micro-judge-native, dsh-build, checks]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
