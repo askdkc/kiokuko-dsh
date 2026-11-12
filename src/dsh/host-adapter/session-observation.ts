@@ -84,7 +84,7 @@ export function createSessionObservation(runtime: DshCoreRuntime) {
         readInputClaim(database, sessionId, turn) ?? backupInputClaimInTransaction(database, {
           dshSessionId: sessionId, nativeTurn: turn, messages: snapshot.messages,
         })
-      )), () => current() && inMemoryClaims.get(key) === snapshot)
+      )), () => current() && inMemoryClaims.get(key) === snapshot, source?.signal)
       source?.signal.throwIfAborted()
       if (!current() || inMemoryClaims.get(key) !== snapshot) throw new KiokukoError('CONFLICT', 'input_owner_changed')
       snapshot.messages = stored.messages

@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {readFile} from 'node:fs/promises'
-import {join} from 'node:path'
+import {nativeQuestionClass} from '../../helpers/native-question.js'
 import {askLispCodingQuestion, normalizeLispCodingAnswer, LispCodingCancelled} from '../../../../src/dsh/coding-question.js'
 import {LispCodingPreparation} from '../../../../src/dsh/lisp/coding-preparation.js'
 const request={questions:[{id:'question',question:'Lisp?'}]} as const
@@ -25,12 +24,26 @@ test('a hidden card leaves the active ask pending until the host settles it',asy
  await Promise.resolve();assert.equal(settled,false)
  resolve(response([]));assert.equal((await promise).status,'cancelled')
 })
-test('pinned DSH UI fixture distinguishes hide, ASK_CANCELLED and submitted Skip',async()=>{
- const path=join(process.env.KIOKUKO_DSH_PACKAGE_ROOT ?? join(process.cwd(),'tests/fixtures/dsh-runtime/node_modules'),'@deepseek-ai/dsh-client-ui-user-questions/lib/client.js')
- const source=await readFile(path,'utf8')
- assert.match(source,/this\.dismissal === "hide"[\s\S]*?this\.#seat\?\.hide\(\)/u)
- assert.match(source,/waterfall\.reject\("ASK_CANCELLED"\)/u)
- assert.match(source,/if \(value\.skipped\) return \{\s*id: item.id,\s*selected: \[\]/u)
+for(const minify of [false,true]) test(`pinned DSH UI distinguishes hide, ASK_CANCELLED and empty answer (minified=${minify})`,async()=>{
+ const PendingQuestion=nativeQuestionClass(minify)
+ const q={id:'question',question:'Lisp?'}
+ for(const callId of ['named-call',undefined]) {
+  const pending=new PendingQuestion('session',[q],callId)
+  let hidden=0,rejected:string|undefined,answer:any
+  pending.attachSeat({hide:()=>{hidden++}})
+  pending.attachWaterfall({deadline:undefined,resolve:(value:any)=>{answer=value},reject:(code:string)=>{rejected=code},delegate(){}})
+  try {
+   await pending.dismiss()
+   assert.equal(hidden,callId===undefined?0:1)
+   assert.equal(rejected,callId===undefined?'ASK_CANCELLED':undefined)
+   assert.equal(answer,undefined,'hiding/cancelling must not fabricate an empty answer')
+   if(callId!==undefined) {
+    await pending.answer(response([]))
+    assert.deepEqual(answer,response([]))
+    assert.equal(normalizeLispCodingAnswer(answer,'question').status,'cancelled')
+   }
+  } finally {pending.close()}
+ }
 })
 function preparation(){
  const agent={id:'agent'},input={agent,turn:1,task:'Implement parser.ts',taskType:'build' as const,signal:new AbortController().signal}

@@ -1,5 +1,7 @@
 # Coding continuity follow-up to 9bcbbf41
 
+This is the historical f9335f2 verification record. See [the subsequent package/shutdown/CI follow-up](package-shutdown-ci-followup.md) for the initialization ownership correction and current validation limits.
+
 ## Changes
 
 - Custom LLM errors use one capability-based bridge. Modern SDKs use `fromFailure`; older SDKs retain their string-code constructor. Provider facts, cause and existing redaction remain intact.

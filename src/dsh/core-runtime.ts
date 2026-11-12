@@ -21,6 +21,7 @@ export interface DshRuntimeOptions extends DshPathEnvironment {
   readonly repositoryRoot: string
   readonly databasePath?: string
   readonly migrationsDirectory?: string
+  /** Owns its unpublished resources until settlement; should honor options.signal. */
   readonly initializeDatabase?: (options: InitOptions) => unknown | PromiseLike<unknown>
   readonly openDatabase?: EmbeddingDatabaseOpener
   readonly embeddingConfig?: EmbeddingConfig
@@ -122,6 +123,11 @@ export class DshCoreRuntime {
   }
 
   async #initialize(): Promise<RuntimeResources> {
+    // Until publication, this task exclusively owns its resources. Cancellation
+    // prevents publication; a non-cooperative await retains ownership until it
+    // settles and this task can clean up, without blocking runtime shutdown.
+    const signal = this.#databaseAdmission.signal
+    signal.throwIfAborted()
     const configuredRepositoryRoot = requireRepositoryRoot(this.#options.repositoryRoot)
     let repositoryRoot = configuredRepositoryRoot
     const databasePath = this.#options.databasePath ?? getDshDatabasePath(this.#options)
@@ -132,19 +138,23 @@ export class DshCoreRuntime {
     let queue: WriteQueue<unknown> | undefined
     try {
       await initialize({
-        databasePath,
+        databasePath, signal,
         ...(this.#options.migrationsDirectory === undefined ? {} : { migrationsDirectory: this.#options.migrationsDirectory }),
       })
+      signal.throwIfAborted()
       const opened = await openEmbeddingDatabase(databasePath, {
+        signal,
         ...(this.#options.embeddingConfig === undefined ? {} : { config: this.#options.embeddingConfig }),
         openDatabase: this.#options.openDatabase ?? openConnection,
         ...(this.#options.embeddingBackend === undefined ? {} : { backend: this.#options.embeddingBackend }),
       })
       database = opened.database
+      signal.throwIfAborted()
       let bindingConflict: RepositoryBindingConflict | undefined
       if (this.#options.autoRegisterRepository === true) {
         try {
           const resolved = await resolveProjectWorkspace(database, configuredRepositoryRoot, { allowDirectory: true })
+          signal.throwIfAborted()
           if (resolved !== undefined) repositoryRoot = resolved.repositoryRoot
         } catch (error) {
           if (!(error instanceof RepositoryBindingConflict)) throw error
@@ -153,6 +163,7 @@ export class DshCoreRuntime {
           bindingConflict = error
         }
       }
+      signal.throwIfAborted()
       const binding = bindingConflict ?? findRepositoryBinding(database, repositoryRoot)
       queue = new WriteQueue<unknown>(64)
       embeddingRuntime = createEmbeddingRuntime(database, this.#options.embeddingConfig, {
@@ -162,6 +173,7 @@ export class DshCoreRuntime {
       })
       worker = embeddingRuntime.profileId === null ? undefined : createEmbeddingWorker({ runtime: embeddingRuntime })
       const resources = { database, embeddingRuntime, worker, queue, binding } satisfies RuntimeResources
+      signal.throwIfAborted()
       this.#resources = resources
       worker?.start()
       return resources
@@ -181,12 +193,14 @@ export class DshCoreRuntime {
     if (this.#initialization === undefined) {
       this.#initialization = this.#initialize()
     }
-    await this.#initialization
+    await abortable(this.#initialization, this.#databaseAdmission.signal)
+    this.#databaseAdmission.signal.throwIfAborted()
   }
 
   async #requireResources(): Promise<RuntimeResources> {
     if (this.#closing || this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed')
     await this.start()
+    this.#databaseAdmission.signal.throwIfAborted()
     if (this.#resources === undefined) throw new KiokukoError('INTEGRITY_ERROR', 'dsh runtime initialized without resources')
     return this.#resources
   }
@@ -209,11 +223,13 @@ export class DshCoreRuntime {
   async enqueueWrite<T>(operation: () => T | PromiseLike<T>): Promise<T> {
     if (this.#closing || this.#closed) throw new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed')
     const resources = this.#resources ?? await this.#requireResources()
+    this.#databaseAdmission.signal.throwIfAborted()
     return resources.queue.enqueue(operation) as Promise<T>
   }
 
   async openAgent(identity: DshAgentIdentity): Promise<DshAgentState> {
     const resources = await this.#requireResources()
+    this.#databaseAdmission.signal.throwIfAborted()
     if (resources.binding instanceof RepositoryBindingConflict) throw resources.binding
     return this.#agents.open(identity, resources.binding.repositoryId, resources.binding.workspace, this.#options.now?.())
   }
@@ -230,7 +246,7 @@ export class DshCoreRuntime {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise
     this.#closing = true
-    this.#databaseAdmission.abort()
+    this.#databaseAdmission.abort(new KiokukoError('SERVICE_UNAVAILABLE', 'dsh runtime is closed'))
     this.#agents.closeAll()
     this.#closePromise = (async () => {
       await this.auxiliaryRecovery.close()
@@ -240,7 +256,9 @@ export class DshCoreRuntime {
         this.#activeDatabaseDrain = undefined
         this.#resolveActiveDatabaseDrain = undefined
       }
-      const resources = this.#resources ?? await this.#initialization?.catch(() => undefined)
+      // Never take ownership of unpublished initialization resources. The
+      // cancelled initializer closes any late acquisition in its own catch.
+      const resources = this.#resources
       if (resources === undefined) {
         this.#closed = true
         return

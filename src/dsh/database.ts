@@ -28,6 +28,8 @@ import {
 import { KiokukoError } from '../errors.js';
 
 export interface InitOptions {
+  /** Cancel before subsequent setup effects; in-flight work owns its cleanup. */
+  signal?: AbortSignal;
   databasePath?: string;
   migrationsDirectory?: string;
 }
@@ -467,6 +469,7 @@ function requireFreshDatabaseMetadata(connection: ReturnType<typeof openConnecti
 }
 
 export async function initializeDatabase(options: InitOptions = {}, hooks: InitHooks = {}): Promise<InitResult> {
+  options.signal?.throwIfAborted();
   const databasePath = options.databasePath ?? getDshDatabasePath();
   if (databasePath === ':memory:') {
     throw new KiokukoError(
@@ -477,6 +480,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
   const dataDirectory = options.databasePath
     ? dirname(databasePath)
     : await ensureDshDataDirectory();
+  options.signal?.throwIfAborted();
   const migrationsDirectory = options.migrationsDirectory ?? defaultMigrationsDirectory();
   // Load and validate once. Every plan comparison and applied SQL statement in
   // this run is bound to these exact ordered bytes, even if the source files
@@ -537,6 +541,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
         );
         backupPath = createdBackup.path;
         requireDatabaseFileIdentity(databasePath, preflightDatabaseIdentity);
+        options.signal?.throwIfAborted();
         backupBinding = bindBackupArtifact(createdBackup);
       } else {
         inspection = undefined;
@@ -563,6 +568,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
   let operationError: unknown;
   try {
     if (hooks.afterPreflight !== undefined) await hooks.afterPreflight();
+    options.signal?.throwIfAborted();
     const reservation = databaseExistedAtPreflight
       ? { appeared: false }
       : reserveAbsentDatabasePath(databasePath, dataDirectory);
@@ -576,6 +582,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
     if (reservation.identity !== undefined) expectedDatabaseIdentity = reservation.identity;
     if (reservationDescriptor !== undefined && hooks.afterPathReserved !== undefined) {
       await hooks.afterPathReserved();
+      options.signal?.throwIfAborted();
     }
     if (reservationDescriptor !== undefined) {
       if (expectedDatabaseIdentity === undefined) {
@@ -611,6 +618,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
       : undefined;
     if (freshDataVersion !== undefined) requireFreshDatabaseMetadata(writableConnection);
     if (hooks.afterWritableOpen !== undefined) await hooks.afterWritableOpen();
+    options.signal?.throwIfAborted();
     if (writableDataVersion !== undefined && dataVersion(writableConnection) !== writableDataVersion) {
       throw new KiokukoError(
         'CONFLICT',
@@ -668,6 +676,7 @@ export async function initializeDatabase(options: InitOptions = {}, hooks: InitH
       migration = migrateDatabaseSnapshotInTransaction(writableConnection, migrationSnapshot);
       requireForeignKeyIntegrity(writableConnection, 'after');
       hooks.beforeCommit?.();
+      options.signal?.throwIfAborted();
       if (expectedDatabaseIdentity !== undefined) {
         requireDatabaseFileIdentity(databasePath, expectedDatabaseIdentity);
       }

@@ -257,7 +257,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                   ? mock.toolCallResponse(id, name, args)
                   : mock.toolCallResponse(id, 'run_code', {
                       description: 'Follow the current requested plan',
-                      code: `return await tools.${name}(${JSON.stringify(args)})`,
+                      code: `inspect(JSON.stringify(await tools.${name}(${JSON.stringify(args)})))`,
                     })
               ctx.get('planMode').set(agent, true)
               const resultFor = (request: any, id: string) => {
@@ -423,7 +423,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
                         if (presentation === 'ptc')
                           return mock.toolCallResponse('native-calculation-after-assessment', 'run_code', {
                             description: 'Calculate without claiming task preparation',
-                            code: 'return 42',
+                            code: 'inspect(JSON.stringify(42))',
                           })
                         return toolCall(
                           'missing-scope-plan',

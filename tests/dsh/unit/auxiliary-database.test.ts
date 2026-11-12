@@ -124,3 +124,21 @@ for (const change of ['stop', 'session', 'generation'] as const) test(`input cap
     assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table'").get()!.n, 0)
   } finally { db.close() }
 })
+
+test('Stop interrupts initial-input capture before optional DB acquisition settles', async () => {
+  const { createSessionObservation } = await import('../../../src/dsh/host-adapter/session-observation.js')
+  let release!: () => void, writes = 0, entered!: () => void
+  const held = new Promise<void>(resolve => { release = resolve }), ready = new Promise<void>(resolve => { entered = resolve })
+  const runtime = { withDatabase: async (fn: any) => { entered(); await held; return fn({prepare(){writes++;throw new Error('must not reach DB')}}) } }
+  const observation = createSessionObservation(runtime as any), controller = new AbortController()
+  const session = {}, agent = {session}
+  const pending = observation.captureInitialInput('stop-now',1,['input'],{signal:controller.signal,agent,session,current:()=>true})
+  let rejected = false
+  const settled = assert.rejects(pending).then(() => { rejected = true })
+  try {
+    await ready; controller.abort()
+    await new Promise(resolve=>setTimeout(resolve,80))
+    assert.equal(rejected,true,'Stop must not wait for the 250ms optional DB timeout')
+  } finally { release(); await settled; await new Promise(resolve=>setImmediate(resolve)) }
+  assert.equal(writes,0)
+})

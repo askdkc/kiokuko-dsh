@@ -1,4 +1,4 @@
-import { isRuntimeContextMarker } from './harness/runtime-context.js'
+import { isRuntimeContextMarker } from './runtime-context-marker.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { findSecret } from '../memory/secrets.js'

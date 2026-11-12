@@ -1,3 +1,5 @@
+import { RUNTIME_CONTEXT_MARKER, isRuntimeContextMarker } from '../runtime-context-marker.js'
+export { RUNTIME_CONTEXT_MARKER, isRuntimeContextMarker } from '../runtime-context-marker.js'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 /** Runtime context is a complete current snapshot, not conversation history.
  * Keep the latest snapshot at its original position; preserve all human input,
@@ -43,13 +45,4 @@ export function retireLegacyRuntimeContexts(session: import('@deepseek-ai/dsh-se
     else flush()
   }
   flush()
-}
-
-export const RUNTIME_CONTEXT_MARKER = '[Superseded runtime context]'
-export function isRuntimeContextMarker(value: unknown): boolean {
-  const message = value as { role?: unknown; source?: { kind?: unknown; form?: unknown; sections?: unknown }; content?: unknown } | null
-  if (message?.role !== 'user' || message.source?.kind !== 'plugin:kiokuko-dsh' || message.source.form !== 'snapshot') return false
-  return Array.isArray(message.source.sections) && message.source.sections.length === 0
-    && Array.isArray(message.content) && message.content.length === 1
-    && message.content[0]?.type === 'text' && message.content[0]?.text === RUNTIME_CONTEXT_MARKER
 }

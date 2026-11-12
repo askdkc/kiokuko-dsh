@@ -210,3 +210,99 @@ test('core close waits for actual executing transactions before closing the shar
     try {assert.ok(check.prepare("SELECT name FROM sqlite_master WHERE name='close_order_test'").get())}finally{check.close()}
   } finally {release();await runtime.close();await rm(fixture.root,{recursive:true,force:true})}
 })
+
+test('close finishes while initialization is held and late initialization cannot open or publish a DB', async () => {
+  const { DshCoreRuntime } = await import('../../../src/dsh/core-runtime.js')
+  const { auxiliaryDatabase, auxiliaryDatabasePending } = await import('../../../src/dsh/auxiliary-database.js')
+  const fixture = await makeRegisteredDatabase()
+  let release!: () => void, opens = 0, writes = 0
+  const held = new Promise<void>(resolve=>{release=resolve})
+  const runtime = new DshCoreRuntime({repositoryRoot:fixture.root,databasePath:fixture.databasePath,
+    initializeDatabase:()=>held,openDatabase:()=>{opens++;throw new Error('late open')}})
+  const attempts=Promise.allSettled(Array.from({length:1000},()=>auxiliaryDatabase(runtime,()=>{writes++},()=>true)))
+  const startup=assert.rejects(runtime.start())
+  let closed=false
+  const closing=runtime.close().then(()=>{closed=true})
+  try {
+    await attempts
+    await new Promise(resolve=>setTimeout(resolve,80))
+    assert.equal(closed,true,'close must not await the held initializer')
+    await startup
+    assert.equal(auxiliaryDatabasePending(runtime),0)
+    await assert.rejects(runtime.withDatabase(()=>{writes++}))
+  } finally {release();await closing;await startup;await new Promise(resolve=>setImmediate(resolve));await rm(fixture.root,{recursive:true,force:true})}
+  assert.equal(opens,0);assert.equal(writes,0)
+})
+
+for (const configured of [false, true]) {
+  test(`close detaches a held DB opener and closes its late connection without use (configured=${configured})`, async () => {
+    const { DshCoreRuntime } = await import('../../../src/dsh/core-runtime.js')
+    const fixture = await makeRegisteredDatabase()
+    const db = openConnection(fixture.databasePath)
+    let release!: () => void, entered!: () => void, closes = 0, uses = 0
+    const held = new Promise<void>(resolve => { release = resolve })
+    const acquired = new Promise<void>(resolve => { entered = resolve })
+    const tracked = new Proxy(db, { get(target, property) {
+      if (property === 'close') return () => { closes++; target.close() }
+      const value = Reflect.get(target, property, target)
+      return typeof value === 'function' ? (...args: unknown[]) => { uses++; return value.apply(target, args) } : value
+    } })
+    const runtime = new DshCoreRuntime({repositoryRoot:fixture.root,databasePath:fixture.databasePath,
+      initializeDatabase:()=>undefined,openDatabase:async()=>{entered();await held;return tracked},
+      ...(configured ? {embeddingConfig:{mode:'off' as const,provider:'openai-compatible' as const,allowRemote:false,vectorBackend:'auto' as const,timeoutMs:1000,batchSize:1}} : {})})
+    const startup = assert.rejects(runtime.start(), /runtime is closed/)
+    const write = assert.rejects(runtime.enqueueWrite(()=>{uses++}), /runtime is closed/)
+    const agent = assert.rejects(runtime.openAgent({dshSessionId:'late',turn:1}), /runtime is closed/)
+    try {
+      await acquired
+      let closed=false
+      const closing=runtime.close().then(()=>{closed=true})
+      await new Promise(resolve=>setTimeout(resolve,80))
+      assert.equal(closed,true,'close must not wait for the held opener')
+      await closing
+      await Promise.all([startup,write,agent])
+      assert.equal(closes,0,'unpublished connection remains owned by the opener until it settles')
+      release()
+      await new Promise(resolve=>setImmediate(resolve))
+      assert.equal(closes,1)
+      assert.equal(uses,0,'late connection must not even be probed for embedding settings')
+      assert.equal(runtime.activeAgentCount,0)
+      await runtime.close()
+      assert.equal(closes,1)
+    } finally {release();await runtime.close();await new Promise(resolve=>setImmediate(resolve));if(closes===0)db.close();await rm(fixture.root,{recursive:true,force:true})}
+  })
+}
+
+test('late initializer rejection after close is consumed without reopening runtime', async () => {
+  const { DshCoreRuntime } = await import('../../../src/dsh/core-runtime.js')
+  let reject!: (reason: Error) => void
+  const runtime = new DshCoreRuntime({repositoryRoot:process.cwd(),databasePath:'/tmp/unused-cancelled-runtime.sqlite3',
+    initializeDatabase:()=>new Promise((_, fail)=>{reject=fail})})
+  const startup=assert.rejects(runtime.start(), /runtime is closed/)
+  await runtime.close()
+  await startup
+  reject(new Error('late initialization failure'))
+  await new Promise(resolve=>setImmediate(resolve))
+  await assert.rejects(runtime.start(), /runtime is closed/)
+})
+
+for (const boundary of ['afterPreflight','afterWritableOpen','beforeCommit'] as const) {
+  test(`default initializer cancels at ${boundary} and leaves no committed migrations`, async () => {
+    const { initializeDatabase } = await import('../../../src/dsh/database.js')
+    const root=await mkdtemp(join(tmpdir(),'kiokuko-init-cancel-'))
+    const path=join(root,'index.sqlite3'), controller=new AbortController()
+    try {
+      await assert.rejects(initializeDatabase({databasePath:path,signal:controller.signal}, {
+        [boundary]:()=>controller.abort(new Error('cancel migration')),
+      }), /cancel migration/)
+      if (boundary==='afterPreflight') await assert.rejects(access(path))
+      else {
+        const db=openConnection(path)
+        try {
+          assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().length,0)
+          db.exec('BEGIN EXCLUSIVE; CREATE TABLE cancellation_cleanup(value TEXT); COMMIT')
+        } finally {db.close()}
+      }
+    } finally {await rm(root,{recursive:true,force:true})}
+  })
+}

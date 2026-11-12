@@ -13,6 +13,7 @@ export type EmbeddingDatabaseOpener = (
 ) => SqliteDatabase | PromiseLike<SqliteDatabase>;
 
 export interface OpenEmbeddingDatabaseOptions {
+  readonly signal?: AbortSignal;
   readonly config?: EmbeddingConfig;
   readonly openDatabase?: EmbeddingDatabaseOpener;
   readonly createLoader?: () => Promise<SqliteVecLoader | null>;
@@ -45,7 +46,17 @@ export async function openEmbeddingDatabase(
   databasePath: string,
   options: OpenEmbeddingDatabaseOptions,
 ): Promise<OpenEmbeddingDatabaseResult> {
-  const openDatabase = options.openDatabase ?? openConnection;
+  const opener = options.openDatabase ?? openConnection;
+  const openDatabase: EmbeddingDatabaseOpener = async (path, connectionOptions) => {
+    options.signal?.throwIfAborted();
+    const database = await opener(path, connectionOptions);
+    if (options.signal?.aborted) {
+      database.close();
+      options.signal.throwIfAborted();
+    }
+    return database;
+  };
+  options.signal?.throwIfAborted();
   if (options.backend !== undefined) {
     return { database: await openDatabase(databasePath), backend: options.backend };
   }
@@ -53,6 +64,7 @@ export async function openEmbeddingDatabase(
   if (config === undefined) {
     const probe = await openDatabase(databasePath);
     try {
+      options.signal?.throwIfAborted();
       try {
         config = readPersistedEmbeddingSettings(probe);
       } catch {
@@ -62,6 +74,7 @@ export async function openEmbeddingDatabase(
       probe.close();
     }
   }
+  options.signal?.throwIfAborted();
   if (config.mode === 'off') {
     return { database: await openDatabase(databasePath), backend: undefined };
   }
@@ -72,6 +85,7 @@ export async function openEmbeddingDatabase(
   }
 
   const loader = await (options.createLoader ?? createSqliteVecLoader)();
+  options.signal?.throwIfAborted();
   if (loader === null) {
     if (config.vectorBackend === 'sqlite-vec') forcedSqliteVecUnavailable();
     return { database: await openDatabase(databasePath), backend: javascriptBackend };

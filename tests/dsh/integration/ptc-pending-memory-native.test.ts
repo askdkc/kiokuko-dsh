@@ -93,7 +93,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           assert.deepEqual(names, ['run_code'], 'pending memory keeps the native PTC transport')
           row.preparation = messageResult('prepare')
           assert.equal(row.preparation.isError, false)
-          response = mock.toolCallResponse('status', 'run_code', { description: 'Inspect pending memory review', code: 'return JSON.stringify(await tools.task_memory_review({ action: "status" }))' })
+          response = mock.toolCallResponse('status', 'run_code', { description: 'Inspect pending memory review', code: 'inspect(JSON.stringify(await tools.task_memory_review({ action: "status" })))' })
         } else if (step === 3) {
           const statusResult = messageResult('status')
           if (statusResult.isError) throw new Error(`status subdispatch failed: ${JSON.stringify(statusResult)}`)

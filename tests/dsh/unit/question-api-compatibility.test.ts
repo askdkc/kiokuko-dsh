@@ -4,8 +4,8 @@ import { nativeQuestionClass } from '../helpers/native-question.js'
 import { apply } from '../../../src/client.js'
 
 // Exercise the shipped native class, not a hand-written cancel-only carrier.
-for (const fixture of ['dsh-runtime']) test(`numbered composer claims real ${fixture} question carriers`, () => {
-  const PendingQuestion = nativeQuestionClass()
+for (const minify of [false, true]) test(`numbered composer claims real question carriers (minified=${minify})`, () => {
+  const PendingQuestion = nativeQuestionClass(minify)
   const store = (state: any) => ({ getSnapshot: () => state, update() {} })
   const globals = globalThis as any, previous = globals.createSnapshotStore
   globals.createSnapshotStore = store
@@ -15,7 +15,7 @@ for (const fixture of ['dsh-runtime']) test(`numbered composer claims real ${fix
       slots: { inject: (_n, f) => f(), register(d) { if (d.name === 'conversation.composer') select = d.select } } })
     for (const count of [1, 9, 10, 24, 0]) {
       const q = { id: 'unknown-question', header: 'Test', question: 'Choose', options: Array.from({ length: count }, (_, i) => ({ label: `Choice ${i + 1}` })) }
-      const pending = new PendingQuestion('session', [q], fixture === 'dsh-runtime' ? new AbortController().signal : undefined)
+      const pending = new PendingQuestion('session', [q], 'fixture-call')
       assert.equal(select({ pendingInteraction: pending }), pending)
       if (pending.close) pending.close()
     }
