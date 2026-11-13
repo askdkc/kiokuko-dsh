@@ -6,7 +6,7 @@ import { preparationCarrierResult } from '../../../src/dsh/preparation-carrier-r
 // Current run_code allows logs and optional sandbox, never arbitrary result.
 const schema = { type: 'object', additionalProperties: false, properties: {
   logs: { type: 'array', items: { type: 'string' } }, sandbox: { type: 'object' },
-}, required: ['logs'] }
+}, required: ['logs'] } satisfies Parameters<typeof validateJsonSchemaValue>[0]
 
 test('all host receipts fit the strict PTC output contract and remain model-visible', () => {
   for (const receipt of [
