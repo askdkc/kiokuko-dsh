@@ -11,9 +11,11 @@ import { pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { createDshHostAdapter } from '../../../src/dsh/host-adapter.js'
 import { mountDshComposition } from '../../../src/dsh/composition.js'
-import { nativeMock } from '../helpers/native-mock.js'
+import { nativeMock, nativeToolResults } from '../helpers/native-mock.js'
 import { isolateSkillHome } from '../helpers/skill-home.js'
 import { TASK_PREPARE_TOOL } from '../../../src/dsh/on-demand-intake.js'
+import { mountLispSurface } from '../../../src/dsh/lisp/surface.js'
+import { LispConfig } from '../../../src/dsh/lisp/contracts.js'
 
 isolateSkillHome()
 
@@ -23,12 +25,6 @@ const dshManifest = join(packageRoot, '@deepseek-ai/dsh/package.json')
 const explicitRuntime = process.env.KIOKUKO_DSH_PACKAGE_ROOT !== undefined || process.env.KIOKUKO_REQUIRE_DSH_NATIVE === '1'
 if (!existsSync(dshManifest) && explicitRuntime) throw new Error('Current DSH native subagent runtime is required')
 const available = existsSync(dshManifest)
-if (available) {
-  const version = JSON.parse(readFileSync(dshManifest, 'utf8')).version
-  const expectedVersion = process.env.KIOKUKO_EXPECTED_DSH_VERSION
-    ?? JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/dsh-runtime/package.json'), 'utf8')).dependencies['@deepseek-ai/dsh']
-  if (version !== expectedVersion) throw new Error(`Subagent test requires ${expectedVersion}, received ${version}`)
-}
 const current = available
 const moduleUrl = (name: string) => pathToFileURL(join(packageRoot, '@deepseek-ai', name, 'lib/index.js')).href
 function findPatchRows(value: unknown, id: string): Record<string, any>[] {
@@ -43,7 +39,7 @@ async function waitBounded(promise: Promise<unknown>, failure: string): Promise<
     await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(failure)), 10_000) })])
   } finally { if (timer) clearTimeout(timer) }
 }
-for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'failure', 'authority'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
+for (const mode of ['unprepared-spawn', 'unprepared-fork', 'foreground', 'parallel', 'parallel-staggered', 'fork', 'fork-lisp', 'failure', 'authority'] as const) test(`shipped standard preset ${mode} runs without Kiokuko child intake`, {
   skip: current ? false : 'requires the canonical current DSH runtime', timeout: 120_000,
 }, async () => {
   const [cordis, appBoot, llm, session, cmdline] = await Promise.all([
@@ -56,10 +52,13 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
   let ctx: any
   let adapter: ReturnType<typeof createDshHostAdapter> | undefined
   let composition: Awaited<ReturnType<typeof mountDshComposition>> | undefined
+  let lisp: Awaited<ReturnType<typeof mountLispSurface>> | undefined
   let parent: any
   let releaseChildren: (() => void) | undefined
   let releaseSecondChild: (() => void) | undefined
   const parallel = mode === 'parallel' || mode === 'parallel-staggered'
+  const unprepared = mode === 'unprepared-spawn' || mode === 'unprepared-fork'
+  const fork = mode.startsWith('fork') || mode === 'unprepared-fork'
   try {
     await mkdir(repository)
     await writeFile(join(repository, 'authority.txt'), 'original')
@@ -149,6 +148,37 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
           authorityResults.push({ name: 'forged', result: await invoke(forged, 'kioku_write', { path: 'authority.txt', content: 'forged' }, `forged-${started.length}`) })
           yield* mock.textResponse('CHILD_COMPLETE'); return
         }
+        if (child && mode.startsWith('fork')) {
+          childStep++
+          if (childStep === 1) { yield* mock.toolCallResponse('child-read', 'read', { file_path: 'authority.txt' }); return }
+          const read = nativeToolResults(options.messages).find((result: any) => result.toolCallId === 'child-read')
+          assert.ok(read && !read.isError, JSON.stringify(read))
+          assert.match(JSON.stringify(read.content), /original/)
+          if (childStep === 2) { yield* mock.toolCallResponse('child-completion', 'task_completion', { action: 'status' }); return }
+          const completion = nativeToolResults(options.messages).find((result: any) => result.toolCallId === 'child-completion')
+          assert.ok(completion && !completion.isError, JSON.stringify(completion))
+          if (childStep === 3) { yield* mock.toolCallResponse('child-workflow', 'coding_workflow', { action: 'status' }); return }
+          const workflow = nativeToolResults(options.messages).find((result: any) => result.toolCallId === 'child-workflow')
+          assert.ok(workflow && !workflow.isError, JSON.stringify(workflow))
+          assert.equal(toolValue(options, 'child-workflow').applicable, true)
+          if (childStep === 4) {
+            yield* mock.toolCallResponse('child-bind-denied', 'task_completion', { action: 'bind', criterionId: 'parent-check',
+              method: { kind: 'native_command', command: 'printf original', cwd: repository, sourcePaths: ['authority.txt'],
+                assertion: 'output_matches', expectedOutput: 'original' } }); return
+          }
+          const bind = nativeToolResults(options.messages).find((result: any) => result.toolCallId === 'child-bind-denied')
+          assert.ok(bind?.isError, 'child status access must not grant parent verification binding')
+          assert.match(JSON.stringify(bind), /exact active native run/)
+          if (mode === 'fork-lisp') {
+            assert.equal(toolValue(options, 'child-workflow').choice.state, 'yes')
+            assert.ok(options.tools.some((tool: any) => tool.name === 'lisp_eval'), 'the admitted child keeps its own Lisp surface')
+            if (childStep === 5) { yield* mock.toolCallResponse('child-lisp', 'lisp_eval', { operationId: 'child-lisp', code: '(+ 20 22)' }); return }
+            const evaluated = toolValue(options, 'child-lisp')
+            assert.equal(evaluated.ok, true, JSON.stringify(evaluated))
+            assert.equal(evaluated.value.json, 42)
+          }
+          yield* mock.textResponse('CHILD_COMPLETE'); return
+        }
         if (child && mode === 'failure') throw new Error('child fixture failure')
         if (child && parallel) {
           const childRequest = ++childRequests
@@ -170,11 +200,28 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
         ]
         const parentStep = child || !options.tools?.length ? 0 : ++parentRequests
         const chunks = child ? mock.textResponse('CHILD_COMPLETE')
-          : mode === 'fork' && parentStep === 1 ? mock.textResponse('PARENT_SEED')
-          : parentStep === (mode === 'fork' ? 2 : 1) ? interpretedPreparation(mock, 'prepare-parent', 'new', 'change', 'build')(options)
-          : parentStep === (mode === 'fork' ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
-          : parentStep === (mode === 'fork' ? 4 : 3) ? mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:toolValue(options,'goal-status').revision,definition:fixtureDefinition()})
-          : mode === 'fork' && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
+          : fork && parentStep === 1 ? mock.textResponse('PARENT_SEED')
+          : unprepared ? parentStep === (fork ? 2 : 1)
+            ? tool('unprepared-child', fork ? 'subagent_fork' : 'subagent', false)
+            : parentStep === (fork ? 3 : 2)
+              ? (() => {
+                const rejected = nativeToolResults(options.messages).find(message => message.toolCallId === 'unprepared-child')
+                assert.ok(rejected?.isError, 'unprepared delegation must not launch a child')
+                assert.match(JSON.stringify(rejected), /Native delegation requires a prepared parent task/)
+                assert.match(JSON.stringify(rejected), /requestIntent.*evidenceRefs/)
+                assert.equal(started.length, 0)
+                return interpretedPreparation(mock, 'prepare-parent', 'new', 'change', 'build')(options)
+              })()
+              : parentStep === (fork ? 4 : 3)
+                ? tool('recovered-child', fork ? 'subagent_fork' : 'subagent', false)
+                : mock.textResponse('PARENT_COMPLETE')
+          : parentStep === (mode.startsWith('fork') ? 2 : 1) ? interpretedPreparation(mock, 'prepare-parent', 'new', 'change', 'build')(options)
+          : parentStep === (mode.startsWith('fork') ? 3 : 2) ? mock.toolCallResponse('goal-status','coding_workflow',{action:'status'})
+          : parentStep === (mode.startsWith('fork') ? 4 : 3) ? (() => {
+              const status = toolValue(options, 'goal-status')
+              return mock.toolCallResponse('goal-propose','coding_workflow',{action:'propose',expectedRevision:status.revision,definition:fixtureDefinition()})
+            })()
+          : mode.startsWith('fork') && parentStep === 5 ? tool('fork-1', 'subagent_fork', false)
           : parallel && parentStep === 4 ? multi([['spawn-1', 'subagent'], ['spawn-2', 'subagent']])
           : (mode === 'foreground' || mode === 'failure' || mode === 'authority') && parentStep === 4 ? tool('spawn-1', 'subagent', false)
           : mock.textResponse('PARENT_COMPLETE')
@@ -187,24 +234,29 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     assert.ok(nativeQuestions)
     nativeQuestions.ask = async (request: any) => {
       assert.notEqual(request.agent?.session?.header?.origin, 'subagent', 'generic children must never receive startup or intake questions')
-      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, 'decision OFF / Lisp OFF')
+      if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStartup(request, mode === 'fork-lisp' ? 'decision OFF / Lisp ON' : 'decision OFF / Lisp OFF')
       questions.push(request)
       if (request.agent?.session?.header?.origin === 'subagent') throw new Error('Kiokuko asked a generic child')
       return { answers: request.questions.map((question: any) => ({ id: question.id,
         selected: [question.id.startsWith('coding-lisp-') ? '使わない' : question.id === 'execution-mode' ? '通常実行' : question.options?.[0]?.label ?? 'build'] })) }
     }
+    const hostRepository = mode.startsWith('fork') ? join(temporary, 'host-workspace') : repository
+    if (hostRepository !== repository) await mkdir(hostRepository)
     adapter = createDshHostAdapter(ctx as typeof cordis.Context, {
-      repositoryRoot: repository, databasePath: join(temporary, 'kiokuko.sqlite3'),
+      repositoryRoot: hostRepository, databasePath: join(temporary, 'kiokuko.sqlite3'),
       migrationsDirectory: join(process.cwd(), 'migrations'), agenticReplay: { enabled: false }, typedDecisions: { mode: 'off' },
     })
     composition = await mountDshComposition(ctx, adapter.host)
+    if (mode === 'fork-lisp') lisp = await mountLispSurface(ctx, adapter.host.runtime!, LispConfig.parse({
+      enabled: true, executionMode: 'development', sbclPath: process.env.KIOKUKO_LISP_SBCL, startupTimeoutMs: 60000,
+    }))
     parent = await ctx.agents.create({ sessionId: session.SessionId('standard-parent'),
       agentOptions: { provider: 'mock', model: 'mock' }, meta: { cwd: repository },
       setup: (agentCtx: any) => ctx.agentPresets.mount(agentCtx, 'standard').then(() => undefined) })
     const names = ctx.tools.schemas(parent.agent).map((schema: any) => schema.name)
     assert.ok(names.includes('subagent'))
     assert.ok(names.includes('subagent_fork'))
-    if (mode === 'fork') {
+    if (fork) {
       parent.agent.followup(llm.createUserMessage({ content: [{ type: 'text', text: 'Remember the first completed turn.' }], source: { kind: 'user' } }))
       await parent.agent.whenIdle()
     }
@@ -227,25 +279,39 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       } finally { releaseChildren?.(); releaseSecondChild?.() }
     }
     await parent.agent.whenIdle()
+    if (unprepared) {
+      const firstRequest = requests.find(request => request.sessionId === 'standard-parent' && request.tools?.length)
+      assert.match(JSON.stringify(firstRequest?.messages), /Native delegation requires a prepared parent task/,
+        'the parent must receive the prerequisite before its first delegation, not only after failure')
+      const launch = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'recovered-child')
+      assert.ok(launch && !launch.data.message.isError, JSON.stringify(launch?.data ?? { error: 'Missing native delegation result' }))
+    }
     await waitBounded(childrenFinished, 'Continuable children did not settle')
     assert.ok(requests.some(request => request.sessionId !== 'standard-parent'),
       `real child LLM request must occur: ${JSON.stringify({ requests: requests.map(request => ({ sessionId: request.sessionId, tools: request.tools?.map((tool: any) => tool.name) })), questions: questions.map(request => request.questions?.map((question: any) => ({ id: question.id, options: question.options?.map((option: any) => option.label) }))), events: parent.agent.session.snapshotEvents().filter((event: any) => event.type === 'tool/result' || event.type === 'tool/call').map((event: any) => event.data) })}`)
     const preparation = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'prepare-parent')
-    assert.ok(preparation && !preparation.data.message.isError, 'parent must prepare through the real native tool registry before launching children')
+    assert.ok(preparation && !preparation.data.message.isError, 'explicit parent preparation must succeed')
+    if (!unprepared) {
+      const initialStatus = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId === 'goal-status')
+      assert.equal(toolValue({ messages: [initialStatus.data.message] }, 'goal-status').choice.state, mode === 'fork-lisp' ? 'yes' : 'no',
+        'the confirmed startup Lisp choice must survive task admission before a Goal exists')
+    }
     assert.equal(questions.some(request => request.agent?.session?.header?.origin === 'subagent'), false)
     const parentRows = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT COUNT(*) AS count FROM ledger_runs WHERE dsh_session_id=?').get<{ count: number }>(parent.agent.session.id))
-    assert.equal(parentRows?.count, 1, 'only the explicitly prepared parent execution may create a run')
+    assert.equal(parentRows?.count, 1, 'recovery must prepare exactly one parent run')
     assert.ok(requests.some(request => request.sessionId === 'standard-parent' &&
       request.tools?.some((tool: any) => tool.name === 'subagent') &&
       request.tools?.some((tool: any) => tool.name === 'subagent_fork')), 'both tools must reach the parent model request')
     if (!parallel) {
-      const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' && event.data.message.toolCallId !== 'prepare-parent')
+      const result = parent.agent.session.snapshotEvents().find((event: any) => event.type === 'tool/result' &&
+        event.data.message.toolCallId === (unprepared ? 'recovered-child' : fork ? 'fork-1' : 'spawn-1'))
       const child = ended.find(item => item.id === started[0]?.id)
       assert.ok(child)
       if (mode === 'failure') {
         assert.equal(child.stopReason, 'error')
       } else {
-        assert.equal(child.stopReason, 'completed')
+        assert.equal(child.stopReason, 'completed', JSON.stringify(requests.filter(request => request.sessionId !== 'standard-parent')
+          .flatMap(request => nativeToolResults(request.messages)).filter(result => result.toolCallId.startsWith('child-'))))
         assert.match(JSON.stringify(child.lastAssistantMessage), /CHILD_COMPLETE/)
       }
       assert.equal(result?.data.message.isError, false, 'launch result reports asynchronous child startup')
@@ -264,7 +330,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
       const childRows: { count: number } | undefined = await adapter.host.runtime!.withDatabase(db => db.prepare('SELECT count(*) AS count FROM ledger_runs WHERE dsh_session_id = ?').get<{count:number}>(child.id))
       assert.equal(childRows?.count, 0)
     }
-    if (mode === 'fork') {
+    if (fork) {
       const seed = JSON.stringify(requests.find(request => request.sessionId !== 'standard-parent')?.messages)
       assert.match(seed, /PARENT_SEED/)
       assert.doesNotMatch(seed, /Implement a bounded change using a subagent\./)
@@ -312,7 +378,7 @@ for (const mode of ['foreground', 'parallel', 'parallel-staggered', 'fork', 'fai
     composition?.stopIngress()
     let cleanupError: unknown
     for (const cleanup of [
-      () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
+      () => lisp?.dispose(), () => adapter?.dispose(), () => parent?.dispose(), () => composition?.dispose(),
       () => ctx?.fiber.dispose(), () => rm(temporary, { recursive: true, force: true }),
     ]) {
       try { await cleanup() } catch (error) { cleanupError ??= error }

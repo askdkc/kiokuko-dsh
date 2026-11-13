@@ -71,8 +71,11 @@ export function createContextMessages({
     const workflow = await runtime.withDatabase(db=>codingStatus(db,{runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot}))
     if(workflow.applicable)messages.push({role:'user',source:'user-task',name:'coding-workflow',content:`${CODING_GUIDANCE}\n${JSON.stringify(workflow)}`})
     const executionSelection = getSelection(item.runId)?.value
+    const lispChoice = workflow.applicable
+      ? workflow.choice.state === 'yes' ? 'ON' : workflow.choice.state === 'no' ? 'OFF' : workflow.choice.state === 'cancelled' ? '取消済み' : '未確定'
+      : 'この実行方式の通知では確定しません'
     const discussionText = executionSelection?.status === 'ready'
-      ? '実行方式・モデル構成の選択が確定しました。自由入力への会話のみという制限は解除されています。直近のユーザーの依頼と現在の実行指示に従ってください。'
+      ? `実行方式・モデル構成の選択が確定しました。Lispの選択状態: ${lispChoice}。実行方式に関する自由入力への回答は終わっています。Lispの選択、Stop、権限、現在の実行指示は引き続き有効です。`
       : undefined
     const discussionMessages = discussionText ? [{
       role: 'user' as const, source: 'user-task' as const, name: 'execution-selection-discussion',

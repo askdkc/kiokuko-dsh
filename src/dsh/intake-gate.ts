@@ -1,4 +1,5 @@
 import { createMemoryReuseRuntime } from './memory-reuse.js'
+import { releaseFailedPreparation } from './failed-preparation.js'
 import type { DecisionService } from './decisions/service.js'
 import { classifyTaskForIntake, selectInstalledSkills } from './decisions/workflows.js'
 import { AkinatorMemoryConfig, type ProbeConfig } from '../akinator/memory-probe-types.js'
@@ -289,6 +290,13 @@ export class DshIntakeGate {
     })
     try {
       return await operation
+    } catch (error) {
+      try {
+        await this.#runtime.withDatabase(db => releaseFailedPreparation(db, event.sessionId, requestId))
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Failed preparation reservation could not be released')
+      }
+      throw error
     } finally {
       if (this.#preparing.get(cacheKey)?.promise === operation) this.#preparing.delete(cacheKey)
     }

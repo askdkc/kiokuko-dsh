@@ -166,7 +166,7 @@ test('native task completion observer rejects a delayed result after generation 
 })
 
 
-test('native children require host spawn proof and retain the original parent authority across resume', async () => {
+for (const foreignWorkspace of [false, true]) test(`native children retain parent authority across resume (session differs from host workspace=${foreignWorkspace})`, async () => {
   const f = await fixture(), agents = new Map<string,any>(), sessions = new Map<string,any>()
   const parent:any = f.identity.agent
   parent.session = {id:f.identity.sessionId,header:{cwd:f.root}}
@@ -177,7 +177,7 @@ test('native children require host spawn proof and retain the original parent au
   }
   const backend = {async startActivation(spec:any) {create(spec.childId,spec.request.parent.session.id);return {childId:spec.childId}}}
   const original = backend.startActivation
-  const authority = new NativeTaskAuthority({runtime:f.runtime,repositoryRoot:f.root,backend,agents:{get:id=>agents.get(id),list:()=>[...agents.values()]},sessions,resolveParent:f.host.resolve})
+  const authority = new NativeTaskAuthority({runtime:f.runtime,repositoryRoot:foreignWorkspace ? process.cwd() : f.root,backend,agents:{get:id=>agents.get(id),list:()=>[...agents.values()]},sessions,resolveParent:f.host.resolve})
   const service = new OwnedExecutionService({...f.host,resolve: execution => authority.resolve(execution) ?? f.host.resolve(execution),
     resolveRead:async execution=>authority.read(execution)??readOwnedIdentity(f.db,execution.agent,f.root,execution.arguments?.operationId)})
   const exec = (agent:any,name:string,args:any,id:string) => service.execute(name,args,{agent,name,arguments:args,callId:id,signal:new AbortController().signal}) as Promise<any>
@@ -191,6 +191,11 @@ test('native children require host spawn proof and retain the original parent au
     await assert.rejects(exec(child,'kioku_write',{path:'wrong-parent',content:'no'},'wrong-parent'), /parent_mismatch/)
     child.session.header.parentSession = parent.session.id
     assert.equal((await exec(child,'kioku_write',{path:'restored-parent.txt',content:'still-authorized'},'restored-parent')).applied,true)
+    child.session.header.cwd = process.cwd()
+    await assert.rejects(exec(child,'kioku_write',{path:'wrong-workspace',content:'no'},'wrong-workspace'), /workspace_mismatch/)
+    child.session.header.cwd = f.root
+    const nested = await backend.startActivation({provider:'fork',delivery:'parent',request:{parent:child},signal:new AbortController().signal})
+    assert.equal((await exec(agents.get(`agent:${nested.childId}`),'kioku_write',{path:'nested.txt',content:'owned'},'nested')).applied,true)
     f.state('Pending');f.state('Working')
     await assert.rejects(exec(child,'kioku_write',{path:'stale-child.txt',content:'no'},'stale'),/stale/)
     await assert.rejects(backend.startActivation({provider:'spawn',delivery:'parent',request:{parent:child},signal:new AbortController().signal}),/stale/)

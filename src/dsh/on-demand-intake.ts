@@ -88,7 +88,9 @@ class RequestClarification extends Error {
 
 export type { IntakeMode } from './intake-mode.js'
 export const TASK_PREPARE_TOOL = 'prepare_requested_work'
-export const ON_DEMAND_GUIDANCE =
+const NATIVE_DELEGATION_GUIDANCE =
+  'Native delegation requires a prepared parent task: before subagent or subagent_fork, call prepare_requested_work with requestIntent interpreted from the original user request and evidenceRefs from the current host context. Reuse an already prepared current parent task. This binds child ownership and Stop; it is not a memory review or a requirement for ordinary direct editing. Do not infer the request action from the delegation tool name, invent a Goal, or ask the child to prepare the parent task. If preparation is unavailable, continue authorized work directly without delegation; never bypass a denial or unresolved clarification.'
+export const ON_DEMAND_GUIDANCE = NATIVE_DELEGATION_GUIDANCE + ' ' +
   'The original user request may be answered now without selecting a task category. Ordinary native Bash needs no memory, Goal or prepare_requested_work round trip. Unowned native write/edit and PTC calls also need no task record; native permissions and human Stop remain authoritative. For ordinary work with Lisp selected, call the registered Lisp tools directly; do not call prepare_requested_work, create_goal or memory-review tools merely to start or finish the task. The host compacts terminal turns into tagged memory in the background. Registered root Lisp tools delegate to the Lisp runtime without an optional preparation round trip; foreground processes use native Bash permissions, sandbox, approval and Stop. Owned effects require current task authority. Explicitly enrolled protected work also follows its execution protocol. Preserve the original utterance, every requested action, negation, quotation, target uncertainty, and current-session references; never replace it with a model rewrite. Use only the supplied active Goal and proposal references from this exact native session, never another chat. Classify relation as new, same_scope_continuation, scope_change, or unknown, and action as answer, research, verify, change, operate, or unknown; do not infer either from a fixed phrase or tool name. “Check how it behaves” is verification/research even when the next tool is Bash. This interpretation grants no native permission. When the decision provider is unavailable, abstains, or returns unknown, interpret the same context in the main model; ask the user only if the action or referenced target remains unclear, and preserve active work while waiting. Native read, glob, grep, web_search and web_fetch demands can gather evidence without preparation. Do not call prepare_requested_work merely to read a plan or inspect files. prepare_requested_work accepts either the legacy taskType alone or a requestIntent with exact evidenceRefs from the supplied context. taskOperation is optional and describes a transition of an existing activeTask, not starting the requested work itself. Omit taskOperation when activeTask is null or the request does not ask for a state transition; it never accepts a rewritten task or target and never changes native permissions. Installed Skill reads need no preparation and do not activate execution. Do not prepare work merely to load a skill. Plan, cancellation, memory-owner and execution ownership still apply. Optional coding records are not execution conditions. If only run_code is exposed, use the exact preparation-only carrier returned by this tool contract; the host intercepts it without evaluating code.'
 const ACTION_TYPES: readonly TaskType[] = TASK_TYPES.filter(
   (type) => type !== 'chat',
@@ -366,6 +368,16 @@ function nativeEvidenceRead(execution: Execution): boolean {
     (execution.name === 'working_directory' && !!execution.arguments &&
       typeof execution.arguments === 'object' && !Array.isArray(execution.arguments) &&
       Object.keys(execution.arguments).length === 0)
+}
+/** Native diagnostics/profile recovery keep their own validation and approval.
+ * This does not authorize task effects, arbitrary programs, or nested calls. */
+function nativeMaintenance(execution: Execution): boolean {
+  if (execution.parent !== undefined) return false
+  const args = execution.arguments
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return false
+  if (execution.name === 'plugin_manager') return true
+  if (execution.name === 'task_completion') return Object.keys(args).length === 1 && 'action' in args && args.action === 'status'
+  return execution.name === 'lsp' || execution.name === 'lsp_extra'
 }
 function unownedNativeTool(execution: Execution): boolean {
   return UNOWNED_NATIVE_TOOLS.has(execution.name) || nativeEvidenceRead(execution)
@@ -3097,17 +3109,16 @@ export class OnDemandIntake {
             // In particular, an inherited owner must not turn a read into an
             // immutable research preparation before the main model can interpret it.
             if (
-              state.status === 'answer' &&
-              !state.nativeUnowned &&
               execution.parent === undefined &&
-              nativeEvidenceRead(execution)
+              ((nativeMaintenance(execution) && ['answer', 'prepared'].includes(state.status)) ||
+                (state.status === 'answer' && !state.nativeUnowned && nativeEvidenceRead(execution)))
             ) {
               const clarification = executionClarification(
                 state.task,
                 state.requestIntent,
                 state.requestIntentContext,
               )
-              if (clarification && !state.clarificationPending) return denied(clarification)
+              if (clarification && !state.clarificationPending && !nativeMaintenance(execution)) return denied(clarification)
               this.#executions.set(execution, {
                 turn: state,
                 execute: actual.execute,
@@ -3200,7 +3211,9 @@ export class OnDemandIntake {
                 )
                 if (!type)
                   return denied(
-                    'This tool requires a Kiokuko task record; call prepare_requested_work only when that record is needed. Ordinary native write/edit, PTC, Bash and selected Lisp work can continue without it. Clarify unknown actions or targets first; native permissions and Stop remain authoritative.',
+                    execution.name === 'subagent' || execution.name === 'subagent_fork'
+                      ? NATIVE_DELEGATION_GUIDANCE + ' No child was launched; after successful parent preparation, retry the delegation.'
+                      : 'This tool requires a Kiokuko task record; call prepare_requested_work only when that record is needed. Ordinary native write/edit, PTC, Bash and selected Lisp work can continue without it. Clarify unknown actions or targets first; native permissions and Stop remain authoritative.',
                   )
                 await this.prepare(
                   state,
@@ -3319,9 +3332,9 @@ export class OnDemandIntake {
           }
           if (proof.evidenceReadDigest !== undefined) {
             if (
-              state.status !== 'answer' ||
+              !(state.status === 'answer' || (state.status === 'prepared' && nativeMaintenance(execution))) ||
               execution.parent !== undefined ||
-              !nativeEvidenceRead(execution) ||
+              !(nativeEvidenceRead(execution) || nativeMaintenance(execution)) ||
               canonicalContentHash(execution.arguments) !==
                 proof.evidenceReadDigest
             )
@@ -3524,9 +3537,9 @@ export class OnDemandIntake {
             ? undefined
             : 'Native Lisp identity or arguments changed'
         if (proof.evidenceReadDigest !== undefined)
-          return state.status === 'answer' &&
+          return (state.status === 'answer' || (state.status === 'prepared' && nativeMaintenance(execution))) &&
             execution.parent === undefined &&
-            nativeEvidenceRead(execution) &&
+            (nativeEvidenceRead(execution) || nativeMaintenance(execution)) &&
             canonicalContentHash(execution.arguments) ===
               proof.evidenceReadDigest
             ? undefined

@@ -1,5 +1,6 @@
 import type { SqliteDatabase } from '../db/adapter.js'
 import { readCodingWorkflow } from './coding-workflow/store.js'
+import { isReleasedPreparation } from './failed-preparation.js'
 
 export interface NativeJobView {
   readonly id: string
@@ -84,6 +85,7 @@ export function nativeExecutionOwnership(db: SqliteDatabase, sessionId: string, 
     }>(sessionId)
   if (currentRunId !== undefined && !runs.some(run => run.run_id === currentRunId)) throw new Error('Current native ownership is missing from authority storage')
   for (const run of runs) {
+    if (run.status === 'cancelled' && isReleasedPreparation(db, run.run_id, sessionId)) continue
     if (!['active', 'completed'].includes(run.status) || run.task_state !== 'Done' || run.task_pending_stop_json !== null || run.task_unresolved_json !== null) return 'owned'
     // The compatibility reader tolerates pre-workflow schemas; this authority
     // proof must instead reject an unavailable enrollment table.

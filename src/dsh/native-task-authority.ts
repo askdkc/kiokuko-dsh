@@ -72,12 +72,20 @@ export class NativeTaskAuthority {
     this.wrapper = async function (this: Backend, spec: any) {
       if (host.stopped || spec.delivery !== 'parent' || !['spawn', 'fork'].includes(spec.provider)) return original.call(this, spec)
       const parent = (spec.parent ?? spec.request?.parent) as Agent | undefined
-      if (!parent || !host.local(parent)) return original.call(this, spec)
-      host.exact(parent)
-      const rootAgent = backend.rootOf?.(parent)
+      if (!parent) return original.call(this, spec)
+      // Another installed host may own a foreign child. Do not intercept its
+      // launch unless this host reserved its lineage (including foreign roots).
+      if (isNativeSubagent(parent) && !host.local(parent) &&
+        !host.proofs.has(parent.session?.id ?? '')) return original.call(this, spec)
       const execution: Execution = { agent: parent }
       const identity = host.resolve(execution) ?? options.resolveParent(execution)
-      if (!identity) throw new KiokukoError('CONFLICT', 'No admitted task owns this native child launch')
+      if (!identity) {
+        if (!host.local(parent)) return original.call(this, spec)
+        throw new KiokukoError('CONFLICT', 'No admitted task owns this native child launch')
+      }
+      host.exact(parent)
+      if (!host.local(parent, identity.repositoryRoot)) throw authorityDenied('workspace_mismatch', 'Native parent workspace changed')
+      const rootAgent = backend.rootOf?.(parent)
       const pinned = Object.freeze({ ...identity })
       const rootIdentity = rootAgent === parent ? pinned : rootAgent && options.resolveParent({ agent: rootAgent })
       const root = rootAgent && rootIdentity ? { agent: rootAgent, identity: Object.freeze({ ...rootIdentity }) } : undefined
@@ -102,7 +110,7 @@ export class NativeTaskAuthority {
         const child = options.agents?.list?.().find(agent => agent.session?.id === childId)
         if (child) {
           host.exact(child)
-          if (!host.local(child) || !isNativeSubagent(child) || child.session?.header?.parentSession !== parent.session?.id)
+          if (!host.local(child, proof.identity.repositoryRoot) || !isNativeSubagent(child) || child.session?.header?.parentSession !== parent.session?.id)
             throw new KiokukoError('CONFLICT', 'Native child lineage changed')
           proof.child = child
           // This is the exact activation returned by the trusted backend. Its
@@ -130,7 +138,7 @@ export class NativeTaskAuthority {
       || !event.local || !['spawn', 'fork'].includes(event.provider)
       || event.parentSessionId !== original.parent.session?.id) return
     const child = this.options.agents?.get(event.id) as Agent | undefined
-    if (!child || child.session?.id !== event.id || !isNativeSubagent(child) || !this.local(child)
+    if (!child || child.session?.id !== event.id || !isNativeSubagent(child) || !this.local(child, original.identity.repositoryRoot)
       || child.session.header?.parentSession !== event.parentSessionId) return
     try {
       this.exact(child)
@@ -165,8 +173,8 @@ export class NativeTaskAuthority {
     })
     void proof.settlement.catch(() => {})
   }
-  private local(agent: Agent): boolean {
-    try { return !!agent.session?.header?.cwd && realpathSync(agent.session.header.cwd) === this.options.repositoryRoot } catch { return false }
+  private local(agent: Agent, repositoryRoot = this.options.repositoryRoot): boolean {
+    try { return !!agent.session?.header?.cwd && realpathSync(agent.session.header.cwd) === repositoryRoot } catch { return false }
   }
   private exact(agent: Agent): void {
     if (!agent.session || this.options.agents?.get(agent.id) !== agent || this.options.sessions?.get(agent.session.id) !== agent.session)
@@ -195,7 +203,7 @@ export class NativeTaskAuthority {
     if (proof.stopRequested || original?.stopRequested) throw authorityDenied('stop_requested', 'Native child stop requested')
     if (proof.ended || proof.completed) throw authorityDenied('activation_ended', 'Native child activation ended')
     this.exact(agent)
-    if (!this.local(agent)) throw authorityDenied('workspace_mismatch', 'Native child workspace changed')
+    if (!this.local(agent, proof.identity.repositoryRoot)) throw authorityDenied('workspace_mismatch', 'Native child workspace changed')
     if (agent.session.header?.parentSession !== proof.parent.session!.id)
       throw authorityDenied('parent_mismatch', 'Native child lineage changed')
     if (proof.child && proof.child !== agent)
@@ -219,7 +227,7 @@ export class NativeTaskAuthority {
     const proof = agent?.session ? this.active.get(agent.session.id) ?? this.proofs.get(agent.session.id) : undefined
     if (this.stopped || !agent?.session || !proof?.live || proof.ended) return undefined
     this.exact(agent)
-    if (!this.local(agent) || !isNativeSubagent(agent) || agent.session.header?.parentSession !== proof.parent.session?.id || proof.child && proof.child !== agent) return undefined
+    if (!this.local(agent, proof.identity.repositoryRoot) || !isNativeSubagent(agent) || agent.session.header?.parentSession !== proof.parent.session?.id || proof.child && proof.child !== agent) return undefined
     proof.child ??= agent
     return { ...proof.identity, sessionId: agent.session.id, workflowSessionId: proof.lease.sessionId, agent }
   }
@@ -251,7 +259,7 @@ export class NativeTaskAuthority {
     // with the same id is never evidence about this activation.
     const registered=this.options.agents?.get(child.id), session=this.options.sessions?.get(child.session.id)
     if(registered&&registered!==child||session&&session!==child.session)return
-    if(!this.local(child)||!isNativeSubagent(child)||child.session.header?.parentSession!==proof.parent.session?.id)return
+    if(!this.local(child, proof.identity.repositoryRoot)||!isNativeSubagent(child)||child.session.header?.parentSession!==proof.parent.session?.id)return
     await this.receipt(childId,proof,'completed')
   }
   private requestStop(id:string, proof:Proof):Promise<boolean> {
@@ -266,7 +274,7 @@ export class NativeTaskAuthority {
       const child=proof.child??this.options.agents?.list?.().find(agent=>agent.session?.id===id)
       if(!child)return false
       this.exact(child)
-      if(!this.local(child)||!isNativeSubagent(child)||child.session?.header?.parentSession!==proof.parent.session?.id)return false
+      if(!this.local(child, proof.identity.repositoryRoot)||!isNativeSubagent(child)||child.session?.header?.parentSession!==proof.parent.session?.id)return false
       proof.child=child
       if(child.status!=='idle')child.cancel?.({kind:'hook',reason:'Kiokuko task stopped'})
       if(!child.whenIdle)return false

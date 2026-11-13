@@ -106,15 +106,18 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
     parameters: JSON.parse(JSON.stringify(z.toJSONSchema(transport, { unrepresentable: 'any' }))),
     output: { schema: {}, render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute: async (args: unknown, execution: NativeExecution) => {
-      const identity = host.resolve(execution)
-      if (!identity || execution.name !== 'task_completion') {
-        throw new KiokukoError('CONFLICT', 'Task completion requires an exact active native run')
-      }
       execution.signal.throwIfAborted()
       const validation=input.safeParse(args)
       if(!validation.success)throw completionInputError(validation.error.issues.map(issue=>({field:issue.path.map(String).join('.')||'input',
         reason:issue.code==='custom'?issue.message:'Missing, invalid or unexpected field for this action/method'})))
       const parsed=validation.data
+      const identity = host.resolve(execution)
+      if (execution.name !== 'task_completion') throw new KiokukoError('CONFLICT', 'Task completion tool identity changed')
+      if (!identity) {
+        if (parsed.action === 'status') return { applicable: false, reason: 'no_active_native_task',
+          verified: false, nextAction: 'No admitted completion record is available. This status grants no execution authority; native diagnostics and recovery retain their own permissions.' }
+        throw new KiokukoError('CONFLICT', 'Task completion requires an exact active native run')
+      }
       const session = identity.agent?.session
       const observed = session?.id === identity.sessionId ? observedMemoryInput(session) : undefined
       if (parsed.action === 'status') return host.runtime.withDatabase(db => ({

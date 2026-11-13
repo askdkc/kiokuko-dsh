@@ -1755,6 +1755,27 @@ test('recoverable preparation failure preserves the request but retry must reacq
   assert.equal(f.bodies(), 1)
 })
 
+for (const owner of ['unowned', 'owned'] as const) for (const [name, args] of [
+  ['plugin_manager', { action: 'list_plugins' }], ['plugin_manager', { action: 'set_plugin', target: 'kiokuko', enabled: false }],
+  ['task_completion', { action: 'status' }], ['lsp_extra', { operation: 'diagnostics', file_path: 'src/example.ts' }],
+] as const) test(`native maintenance ${name}/${Object.values(args)[0]} remains reachable with ${owner} task state`, async t => {
+  let calls = 0
+  const f = await fixture(t, { nativeOwnership: async () => owner })
+  t.after(f.ctx.tools.register({ name, parameters: { type: 'object' }, output: { schema: {}, render: () => [] },
+    execute: () => { calls++; return 'native maintenance' } }))
+  await f.capture()
+  assert.equal((await f.execute(name, args)).isError, false)
+  assert.equal(calls, 1)
+  assert.equal(f.admissions.length, 0)
+  const deny = f.ctx.tools.guard((execution: any) => execution.name === name ? 'NATIVE_MAINTENANCE_DENIED' : undefined)
+  assert.match(JSON.stringify(await f.execute(name, args)), /NATIVE_MAINTENANCE_DENIED/)
+  assert.equal(calls, 1)
+  deny()
+  f.intake.stop()
+  assert.equal((await f.execute(name, args)).isError, true)
+  assert.equal(calls, 1)
+})
+
 for (const name of ['read', 'glob', 'grep', 'web_search', 'web_fetch', 'write', 'edit'] as const)
   test(`unowned native ${name} needs no optional classifier but keeps native denial and current ownership`, async (t) => {
     let owner: 'unowned' | 'owned' = 'unowned',

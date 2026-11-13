@@ -127,7 +127,7 @@ import type {
 } from './native-events.js'
 import type { TurnRecord } from './turn-state.js'
 import { readCodingWorkflow } from '../coding-workflow/store.js'
-import { markCodingScopeChange } from '../coding-workflow/service.js'
+import { answerCodingChoice, markCodingScopeChange } from '../coding-workflow/service.js'
 import { readExecutionFrame } from '../execution-frame.js'
 import {
   assertMemoryOwner,
@@ -371,10 +371,30 @@ export function createAdmission({
         return undefined
       }
     })
-    if (authority)
-      await runtime.withDatabase((database) =>
-        authorizeTaskLease(database, authority),
-      )
+    if (authority) {
+      const requestId = dshTurnRequestId({ dshSessionId: event.sessionId, turn: event.turn })
+      const startup = (await decisions.readStartup(requestId))?.startup
+      const lisp = native.get(LISP_CODING_SERVICE, false) as LispCodingService | undefined
+      const recorded = event.nativeAgent && lisp?.choiceFor?.(event.nativeAgent as any, event.task)
+      const choice = recorded ?? (startup && !startup.cancelled
+        ? { choice: startup.lisp ? 'yes' as const : 'no' as const, answerRef: `task-startup:${requestId}` }
+        : undefined)
+      event.signal.throwIfAborted()
+      await runtime.withDatabase(database => {
+        authorizeTaskLease(database, authority)
+        const workflow = readCodingWorkflow(database, authority.taskId)
+        // Project only a recorded human choice into the initial workflow. Never
+        // answer a later scope's question, revive a cancelled run or guess OFF.
+        if (!choice || !workflow || workflow.scopeVersion !== 1 || workflow.choice.state !== 'pending' ||
+          ['cancelled', 'superseded', 'completed'].includes(workflow.state)) return
+        answerCodingChoice(database, workflow, {
+          callId: `startup-choice:${workflow.workflowId}:${workflow.revision}`, expectedRevision: workflow.revision,
+          workflowId: workflow.workflowId, scopeVersion: workflow.scopeVersion,
+          questionId: workflow.choice.questionId, questionRevision: workflow.choice.revision,
+          answerRef: choice.answerRef, choice: choice.choice,
+        })
+      })
+    }
     turnState.record(event, result, generation, authority)
     await observeDiagnostic(runtime, event.sessionId, (db) =>
       recordDiagnosticAdmission(db, {

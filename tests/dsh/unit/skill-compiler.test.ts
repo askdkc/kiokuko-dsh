@@ -89,6 +89,25 @@ test('Lisp planning and execution safeguards survive full, compiled and fallback
     }
   } finally { await rm(dir, { recursive: true, force: true }) }
 })
+test('coding delegation preparation survives full, compiled and fallback delivery without gating direct work', async () => {
+  const sources = await loadSkillSources()
+  const dir = await mkdtemp(join(tmpdir(), 'delegation-contract-'))
+  try {
+    const artifact = pathToFileURL(join(dir, 'bundle.json'))
+    const fallback = new DshSkillPrompts({ mode: 'compiled' }, artifact, async () => sources)
+    const bodies = [await fallback.require('coding-ideal-routine-skill')]
+    await writeFile(artifact, JSON.stringify(compileSkillBundle(sources)))
+    for (const mode of ['full', 'compiled'] as const)
+      bodies.push(await new DshSkillPrompts({ mode }, artifact, async () => sources).require('coding-ideal-routine-skill'))
+    for (const body of bodies) {
+      assert.match(body, /`subagent`／`subagent_fork`.*起動前に親が `prepare_requested_work`/)
+      assert.match(body, /`requestIntent`.*`evidenceRefs`/)
+      assert.match(body, /子に親タスクを準備させない/)
+      assert.match(body, /Lisp ON の通常作業は `lisp_eval` などの Lisp ツールから直接進める/)
+    }
+  } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
 test('compiler rejects unclassified, duplicate, nested, empty and malformed blocks', () => {
   for (const content of [`unclassified\n${contract}`, `${contract}\n${contract}`, contract.replace('Never replay completed effects.', ''),
     contract.replace('runtime core', 'runtime INVALID'), contract.replace('<!-- /kiokuko:runtime -->', ''),

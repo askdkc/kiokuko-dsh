@@ -5,6 +5,7 @@ import { assessRequestIntent } from "./decisions/intent-assessment.js";
 import { TaskStartup } from "./task-startup.js";
 import { answerAkinatorQuestion } from "./decisions/akinator-answers.js";
 import { nativeExecutionOwnership, hasUnclassifiedNativeJobs, reportNativeJobClassification, type NativeJobView } from "./native-execution-ownership.js";
+import { reconcileFailedPreparation } from "./failed-preparation.js";
 import { NativeTaskAuthority } from "./native-task-authority.js";
 import { readOwnedIdentity } from "./owned-read-owner.js";
 import type { RoutableAgent } from "./model-routing.js";
@@ -908,9 +909,11 @@ export function createDshHostAdapter(
                 | { list(sessionId: string): NativeJobView[] }
                 | undefined;
               const current = currentSession(session.id);
-              const ownership = await runtime.withDatabase((db) =>
-                nativeExecutionOwnership(db, session.id, current?.runId),
-              );
+              const ownership = await runtime.withDatabase((db) => {
+                input.signal.throwIfAborted();
+                if (!current) reconcileFailedPreparation(db, session.id, () => session.snapshotEvents?.() ?? []);
+                return nativeExecutionOwnership(db, session.id, current?.runId);
+              });
               input.signal.throwIfAborted();
               // Retire only the exact completed in-memory projection proven above.
               // Durable history remains intact; no memory lookup or save is involved.
@@ -1584,6 +1587,8 @@ export function createDshHostAdapter(
             demand?.nativeCommand(execution) === true,
           nativeLisp: (execution) => demand?.nativeLisp(execution) === true,
           resolve(execution) {
+            const child = childTaskStatus(execution);
+            if (child) return child;
             const agent = execution.agent as NativeAgent | undefined,
               session = agent?.session;
             if (
@@ -1615,6 +1620,14 @@ export function createDshHostAdapter(
         },
       )
     : undefined;
+  // Children inspect their parent's task through the exact reserved launch.
+  // Status is not permission to bind checks, change the Goal, or adopt a newer lease.
+  function childTaskStatus(execution: any) {
+    if (!['coding_workflow', 'task_completion'].includes(execution.name) || !execution.agent ||
+      !isGenericNativeChild(execution.agent) || execution.arguments?.action !== 'status') return undefined;
+    const identity = nativeTaskAuthority.resolve(execution);
+    return identity && { ...identity, sessionId: identity.workflowSessionId ?? identity.sessionId };
+  }
   const completionDisposer = tools
     ? mountTaskCompletion(
         {
@@ -1627,6 +1640,8 @@ export function createDshHostAdapter(
           workingDirectory: (session) =>
             (ctx.get("workingDirectory", false) as { get(session: object): string } | undefined)?.get(session),
           resolve(execution) {
+            const child = childTaskStatus(execution);
+            if (child) return child;
             const agent = execution.agent as NativeAgent | undefined;
             const session = agent?.session;
             const item = session ? currentSession(session.id) : undefined;
@@ -1739,9 +1754,7 @@ export function createDshHostAdapter(
             // Child scopes retain their independent lineage checks. A primary session
             // may have been admitted from a directory other than plugin startup cwd.
             if (isGenericNativeChild(agent))
-              return cwd === root
-                ? nativeTaskAuthority.read(execution)
-                : undefined;
+              return nativeTaskAuthority.read(execution);
             const current = resolveParentOwned(execution);
             if (execution.name === "kioku_read" && current) {
               const item = currentSession(session.id);

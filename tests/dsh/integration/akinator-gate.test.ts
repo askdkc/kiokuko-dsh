@@ -10,6 +10,8 @@ import { openConnection } from '../../../src/db/connection.js'
 import { registerRepositoryAndLocation } from '../../../src/repository/binding.js'
 import { createDshCapabilityCatalog } from '../../../src/dsh/capability-catalog.js'
 import { DshIntakeGate, type DshPreStepEvent } from '../../../src/dsh/intake-gate.js'
+import { nativeExecutionOwnership } from '../../../src/dsh/native-execution-ownership.js'
+import { reconcileFailedPreparation } from '../../../src/dsh/failed-preparation.js'
 import { AkinatorMemoryConfig } from '../../../src/akinator/memory-probe-types.js'
 import { createDshIntakeAnswerer } from '../../../src/dsh/user-interaction.js'
 import { createStandardSkillProvider } from '../../../src/dsh/standard-skill-provider.js'
@@ -208,6 +210,98 @@ test('pre-step admits a session rooted at an unregistered non-Git directory', as
     await rm(fixture.root, { recursive: true, force: true })
   }
 })
+
+test('cancelled intake releases only its never-admitted reservation and permits a fresh turn', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({ repositoryRoot: fixture.root, databasePath: fixture.databasePath,
+    migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  const cancelled = new Error('the user cancelled ask_user_question')
+  let asks = 0
+  const gate = new DshIntakeGate(runtime, createDshIntakeAnswerer({ async ask() { asks++; throw cancelled } }))
+  const input = event(fixture.root, await catalog())
+  try {
+    await assert.rejects(gate.prepare(input), error => error === cancelled)
+    assert.equal(asks, 1)
+    await runtime.withDatabase(db => {
+      assert.equal(nativeExecutionOwnership(db, input.sessionId), 'unowned', 'a rejected optional intake must not block native edit')
+      assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_execution_owners').get<{ n: number }>()?.n, 0)
+      const rows = db.prepare('SELECT status FROM ledger_runs WHERE dsh_session_id=?').all<{ status: string }>(input.sessionId)
+      assert.deepEqual(rows.map(row => row.status), ['cancelled'], 'retain the cancelled preparation for audit, not a completed task')
+    })
+    await assert.rejects(gate.prepare(input), 'same-turn retry must not reopen the cancelled question')
+    assert.equal(asks, 1)
+    const next = await gate.prepare({ ...input, turn: 2,
+      profileHints: { taskType: 'build', target: 'src/parser.ts', expected: 'Parser handles empty input' } })
+    assert.equal(next.admitted, true, 'new human turn must not conflict with the abandoned reservation')
+  } finally { await runtime.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+test('legacy preparation recovery requires one exact failed native call and invalidates on a later revision', async () => {
+  const fixture = await makeFixture()
+  const runtime = new DshRuntime({ repositoryRoot: fixture.root, databasePath: fixture.databasePath,
+    migrationsDirectory: join(process.cwd(), 'migrations'),
+    embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+  const input = event(fixture.root, await catalog())
+  try {
+    const prepared = await new DshIntakeGate(runtime).prepare(input)
+    assert.equal(prepared.admitted, false)
+    const began = { seq: 1, type: 'turn/start', data: { turn: input.turn } }
+    const call = { seq: 2, type: 'tool/call', data: { turn: input.turn, callId: 'prepare', name: 'prepare_requested_work' } }
+    const result = { seq: 3, type: 'tool/result', sourceEventSeqs: [2], data: { turn: input.turn,
+      message: { role: 'tool', toolCallId: 'prepare', isError: true } } }
+    const denied = [
+      [began, call],
+      [call, result],
+      [began, call, { ...result, sourceEventSeqs: [1] }],
+      [began, call, { ...result, data: { ...result.data, error: { code: 'TOOL_OUTCOME_UNKNOWN' } } }],
+      [began, call, { ...result, data: { ...result.data, turn: input.turn + 1 } }],
+      [began, call, { ...result, data: { ...result.data, message: { ...result.data.message, isError: false } } }],
+      [began, { ...call, data: { ...call.data, name: 'edit' } }, result],
+      [began, call, result, { ...call, seq: 4, data: { ...call.data, callId: 'other-attempt' } }],
+    ]
+    await runtime.withDatabase(db => {
+      for (const events of denied) {
+        reconcileFailedPreparation(db, input.sessionId, () => events)
+        assert.equal(nativeExecutionOwnership(db, input.sessionId), 'owned', JSON.stringify(events))
+      }
+      reconcileFailedPreparation(db, 'another-session', () => [began, call, result])
+      assert.equal(nativeExecutionOwnership(db, input.sessionId), 'owned')
+      reconcileFailedPreparation(db, input.sessionId, () => [began, call, result])
+      assert.equal(nativeExecutionOwnership(db, input.sessionId), 'unowned')
+      reconcileFailedPreparation(db, input.sessionId, () => { throw new Error('idempotent release must not reread history') })
+      db.prepare('UPDATE ledger_runs SET task_revision=task_revision+1 WHERE run_id=?').run(prepared.prepared.run.runId)
+      assert.equal(nativeExecutionOwnership(db, input.sessionId), 'owned', 'a stale release proof never authorizes a changed task')
+    })
+  } finally { await runtime.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+for (const boundary of ['active', 'stop', 'unknown-effect', 'replacement-owner'] as const)
+  test(`failed intake cleanup preserves ${boundary} authority`, async () => {
+    const fixture = await makeFixture()
+    const runtime = new DshRuntime({ repositoryRoot: fixture.root, databasePath: fixture.databasePath,
+      migrationsDirectory: join(process.cwd(), 'migrations'),
+      embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } })
+    const input = event(fixture.root, await catalog())
+    const gate = new DshIntakeGate(runtime, createDshIntakeAnswerer({ async ask() {
+      await runtime.withDatabase(db => {
+        const owner = db.prepare('SELECT run_id FROM dsh_execution_owners WHERE dsh_session_id=?').get<{ run_id: string }>(input.sessionId)!
+        if (boundary === 'active') db.prepare("UPDATE ledger_runs SET status='active' WHERE run_id=?").run(owner.run_id)
+        else if (boundary === 'stop') db.prepare("UPDATE ledger_runs SET task_pending_stop_json='{}' WHERE run_id=?").run(owner.run_id)
+        else if (boundary === 'replacement-owner') db.prepare("UPDATE dsh_execution_owners SET start_id='replacement' WHERE run_id=?").run(owner.run_id)
+        else db.prepare("INSERT INTO dsh_owned_operations VALUES('unknown',?,?, 'generation','digest','unknown','{}',?)").run(owner.run_id, input.sessionId, new Date().toISOString())
+      })
+      throw new Error('preparation interrupted')
+    } }))
+    try {
+      await assert.rejects(gate.prepare(input), /preparation interrupted/)
+      await runtime.withDatabase(db => {
+        assert.equal(nativeExecutionOwnership(db, input.sessionId), 'owned')
+        assert.equal(db.prepare('SELECT count(*) AS n FROM dsh_execution_owners').get<{ n: number }>()?.n, 1)
+        assert.equal(db.prepare("SELECT count(*) AS n FROM ledger_runs WHERE json_extract(metadata_json,'$.failedPreparation') IS NOT NULL").get<{ n: number }>()?.n, 0)
+      })
+    } finally { await runtime.close(); await rm(fixture.root, { recursive: true, force: true }) }
+  })
 
 test('concurrent preparation of one turn shares a single question and result', async () => {
   const fixture = await makeFixture()
