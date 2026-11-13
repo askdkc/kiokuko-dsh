@@ -1,3 +1,4 @@
+import { mountNativeConnection } from '../helpers/native-connection.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { join } from 'node:path'
@@ -51,7 +52,7 @@ test('quality uses native command, alternative model, reservations and read-only
     const status = await f.command('/deep-planning --status')
     assert.equal(status.result.kind, 'success'); assert.ok(status.result.text.includes(report.text))
     const connection = await import(pathToFileURL(join(process.env.KIOKUKO_DSH_PACKAGE_ROOT!, '@deepseek-ai/dsh-client-connection/lib/index.js')).href)
-    connectionFiber = await f.ctx.plugin({ name: 'quality-report-connection', apply(ctx: any) { new connection.HostConnectionService(ctx, [], { isAuthenticated: () => true }) } })
+    connectionFiber = await mountNativeConnection(f.ctx, connection, 'quality-report-connection')
     unmount = mountDeepReportSurface(f.ctx, f.deep)
     const transport = f.ctx.connection.createSharedFetchHandler('/api')
     const response = await transport.fetch(new Request(`http://localhost/api/kiokuko.deep?sessionId=${f.parent.session.id}`), {principal:{kind:'owner'}})

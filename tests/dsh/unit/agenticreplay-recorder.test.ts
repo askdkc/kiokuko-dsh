@@ -1,3 +1,4 @@
+import { readAgenticReplayBlob } from '../../../src/dsh/agenticreplay-blob.js'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
@@ -606,8 +607,7 @@ test('multiline directory output with high-entropy names remains valid redacted 
     const tool = events.find(event => event.type === 'tool.result')!
     let payload: any = tool.payload
     if (typeof payload?.$blob === 'string') {
-      const digest = payload.$blob.replace('sha256:', '')
-      payload = JSON.parse(await readFile(join(runDir, 'blobs', digest.slice(0, 2), digest), 'utf8'))
+      payload = JSON.parse((await readAgenticReplayBlob(runDir, payload, payload.bytes)).toString('utf8'))
     }
     assert.ok(payload.content[0].text.includes('Harmless directory-list suffix'))
     assert.equal(JSON.stringify(payload).includes('sk-unitsecret1234567890'), false)
@@ -709,7 +709,7 @@ test('sub-budget multi-message requests retain redacted content in digest-verifi
     const ref = event.payload as { $blob: string; bytes: number }
     assert.ok(ref.$blob, 'existing SDK content-addressed spill preserves the full request')
     const digest = ref.$blob.replace('sha256:', '')
-    const bytes = await readFile(join(dir, 'blobs', digest.slice(0, 2), digest))
+    const bytes = await readAgenticReplayBlob(dir, ref, ref.bytes)
     assert.equal(bytes.length, ref.bytes)
     assert.equal(createHash('sha256').update(bytes).digest('hex'), digest)
     const restored = JSON.parse(bytes.toString('utf8'))

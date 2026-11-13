@@ -1,3 +1,4 @@
+import { mountNativeConnection } from '../helpers/native-connection.js'
 import { mountNativeTools } from '../helpers/native-tools.js'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
@@ -250,7 +251,7 @@ test('Deep native: closing configuration retains a zero-budget draft without fai
 test('Deep native: authenticated report transport is Session-bound and leaves native logs reopenable', nativeOptions, async () => {
   const fixture = await deepNativeFixture(() => [], {budget:{maxTotalTokens:0}})
   const connection = await import(modulePath('client-connection'))
-  const fiber = await fixture.ctx.plugin({name:'deep-native-connection',apply(ctx:any){new connection.HostConnectionService(ctx, [], {isAuthenticated:()=>true})}})
+  const fiber = await mountNativeConnection(fixture.ctx, connection, 'deep-native-connection')
   const unmountReport = mountDeepReportSurface(fixture.ctx, fixture.deep)
   const stockExport = await import(modulePath('session-log-export'))
   await fixture.ctx.plugin(stockExport)

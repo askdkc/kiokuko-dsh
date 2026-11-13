@@ -79,7 +79,9 @@ export function nativeMock(llm: any) {
           .at(-1);
         assert.ok(
           result && !result.isError,
-          "native preparation must succeed before consuming the workflow",
+          `native preparation must succeed before consuming the workflow: ${
+            result ? JSON.stringify(result.content ?? []).slice(0, 4096) : "missing tool result"
+          }`,
         );
         const value = JSON.parse(
           result.content

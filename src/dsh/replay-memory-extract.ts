@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { readAgenticReplayBlob } from './agenticreplay-blob.js'
 import { readAgenticReplayManifest, readAgenticReplayPage, resolveAgenticReplayEventsFile } from './agenticreplay-files.js'
-import { checkPrivatePath, readPrivateFile, scrubAgenticReplayText, projectAgenticReplayJson } from './agenticreplay-security.js'
+import { checkPrivatePath, scrubAgenticReplayText, projectAgenticReplayJson } from './agenticreplay-security.js'
 import type { TraceEvent } from './agenticreplay-libraries.js'
 import { AgenticReplayError } from './agenticreplay-types.js'
 import type { ReplayMemoryProposal } from '../memory/replay-review.js'
@@ -58,10 +58,7 @@ async function readReplaySnapshot(input: ReplayEvidenceIdentity, limits: ReplayE
         const cached = materialized.get(ref)
         if (cached) payload = cached
         else {
-          await checkPrivatePath(join(input.directory, 'blobs'), true)
-          await checkPrivatePath(join(input.directory, 'blobs', hex.slice(0, 2)), true)
-          const data = await readPrivateFile(join(input.directory, 'blobs', hex.slice(0, 2), hex), size)
-          if (data.length !== size || hash(data) !== hex) throw new AgenticReplayError('blob_mismatch')
+          const data = await readAgenticReplayBlob(input.directory, { $blob: ref, bytes: size }, size)
           payload = object(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(data)))
           materialized.set(ref, payload)
         }

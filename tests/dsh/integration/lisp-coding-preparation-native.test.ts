@@ -298,7 +298,7 @@ for (const reload of [false, true]) test(`manual ON supplies a formal Goal choic
 for(const mode of ['explicit','numeric','skip','ASK_CANCELLED'] as const)test(`native early ${mode} cancellation ends implementation and permits the next independent conversation`,{timeout:120000},async()=>{
  let asked=0,startupSettings=0
  const f=await nativeSkillFixture({packages,...(packageRoot?{packageRoot}:{}),mode:'compiled',extra,nativeAnswer:async q=>{
-  startupSettings++;answerTaskStartup(q,'取消・作業を保持');if(asked){return answerTaskStartup(q,'decision OFF / Lisp OFF')}asked++;if(mode==='ASK_CANCELLED')throw Object.assign(new Error('User cancelled question'),{code:'ASK_CANCELLED'})
+  startupSettings++;answerTaskStartup(q,'取消・作業を保持');if(asked){return answerTaskStartup(q,'decision OFF / Lisp OFF')}asked++;if(mode==='ASK_CANCELLED')throw new (await import(pathToFileURL(join(packages,'@deepseek-ai/dsh-user-questions/lib/index.js')).href)).UserQuestionError('User cancelled question','ASK_CANCELLED')
   return {answers:[{id:q.questions[0].id,selected:mode==='skip'?[]:[mode==='numeric'?'5':'取消・作業を保持']}]}
  }})
  const errors:unknown[]=[]

@@ -297,7 +297,7 @@ for (const mode of ['native', 'ptc'] as const)
           }
           const emptyRefs = await invoke(request('new', []))
           assert.equal(emptyRefs.isError, false)
-          assert.equal((mode === 'ptc' ? emptyRefs.value.result : emptyRefs.value).status, 'invalid_preparation_request')
+          assert.equal((mode === 'ptc' ? JSON.parse(emptyRefs.value.logs[0]) : emptyRefs.value).status, 'invalid_preparation_request')
           unchanged()
           context.proposals[0]!.revision = 3
           const stale = await invoke(request('new'))
@@ -326,14 +326,14 @@ for (const mode of ['native', 'ptc'] as const)
           }
           const malformed = await invoke({ requestIntent: { relation: 'new', action: 'change', changeScope: 'fix', evidenceRefs: refs } })
           assert.equal(malformed.isError, false, JSON.stringify(malformed))
-          const invalid = mode === 'ptc' ? malformed.value.result : malformed.value
+          const invalid = mode === 'ptc' ? JSON.parse(malformed.value.logs[0]) : malformed.value
           assert.equal(invalid.status, 'invalid_preparation_request')
           assert.equal(invalid.nextAction, 'correct_preparation_input')
           assert.ok(invalid.issues.some((issue: any) => issue.path === 'requestIntent.changeScope' && issue.allowedValues.includes('implementation')))
           unchanged()
           const result = await invoke(request('new'), { callId: 'corrected' })
           assert.equal(result.isError, false, JSON.stringify(result))
-          const receipt = mode === 'ptc' ? result.value.result : result.value
+          const receipt = mode === 'ptc' ? JSON.parse(result.value.logs[0]) : result.value
           assert.equal(receipt.permissions, 'unchanged_native_policy')
           if (mode === 'ptc') assert.equal(receipt.programExecuted, false)
           assert.equal(receipt.originalTask, task)
@@ -503,17 +503,17 @@ test(
         signal: signal(),
       })
       assert.equal(receipt.isError, false, text(receipt))
-      assert.equal(receipt.value.result.programExecuted, false)
-      assert.equal(receipt.value.result.requestInterpretation.state, 'required')
+      assert.equal(JSON.parse(receipt.value.logs[0]).programExecuted, false)
+      assert.equal(JSON.parse(receipt.value.logs[0]).requestInterpretation.state, 'required')
       assert.equal(
-        receipt.value.result.requestInterpretation.nextAction,
+        JSON.parse(receipt.value.logs[0]).requestInterpretation.nextAction,
         'submit_current_request_intent',
       )
       assert.deepEqual(
-        receipt.value.result.requestInterpretation.currentReferences,
+        JSON.parse(receipt.value.logs[0]).requestInterpretation.currentReferences,
         requestIntentReferenceIds(context),
       )
-      assert.equal(receipt.value.result.prepared, false)
+      assert.equal(JSON.parse(receipt.value.logs[0]).prepared, false)
       assert.equal(admissions, 0)
       const answer = await executeNativeTool(ctx, packages, {
         name: 'run_code',
@@ -526,9 +526,9 @@ test(
         signal: signal(),
       })
       assert.equal(answer.isError, false, text(answer))
-      assert.equal(answer.value.result.prepared, false)
-      assert.equal(answer.value.result.status, 'answer_directly')
-      assert.equal(answer.value.result.programExecuted, false)
+      assert.equal(JSON.parse(answer.value.logs[0]).prepared, false)
+      assert.equal(JSON.parse(answer.value.logs[0]).status, 'answer_directly')
+      assert.equal(JSON.parse(answer.value.logs[0]).programExecuted, false)
       assert.equal(admissions, 0)
       const effect = await executeNativeTool(ctx, packages, {
         name: 'run_code',
@@ -553,8 +553,8 @@ test(
         signal: signal(),
       })
       assert.equal(corrected.isError, false, text(corrected))
-      assert.equal(corrected.value.result.prepared, true)
-      assert.equal(corrected.value.result.programExecuted, false)
+      assert.equal(JSON.parse(corrected.value.logs[0]).prepared, true)
+      assert.equal(JSON.parse(corrected.value.logs[0]).programExecuted, false)
       assert.equal(admissions, 1)
     } finally {
       await intake?.dispose()

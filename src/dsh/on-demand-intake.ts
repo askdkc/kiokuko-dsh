@@ -1,3 +1,4 @@
+import { preparationCarrierResult } from './preparation-carrier-result.js'
 import { measureIntakePhase, withIntakeTiming, type IntakePhase } from './intake-timing.js'
 import { REQUEST_SOURCE_TOOL, RequestSourceReadSchema, readRequestSource, requestSourceManifest, bindRequestSourceContext } from './request-sources.js'
 import { revalidateResumedRequest } from './request-resume.js'
@@ -3289,14 +3290,7 @@ export class OnDemandIntake {
             ])
             if (!control.invoke) return next()
             const result = await control.invoke(control.args, execution)
-            return {
-              isError: false,
-              value: {
-                logs: ['Host task operation. No program was evaluated.'],
-                result,
-              },
-              content: [{ type: 'text', text: JSON.stringify(result) }],
-            }
+            return preparationCarrierResult(result)
           }
           const proof = this.#executions.get(execution)
           if (!proof) return next() // Existing independently admitted runs keep their original path.
@@ -3378,7 +3372,7 @@ export class OnDemandIntake {
           const carrier = parsePreparationRequest(envelope.input)
           if (!carrier) {
             const result = { ...invalidPreparation(envelope.input, state.requestIntentContext), programExecuted: false }
-            return { isError: false, value: { logs: [], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+            return preparationCarrierResult(result)
           }
           state.preparationCalls.add(execution.callId)
           try {
@@ -3457,19 +3451,12 @@ export class OnDemandIntake {
               permissions: 'unchanged_native_policy',
               programExecuted: false,
             })
-            return {
-              isError: false,
-              value: {
-                logs: ['Host intake prepared. No program was evaluated.'],
-                result,
-              },
-              content: [{ type: 'text', text: JSON.stringify(result) }],
-            }
+            return preparationCarrierResult(result)
           } catch (error) {
             const unavailable = unavailableRepositoryMemory(error)
             if (unavailable) {
               const result = { ...unavailable, programExecuted: false }
-              return { isError: false, value: { logs: [], result }, content: [{ type: 'text', text: JSON.stringify(result) }] }
+              return preparationCarrierResult(result)
             }
             if (!(error instanceof RequestClarification)) throw error
             const result = {
@@ -3480,14 +3467,7 @@ export class OnDemandIntake {
               )) as object),
               programExecuted: false,
             }
-            return {
-              isError: false,
-              value: {
-                logs: ['Execution was not prepared. No program was evaluated.'],
-                result,
-              },
-              content: [{ type: 'text', text: JSON.stringify(result) }],
-            }
+            return preparationCarrierResult(result)
           }
         },
         { prepend: true },
