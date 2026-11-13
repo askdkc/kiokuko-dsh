@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import { agenticReplayFixture, chunks, collect, request, response } from './agenticreplay-fixture.js'
 import { checkedRunDir } from '../../../src/dsh/agenticreplay-security.js'
 import { loadAgenticReplayLibrary } from '../../../src/dsh/agenticreplay-libraries.js'
@@ -43,7 +44,12 @@ export async function captureRedactionCase(input: string, content: 'redacted'|'m
       for(const entry of await readdir(root,{withFileTypes:true})) {
         const path=join(root,entry.name)
         if(entry.isDirectory())await walk(path)
-        else files.push({path,body:(await readFile(path)).toString('utf8')})
+        else {
+          const stored = await readFile(path)
+          // Inspect decoded fixture content: compressed bytes cannot prove redaction.
+          const bytes = path.endsWith('.gz') ? gunzipSync(stored) : stored
+          files.push({path,body:bytes.toString('utf8')})
+        }
       }
     }
     await walk(dir)

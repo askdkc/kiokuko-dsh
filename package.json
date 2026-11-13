@@ -291,14 +291,14 @@
     "@ai-sdk/provider": "^4.0.21",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-agent": "*",
-    "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-attachment": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-llm-pi-ai": "*",
+    "@deepseek-ai/dsh-session": "*",
+    "@deepseek-ai/dsh-tools": "*",
     "@huggingface/hub": "^2.16.1",
     "@huggingface/transformers": "^4.2.0",
-    "sqlite-vec": "^0.1.9",
-    "@deepseek-ai/dsh-tools": "*"
+    "sqlite-vec": "^0.1.9"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-session": {

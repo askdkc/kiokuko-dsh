@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { readAgenticReplayBlob } from './agenticreplay-blob.js'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { loadAgenticReplayLibrary, type Manifest, type TraceEvent } from './agenticreplay-libraries.js'
@@ -72,13 +73,8 @@ export async function readAgenticReplayPage(dir: string, offset: number, previou
             if (events.length === 0) throw new AgenticReplayError('timeline_blob_limit')
             break
           }
-          const hex = ref.$blob.slice(7)
-          if (!/^[0-9a-f]{64}$/u.test(hex)) throw new AgenticReplayError('unsafe_blob')
-          await checkPrivatePath(join(dir, 'blobs'), true)
-          await checkPrivatePath(join(dir, 'blobs', hex.slice(0, 2)), true)
-          const bytes = await readPrivateFile(join(dir, 'blobs', hex.slice(0, 2), hex), ref.bytes)
-          if (bytes.length !== ref.bytes || createHash('sha256').update(bytes).digest('hex') !== hex) throw new AgenticReplayError('blob_mismatch')
-          blobBytes += ref.bytes
+          const bytes = await readAgenticReplayBlob(dir, ref, maxBytes - readBytes - blobBytes)
+          blobBytes += bytes.length
           validatedBlobs.set(ref.$blob, ref.bytes)
         }
         blobs.set(ref.$blob, ref.bytes)

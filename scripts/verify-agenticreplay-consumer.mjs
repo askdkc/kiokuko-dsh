@@ -29,7 +29,8 @@ try {
     { cwd: consumer, env, timeout: 180_000, maxBuffer: 4_194_304 })
   await writeFile(join(consumer, 'verify.mjs'), `
 import assert from 'node:assert/strict';
-import { mkdir, readFile, readdir } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
+import { gzipSync, gunzipSync } from 'node:zlib';
 import { createRequire, findPackageJSON } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -43,8 +44,8 @@ const { gte } = plugin('semver');
 const fastUriVersion = ajv('fast-uri/package.json').version;
 assert.ok(gte(fastUriVersion, '3.1.9'), 'the installed AJV must resolve patched fast-uri');
 const distributionVersion = JSON.parse(await readFile(findPackageJSON('agenticreplay', plugin.resolve('agenticreplay')), 'utf8')).version;
-const { TraceReader } = await import(pathToFileURL(coreEntry).href);
-const { buildTimeline, exportTraceHtml } = await import(pathToFileURL(distribution.resolve('@agenticreplay/viewer')).href);
+const { TraceReader, compactRun } = await import(pathToFileURL(coreEntry).href);
+const { buildTimeline, exportTraceHtml, readTraceDir } = await import(pathToFileURL(distribution.resolve('@agenticreplay/viewer')).href);
 const root = join(process.cwd(), 'workspace'); await mkdir(root);
 const runtime = new DshRuntime({ repositoryRoot: root, databasePath: join(process.cwd(), 'index.sqlite3'), autoRegisterRepository: true,
   embeddingConfig: { mode: 'off', provider: 'openai-compatible', allowRemote: false, vectorBackend: 'auto', timeoutMs: 1000, batchSize: 1 } });
@@ -76,7 +77,7 @@ try {
   const exported=await service.export(binding,status.trace.agenticreplay_run_id);assert.ok((await readFile(exported)).length>0);
   const installed = JSON.parse(await readFile(findPackageJSON('@agenticreplay/core', coreEntry), 'utf8'));
   assert.equal(installed.version, distributionVersion);
-  assert.ok(gte(installed.version, '0.1.18'));
+  assert.ok(gte(installed.version, '0.1.22'));
   const manifest = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'));
   assert.ok(manifest.counts.blobs > 0, 'exercise redaction through blob storage');
   assert.equal(manifest.agenticreplay_version, installed.version);
@@ -90,14 +91,108 @@ try {
   assert.match(loaded.buildId, /^[a-f0-9]{64}$/u); assert.equal(loaded.pluginVersion, packaged.packageVersion);
   for(const type of ['model.request','model.response'])assert.ok(events.some(e=>e.type===type));
   const files=[];
-  async function inspectFiles(path){for(const entry of await readdir(path,{withFileTypes:true})){const target=join(path,entry.name);if(entry.isDirectory())await inspectFiles(target);else files.push(await readFile(target,'utf8'));}}
+  async function inspectFiles(path){for(const entry of await readdir(path,{withFileTypes:true})){const target=join(path,entry.name);if(entry.isDirectory())await inspectFiles(target);else {const bytes=await readFile(target);files.push((entry.name.endsWith('.gz')?gunzipSync(bytes):bytes).toString('utf8'));}}}
   await inspectFiles(dir);
   const html=await readFile(exported,'utf8');
   for(const value of [...files,JSON.stringify(shown),html])assert.ok(!value.includes('FAKEONLY_DUMMY_CREDENTIAL'));
   assert.ok(files.join(' ').includes(benign));assert.ok(html.includes(benign));
   assert.equal(buildTimeline(events).length, events.length);
   assert.ok((await exportTraceHtml(dir, join(root, 'fixture.html'))).bytes > 0);
-  console.log(JSON.stringify({ packageManager: '${packageManager}', automaticRuntimeDependencies: 'passed', agenticreplayVersion: installed.version, fastUriVersion, events: events.length, exactReplay: false }));
+  const viewerEntry = distribution.resolve('@agenticreplay/viewer');
+  const viewerVersion = JSON.parse(await readFile(findPackageJSON('@agenticreplay/viewer', viewerEntry), 'utf8')).version;
+  assert.equal(viewerVersion, distributionVersion);
+  assert.equal(typeof compactRun, 'function', 'installed core must expose compactRun');
+  // Do not equate a version floor or nonempty HTML with gzip compatibility.
+  const before = await readTraceDir(dir);
+  assert.equal(before.omittedBlobs, 0);
+  assert.ok(Object.keys(before.blobs).length > 0);
+  const blobs = [];
+  for (const shard of await readdir(join(dir, 'blobs'), { withFileTypes: true })) {
+    if (!shard.isDirectory()) continue;
+    for (const name of await readdir(join(dir, 'blobs', shard.name))) {
+      if (!/^[a-f0-9]{64}(?:[.]gz)?$/u.test(name)) continue;
+      const path = join(dir, 'blobs', shard.name, name);
+      const compressed = name.endsWith('.gz');
+      const bytes = await readFile(path);
+      blobs.push({ path, hex: name.slice(0, 64), bytes: compressed ? gunzipSync(bytes) : bytes, compressed });
+    }
+  }
+  assert.ok(blobs.length > 0);
+  for (const blob of blobs) {
+    assert.ok(!blob.bytes.toString('utf8').includes('FAKEONLY_DUMMY_CREDENTIAL'));
+    if (!blob.compressed) {
+      await writeFile(blob.path + '.gz', gzipSync(blob.bytes), { mode: 0o600 });
+      await rm(blob.path);
+    }
+  }
+  // Independent checks report every broken consumer without printing payloads.
+  const checks = {};
+  async function verifyConsumers(prefix) {
+    async function check(name, verify) {
+      try { await verify(); checks[prefix + name] = 'passed'; }
+      catch { checks[prefix + name] = 'failed'; }
+    }
+    await check('coreGzip', async () => {
+      const compressedReader = await TraceReader.open(dir);
+      assert.deepEqual(await compressedReader.events(), events);
+      assert.equal((await compressedReader.verifyIntegrity()).ok, true);
+      for (const blob of blobs) assert.deepEqual(Buffer.from(await compressedReader.blob('sha256:' + blob.hex)), blob.bytes);
+    });
+    await check('viewerGzip', async () => {
+      const after = await readTraceDir(dir);
+      assert.equal(after.omittedBlobs, 0);
+      assert.deepEqual(after.blobs, before.blobs);
+      assert.deepEqual(after.events, before.events);
+      const result = await exportTraceHtml(dir, join(root, 'gzip.html'));
+      assert.ok(result.bytes > 0);
+      const compressedHtml = await readFile(result.path, 'utf8');
+      assert.equal(compressedHtml, await readFile(join(root, 'fixture.html'), 'utf8'));
+      assert.ok(compressedHtml.includes(benign));
+      assert.ok(!compressedHtml.includes('FAKEONLY_DUMMY_CREDENTIAL'));
+    });
+    await check('dshGzipShow', async () => {
+      const after = await service.show(binding, status.trace.agenticreplay_run_id);
+      assert.deepEqual(after.events, shown.events);
+      assert.deepEqual(after.rows, shown.rows);
+      assert.ok(!JSON.stringify(after).includes('FAKEONLY_DUMMY_CREDENTIAL'));
+    });
+    await check('dshGzipScanAndExport', async () => {
+      // The public export performs both bounded scans and the installed Viewer pass.
+      const after = await readFile(await service.export(binding, status.trace.agenticreplay_run_id), 'utf8');
+      assert.equal(after, html);
+      assert.ok(after.includes(benign));
+      assert.ok(!after.includes('FAKEONLY_DUMMY_CREDENTIAL'));
+    });
+  }
+  await verifyConsumers('');
+  // Restore legacy plain storage using the real writer's decoded bytes. New
+  // writers already gzip large blobs, which would otherwise make compact a no-op.
+  for (const blob of blobs) {
+    const plainPath = blob.compressed ? blob.path.slice(0, -3) : blob.path;
+    await writeFile(plainPath, blob.bytes, { mode: 0o600 });
+    await rm(plainPath + '.gz');
+  }
+  const plain = await readTraceDir(dir);
+  assert.equal(plain.omittedBlobs, 0);
+  assert.deepEqual(plain.blobs, before.blobs);
+  assert.deepEqual(plain.events, before.events);
+  const manifestBeforeCompact = await readFile(join(dir, 'manifest.json'));
+  const eventsBeforeCompact = await readFile(join(dir, 'events.jsonl'));
+  const compact = await compactRun(dir);
+  assert.equal(compact.reason, undefined);
+  assert.notEqual(compact.pending, true);
+  assert.ok(compact.converted > 0, 'compact must actually convert writer-produced blobs');
+  assert.ok(compact.savedBytes > 0, 'compact must reclaim storage');
+  assert.deepEqual(await readFile(join(dir, 'manifest.json')), manifestBeforeCompact);
+  assert.deepEqual(await readFile(join(dir, 'events.jsonl')), eventsBeforeCompact);
+  await verifyConsumers('compact:');
+  files.length = 0;
+  await inspectFiles(dir);
+  for (const value of files) assert.ok(!value.includes('FAKEONLY_DUMMY_CREDENTIAL'));
+  assert.ok(files.join(' ').includes(benign));
+  console.log(JSON.stringify({ packageManager: '${packageManager}', agenticreplayVersion: installed.version, viewerVersion,
+    fastUriVersion, events: events.length, blobs: blobs.length, gzip: checks, compact, exactReplay: false }));
+  assert.ok(Object.values(checks).every(value => value === 'passed'), 'installed consumers must preserve gzip blob content');
 } finally { await recorder.shutdown(); await runtime.close(); }
 `)
   const result = await exec(process.execPath, ['verify.mjs'], { cwd: consumer, env, timeout: 30_000 })
