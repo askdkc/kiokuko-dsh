@@ -1745,6 +1745,11 @@ export async function mountCore(
         mountTaskCompletion(
           { tools, on: ctx.on.bind(ctx) as any },
           { runtime, resolve: resolveOwned, approve: async () => true,
+            canInspectUnowned: execution => {
+              const agent = execution.agent, session = agent?.session
+              return !!agent && !!session && !isNativeSubagent(agent) &&
+                agents?.get(agent.id) === agent && sessions?.get(session.id) === session
+            },
             workingDirectory: session => get('workingDirectory')?.get(session) },
         ),
       )

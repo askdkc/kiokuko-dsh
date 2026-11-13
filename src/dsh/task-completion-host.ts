@@ -31,6 +31,8 @@ interface Context {
 export interface CompletionHost {
   runtime: DshCoreRuntime
   resolve(execution: NativeExecution): { runId: string; sessionId: string; repositoryRoot: string; agent: any } | undefined
+  /** Exact registered callers may inspect absence; unresolved/forged identities may not. */
+  canInspectUnowned?(execution: NativeExecution): boolean
   workingDirectory?(session: object): string | undefined
   approve?(identity: { runId: string; sessionId: string; repositoryRoot: string; agent: any },
     criterion: { criterionId: string; description: string }, method: z.infer<typeof CompletionMethodSchema>, signal: AbortSignal): Promise<boolean>
@@ -114,7 +116,7 @@ export function mountTaskCompletion(ctx: Context, host: CompletionHost): () => v
       const identity = host.resolve(execution)
       if (execution.name !== 'task_completion') throw new KiokukoError('CONFLICT', 'Task completion tool identity changed')
       if (!identity) {
-        if (parsed.action === 'status') return { applicable: false, reason: 'no_active_native_task',
+        if (parsed.action === 'status' && host.canInspectUnowned?.(execution) === true) return { applicable: false, reason: 'no_active_native_task',
           verified: false, nextAction: 'No admitted completion record is available. This status grants no execution authority; native diagnostics and recovery retain their own permissions.' }
         throw new KiokukoError('CONFLICT', 'Task completion requires an exact active native run')
       }

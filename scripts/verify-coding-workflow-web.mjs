@@ -59,7 +59,14 @@ if(mode==='seed'){responses.push(()=>{result={ready:true};return mock.textRespon
 else {
 const call=(id,name,args)=>responses.push(mock.toolCallResponse(prefix+id,name,args));
 const prepare=(relation)=>request=>{const text=request.messages.flatMap(m=>m.source?.sections??[]).filter(s=>s.name==='on-demand-intake').at(-1)?.text;const json=text?.split('Current request references and same-session work (host-bound, advisory only):\\n')[1]?.split('\\n')[0];if(!json)throw Error('Missing current host references');return mock.toolCallResponse(prefix+'prepare','prepare_requested_work',{requestIntent:{relation,action:'change',changeScope:'implementation',evidenceRefs:JSON.parse(json).references}})};
-if(mode!=='resume'){
+if(mode==='choose'||mode==='pending'){
+ responses.push(prepare('scope_change'),()=>mock.toolCallResponse(prefix+'status','coding_workflow',{action:'status'}),r=>{
+  const prior=value(r,prefix+'status'),revised=structuredClone(definition);
+  revised.goal.revision=prior.definition.goal.revision+1;revised.goal.target+=' and src/'+mode+'.mjs';
+  revised.goal.requestBasis='Extend the implementation to src/'+mode+'.mjs';
+  return mock.toolCallResponse(prefix+'revise','coding_workflow_apply',{action:'revise',expectedRevision:prior.revision,definition:revised});
+ });
+}else if(mode!=='resume'){
  responses.push(prepare('new'),r=>{const result=value(r,prefix+'prepare');if(!result.prepared)throw Error('Preparation failed');return mock.toolCallResponse(prefix+'status','coding_workflow',{action:'status'})},(r)=>mock.toolCallResponse(prefix+'propose','coding_workflow_apply',{action:'propose',expectedRevision:value(r,prefix+'status').revision,definition}));
 }else {responses.push(prepare('same_scope_continuation'));call('reopen','coding_workflow',{action:'next'});}
 if(mode==='complete'){
@@ -68,9 +75,9 @@ if(mode==='complete'){
  call('item-check','kioku_exec',{command});call('goal-check','kioku_exec',{command});
 }
 call('final','coding_workflow',{action:'status'});
-responses.push(r=>{result=value(r,prefix+'final');return mock.textResponse(mode==='complete'?'Goal achieved: the ordinary CLI returned 42.':'The Goal is preserved; implementation awaits this task’s choice.')});
+responses.push(r=>{result=value(r,prefix+'final');return mock.textResponse(mode==='complete'?'Goal achieved: the ordinary CLI returned 42.':'Recorded the current Goal state; no implementation was performed.')});
 }
-agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:mode==='seed'?'Fixture ready':mode==='resume'?'Continue the current task without changing its scope.':'Implement src/parser.mjs so its public command adds one to numeric input. 通常実行で。観測と未確定事項: 前の呼び出しに300,184msかかった。実装後にテストし結果を報告する。'}]}));
+agent.followup(llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:mode==='seed'?'Fixture ready':mode==='resume'?'Continue the current task without changing its scope.':(mode==='choose'||mode==='pending')?'Extend the implementation to src/'+mode+'.mjs. Keep the existing parser behavior.':'Implement src/parser.mjs so its public command adds one to numeric input. 通常実行で。観測と未確定事項: 前の呼び出しに300,184msかかった。実装後にテストし結果を報告する。'}]}));
 await agent.whenIdle();if(result===undefined||responses.length)throw Error('Incomplete fixture script');await appendFile(${JSON.stringify(receipts)},JSON.stringify({mode,result})+'\\n');return {kind:'success',text:'Recorded '+mode};
 }});}
 `)
@@ -111,19 +118,30 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
     await newSessionForTest(page, conversation, poll)
   }
   const records=async()=>(await readFile(receipts,'utf8').catch(()=>'' )).trim().split('\n').filter(Boolean).map(JSON.parse)
-  const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click();if(mode==='seed'||mode==='pending')await answerTaskStartupForTest(page)}
+  const command=async(mode)=>{const editor=conversation.locator('[data-composer-input="true"][contenteditable="true"][data-phase="plain"]:visible').first();const send=page.getByRole('button',{name:'Send message',exact:true});await poll(async()=>{await editor.fill('/coding-fixture '+mode);return send.isEnabled()});await send.click();if(mode==='seed'||mode==='draft')await answerTaskStartupForTest(page)}
   const executionMode=page.getByText('この作業をどう実行しますか？',{exact:true})
   await newSession();await command('seed');await poll(async()=>(await records()).find(r=>r.mode==='seed'))
   await page.setViewportSize({width:390,height:844});await command('complete')
   const goal=page.locator('[data-coding-goal]')
-  await goal.waitFor();assert.match(await goal.innerText(),/CLI|parser command/);assert.match(await goal.innerText(),/確認/)
-  assert.equal(await executionMode.count(),0,'the Goal opens directly without an execution-mode card')
-  assert.equal(await readFile(join(project,'src/parser.mjs'),'utf8').catch(()=>undefined),undefined,'no file before human choice')
-  await page.keyboard.press('2');await page.keyboard.press('Enter')
   const completed=await poll(async()=>(await records()).find(r=>r.mode==='complete'))
   assert.equal(completed.result.state,'completed');assert.equal(completed.result.assessment.verified,true)
+  assert.equal(completed.result.choice.state,'no','the confirmed startup choice is retained')
+  assert.equal(await goal.count(),0,'the initial Goal must not ask the startup choice again')
+  assert.equal(await executionMode.count(),0,'normal work needs no execution-mode card')
   assert.equal((await exec(process.execPath,['src/parser.mjs','41'],{cwd:project})).stdout.trim(),'42')
-  await newSession();await command('pending');await goal.waitFor()
+  // A changed scope, rather than a redundant initial choice, exercises the real
+  // Goal card, keyboard selection and cancellation without weakening coverage.
+  await newSession();await command('draft')
+  const draft=await poll(async()=>(await records()).find(r=>r.mode==='draft'))
+  assert.equal(draft.result.choice.state,'no');assert.equal(draft.result.assessment.verified,false)
+  await command('choose');await goal.waitFor()
+  assert.match(await goal.innerText(),/CLI|parser command/);assert.match(await goal.innerText(),/確認/)
+  assert.equal(await readFile(join(project,'src/choose.mjs'),'utf8').catch(()=>undefined),undefined,'no effects before the fresh scope choice')
+  await page.keyboard.press('2');await page.keyboard.press('Enter')
+  const chosen=await poll(async()=>(await records()).find(r=>r.mode==='choose'))
+  assert.equal(chosen.result.choice.state,'no');assert.equal(chosen.result.workflowId,draft.result.workflowId)
+  assert.ok(chosen.result.scopeVersion>draft.result.scopeVersion)
+  await command('pending');await goal.waitFor()
   await page.getByRole('button',{name:'質問を閉じる',exact:true}).click()
   const pending=await poll(async()=>(await records()).find(r=>r.mode==='pending'))
   const pendingSessionId=await conversation.getAttribute('data-conversation-session')
@@ -145,7 +163,7 @@ await agent.whenIdle();if(result===undefined||responses.length)throw Error('Inco
   assert.equal(await executionMode.count(),0,'replacement admission proceeds without an execution-mode card')
   assert.notEqual(resumed.result.workflowId,pending.result.workflowId,'explicit request must not revive the cancelled workflow')
   assert.notEqual(resumed.result.choice.questionId,pending.result.choice.questionId,'replacement work has a fresh choice identity')
-  assert.equal(resumed.result.state,'preparing');assert.equal(resumed.result.choice.state,'pending')
+  assert.equal(resumed.result.state,'ready');assert.equal(resumed.result.choice.state,'no','replacement retains the explicit startup preference without reviving the cancelled Goal')
   assert.equal(resumed.result.items.length,0);assert.equal(resumed.result.assessment.verified,false)
   assert.equal(await readFile(join(project,'src/parser.mjs'),'utf8'),program,'cancel and replacement admission preserve the existing implementation')
   assert.equal(await goal.count(),0,'replacement admission must not start implementation or reopen the cancelled Goal')

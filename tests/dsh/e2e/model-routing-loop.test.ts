@@ -479,7 +479,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
   try {
     await turn(h, agent, 'feature.mjsを実装してください。')
     assert.equal(writes, 1, JSON.stringify(agent.session.snapshotEvents().filter((event: any) => ['turn/end', 'tool/result'].includes(event.type))))
-    assert.equal(codingChoices, 1)
+    assert.equal(codingChoices, 0, 'startup Lisp OFF is already recorded; no duplicate Goal question')
     assert.equal(await readFile(join(h.root, 'feature.mjs'), 'utf8'), "process.stdout.write('42\\n')\n")
     assert.equal(model.requests.length, 10)
     assert.equal(agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
@@ -491,7 +491,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
     adapter = createDshHostAdapter(h.ctx, options); composition = await mountDshComposition(h.ctx, adapter.host)
     model.prepareNext('debug', 'prepare-next-feature', interpretedPreparation(h.mock,'prepare-next-feature','new','change','debug'))
     await turn(h, agent, '別のfeature.mjsの変更も実装してください。')
-    assert.equal(codingChoices, 1)
+    assert.equal(codingChoices, 0, 'startup Lisp OFF is already recorded; no duplicate Goal question')
     assert.equal(model.requests.length, 12)
     assert.equal(agent.session.snapshotEvents().filter((event: any) => event.type === 'turn/end').at(-1)?.data.reason.kind, 'completed')
   } finally { await composition.dispose(); await adapter.dispose(); edit(); await questions.dispose(); await h.dispose() }

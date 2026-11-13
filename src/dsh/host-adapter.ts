@@ -1637,6 +1637,11 @@ export function createDshHostAdapter(
         },
         {
           runtime,
+          canInspectUnowned(execution) {
+            const agent = execution.agent as NativeAgent | undefined, session = agent?.session;
+            return !!agent && !!session && !isGenericNativeChild(agent) &&
+              agents?.get(agent.id) === agent && sessions?.get(session.id) === session;
+          },
           workingDirectory: (session) =>
             (ctx.get("workingDirectory", false) as { get(session: object): string } | undefined)?.get(session),
           resolve(execution) {

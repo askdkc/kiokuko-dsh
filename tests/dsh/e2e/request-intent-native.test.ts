@@ -35,12 +35,13 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       { path: 'src/parser.mjs', content: 'console.log(41)\n' }),
       f.mock.toolCallResponse('failed-regression', 'kioku_exec', { command: `node -e 'require("node:assert/strict").equal(require("node:child_process").execFileSync(process.execPath,["src/parser.mjs"],{encoding:"utf8"}).trim(),"42")'` }),
       (request: any) => {
+        assert.equal(toolValue(request, 'proposal-propose').choice.state, 'no', 'startup Lisp OFF is retained by the Goal')
         const result = toolValue(request, 'failed-regression')
         assert.equal(result.exitCode, 1, 'a real failed check must precede continuation')
         return f.mock.textResponse('検証が失敗した。未完了の同じGoalを保持する。')
       })
     await f.turn('src/parser.mjs の A/B/C をまとめて入れて。通常実行で。')
-    assert.equal(choices.length, 1)
+    assert.equal(choices.length, 0, 'the recorded startup choice must not be asked again')
     await f.reload(mode)
     f.responses.push(interpretedPreparation(f.mock, 'continue', 'same_scope_continuation', 'change'),
       f.mock.toolCallResponse('continued-state', 'coding_workflow', { action: 'status' }),
@@ -52,7 +53,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       }, f.mock.textResponse('再開した同じGoalの修正を続ける。'))
     await f.turn(mode === 'full' ? 'それを直して。' : 'keep going')
     assert.equal(await readFile(join(f.dir, 'src/parser.mjs'), 'utf8'), 'console.log(42)\n')
-    assert.equal(choices.length, 1)
+    assert.equal(choices.length, 0, 'the recorded startup choice must not be asked again')
     f.responses.push(interpretedPreparation(f.mock, 'verify', 'same_scope_continuation', 'verify'),
       f.mock.toolCallResponse('verify-process', 'kioku_exec', { command: 'node src/parser.mjs' }),
       f.mock.toolCallResponse('forbidden-write', 'kioku_write', { path: 'src/forbidden.mjs', content: 'wrong' }),
@@ -64,7 +65,7 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       })
     await f.turn('パッケージを更新した。src/parser.mjs の動作を見てくれ。変更はしないで。')
     assert.equal(existsSync(join(f.dir, 'src/forbidden.mjs')), false)
-    assert.equal(choices.length, 1)
+    assert.equal(choices.length, 0, 'the recorded startup choice must not be asked again')
     const expansion = 'src/extra.mjs も変更対象に追加して実装して。通常実行で。'
     f.responses.push(interpretedPreparation(f.mock, 'expand', 'scope_change', 'change'),
       f.mock.toolCallResponse('expand-before-record', 'kioku_write', { path: 'src/extra.mjs', content: 'console.log(43)\n' }),
@@ -79,6 +80,6 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
       (request: any) => { toolValue(request, 'revise'); return f.mock.textResponse('改訂したGoalの範囲を実装した。') })
     await f.turn(expansion)
     assert.equal(await readFile(join(f.dir, 'src/extra.mjs'), 'utf8'), 'console.log(43)\n')
-    assert.equal(choices.length, 2, 'scope revision requires a fresh coding choice')
+    assert.equal(choices.length, 1, 'scope revision still requires a fresh coding choice')
   } finally { await f.close() }
 })
