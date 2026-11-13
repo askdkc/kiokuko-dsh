@@ -32,7 +32,6 @@ import {
   isLispNativeCommand,
   withRootLispAdmission,
   rememberLispConversation,
-  isJournalLispInspection,
 } from './lisp-tool-identity.js'
 import { ExecutionSelectionPending } from './execution-pending.js'
 import type { DshAnswerContext } from './answer-context.js'
@@ -1918,8 +1917,7 @@ export class OnDemandIntake {
       nextAction: this.host.questions && agent.inject
         ? background ? 'continue_independent_work_or_wait' : 'wait_for_user'
         : 'ask_user_once',
-      ...(background ? { blockedScope: 'effects_depending_on_current_request',
-        allowedActions: ['read', 'search', 'inspect', 'plan'] } : {}),
+      blockedScope: 'task_preparation',
     }
     const pending = {
       agent: state.input.agent,
@@ -2588,7 +2586,6 @@ export class OnDemandIntake {
       !this.#stopped &&
       !execution.signal.aborted &&
       unownedNativeTool(execution) &&
-      (!state?.clarificationPending || nativeEvidenceRead(execution) || execution.name === 'skill') &&
       this.nativeParent(execution) &&
       !!state &&
       state.nativeUnowned === true &&
@@ -2600,12 +2597,11 @@ export class OnDemandIntake {
       proof.nativeUnownedDigest === canonicalContentHash(execution.arguments)
     )
   }
-  /** Ordinary native Bash follows native policy; an issued clarification cannot be bypassed by switching tools. */
+  /** Optional intake questions do not gate native Bash or its own policy. */
   nativeCommand(execution: Execution): boolean {
     const state = this.bound(execution),
       actual = this.definition(execution),
       proof = this.#executions.get(execution)
-    if (state?.clarificationPending) return false
     if (
       !this.options.onlyWhenDeferred &&
       !this.#stopped &&
@@ -2643,12 +2639,6 @@ export class OnDemandIntake {
         proof.nativeCommandDigest === canonicalContentHash(execution.arguments))
     )
   }
-  /** Known observational/cancellation Lisp contracts stay usable while waiting.
-   * Live evaluation is effect-capable; do not inspect or guess its code string. */
-  private pendingLispEffect(execution: Execution): boolean {
-    if (['lisp_status','lisp_hot_status','lisp_cancel'].includes(execution.name)) return false
-    return !isJournalLispInspection(execution)
-  }
   /** Delegate real root Lisp tools to their own effect/lease/approval authority. */
   nativeLisp(execution: Execution): boolean {
     const state = this.bound(execution),
@@ -2663,7 +2653,6 @@ export class OnDemandIntake {
       (state.status !== 'answer' && state.status !== 'prepared') ||
       state.input.signal.aborted ||
       !actual ||
-      (state.clarificationPending && this.pendingLispEffect(execution)) ||
       !isLispImplementation(actual.execute) ||
       (execution.agent && this.host.nativeChild?.(execution.agent))
     )
@@ -3071,13 +3060,6 @@ export class OnDemandIntake {
           }
           try {
             this.assertCurrent(state)
-            if (state.clarificationPending && (
-              execution.name === 'bash' || isLispNativeCommand(execution, actual.execute) ||
-              (isLispImplementation(actual.execute) && this.pendingLispEffect(execution)) ||
-              (!isLispImplementation(actual.execute) && !nativeEvidenceRead(execution) &&
-                execution.name !== 'skill' && execution.name !== TASK_PREPARE_TOOL &&
-                !(execution.name === 'run_code' && preparationEnvelope(execution.arguments)))
-            )) return denied('The current request is awaiting clarification. Native commands cannot bypass that question; resolve it and prepare the exact request first.')
             if (
               state.confirmationResume &&
               execution.name !== TASK_PREPARE_TOOL &&

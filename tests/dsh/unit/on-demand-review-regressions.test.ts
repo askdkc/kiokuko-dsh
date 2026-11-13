@@ -3723,6 +3723,41 @@ test('an unavailable optional assessment admits once and does not repeat the che
   assert.equal(f.admissions.length, 1)
 })
 
+for (const name of ['write', 'edit', 'bash', 'lisp_eval', 'plugin_manager', 'lsp_extra'] as const)
+  test(`optional intake clarification does not gate native ${name}`, async (t) => {
+    const task = 'Fix the requested file.', message = human('optional-intake', task)
+    const intent = activeIntent([message], task, 'unknown', 'unknown')
+    const f = await fixture(t, {
+      nativeOwnership: async () => 'unowned',
+      requestContext: async () => intent.context,
+      interpret: async () => intent,
+    })
+    const calls = webTool(t, f, name)
+    if (name === 'lisp_eval') {
+      const { rememberLispImplementation } = await import('../../../src/dsh/lisp-tool-identity.js')
+      rememberLispImplementation(f.ctx.tools.get(name).execute)
+    }
+    await f.capture([message])
+    const pending = await f.execute(TASK_PREPARE_TOOL, { requestIntent: {
+      relation: 'unknown', action: 'unknown', evidenceRefs: requestIntentReferenceIds(intent.context),
+    } })
+    assert.equal(pending.value.status, 'awaiting_clarification')
+    assert.equal(pending.value.blockedScope, 'task_preparation')
+    const args = name === 'lisp_eval' ? { operationId: 'native-eval', code: '(+ 1 1)' } : {}
+    const result = await f.execute(name, args)
+    assert.equal(result.isError, false, JSON.stringify(result))
+    assert.equal(calls.length, 1)
+    assert.equal(f.admissions.length, 0)
+    const deny = f.ctx.tools.guard((execution: any) => execution.name === name ? 'NATIVE_POLICY_DENIED' : undefined)
+    try {
+      assert.match(JSON.stringify(await f.execute(name, args)), /NATIVE_POLICY_DENIED/)
+      assert.equal(calls.length, 1)
+    } finally { deny() }
+    f.intake.stop()
+    assert.equal((await f.execute(name, args)).isError, true)
+    assert.equal(calls.length, 1)
+  })
+
 test('a live native question does not occupy the model step or authorize effects', { timeout: 3000 }, async (t) => {
   const task = 'Inspect the requested artifact.'
   const message = human('pending-artifact', task)
