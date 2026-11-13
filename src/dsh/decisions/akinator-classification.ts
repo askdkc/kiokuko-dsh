@@ -84,9 +84,18 @@ export async function classifyTaskForIntake(service: DecisionService | undefined
   if (configuration.provider === 'typesafe' && (needsPriorContext(task) || hasUnresolvedAlternatives(task))) return { deferInference: true }
   const batch = laya ? buildAkinatorClassificationBatch(task) : legacyClassificationBatch(task)
   if (!batch) return { deferInference: true }
-  const outcome = await service.evaluate(requestId, batch, signal, laya ? AKINATOR_CLASSIFICATION_POLICY : '')
+  const jev = configuration.provider === 'typesafe'
+  if (jev) batch.questions.push({ id: 'coding', type: 'noul', instructions: 'この会話の内容はコーディングか？' })
+  const outcome = await service.evaluate(requestId, batch, signal, laya ? AKINATOR_CLASSIFICATION_POLICY : jev ? 'akinator-jev-coding-noul-v1' : '')
   if (outcome.status === 'fallback') return { deferInference: true }
   const answer = outcome.result.answers[0]
+  if (jev) {
+    const coding = outcome.result.answers.find(answer => answer.id === 'coding')
+    // Only a measured value establishes either side. Classification grants no execution authority.
+    if (coding?.status !== 'measured' || coding.type !== 'noul') return { deferInference: true }
+    if (coding.probability >= 0.5) return { taskType: answer?.status === 'selected' && answer.choiceId === 'debug' ? 'debug' : 'build', deferInference: false }
+    if (answer?.status === 'selected' && (answer.choiceId === 'build' || answer.choiceId === 'debug')) return { taskType: 'chat', deferInference: false }
+  }
   return answer?.status === 'selected' && (laya ? AKINATOR_AUTOMATED_TASK_TYPES : TASK_TYPES).some(type => type === answer.choiceId)
     ? { taskType: answer.choiceId as TaskType, deferInference: false }
     : { deferInference: true }

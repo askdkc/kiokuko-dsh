@@ -735,6 +735,7 @@ for (const provider of ['typesafe', 'nimble'] as const) test(`core ${provider}: 
     }
     calls++
     return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      if (id === 'coding' && q.type === 'noul') return [id, { type: 'noul', noul: 0.1 }]
       const choice = id === 'task-type' ? 'writing' : q.instructions.includes('fixture-writing') ? 'yes' : 'no'
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
@@ -770,6 +771,7 @@ test('core Score selection reaches model context through native pre-step', async
         return [id, { type: 'score', score: positive ? 3 : 0, probabilities: positive ? { 0: 0, 1: 0, 2: 0, 3: 1 } : { 0: 1, 1: 0, 2: 0, 3: 0 },
           legend: Object.fromEntries(q.criteria.map((level: string, index: number) => [index, level])), confidence: 1 }]
       }
+      if (id === 'coding' && q.type === 'noul') return [id, { type: 'noul', noul: 0.1 }]
       const choice = id === 'task-type' ? 'writing' : Object.keys(q.criteria)[0]
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })

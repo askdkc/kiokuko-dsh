@@ -5,7 +5,17 @@ installed Skill relevance, past memory reuse, [post-display answer review](answe
 The selected adapter owns its transport protocol and uncertainty policy. Domain
 workflows consume `selected` or `abstained`; they do not depend on model names.
 
-Task classification treats ordinary questions and advice as `chat`; an explicit
+With TypeSafe/Jev selected, Akinator sends the unchanged original request and asks
+`この会話の内容はコーディングか？` as Noul alongside the task-category question in one batch.
+A measured value **>= 0.5** classifies it as coding: an accepted `debug` category is
+retained, otherwise `build` is the provisional default (including an abstained subtype).
+Below 0.5, non-coding categories remain available; a conflicting `build`/`debug`
+category becomes `chat`. An unmeasured coding answer defers inference; below 0.5,
+an abstained category also defers. Explicit task types and disabled decisions keep
+precedence. No translation, extra provider call, provider switch or execution permission
+is introduced. The separate startup work-request gate remains unchanged.
+
+Otherwise, task classification treats ordinary questions and advice as `chat`; an explicit
 source lookup is `research`. Laya receives complete current requests up to 4096
 UTF-8 bytes, including queued coding requests, multiple sentences, quoted filenames,
 source material, combined actions and negations. All eight task types and `abstain`

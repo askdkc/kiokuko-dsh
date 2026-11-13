@@ -38,6 +38,7 @@ for (const kind of ['typesafe', 'nimble', 'laya-v1', 'laya-strict'] as const) te
     const input = JSON.parse(String(options!.body))
     if (input.questions['task-type']) requests.push(input)
     return Response.json({ model: input.model, answers: Object.fromEntries(Object.entries(input.questions).map(([id, q]: [string, any]) => {
+      if (id === 'coding' && q.type === 'noul') return [id, { type: 'noul', noul: 0.1 }]
       const choice = choose(id, Object.keys(q.criteria))
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(c => [c, c === choice ? 1 : 0])), confidence: 1 }]
     })) })
@@ -369,6 +370,7 @@ for (const kind of ['typesafe', 'nimble'] as const) test(`full gate ${kind}: pro
     const request: typeof fetch = async (_url, options) => {
       calls++; const input = JSON.parse(String(options!.body))
       return Response.json({ model: input.model, answers: Object.fromEntries(Object.entries(input.questions).map(([id, q]: [string, any]) => {
+        if (id === 'coding' && q.type === 'noul') return [id, { type: 'noul', noul: 0.1 }]
         const choice = id === 'task-type' ? 'research' : q.instructions.includes('fixture-selection') ? 'yes' : 'no'
         return [id, { type: 'choice', choice, probabilities: Object.fromEntries(Object.keys(q.criteria).map(c => [c, c === choice ? 1 : 0])), confidence: 1 }]
       })) })

@@ -15,6 +15,7 @@ function transport(select: (id: string, options: string[]) => string, capture?: 
     capture?.(url, options!)
     const request = JSON.parse(String(options!.body))
     return Response.json({ model: request.model, answers: Object.fromEntries(Object.entries(request.questions).map(([id, q]: [string, any]) => {
+      if (id === 'coding' && q.type === 'noul') return [id, { type: 'noul', noul: 0.9 }]
       const keys = Object.keys(q.criteria), choice = select(id, keys)
       return [id, { type: 'choice', choice, probabilities: Object.fromEntries(keys.map(k => [k, k === choice ? 1 : 0])), confidence: 1 }]
     })) })
@@ -92,7 +93,7 @@ test('invalid endpoints, TypeSafe credential reuse and malformed replies fail cl
 test('portable workflows accept different metadata and one-question provider limits without branching', async () => {
   const fake: DecisionProvider = { capabilities: { maxQuestions: 1, maxChoices: 20, maxBytes: 100000 }, evaluate: async request => ({ provider: 'custom', requestedModel: 'custom-v7', revision: 'opaque-build', policyVersion: 'custom-policy',
     answers: request.questions.map(q => ({ id: q.id, status: 'selected' as const, choiceId: request.purpose === 'akinator' ? 'analysis' : request.purpose === 'skills' ? 'yes' : 'satisfied' })) }) }
-  const service = new DecisionService(config('typesafe'), () => fake)
+  const service = new DecisionService(config('nimble'), () => fake)
   assert.equal(await classifyTask(service, 'task', 'Analyze this request', undefined, signal()), 'analysis')
   const catalog = [{ kind: 'skill' as const, name: 'kiokuko-soul' }, { kind: 'skill' as const, name: 'custom-analysis' }]
   const resolution = resolveCapabilities({ task: 'Analyze', profile: { taskType: 'analysis', target: null, expected: null, constraints: null }, recommendedTags: [], capabilities: catalog, memoryUse: 'none' })

@@ -193,10 +193,12 @@ for (const provider of ['typesafe', 'laya-coreml'] as const) {
   test(`${provider}: complete actionable requests keep their provider contract`, async () => {
     let calls = 0
     const task = 'Fix the failing parser in src/parser.ts and add regression tests.'
-    const service = new DecisionService(config(), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => {
+    const service = new DecisionService(config(), () => ({ capabilities: { maxQuestions: 2, maxChoices: 32, maxBytes: 262144, questionTypes: ['choice', 'noul'] }, evaluate: async batch => {
       calls++
       assert.deepEqual(batch.state, provider === 'typesafe' ? { task } : task)
-      return { provider, requestedModel, policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: 'debug' })) }
+      return { provider, requestedModel, policyVersion: 'fixture', answers: batch.questions.map(q => q.id === 'coding'
+        ? { id: q.id, status: 'measured', type: 'noul', probability: 0.9 }
+        : { id: q.id, status: 'selected', choiceId: 'debug' }) }
     } }))
     assert.deepEqual(await classifyTaskForIntake(service, 'complete', task, undefined, signal()), { taskType: 'debug', deferInference: false })
     assert.equal(calls, 1)

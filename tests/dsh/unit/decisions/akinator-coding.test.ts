@@ -34,7 +34,7 @@ for (const task of ['それを実装して', 'Implement it', '検索か画面か
 })
 for (const provider of ['typesafe', 'laya-coreml'] as const) for (const type of ['build', 'debug'] as const) test(`${provider} selected ${type} asks once before admission`, async () => {
   const config = TypedDecisionsConfig.parse({ mode: 'auto', provider, 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } })
-  const service = new DecisionService(config, () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => ({ provider, requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: type })) }) }))
+  const service = new DecisionService(config, () => ({ capabilities: { maxQuestions: 2, maxChoices: 32, maxBytes: 262144, questionTypes: ['choice', 'noul'] }, evaluate: async batch => ({ provider, requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => q.id === 'coding' ? { id: q.id, status: 'measured', type: 'noul', probability: 0.5 } : { id: q.id, status: 'selected', choiceId: type }) }) }))
   const signal = new AbortController().signal
   const task = type === 'build' ? '検索機能を実装して' : 'ログイン時の例外を修正して'
   const classified = await classifyTaskForIntake(service, 'request', task, undefined, signal)
@@ -57,13 +57,13 @@ for (const provider of ['typesafe', 'laya-coreml'] as const) for (const type of 
   assert.equal(asked, 1)
 })
 test('admission wording never overrides a model decision about prose', async () => {
-  const service = new DecisionService(TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } }), () => ({ capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 }, evaluate: async batch => ({ provider: 'laya-coreml', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: 'writing' })) }) }))
+  const service = new DecisionService(TypedDecisionsConfig.parse({ provider: 'laya-coreml', 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } }), () => ({ capabilities: { maxQuestions: 2, maxChoices: 32, maxBytes: 262144, questionTypes: ['choice', 'noul'] }, evaluate: async batch => ({ provider: 'laya-coreml', requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'selected', choiceId: 'writing' })) }) }))
   assert.deepEqual(await classifyTaskForIntake(service, 'prose', '検索機能の説明文を作成して', undefined, new AbortController().signal), { taskType: 'writing', deferInference: false })
 })
 
 for (const provider of ['typesafe', 'laya-coreml'] as const) for (const failure of ['abstain', 'UNAVAILABLE', 'TOO_LARGE'] as const) test(`${provider} ${failure} cannot become keyword-inferred coding`, async () => {
   const service = new DecisionService(TypedDecisionsConfig.parse({ mode: 'auto', provider, 'laya-coreml': { protocol: 'v1', model: 'laya-rl-agent' } }), () => ({
-    capabilities: { maxQuestions: 1, maxChoices: 32, maxBytes: 262144 },
+    capabilities: { maxQuestions: 2, maxChoices: 32, maxBytes: 262144, questionTypes: ['choice', 'noul'] },
     evaluate: async batch => {
       if (failure !== 'abstain') throw new DecisionError(failure)
       return { provider, requestedModel: 'fixture', policyVersion: 'fixture', answers: batch.questions.map(q => ({ id: q.id, status: 'abstained' as const, reason: 'uncertain' })) }
