@@ -1,3 +1,4 @@
+import { contextRoot } from '../context-root.js'
 import { lispWorkflowAccess, isLispWorkflowDiagnostic } from './workflow-access.js'
 import { NativeChildOwnership } from './native-child-ownership.js'
 import { createLispHostDispatch, lispHostToolWasNotDispatched } from './host-tool-dispatch.js'
@@ -155,7 +156,7 @@ export async function lispFallbackCompactionOutcome(agent: Agent, signal: AbortS
 
 /** The fence belongs to the host root, so plugin unload cannot restore bash access. */
 export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config: LispConfiguration, skillPrompts?: DshSkillPrompts, decisions?: DecisionService, semanticCompaction?: SemanticCompactionCoordinator): Promise<{ stop(): void; dispose(): Promise<void>; manager: LispManager }> {
-  const root = (ctx.root ?? ctx) as unknown as Context & { [fenceKey]?: Fence }
+  const root = (contextRoot(ctx)) as unknown as Context & { [fenceKey]?: Fence }
   const tools = root.get('tools', false) as Tools | undefined
   const pluginTools = ctx.get('tools', false) as Tools | undefined
   const agents = root.get('agents', false) as { get(id: string): Agent | undefined;isOwnedBy?(id:string,parent:Agent):boolean } | undefined

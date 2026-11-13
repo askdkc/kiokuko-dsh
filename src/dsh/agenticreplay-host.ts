@@ -1,3 +1,4 @@
+import { contextRoot } from './context-root.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgenticReplayConfig } from './config.js'
 import { canonicalDirectory, detectRepositoryRoot } from '../repository/detect-root.js'
@@ -24,7 +25,7 @@ export function createDshAgenticReplayHost(ctx: Context, config: AgenticReplayCo
   // Web keeps observers alive through recorder drain. CLI/TUI profiles forbid
   // plugin registration on the composition root, so use their scoped context.
   const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
-  const observerContext = profile === 'dsh-cli' || profile === 'dsh-tui' ? ctx : ctx.root ?? ctx
+  const observerContext = profile === 'dsh-cli' || profile === 'dsh-tui' ? ctx : contextRoot(ctx)
   const bindings = new Map<string, { agent: object; session: object; binding: DshAgenticReplayBinding; turn?: number | undefined }>()
   let accepting = true
   const withIndex: WithAgenticReplayIndex = operation => runtime.withDatabase(async db => await operation(new DshAgenticReplayStore(db)))

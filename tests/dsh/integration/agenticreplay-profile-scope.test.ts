@@ -1,3 +1,4 @@
+import { Context } from '@deepseek-ai/cordis'
 import assert from 'node:assert/strict'
 import { writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -37,8 +38,9 @@ async function verifyRecordingScope(profile: string | undefined, scoped: boolean
       },
     },
   }
+  const rootKey: unknown = Reflect.get(Context, 'root')
   const ctx = {
-    root,
+    [typeof rootKey === 'symbol' ? rootKey : 'root']: root,
     get: (name: string, strict: boolean) => {
       assert.equal(name, 'profileContext')
       assert.equal(strict, false)

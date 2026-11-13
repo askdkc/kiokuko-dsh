@@ -1,3 +1,4 @@
+import { contextRoot } from '../context-root.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { DshMemoryFinalizer } from '../session-memory-finalizer.js'
 import type { NativeAgent, NativeAgents, NativeSessions } from './native-events.js'
@@ -31,7 +32,7 @@ export function createEfficiencyHost(deps: EfficiencyHostDependencies) {
     efficiency = observer
     if (observer === undefined) return
     const profile = (ctx.get?.('profileContext', false) as { name?: string } | undefined)?.name
-    const scope = profile === 'dsh-tui' ? ctx : (ctx.root ?? ctx) as Context
+    const scope = profile === 'dsh-tui' ? ctx : (contextRoot(ctx)) as Context
     const observedAgents = new Map<string, NativeAgent>()
     const bind = (agent: NativeAgent | undefined) => {
       if (!agent?.session || agents?.get(agent.id) !== agent || sessions?.get(agent.session.id) !== agent.session) return
