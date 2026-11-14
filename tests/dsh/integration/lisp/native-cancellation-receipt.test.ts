@@ -29,6 +29,7 @@ const cases = [false, true].flatMap(jobs => (supportsHostReceipts ? [true, false
 cases.push({ jobs: true, retained: false, scenario: 'workdir', title: 'missing native workdir never dispatches or blocks the next Lisp command' })
 cases.push({ jobs: true, retained: false, scenario: 'prototype', title: 'human Lisp recovery reopens a failed protected prototype on the same task' })
 cases.push({ jobs: true, retained: false, scenario: 'completion', title: 'Lisp native Bash verifies the bound command in a subdirectory' })
+cases.push({ jobs: true, retained: false, scenario: 'foreground', title: 'Lisp command times out in foreground without registering a job or blocking later work' })
 for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 30000 }, async () => {
   const [cordis, prompt, tools, scope, sessions] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-session'].map(load))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'native-receipt-'))), root = join(base, 'repo')
@@ -68,6 +69,7 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
     }
     if (jobs) fibers.push(await ctx.plugin((await load('dsh-jobs-local')).default, {}))
     fibers.push(await ctx.plugin(await load('dsh-tool-bash'), {}))
+    if (scenario === 'foreground') fibers.push(await ctx.plugin(await load('dsh-tool-jobs'), {}))
     if (scenario === 'completion') {
       const unmount = mountTaskCompletion(ctx, { runtime,
         resolve: execution => execution.agent === agent
@@ -85,6 +87,30 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
     assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal })).kind, 'success')
     await intake.capture({ agent, turn: 1, step: 0, messages: [{ id: 'human', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Verify this isolated fixture.' }] }], signal })
     assert.equal((await execute('lisp_eval', { operationId: 'warm', code: '(+ 20 22)' })).value.ok, true)
+    if (scenario === 'foreground') {
+      let registered = 0
+      const originalStart = ctx.jobs.start
+      ctx.jobs.start = function (...args: any[]) { registered++; return originalStart.apply(this, args) }
+      const script = "require('fs').appendFileSync('effects','x');console.log('partial test output');console.error('failed test');setInterval(()=>{},1000)"
+      const result = await execute('lisp_eval', { operationId: 'foreground-timeout',
+        code: `(kioku.process:run ${JSON.stringify(process.execPath)} (list "-e" ${JSON.stringify(script)}) :timeout-ms 500)` })
+      assert.equal(result.value.ok, true, JSON.stringify(result))
+      const value = result.value.value.json
+      assert.equal(value.timedOut, true)
+      assert.equal(registered, 0, 'synchronous Lisp must never enter the jobs registry')
+      assert.match(value.stdout, /partial test output/)
+      assert.match(value.stderr, /failed test/)
+      assert.equal(value.receipt.processStopped, true)
+      assert.equal(value.receipt.cancelled, true)
+      assert.equal(db.prepare('SELECT state FROM dsh_managed_operations').get<any>()?.state, 'cancelled-confirmed')
+      assert.equal((await surface.manager.status(owner)).managedReconciliationRequired, false)
+      const next = await execute('lisp_eval', { operationId: 'after-timeout',
+        code: `(kioku.process:run ${JSON.stringify(process.execPath)} '("--version"))` })
+      assert.equal(next.value.value.json.code, 0, JSON.stringify(next))
+      assert.equal(next.value.generation, result.value.generation)
+      assert.equal(await readFile(join(root, 'effects'), 'utf8'), 'x', 'the timed out command is never replayed')
+      return
+    }
     if (scenario === 'completion') {
       await mkdir(join(root, 'selected'))
       await writeFile(join(root, 'selected', 'check.test.mjs'), "import test from 'node:test'; test('selected case', () => {});\n")

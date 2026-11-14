@@ -6,6 +6,7 @@ import { formatLispStatus, type LispStatusView } from './status-text.js'
 import { ManagedDispatchDenied, managedAdmissionDenied, currentManagedOperation, observeManagedResult } from '../managed-operation-runner.js'
 import { ManagedOperationJournal } from '../managed-operation-journal.js'
 import { nativeStopReceipt } from './native-stop-receipt.js'
+import { withNativeForegroundOnly } from './native-foreground.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { isCodingWorkflowTool } from '../coding-workflow/host.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
@@ -628,6 +629,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                       }
                     }
                     dispatchStarted = true
+                    const host = binding.agent.ctx ?? ctx
+                    return withNativeForegroundOnly(host.get('jobs', false), next)
                   }
                   return next()
                 }, {global:true, prepend:true})
@@ -649,18 +652,22 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
                 const value = result.value
                 if (value.kind === 'background' || value.kind === 'promoted') {
                   const jobs = ctx.get('jobs', false) as any
-                  if (!jobs) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} requires cancellation.`)
-                  jobs.kill(value.jobId, binding.agent.id, 'Lisp foreground deadline')
-                  const terminal = await jobs.wait(value.jobId, 5000, binding.agent.id)
-                  if (['running', 'stopping'].includes(terminal.status)) fail('STOP_UNCONFIRMED', `Native job ${value.jobId} has not stopped.`)
-                  jobs.remove(value.jobId, binding.agent.id)
-                  fail('STOP_UNCONFIRMED', `Native job ${value.jobId} reported settlement without an observed managed-range stop receipt; inspect the original host call before retrying.`)
+                  if (jobs) {
+                    jobs.kill(value.jobId, binding.agent.id, 'Lisp synchronous execution cannot run in background')
+                    await jobs.wait(value.jobId, 5000, binding.agent.id)
+                  }
+                  fail('STOP_UNCONFIRMED', 'Host violated foreground-only execution; inspect the original call before retrying.')
                 }
+                const receipt = { route: 'native', callId: child.callId, operationId: child.callId,
+                  processStopped: true, ...(value.timedOut ? { state: 'cancelled', cancelled: true } : {}) }
+                // Stop may revoke the caller while the original host range is
+                // draining. Retain its proof before checking live admission.
+                if (value.timedOut && managed) await observeManagedResult(managed, { receipt })
                 this.assertCurrent()
                 if (value.exitCode !== 0 || value.timedOut) prototypeProcessFailed = true
                 return { code: value.exitCode, stdout: value.stdout?.text ?? '', stderr: value.stderr?.text ?? '',
                   ...(value.stdout?.truncated ? { stdoutTruncated: true } : {}), ...(value.stderr?.truncated ? { stderrTruncated: true } : {}),
-                  timedOut: value.timedOut, sandbox: value.sandbox, receipt: { route: 'native', callId: child.callId, processStopped: true } }
+                  timedOut: value.timedOut, sandbox: value.sandbox, receipt }
               },
             } : undefined
             if((name === 'lisp_recover' || development && !admission) && (ctx.get('planMode',false) as any)?.get(binding.agent)?.active && !['lisp_status','lisp_hot_status','lisp_inspect','lisp_cancel'].includes(name))fail('PLAN_ACTIVE','Plan 中の Lisp 実行・変更はできません。実装指示またはPlan承認後に実行してください。')
