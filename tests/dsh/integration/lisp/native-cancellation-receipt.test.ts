@@ -30,6 +30,7 @@ cases.push({ jobs: true, retained: false, scenario: 'workdir', title: 'missing n
 cases.push({ jobs: true, retained: false, scenario: 'prototype', title: 'human Lisp recovery reopens a failed protected prototype on the same task' })
 cases.push({ jobs: true, retained: false, scenario: 'completion', title: 'Lisp native Bash verifies the bound command in a subdirectory' })
 cases.push({ jobs: true, retained: false, scenario: 'foreground', title: 'Lisp command times out in foreground without registering a job or blocking later work' })
+cases.push({ jobs: true, retained: false, scenario: 'reset', title: 'human reset restarts SBCL and preserves the exact session Lisp tool definitions' })
 for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 30000 }, async () => {
   const [cordis, prompt, tools, scope, sessions] = await Promise.all(['cordis', 'dsh-system-prompt', 'dsh-tools', 'dsh-scope', 'dsh-session'].map(load))
   const base = await realpath(await mkdtemp(join(tmpdir(), 'native-receipt-'))), root = join(base, 'repo')
@@ -87,6 +88,34 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
     assert.equal((await commands.get('kioku-lisp').handler({ rawInput: 'enable', agent, signal })).kind, 'success')
     await intake.capture({ agent, turn: 1, step: 0, messages: [{ id: 'human', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Verify this isolated fixture.' }] }], signal })
     assert.equal((await execute('lisp_eval', { operationId: 'warm', code: '(+ 20 22)' })).value.ok, true)
+    if (scenario === 'reset') {
+      const schemas = ctx.tools.schemas(agent).filter((s: any) => s.name.startsWith('lisp_'))
+      const definitions = schemas.map((s: any) => ctx.tools.get(s.name, agent))
+      const before = await surface.manager.status(owner)
+      const journal = new ManagedOperationJournal(db)
+      const scope = journal.createScope({ sessionId: session.id, parentId: 'lost-result', runtimeIdentity: 'sbcl:old' })
+      const operation = journal.prepare(scope.scopeId, { route: 'native', kind: 'process', request: {} })
+      journal.claim(operation.operationId); journal.recover(scope.scopeId)
+      const originalDispose = surface.manager.disposeSession
+      surface.manager.disposeSession = async () => { throw new Error('injected stop failure') }
+      try {
+        const rejected = await commands.get('kioku-lisp').handler({ rawInput: 'reset', agent, signal })
+        assert.equal(rejected.kind, 'error')
+        assert.equal(journal.readOperation(operation.operationId).state, 'unknown')
+        schemas.forEach((s: any, index: number) => assert.equal(ctx.tools.get(s.name, agent), definitions[index]))
+      } finally { surface.manager.disposeSession = originalDispose }
+      const reset = await commands.get('kioku-lisp').handler({ rawInput: 'reset', agent, signal })
+      assert.equal(reset.kind, 'success', reset.text)
+      const after = await surface.manager.status(owner)
+      assert.equal(after.state, 'READY'); assert.notEqual(after.generation, before.generation)
+      assert.equal(after.managedReconciliationRequired, false)
+      assert.equal(journal.readOperation(operation.operationId).state, 'abandoned')
+      assert.deepEqual(ctx.tools.schemas(agent).filter((s: any) => s.name.startsWith('lisp_')), schemas)
+      schemas.forEach((s: any, index: number) => assert.equal(ctx.tools.get(s.name, agent), definitions[index]))
+      const next = await execute('lisp_eval', { operationId: 'after-reset', code: '(+ 40 2)' })
+      assert.equal(next.value.ok, true, JSON.stringify(next))
+      return
+    }
     if (scenario === 'foreground') {
       let registered = 0
       const originalStart = ctx.jobs.start

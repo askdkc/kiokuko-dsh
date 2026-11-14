@@ -229,8 +229,8 @@ export class LispStore {
         .run(state, encoded, nextPayload, new Date().toISOString(), owner.sessionId, owner.agentId, id)
     }))
   }
-  operations(sessionId: string): Promise<Operation[]> {
-    return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC").all<Operation>(sessionId))
+  operations(sessionId: string, limit = -1): Promise<Operation[]> {
+    return this.database(db => db.prepare("SELECT * FROM dsh_lisp_operations WHERE session_id=? AND kind!='binding' ORDER BY CASE WHEN state IN ('RUNNING','APPLYING','UNKNOWN','AWAITING_APPROVAL') THEN 0 ELSE 1 END, updated_at DESC LIMIT ?").all<Operation>(sessionId, limit))
   }
   taskSummary(owner: LispOwner): Promise<{ tools: unknown[]; results: unknown[]; candidates: unknown[]; unresolved: unknown[] }> {
     return this.database(db => {

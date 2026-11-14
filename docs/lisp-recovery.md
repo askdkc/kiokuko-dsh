@@ -1,5 +1,28 @@
 # Bounded live condition/restart recovery
 
+## Reset a stuck session without changing its tools
+
+Use `/kioku-lisp reset` (alias `/kioku-lisp restart`) to stop the current
+session's owned workers, abandon pending execution records, and start a fresh
+SBCL. This is an explicit human command, not an autonomous model tool. It does
+not disable Lisp, unregister/re-register tools, change the repository/session,
+or replay previous code. The stop phase has a 10-second bound; failed or
+unconfirmed termination leaves the records intact and never starts a second
+worker.
+
+Native tool definitions, saved task tools, explicitly saved function sources,
+results and operation history remain. Unresolved effects are recorded as
+abandoned, never successful or reverted. Heap-only definitions, variables and
+continuations are lost; saved function sources are not automatically evaluated.
+Another session's workers and records are unaffected. Disposable task mode
+keeps its saved tools and returns ready for the next disposable worker.
+
+`/kioku-lisp diagnostics` also works while Lisp is disabled. A damaged proposal
+JSON record is identified as unreadable without preventing other records from
+being displayed. Use an operation ID for a specific record.
+
+## Recover a live condition
+
 If a protected Lisp worker fails to start or recover, the model can continue with permitted reading, search, and planning. Use `lisp_status` and `lisp_inspect` to diagnose the worker and inspect saved receipts. The selected route and its effect guards remain in force while the worker or an operation is unresolved.
 
 `kioku.recovery:select-restart` is opt-in recovery inside an explicit Common Lisp

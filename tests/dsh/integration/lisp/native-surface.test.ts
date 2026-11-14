@@ -45,6 +45,9 @@ test('recover on a disabled session leaves native tools available without requir
       assert.equal(recovered.kind, 'error'); assert.match(recovered.text, /有効にしていません/)
       assert.equal((await call()).isError, false, 'failed recovery must not hide ordinary tools')
       assert.equal((await surface.manager.status({ sessionId: agent.id, agentId: agent.id, root: base }) as any).state, 'DISABLED')
+      const diagnostics = await commands.get('kioku-lisp').handler({ rawInput: 'diagnostics', agent, signal: new AbortController().signal })
+      assert.equal(diagnostics.kind, 'success', diagnostics.text)
+      assert.equal(JSON.parse(diagnostics.text).state, 'DISABLED')
     }
     assert.equal(effects, 3)
   } finally {

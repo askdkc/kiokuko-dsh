@@ -732,9 +732,9 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       async run() { return fail('CAPABILITY_DENIED', 'Mode control cannot execute a command.') },
     })
   }
-  const recover = async (binding: ReturnType<typeof owner>, signal?: AbortSignal) => {
+  const recover = async (binding: ReturnType<typeof owner>, signal?: AbortSignal, reset = false) => {
     const request = preparation.binding(binding.agent)
-    const restart = () => manager.recover(binding.owner, signal)
+    const restart = () => reset ? manager.restart(binding.owner, signal) : manager.recover(binding.owner, signal)
     const result = await (await manager.canRecoverWorkerWithoutTask(binding.owner) ? modeOnly(binding, restart) : restart()) as { state?: string }
     if (!signal?.aborted && (result.state === 'READY' || result.state === 'TASK_READY')) {
       diagnosticOnly.delete(binding.agent)
@@ -1051,7 +1051,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
   }, (sessionId, signal) => recover(owner(agents.get(sessionId)), signal)))
-  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | cancel | recover | abandon ID | restore ID | abandon-managed ID 証跡 | disable' },
+  disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | diagnostics [ID] | cancel | recover | reset | abandon ID | restore ID | abandon-managed ID 証跡 | disable' },
     handler: async invocation => {
       try {
         const binding = owner(invocation.agent)
@@ -1091,6 +1091,11 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
         else if (action === 'recover') {
           if (manager.enabled.has(binding.owner.sessionId)) register(binding.agent)
           result = await recover(binding, invocation.signal)
+        }
+        else if (action === 'reset' || action === 'restart') {
+          // Keep the existing definitions and visibility: do not unregister,
+          // disable, re-register or change the coding choice during reset.
+          result = await recover(binding, invocation.signal, true)
         }
         else if (action === 'abandon') result = await manager.abandon(binding.owner, argument ?? '')
         else if (action === 'abandon-managed') result = await manager.abandonManaged(binding.owner, argument ?? '', managedEvidence)

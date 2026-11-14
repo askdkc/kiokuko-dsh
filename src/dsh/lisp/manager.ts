@@ -1,5 +1,6 @@
 import { ManagedOperationJournal } from '../managed-operation-journal.js'
 import { runManagedOperation, observeManagedResult, managedAdmissionDenied, isManagedAdmissionDenied, type ManagedScope } from '../managed-operation-runner.js'
+import { resetStoppedSessionRecords, stopBeforeReset } from './session-reset.js'
 import { LispRecoverySession } from './recovery.js'
 import type { LispNativeCommands } from '../lisp-tool-identity.js'
 import { CodeIntelligenceAdapterV1 } from './code-intelligence.js'
@@ -848,17 +849,25 @@ export class LispManager {
       recovery: managedReconciliation ? 'Managed operations remain unresolved. Inspect the listed operation IDs and original receipts; restarting or abandoning Lisp does not reconcile external effects.' : unconfirmed ? '停止と操作記録を照合してください。自動再実行しません。' : taskMode && !state.worker ? null : state.state === 'SUSPENDED' ? 'Lisp は休止中です。次の利用時に自動起動します。変数・関数定義は保持されません。' : state.state === 'READY' ? null : '停止理由と操作履歴を確認し、/kioku-lisp recover を実行してください。' }
   }
   async diagnostics(owner: LispOwner, id?: string): Promise<unknown> {
-    this.entry(owner)
+    const session = await this.#store.session(owner.sessionId)
+    if (session && session.root_path !== owner.root) fail('SCOPE_CONFLICT', '診断対象のセッションとリポジトリが一致しません。')
+    const parse = (value: string) => {
+      try { return JSON.parse(value) } catch { return { unreadable: true, reason: 'CORRUPT_JSON', bytes: Buffer.byteLength(value) } }
+    }
     if (id) {
       const operation = await this.#store.get(owner, identifier.parse(id))
       if (!operation) {
         return this.managedDiagnostics(owner, id)
       }
-      return { ...operation, payload: JSON.parse(operation.payload), result: operation.result ? JSON.parse(operation.result) : null }
+      return { ...operation, payload: parse(operation.payload), result: operation.result ? parse(operation.result) : null }
     }
-    const operations = await this.#store.operations(owner.sessionId)
-    return { ...await this.status(owner) as object,
-      changes: operations.filter(o => o.kind === 'proposal').slice(0, 100).map(o => ({ id: o.operation_id, state: o.state, details: JSON.parse(o.payload), result: o.result ? JSON.parse(o.result) : null })),
+    const operations = await this.#store.operations(owner.sessionId, 100)
+    let status: object
+    try { status = await this.status(owner) as object }
+    catch (error) { status = { enabled: this.enabled.has(owner.sessionId), state: 'DIAGNOSTICS_PARTIAL', statusError: failure(error) } }
+    return { ...status, operationPageLimit: 100,
+      changes: operations.filter(o => o.kind === 'proposal').map(o => ({ id: o.operation_id, state: o.state, details: parse(o.payload), result: o.result ? parse(o.result) : null })),
+      reset: '/kioku-lisp reset は対象セッションの SBCL と実行状態を初期化します。ツール登録・保存済み定義・操作履歴は保持し、元の処理は再実行しません。',
       inspect: '/kioku-lisp diagnostics OPERATION_ID で各操作の全内容を確認できます。' }
   }
   private async managedDiagnostics(owner: LispOwner, id: string): Promise<unknown> {
@@ -1396,6 +1405,25 @@ export class LispManager {
       this.entry(owner)
       await this.authorizeRecovery(owner)
       return this.recoverBound(owner, signal)
+    }))
+  }
+  /** Explicit human reset, never exposed as an autonomous model tool. The
+   * session and tool registrations survive; only execution state is replaced. */
+  restart(owner: LispOwner, signal?: AbortSignal): Promise<unknown> {
+    return this.taskAuthority.run(owner, () => this.withRecoverySlot(owner, async () => {
+      const state = this.entry(owner)
+      signal?.throwIfAborted()
+      await this.claimSession(owner)
+      // No new worker or bookkeeping reset while any owned stop is unconfirmed.
+      await stopBeforeReset(() => this.disposeSession(owner.sessionId))
+      signal?.throwIfAborted()
+      const reset = await this.#store.database(db => resetStoppedSessionRecords(db, owner))
+      for (const current of this.#agents.values()) if (current.owner.sessionId === owner.sessionId) {
+        delete current.awaiting; delete current.recovery; delete current.execution; delete current.managedScope
+        delete current.currentVerification; delete current.packageBase; delete current.codeLease
+      }
+      if (!await this.isTaskMode(owner)) await this.startWorker(state, signal)
+      return { ...await this.status(owner) as object, reset, definitionsLost: true, toolsPreserved: true }
     }))
   }
   private async withRecoverySlot<T>(owner: LispOwner, action: () => Promise<T>): Promise<T> {
