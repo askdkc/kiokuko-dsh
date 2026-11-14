@@ -1050,7 +1050,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
     if (binding.owner.sessionId !== sessionId) fail('SESSION_MISMATCH', 'セッションが一致しません。')
     if (recover && manager.enabled.has(sessionId)) register(binding.agent)
     return binding.owner
-  }, (sessionId, signal) => recover(owner(agents.get(sessionId)), signal)))
+  }, (sessionId, signal, reset) => recover(owner(agents.get(sessionId)), signal, reset)))
   disposers.push(commands.register({ name: 'kioku-lisp', description: 'Common Lisp の開始・状態・停止・復旧', input: { hint: 'approval ask|auto|status | enable | enable-task | status [--json] | diagnostics [ID] | cancel | recover | reset | abandon ID | restore ID | abandon-managed ID 証跡 | disable' },
     handler: async invocation => {
       try {

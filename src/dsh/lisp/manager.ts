@@ -834,6 +834,7 @@ export class LispManager {
     return { approval, enabled: true, managedOperations, managedUnknownOperations:managed.unknownOperations, managedOperationCount:managed.total, managedOperationsTruncated:managed.truncated, managedReconciliationRequired:managedReconciliation, state: managedReconciliation ? 'RECONCILIATION_REQUIRED' : unconfirmed ? 'STOP_UNCONFIRMED' : taskMode && state.state === 'RECOVERY_REQUIRED' && !state.worker ? 'TASK_READY' : state.state,
       generation: state.worker?.generation ?? null, supervisorPid: state.worker?.supervisorPid ?? null,
       runtimePid: state.worker?.runtimePid ?? null, repositoryRoot:state.worker?.repositoryRoot ?? null,
+      runtimeHealthy: state.worker?.healthy ?? false,
       owner:{hostPid:process.pid,sessionId:owner.sessionId,agentId:owner.agentId},
       error: unconfirmed?.error ?? (taskMode && !state.worker ? null : state.error ?? null),
       ...(managedReconciliation && managed.unknownOperations[0] ? { nextInspection: { tool: 'lisp_inspect', managedOperationId: managed.unknownOperations[0].id } } : {}),

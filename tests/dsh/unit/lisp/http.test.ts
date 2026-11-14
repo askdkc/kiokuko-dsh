@@ -31,3 +31,28 @@ test('authenticated conversation recovery uses the host mode-only route without 
   assert.equal((await handler(request({ action: 'restore' }))).status, 409)
   assert.equal(recovered, 1)
 })
+
+test('human reset uses the session-bound host route without re-registering tools', async () => {
+  let handler!: (request: Request) => Promise<Response>, resets = 0
+  const ctx = { get: () => ({ fetch: { register: (route: any) => { handler = route.fetch; return () => {} } } }) }
+  mountLispHttp(ctx as any, {} as any, (id, register) => {
+    assert.equal(register, undefined, 'reset must preserve existing tool registrations')
+    return { sessionId: id, agentId: id, root: '/workspace' }
+  }, async (id, signal, reset) => {
+    assert.equal(id, 's'); assert.equal(signal.aborted, false); assert.equal(reset, true)
+    resets++
+    if (resets === 1) throw new Error('owned process stop failed')
+    return { state: 'READY', toolsPreserved: true, managedUnknownOperations: [] }
+  })
+  const request = (body: object, origin = 'http://localhost') => new Request('http://localhost/api/kiokuko.lisp?sessionId=s', {
+    method: 'POST', headers: { origin }, body: JSON.stringify(body),
+  })
+  assert.equal((await handler(request({ action: 'reset' }, 'http://outside.example'))).status, 403)
+  assert.equal((await handler(request({ action: 'reset', approval: true }))).status, 409)
+  assert.equal(resets, 0)
+  assert.equal((await handler(request({ action: 'reset' }))).status, 409)
+  const result = await handler(request({ action: 'reset' }))
+  assert.equal(result.status, 200)
+  assert.deepEqual(await result.json(), { state: 'READY', toolsPreserved: true, managedUnknownOperations: [] })
+  assert.equal(resets, 2)
+})

@@ -3,16 +3,23 @@
 ## Reset a stuck session without changing its tools
 
 Use `/kioku-lisp reset` (alias `/kioku-lisp restart`) to stop the current
-session's owned workers, abandon pending execution records, and start a fresh
+session's owned workers, delete pending execution records, and start a fresh
 SBCL. This is an explicit human command, not an autonomous model tool. It does
 not disable Lisp, unregister/re-register tools, change the repository/session,
 or replay previous code. The stop phase has a 10-second bound; failed or
 unconfirmed termination leaves the records intact and never starts a second
 worker.
 
+The Web Lisp status dialog exposes the same action as **Lisp をリセットして再開**,
+including while external-operation reconciliation is pending. No typed evidence
+or memory review is required. The authenticated session-bound HTTP route keeps
+the existing tool registrations and propagates stop/start failures.
+
 Native tool definitions, saved task tools, explicitly saved function sources,
-results and operation history remain. Unresolved effects are recorded as
-abandoned, never successful or reverted. Heap-only definitions, variables and
+completed results remain. Pending and previously abandoned execution records,
+managed transitions and snapshots of those affected scopes are deleted. DSH's
+session log is not modified. Reset neither reruns old code nor reverts file changes.
+Heap-only definitions, variables and
 continuations are lost; saved function sources are not automatically evaluated.
 Another session's workers and records are unaffected. Disposable task mode
 keeps its saved tools and returns ready for the next disposable worker.

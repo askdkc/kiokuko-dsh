@@ -109,7 +109,7 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
       const after = await surface.manager.status(owner)
       assert.equal(after.state, 'READY'); assert.notEqual(after.generation, before.generation)
       assert.equal(after.managedReconciliationRequired, false)
-      assert.equal(journal.readOperation(operation.operationId).state, 'abandoned')
+      assert.throws(() => journal.readOperation(operation.operationId))
       assert.deepEqual(ctx.tools.schemas(agent).filter((s: any) => s.name.startsWith('lisp_')), schemas)
       schemas.forEach((s: any, index: number) => assert.equal(ctx.tools.get(s.name, agent), definitions[index]))
       const next = await execute('lisp_eval', { operationId: 'after-reset', code: '(+ 40 2)' })
