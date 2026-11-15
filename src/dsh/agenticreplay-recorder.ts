@@ -33,12 +33,13 @@ interface ActiveTrace {
   diagnosticPromise?: Promise<void>
 }
 interface CaptureFailureDiagnostic {
+  readonly operation?: string
   readonly phase: string
   readonly eventType: string
   readonly callId?: string
   readonly code: string
 }
-interface FailureContext { readonly phase: string; readonly eventType: string; readonly callId?: string }
+interface FailureContext { readonly phase: string; readonly eventType: string; readonly callId?: string; readonly operation?: string }
 interface Attempt { trace: ActiveTrace; ref: Ref; id: string; started?: number; phase: string; bytes: number }
 export interface AgenticReplayRecorderDependencies {
   createWriter?: CreateTraceWriter
@@ -66,9 +67,9 @@ export class DshAgenticReplayRecorder {
       trace: trace === undefined ? null : { ...trace.row, ...((trace.writer?.runDir ?? trace.runDirectory) ? {run_directory:trace.writer?.runDir ?? trace.runDirectory} : {}) }, persistenceFailed: trace?.persistenceFailed ?? false,
       diagnostics: { ...this.diagnostics }, ...(trace?.failure ? { failure: { ...trace.failure } } : {}), unavailableReason: this.#unavailableReason, capture: AGENTICREPLAY_CAPTURE }
   }
-  #fail(trace: ActiveTrace, code: string, context: FailureContext = { phase: 'capture', eventType: 'unknown' }) {
+  #fail(trace: ActiveTrace, code: string, context: FailureContext = { phase: 'capture', eventType: 'unknown' }, missingEvent = true) {
     trace.accepting = false
-    trace.row.missing_event_count++
+    if (missingEvent) trace.row.missing_event_count++
     trace.row.last_error_code ??= code
     if (!trace.failure) {
       const safeCode = /^[A-Za-z0-9_-]{1,64}$/u.test(code) ? code : 'capture_failure'
@@ -76,7 +77,7 @@ export class DshAgenticReplayRecorder {
       if (typeof context.callId === 'string' && context.callId) {
         try { callId = label(context.callId.slice(0, 128)) } catch { callId = 'unavailable' }
       }
-      trace.failure = { phase: context.phase, eventType: context.eventType, ...(callId ? { callId } : {}), code: safeCode }
+      trace.failure = { phase: context.phase, eventType: context.eventType, ...(context.operation ? { operation: context.operation } : {}), ...(callId ? { callId } : {}), code: safeCode }
     }
     if (!trace.sealed) trace.row.state = trace.writer ? 'incomplete' : 'failed'
     // The event queue may have stopped. Persist a bounded independent diagnostic,
@@ -87,7 +88,11 @@ export class DshAgenticReplayRecorder {
     }
   }
   async #persistDiagnostic(trace: ActiveTrace): Promise<void> {
-    try { await this.withIndex(store => store.save({ ...trace.row })) } catch { trace.persistenceFailed = true }
+    try { await this.withIndex(store => store.save({ ...trace.row })) } catch {
+      trace.persistenceFailed = true
+      trace.row.last_error_code ??= 'index_persistence_failed'
+      if (trace.row.state === 'completed') trace.row.state = 'incomplete'
+    }
     if (!trace.writer) return
     const dir = trace.writer.runDir
     const temporary = join(dir, `.capture-status-${randomBytes(12).toString('hex')}.tmp`)
@@ -99,7 +104,7 @@ export class DshAgenticReplayRecorder {
           runId: trace.row.agenticreplay_run_id, state: trace.row.state, lastErrorCode: trace.row.last_error_code,
           failure: trace.failure,
           missingEvents: trace.row.missing_event_count, unresolvedCalls: trace.row.unresolved_call_count,
-          endedAt: trace.row.ended_at }) + '\n')
+          endedAt: trace.row.ended_at, recordingComplete: trace.row.state === 'completed' }) + '\n')
         await handle.sync()
       } finally { await handle.close() }
       await rename(temporary, join(dir, 'capture-status.json'))
@@ -208,17 +213,22 @@ export class DshAgenticReplayRecorder {
     const occurredAt = new Date()
     trace.tail = trace.tail.then(async () => {
       if (!trace.writer) return
+      let operation = 'capacity_precheck'
+      let appended = false
       try {
         // Reserve conservatively for JSON/blob/redaction overhead, then measure real files.
         if (trace.row.recorded_bytes + bytes * 4 + 16_384 > this.config.maxTraceBytes) throw new AgenticReplayError('trace_limit')
         if (cause && cause.seq === undefined) throw new AgenticReplayError('missing_cause')
+        operation = 'writer_append'
         const saved = await trace.writer.append({ ...event, occurredAt, ...(cause ? { causes: [cause.seq!] } : {}) })
+        appended = true
         ref.seq = saved.seq
+        operation = 'disk_measurement'
         trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
-      } catch (error) { this.#fail(trace, agenticReplayErrorCode(error), context ?? {
+      } catch (error) { this.#fail(trace, agenticReplayErrorCode(error), { ...(context ?? {
         phase: 'event_append', eventType: event.type,
         ...(typeof event.attrs?.callId === 'string' ? { callId: event.attrs.callId } : {}),
-      }) }
+      }), operation }, !appended) }
     }).finally(() => this.#release(trace, bytes))
     return ref
   }
@@ -528,24 +538,42 @@ export class DshAgenticReplayRecorder {
     await trace.tail
     this.#safe(trace, () => { this.#enqueue(trace, { type: 'run.end', actor: 'harness', attrs: {
       reason: label(reason), omitted_bodies: trace.omittedBodies, missing_events: trace.row.missing_event_count, unresolved_calls: trace.row.unresolved_call_count,
-      last_error_code: trace.row.last_error_code, recording_complete: trace.row.last_error_code === null } }) })
+      last_error_code: trace.row.last_error_code, recording_complete: false,
+      recording_verification: 'pending', recording_status_file: 'capture-status.json' } }) })
     trace.sealed = true // late observations cannot append behind run.end
     await trace.tail
     await trace.diagnosticPromise
     if (this.#unavailable && !trace.writer) return
+    let operation = 'writer_close'
     try {
       if (!trace.writer) throw new AgenticReplayError('writer_unavailable')
-      await trace.writer.close() // no invented process exit code
+      const manifest = await trace.writer.close() // no invented process exit code
+      if (manifest.capture?.status === 'incomplete') {
+        const issues = manifest.capture.issues ?? []
+        const code = ['diagnostic_storage_limit', 'event_storage_limit', 'blob_storage_limit'].find(value => issues.includes(value)) ?? 'upstream_capture_incomplete'
+        this.#fail(trace, code, { phase: 'finalization', eventType: 'run.end', operation: 'manifest_capture' }, false)
+      }
+      operation = 'trace_validation'
       const scan = await scanAgenticReplayTrace(trace.writer.runDir, trace.row.agenticreplay_run_id, this.config.maxTraceBytes, Number.MAX_SAFE_INTEGER)
       trace.row.event_count = scan.eventCount
       trace.row.export_input_bytes = scan.exportInputBytes
+      operation = 'disk_measurement'
       trace.row.recorded_bytes = await agenticReplayDiskBytes(trace.writer.runDir, this.config.maxTraceBytes)
       trace.row.state = trace.row.last_error_code === null ? 'completed' : 'incomplete'
-    } catch (error) { trace.row.state = 'failed'; trace.row.last_error_code ??= agenticReplayErrorCode(error) }
+    } catch (error) {
+      this.#fail(trace, agenticReplayErrorCode(error), { phase: 'finalization', eventType: 'run.end', operation }, false)
+      trace.row.state = 'failed'
+    }
+    await trace.diagnosticPromise
     trace.row.ended_at = new Date().toISOString()
     await this.#save(trace)
-    if (trace.row.last_error_code) await this.#persistDiagnostic(trace)
     if (trace.persistenceFailed && trace.row.state === 'completed') trace.row.state = 'incomplete'
+    await this.#persistDiagnostic(trace)
+    if (trace.persistenceFailed && trace.row.state === 'completed') {
+      trace.row.state = 'incomplete'
+      trace.row.last_error_code ??= 'capture_status_persistence_failed'
+      await this.#save(trace)
+    }
     if(trace.writer)trace.runDirectory=trace.writer.runDir
     delete trace.writer
   }

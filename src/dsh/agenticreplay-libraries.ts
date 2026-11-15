@@ -11,6 +11,7 @@ export interface Manifest {
   ended_at?: string
   counts?: { events: number; blobs: number }
   integrity?: { events_sha256: string; blob_count: number }
+  capture?: { status?: string; issues?: string[] }
 }
 export interface TraceEvent {
   seq: number

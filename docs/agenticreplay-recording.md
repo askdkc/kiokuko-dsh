@@ -12,6 +12,24 @@ dependency update; restarting does not update it. Both repository lockfiles
 currently resolve 0.1.19. New releases must pass the recording, reading and
 package-consumer checks before they can be described as tested.
 The trace manifest records the installed core version.
+
+`run.end` marks the end of observations, before writer close and integrity validation.
+New recordings therefore set `recording_complete: false` and
+`recording_verification: pending` there. The final result is the indexed state and
+`capture-status.json` (`state`, `recordingComplete`, `endedAt`), written after
+validation on both success and failure. Historical `run.end` events are not rewritten.
+An absent final status file is not evidence of completion.
+SDK manifest capture omissions also make the indexed capture incomplete, even when
+all event envelopes pass integrity validation.
+
+Failure diagnostics separate `operation` (capacity precheck, writer append, disk
+measurement, writer close, trace validation, or manifest capture) from event phase.
+Known OS error codes and the SDK's diagnostic storage limit retain safe codes;
+arbitrary exception messages are not persisted. Post-append measurement and final
+validation failures do not increment `missing_events`. That legacy counter is not
+proof of how many event bodies are absent. `export_input_limit` during
+`trace_validation` refers to the bounded scan of expanded data, not an HTML export
+attempt; compressed disk size and expanded scan input can differ.
 Each recorded final model request also includes a bounded manifest of host-owned
 context sections still present in that request: section ID, digest, byte count,
 omitted count, and coverage. It stores no extra section text, and an unobserved

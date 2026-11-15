@@ -531,8 +531,8 @@ test('writer failure persists safe phase, event type, call id and code without a
 
     const row = (await f.reader.list(f.binding))[0]!
     const diagnostic = JSON.parse(await readFile(join(await recordedRunDirectory(f.root, row.agenticreplay_run_id), 'capture-status.json'), 'utf8'))
-    assert.equal(diagnostic.lastErrorCode, 'recording_io_failed')
-    assert.deepEqual(diagnostic.failure, { phase: 'tool_call_append', eventType: 'tool.call', callId: 'safe-call-id', code: 'recording_io_failed' })
+    assert.equal(diagnostic.lastErrorCode, 'EIO')
+    assert.deepEqual(diagnostic.failure, { phase: 'tool_call_append', eventType: 'tool.call', operation: 'writer_append', callId: 'safe-call-id', code: 'EIO' })
     const serialized = JSON.stringify(diagnostic)
     assert.equal(serialized.includes('PRIVATE-APPEND-DETAIL'), false)
     assert.equal(serialized.includes('PRIVATE-ARGUMENT'), false)

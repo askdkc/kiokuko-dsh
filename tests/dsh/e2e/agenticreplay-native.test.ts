@@ -208,7 +208,8 @@ for (const owner of ['normal', 'explicit'] as const) test(`AgenticReplay enabled
     assert.equal(bEvents.at(-1).type, 'run.end')
     assert.equal(bEvents.at(-1).attrs.reason, 'unload')
     assert.equal(bEvents.at(-1).attrs.unresolved_calls, 0)
-    assert.equal(bEvents.at(-1).attrs.recording_complete, true)
+    assert.equal(bEvents.at(-1).attrs.recording_complete, false)
+    assert.equal(bEvents.at(-1).attrs.recording_verification, 'pending')
   } finally {
     release?.()
     await plugin?.dispose()

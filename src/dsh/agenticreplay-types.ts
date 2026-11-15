@@ -61,5 +61,9 @@ export class AgenticReplayError extends Error {
 export function agenticReplayErrorCode(error: unknown): string {
   if (error instanceof AgenticReplayError) return error.code
   const code = (error as { code?: unknown } | null)?.code
-  return code === 'ENOSPC' || code === 'EACCES' || code === 'EPERM' ? code : 'recording_io_failed'
+  if (typeof code === 'string' && ['ENOSPC', 'EACCES', 'EPERM', 'EIO', 'EDQUOT', 'EMFILE', 'ENFILE', 'ENOENT'].includes(code)) return code
+  // The SDK currently exposes this capacity failure as an untyped Error.
+  // Match only the known literal; never persist arbitrary exception text.
+  if (error instanceof Error && error.message === 'diagnostic storage limit reached') return 'diagnostic_storage_limit'
+  return 'recording_io_failed'
 }
