@@ -5,15 +5,16 @@ import { pathToFileURL } from 'node:url'
 export function checkToolchainSelectors(source) {
   const failures = []
   let pnpmSetup = false
-  const dynamicNode = /^\$\{\{\s*needs\.select\.outputs\.node_version(?:\s*\|\|\s*'latest')?\s*\}\}/
+  const ltsNode = /^lts\/\*(?:['",}\s]|$)/
+  const dynamicNode = /^\$\{\{\s*needs\.select\.outputs\.node_version(?:\s*\|\|\s*'lts\/\*')?\s*\}\}/
   for (const [index, line] of source.split('\n').entries()) {
     const input = line.trim()
     if (input.startsWith('#')) continue
     if (input.startsWith('- ')) pnpmSetup = false
     if (/\buses:\s*pnpm\/action-setup@/.test(input)) pnpmSetup = true
     const node = /\bnode-version:\s*(['"]?)(.*)/.exec(input)?.[2]
-    if (/\bnode-version-file:/.test(input) || node && !/^latest(?:['",}\s]|$)/.test(node) && !dynamicNode.test(node)) {
-      failures.push(`${index + 1}: select Node with latest or the selection job output`)
+    if (/\bnode-version-file:/.test(input) || node && !ltsNode.test(node) && !dynamicNode.test(node)) {
+      failures.push(`${index + 1}: select Node with lts/* or the selection job output`)
     }
     if (/rustup\s+toolchain\s+install\s+(?!stable(?:\s|$))|rustup\s+which\s+--toolchain\s+(?!stable(?:\s|$))/.test(input)) {
       failures.push(`${index + 1}: select Rust with stable`)

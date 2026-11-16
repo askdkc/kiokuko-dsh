@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
-          node-version: latest
+          node-version: 'lts/*'
       - run: node scripts/check-ci-toolchains.mjs
       - id: dsh
         name: Resolve current official DSH master once
@@ -249,7 +249,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: ${{ needs.select.outputs.node_version || 'latest' }}
+          node-version: ${{ needs.select.outputs.node_version || 'lts/*' }}
       - uses: actions/download-artifact@v8
         if: needs.select.result == 'success'
         with:

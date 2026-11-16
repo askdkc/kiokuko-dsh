@@ -17,11 +17,12 @@ const full=createCiPlan(contract,{full:true},selectionIdentity);
 const plans=(selection=full)=>selection.lanes.map(lane=>({...lane,...lanePlan(contract,selection,lane.id)}));
 const state={sourceDigest:'source',contractDigest:'contract',commit:'commit',runtime:process.version,selectionIdentity};
 
-test('CI toolchain checks accept moving channels and reject literal selectors', async () => {
+test('CI toolchain checks accept moving stable channels and reject fixed or prerelease selectors', async () => {
   const { checkToolchainSelectors } = await import('./check-ci-toolchains.mjs');
   const lines = [
-    'with: {node-version: latest}',
+    "with: {node-version: 'lts/*'}",
     'node-version: ${{ needs.select.outputs.node_version }}',
+    "node-version: ${{ needs.select.outputs.node_version || 'lts/*' }}",
     'run: rustup toolchain install stable',
     'run: npm install --global pnpm@latest',
     '- uses: pnpm/action-setup@v6',
@@ -30,6 +31,8 @@ test('CI toolchain checks accept moving channels and reject literal selectors', 
   assert.deepEqual(checkToolchainSelectors(lines.join('\n')), []);
   for (const line of [
     "with: {node-version: '99.1.2'}", 'node-version: 99', 'node-version-file: .nvmrc',
+    'node-version: latest', 'node-version: nightly',
+    "node-version: ${{ needs.select.outputs.node_version || 'latest' }}",
     'run: rustup toolchain install 99.1.2', 'run: rustup which --toolchain 99.1.2 rustc',
     'run: npm install --global pnpm@99.1.2', 'version: ${{ matrix.pnpmVersion }}',
     '- uses: pnpm/action-setup@v6\n  with: {version: 99.1.2}',
