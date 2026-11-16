@@ -46,7 +46,7 @@ async function until(check: () => boolean, message: string, ms = 2500) {
   const deadline = Date.now() + ms
   while (!check()) { assert.ok(Date.now() < deadline, message); await delay(10) }
 }
-async function fixture(reportDelay: number, options: { terminationLookupError?: 'once' | 'persistent'; parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; runtimeReport?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean } = {}) {
+async function fixture(reportDelay: number, options: { terminationLookupError?: 'once' | 'persistent'; parentageError?: 'gone' | 'goneESRCH' | 'ENOENT' | 'EACCES'; coldStartDelay?: number; startDelay?: number; lateSpawn?: boolean; childStartDelay?: number; announceDelay?: number; startTimeout?: number; failBeforeAnnounce?: boolean; reportPid?: number; payload?: string; monitorExit?: boolean; denyKill?: boolean; hostOwner?: boolean; runtimeReport?: boolean; detachedStdio?: boolean; exitAfterReport?: boolean; identityLookupError?: boolean; namespaceStartGate?: boolean } = {}) {
   const base = await mkdtemp(join(tmpdir(), 'namespace-supervisor-'))
   // Use the running test runtime: system Python cold-start is unrelated to
   // namespace supervision and can consume the entire phase-entry budget on CI.
@@ -73,10 +73,15 @@ ${options.monitorExit ? 'process.exit(0);' : ''}
 if(await cancelled(${reportDelay})){await childExit;process.exit(0);}
 writeSync(5,${options.payload !== undefined ? JSON.stringify(options.payload) : `JSON.stringify({'child-pid':${options.reportPid ?? 'child.pid'}})`});closeSync(5);
 writeSync(1,'reported\\n');
+${options.namespaceStartGate ? `const gate=new net.Socket({fd:7,readable:true,writable:false});
+const release=await Promise.race([once(gate,'data').then(([data])=>data[0]),childExit.then(()=>null)]);
+if(release===null)process.exit(0);if(release!==1)process.exit(24);
+writeSync(1,'released\\n');gate.destroy();` : ''}
 ${options.exitAfterReport ? 'process.exit(0);' : ''}
 const [code,signal]=await childExit;process.exit(signal?128:code??70);
 `)
-  const launch = { command: process.execPath, args: [script], env: {}, cwd: base, protocol: false, namespaceInfo: true, runtimeReport: options.runtimeReport }
+  const launch = { command: process.execPath, args: [script], env: {}, cwd: base, protocol: false, namespaceInfo: true,
+    runtimeReport: options.runtimeReport, namespaceStartFd: options.namespaceStartGate ? 7 : undefined }
   // Fixture EOF remains independent of production Stop. The owned session
   // below also bounds teardown before an inheritor can cooperate with EOF.
   // The fixture anchor is unref'ed and inherits no streams: it must neither
@@ -320,6 +325,43 @@ for (const mode of ['once', 'persistent'] as const) test(`namespace termination 
   })
 })
 
+test('namespace payload waits for the supervisor to attest its owner', { timeout: 10000 }, async () => {
+  const f = await fixture(0.05, { namespaceStartGate: true, runtimeReport: true, exitAfterReport: true })
+  await f.run(async () => {
+    const pid = await f.started()
+    await until(() => f.output.includes('released') && f.control.includes('\n'), 'validated namespace was not released')
+    const ownership = JSON.parse(f.control.trim())
+    assert.equal(ownership.pid, pid)
+    assert.match(ownership.identity, /^[a-f0-9]{64}$/u)
+    await until(() => f.didClose, 'fast payload left the namespace supervisor open')
+    assert.equal(sameProcess(pid, ownership.identity), false)
+  })
+})
+
+test('namespace payload stays blocked when parentage cannot be verified', { timeout: 10000 }, async () => {
+  const f = await fixture(0.05, { namespaceStartGate: true, parentageError: 'EACCES', runtimeReport: true })
+  await f.run(async () => {
+    await f.started()
+    await until(() => f.stderr.includes('LISP_STOP_UNCONFIRMED'), 'missing ownership failure')
+    assert.doesNotMatch(f.output, /released/u)
+    assert.equal(f.didExit, false)
+    assert.equal(f.control, '')
+  })
+})
+
+test('Stop before the namespace report cancels startup without releasing the payload', { timeout: 10000 }, async () => {
+  const f = await fixture(0.3, { namespaceStartGate: true })
+  await f.run(async () => {
+    const pid = await f.started(), identity = processIdentity(pid)
+    assert.ok(identity)
+    f.host.stdin!.end()
+    await until(() => f.didClose, 'Stop left the gated namespace open')
+    assert.match(f.output, /reported/u)
+    assert.doesNotMatch(f.output, /released/u)
+    assert.equal(sameProcess(pid, identity), false)
+  })
+})
+
 for (const code of ['gone', 'goneESRCH', 'ENOENT', 'EACCES'] as const) {
   test(`namespace parentage lookup ${code}: only confirmed child death settles`, { timeout: 10000 }, async () => {
     const f = await fixture(0.4, { parentageError: code })
@@ -415,6 +457,7 @@ test('Linux launch plan reserves a private ownership fd without changing sandbox
     assert.equal(plan.namespaceInfo, true)
     for (const flag of ['--unshare-all', '--die-with-parent', '--new-session']) assert.ok(plan.args.includes(flag))
     assert.equal(plan.args[plan.args.indexOf('--info-fd') + 1], '5')
+    assert.equal(plan.args[plan.args.indexOf('--block-fd') + 1], String(plan.namespaceStartFd))
     assert.equal(plan.args[plan.args.indexOf('--seccomp') + 1], '4')
     assert.equal(plan.seccompPath, join(base, 'network.bpf'))
     assert.ok(!plan.group, 'a process group cannot stand in for namespace ownership')

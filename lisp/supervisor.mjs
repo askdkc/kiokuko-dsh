@@ -82,10 +82,20 @@ if (filter !== undefined) stdio.push(filter)
 if (launch.namespaceInfo) {
   while (stdio.length < 5) stdio.push('ignore')
   stdio.push('pipe')
+  if (launch.namespaceStartFd !== undefined) {
+    while (stdio.length < launch.namespaceStartFd) stdio.push('ignore')
+    stdio.push('pipe')
+  }
 }
 child = spawn(launch.command, launch.args, { cwd: launch.cwd, env: launch.env, stdio, detached: !!launch.group })
 if (filter !== undefined) closeSync(filter)
 if (launch.namespaceInfo) {
+  const startGate = child.stdio[launch.namespaceStartFd]
+  // The namespace can fail during setup and close the gate before exec.
+  // Its terminal status and verified identity still govern completion.
+  startGate?.on('error', error => {
+    if (error.code !== 'EPIPE' && error.code !== 'ECONNRESET') unconfirmed('sandbox start gate failed')
+  })
   let info = '', excessive = false
   child.stdio[5].on('data', chunk => {
     if (excessive) return
@@ -112,6 +122,10 @@ if (launch.namespaceInfo) {
       namespace = { pid, identity }
       reportRuntime(pid, identity ?? null)
       if (closing) kill()
+      // A short command can make bwrap's monitor exit before we read its
+      // ownership report, leaving a live, reparented namespace init. Hold
+      // the payload at --block-fd until its birth identity is pinned.
+      else startGate?.end(Buffer.from([1]))
       finish()
     } catch { unconfirmed('invalid or unowned sandbox child report') }
   })
