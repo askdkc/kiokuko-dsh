@@ -367,9 +367,13 @@ export function saveTurn(
     const before = current(db, repositoryKey);
     const revision = before.revision + 1;
     const additions = turnPoints(repositoryKey, turn, revision);
-    const visible = before.points.filter((point) => visiblePoint(db, point));
+    // With incomplete history, only the existing active projection can identify
+    // proposals whose superseding turn might otherwise be missing.
+    const history = ledgerTurnCount(db, repositoryKey) === before.turnCount
+      ? repositoryLearningHistory(db, repositoryKey)
+      : before.points.filter((point) => visiblePoint(db, point));
     const activeIds = new Set(
-      visible
+      history
         .filter(point => point.workspace === turn.workspace && point.kind === "hypothesis")
         .map(point => point.id),
     );
@@ -378,11 +382,6 @@ export function saveTurn(
       throw new Error("repository_learning_invalid_supersession");
     if (additions.some((point) => point.id && superseded.has(point.id)))
       throw new Error("repository_learning_self_supersession");
-    // With incomplete history, only the existing active projection can identify
-    // proposals whose superseding turn might otherwise be missing.
-    const history = ledgerTurnCount(db, repositoryKey) === before.turnCount
-      ? repositoryLearningHistory(db, repositoryKey)
-      : visible;
     const points = new Map(history.map(point => [pointKey(point), point]));
     applyTurnPoints(points, additions);
     const snapshot = {

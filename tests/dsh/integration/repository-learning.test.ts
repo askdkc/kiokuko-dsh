@@ -983,11 +983,17 @@ test('automatic history ignores corrected lessons and foreign scope, then drops 
       saveTurn(db, { ...seed, workspace: 'project:previous-binding', sessionId: 'foreign', summary: 'ForeignArchive' });
       saveTurn(db, seed);
       const id = readRepositoryLearning(db, f.root, { workspace }).points.find(point => point.lesson)!.id!;
-      saveTurn(db, { ...seed, turnId: 2, terminalSeq: 2, lessons: [{
+      for (let index = 2; index <= 21; index++) {
+        saveTurn(db, { ...seed, sessionId: 'fresh', turnId: index, terminalSeq: index, lessons: [{
+          ...seed.lessons[0]!, hypothesis: `Unrelated fixture ${index}`, applicability: 'Fixture only',
+        }] });
+      }
+      assert.ok(!readRepositoryLearning(db, f.root, { workspace, maxChars: 64000 }).points.some(point => point.id === id));
+      saveTurn(db, { ...seed, turnId: 22, terminalSeq: 22, lessons: [{
         ...seed.lessons[0]!, hypothesis: 'AmberArchive uses a transport-managed socket.',
         supersedes: [id], correctionReason: 'Confirmed the socket is managed by the transport.',
       }] });
-      for (let index = 3; index <= 36; index++) {
+      for (let index = 23; index <= 42; index++) {
         saveTurn(db, { ...seed, sessionId: 'fresh', turnId: index, terminalSeq: index, lessons: [{
           ...seed.lessons[0]!, hypothesis: `Unrelated fixture ${index}`, applicability: 'Fixture only',
         }] });
