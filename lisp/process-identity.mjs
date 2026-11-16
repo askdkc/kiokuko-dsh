@@ -27,7 +27,7 @@ export function sameProcess(pid, identity) {
   try { process.kill(pid,0) } catch(error) { if(error.code==='ESRCH')return false;throw error }
   if(process.platform==='linux'){
     try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');if(['Z','X'].includes(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]))return false}
-    catch(error){if(error.code==='ENOENT')return false;throw error}
+    catch(error){if(error.code==='ENOENT'||error.code==='ESRCH')return false;throw error}
   }
   const current=identity?processIdentity(pid):undefined
   return !current || !identity || current===identity

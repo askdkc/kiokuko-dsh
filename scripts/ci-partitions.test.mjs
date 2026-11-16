@@ -8,14 +8,34 @@ import { partitionPlans, partitionPlan, verificationPlan, digest, sourceDigest }
 import { nativeCiPlan, shardNativePlan } from './run-ci-native.mjs';
 import { repeatedMemoryScenarios, selectedRepeatedScenarios } from './repeated-memory-scenarios.mjs';
 import { requiredJobs, requiredJobsSucceeded, validateCiEvidence } from './verify-ci-results.mjs';
-import { createCiPlan, lanePlan, checkoutIdentity, ciPlatforms, ciToolchain, selectChanges, readChangedFiles, nativeSelection } from './ci-plan.mjs';
+import { createCiPlan, lanePlan, checkoutIdentity, ciPlatforms, selectChanges, readChangedFiles, nativeSelection } from './ci-plan.mjs';
 import { sourceDigest as nativeDigest, sha256, acceptanceSummary } from './micro-judge-artifacts.mjs';
 const root=path.resolve(import.meta.dirname,'..');
 const contractBytes=readFileSync(path.join(root,'scripts/verification.json')),contract=JSON.parse(contractBytes);
-const selectionIdentity={commit:'commit',sourceDigest:'selection-source',contractDigest:'contract',toolchain:ciToolchain};
+const selectionIdentity={commit:'commit',sourceDigest:'selection-source',contractDigest:'contract',toolchain:{node:process.version,npm:'fixture'}};
 const full=createCiPlan(contract,{full:true},selectionIdentity);
 const plans=(selection=full)=>selection.lanes.map(lane=>({...lane,...lanePlan(contract,selection,lane.id)}));
 const state={sourceDigest:'source',contractDigest:'contract',commit:'commit',runtime:process.version,selectionIdentity};
+
+test('CI toolchain checks accept moving channels and reject literal selectors', async () => {
+  const { checkToolchainSelectors } = await import('./check-ci-toolchains.mjs');
+  const lines = [
+    'with: {node-version: latest}',
+    'node-version: ${{ needs.select.outputs.node_version }}',
+    'run: rustup toolchain install stable',
+    'run: npm install --global pnpm@latest',
+    '- uses: pnpm/action-setup@v6',
+    '    package_json_file: .artifacts/official-dsh/package.json',
+  ];
+  assert.deepEqual(checkToolchainSelectors(lines.join('\n')), []);
+  for (const line of [
+    "with: {node-version: '99.1.2'}", 'node-version: 99', 'node-version-file: .nvmrc',
+    'run: rustup toolchain install 99.1.2', 'run: rustup which --toolchain 99.1.2 rustc',
+    'run: npm install --global pnpm@99.1.2', 'version: ${{ matrix.pnpmVersion }}',
+    '- uses: pnpm/action-setup@v6\n  with: {version: 99.1.2}',
+    "const ciToolchain = { node: 'v99.1.2' }",
+  ]) assert.ok(checkToolchainSelectors(line).length, line);
+});
 
 test('CI fixture install recovers one npm internal exit and retains setup failures without secrets', async () => {
   const { parse } = await import('yaml');
@@ -162,7 +182,7 @@ test('the actual aggregate CLI rejects missing jobs/reports, stale selection and
       const tap='actual Rust agrees with an independent exhaustive oracle on 200 deterministic small problems\nactual Rust MRV 8 queens has 92 solutions\nmissing or unsupported binary is explicit unavailable, never an allow\n# tests 18\n# pass 18\n# fail 0\n# cancelled 0\n# skipped 0\n# todo 0\n';
       for(const target of selection.nativeTargets){const binary=Buffer.alloc(64),key=target.key;
         if(target.platform==='linux'){binary.write('7f454c46',0,'hex');binary[4]=2;binary[5]=1;binary.writeUInt16LE(target.architecture==='arm64'?183:62,18)}else{binary.write('cffaedfe',0,'hex');binary.writeUInt32LE(0x100000c,4)}
-        const entry={platform:target.platform,arch:target.architecture,file:key+'/kiokuko-micro-judge',bytes:binary.length,sha256:sha256(binary),sourceDigest:nativeSource,nativeVerified:true,compiler:ciToolchain.rust};
+        const entry={platform:target.platform,arch:target.architecture,file:key+'/kiokuko-micro-judge',bytes:binary.length,sha256:sha256(binary),sourceDigest:nativeSource,nativeVerified:true,compiler:'rustc 2.0.0 fixture'};
         mkdirSync(path.join(folder,key));writeFileSync(path.join(folder,entry.file),binary);writeFileSync(path.join(folder,'native-acceptance-'+key+'.tap'),tap);
         writeFileSync(path.join(folder,'native-verification-'+key+'.json'),JSON.stringify({schemaVersion:1,target:{'linux-x64':'x86_64-unknown-linux-gnu','linux-arm64':'aarch64-unknown-linux-gnu','darwin-arm64':'aarch64-apple-darwin'}[key],platform:entry.platform,arch:entry.arch,binarySha256:entry.sha256,sourceDigest:nativeSource,compiler:entry.compiler,exitCode:0,log:'native-acceptance-'+key+'.tap',logSha256:sha256(tap),summary:acceptanceSummary(tap)}));artifacts.push(entry);
       }
@@ -229,7 +249,7 @@ test('pnpm prerequisites provision full main and representative core lanes',()=>
     [representative,'core-linux-x64',['publint','ci-native-integration-1','ci-native-integration-2']],
   ]){
     const lane=selection.lanes.find(lane=>lane.id===id);
-    assert.equal(lane.pnpm,true,id);assert.equal(lane.pnpmVersion,'11.7.0',id);
+    assert.equal(lane.pnpm,true,id);assert.equal(Object.hasOwn(lane,'pnpmVersion'),false,id);
     const checks=lanePlan(contract,selection,id).checks;
     for(const check of required)assert.ok(checks.find(entry=>entry.id===check)?.requires.includes('pnpm'),`${id}/${check}`);
   }

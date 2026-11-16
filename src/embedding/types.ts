@@ -137,6 +137,12 @@ export interface EmbeddingRuntime {
   readonly backendId: string | null;
   readonly backend: VectorSearchBackend | null;
 
+  /** Embed an isolated search corpus without writing shared entry or query caches. */
+  embedSearchCorpus?(query: string, documents: readonly string[], signal: AbortSignal): Promise<{
+    query: PreparedSemanticQuery;
+    documents: readonly Float32Array[];
+  } | null>;
+
   prepareQuery(
     database: SqliteDatabase,
     text: string,

@@ -10,6 +10,7 @@ import { DshLifecycleMemory } from "../../../src/dsh/lifecycle-memory.js";
 import {
   readRepositoryLearning,
   resetRepositoryLearning,
+  saveTurn,
 } from "../../../src/memory/repository-learning.js";
 import { excludeCapture } from "../../../src/memory/capture-policy.js";
 import { withImmediateTransaction } from "../../../src/db/transaction.js";
@@ -105,13 +106,14 @@ async function fixture(nestedLaunch = false, learningOptions: any = {}) {
     };
     yield { type: "finish", reason: { kind: "stop" } };
   };
-  function agent(id: string, cwd = launchCwd) {
+  function agent(id: string, cwd = launchCwd, inherited: readonly any[] = []) {
     const local = new Host(),
-      events: any[] = [];
+      events: any[] = [...inherited];
     const session: any = {
       id,
       header: { cwd },
-      seq: 0,
+      seq: events.length,
+      inheritedEventCount: inherited.length,
       surface: { nodes: [] },
       eventAt: (seq: number) => events[seq],
       append(type: string, data: any) {
@@ -136,8 +138,8 @@ async function fixture(nestedLaunch = false, learningOptions: any = {}) {
       a,
       events,
       append: session.append,
-      async step(turn: number, query: string | null = "unrelated keyword") {
-        let next = async () => ({ kind: "enter", messages: [] });
+      async step(turn: number, query: string | null = "unrelated keyword", retained: unknown[] = []) {
+        let next = async () => ({ kind: "enter", messages: retained });
         for (const fn of [
           ...(local.handlers.get("agent/pre-step") ?? []),
         ].reverse()) {
@@ -934,4 +936,95 @@ test("native user Stop discards the in-flight reflection and reload does not res
     release?.();
     await f.close();
   }
+});
+
+test('automatic delivery searches observations outside the latest projection', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  try {
+    await f.runtime.withDatabase(db => {
+      const workspace = db.prepare('SELECT workspace FROM repositories').get<{workspace: string}>()!.workspace;
+      for (let index = 1; index <= 35; index++) {
+        saveTurn(db, {
+          repositoryRoot: f.root, workspace, captureRevision: 0, admissionEpoch: 0,
+          sessionId: 'seed', turnId: index, terminalSeq: index, outcome: 'completed',
+          summary: index === 1 ? '琥珀色の環境ではソケットを先に閉じる。' : `Unrelated fixture ${index}`,
+          evidenceRefs: [`native:seed:${index}`],
+        });
+      }
+    });
+    assert.ok((await f.snapshot()).points.every(point => point.revision !== 1));
+    const a = f.agent('historical-search');
+    assert.match(JSON.stringify((await a.step(1, '琥珀色の環境で動作を確認して')).messages), /ソケットを先に閉じる/);
+    assert.deepEqual((await a.step(2, 'CSS spacing')).messages, []);
+    await f.restart();
+    const restarted = f.agent('historical-search-restarted');
+    assert.match(JSON.stringify((await restarted.step(1, '琥珀色の環境')).messages), /ソケットを先に閉じる/);
+    await f.runtime.withDatabase(db => resetRepositoryLearning(db, f.root));
+    assert.deepEqual((await restarted.step(2, '琥珀色の環境')).messages, []);
+  } finally { await f.close(); }
+});
+
+test('automatic history ignores corrected lessons and foreign scope, then drops revoked history', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  try {
+    await f.runtime.withDatabase(db => {
+      const workspace = db.prepare('SELECT workspace FROM repositories').get<{workspace: string}>()!.workspace;
+      const evidence = 'native:history:1';
+      const seed = {
+        repositoryRoot: f.root, workspace, captureRevision: 0, admissionEpoch: 0,
+        sessionId: 'history', turnId: 1, terminalSeq: 1, outcome: 'completed' as const,
+        summary: 'Observed a completed turn.', evidenceRefs: [evidence],
+        lessons: [{
+          hypothesis: 'AmberArchive says to close the socket first.', applicability: 'AmberArchive only',
+          nextAction: 'Check ordering.', verifyWith: 'Run the transport fixture.', evidenceRefs: [evidence],
+        }],
+      };
+      saveTurn(db, { ...seed, repositoryRoot: join(f.root, 'other'), summary: 'ForeignArchive' });
+      saveTurn(db, { ...seed, workspace: 'project:previous-binding', sessionId: 'foreign', summary: 'ForeignArchive' });
+      saveTurn(db, seed);
+      const id = readRepositoryLearning(db, f.root, { workspace }).points.find(point => point.lesson)!.id!;
+      saveTurn(db, { ...seed, turnId: 2, terminalSeq: 2, lessons: [{
+        ...seed.lessons[0]!, hypothesis: 'AmberArchive uses a transport-managed socket.',
+        supersedes: [id], correctionReason: 'Confirmed the socket is managed by the transport.',
+      }] });
+      for (let index = 3; index <= 36; index++) {
+        saveTurn(db, { ...seed, sessionId: 'fresh', turnId: index, terminalSeq: index, lessons: [{
+          ...seed.lessons[0]!, hypothesis: `Unrelated fixture ${index}`, applicability: 'Fixture only',
+        }] });
+      }
+    });
+    const a = f.agent('corrected-history');
+    const decision = await a.step(1, 'AmberArchive');
+    assert.match(JSON.stringify(decision.messages), /transport-managed socket/);
+    assert.doesNotMatch(JSON.stringify(decision.messages), /close the socket first/);
+    assert.deepEqual((await a.step(2, 'ForeignArchive')).messages, []);
+    await f.runtime.withDatabase(db => {
+      const workspace = db.prepare('SELECT workspace FROM repositories').get<{workspace: string}>()!.workspace;
+      withImmediateTransaction(db, () =>
+        excludeCapture(db, workspace, 'history', 'excluded', 'user_refusal', new Date().toISOString()));
+    });
+    assert.deepEqual((await a.step(3, 'AmberArchive')).messages, []);
+  } finally { await f.close(); }
+});
+
+test('fork recovery skips inherited turns and automatic delivery does not accumulate snapshots', async () => {
+  const f = await fixture(false, { mode: 'automatic' });
+  try {
+    const parent = f.agent('parent-history');
+    turn(parent, 1);
+    await f.memory.whenIdle();
+    const before = await f.snapshot();
+    const delivered = (await parent.step(2, 'output directory')).messages[0];
+    assert.ok(delivered);
+    const fork = f.agent('fork-history', f.root, [
+      ...parent.events,
+      { type: 'user/message', data: delivered, seq: parent.events.length },
+    ]);
+    const first = await fork.step(2, 'output directory', [delivered]);
+    assert.equal(first.messages.length, 1);
+    await f.restart();
+    assert.equal((await fork.step(2, 'output directory', first.messages)).messages.length, 1);
+    await f.memory.whenIdle();
+    assert.equal((await f.snapshot()).turnCount, before.turnCount);
+  } finally { await f.close(); }
 });

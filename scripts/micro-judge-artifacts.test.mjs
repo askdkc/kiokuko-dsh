@@ -105,7 +105,8 @@ test('synthetic transport fixtures require exactly three targets and reject miss
     const [platform,arch]=key.split('-'),base=join(input,folder);await mkdir(join(base,key),{recursive:true})
     const binary=Buffer.alloc(64);if(platform==='linux'){binary.write('7f454c46',0,'hex');binary[4]=2;binary[5]=1;binary.writeUInt16LE(arch==='arm64'?183:62,18)}else{binary.write('cffaedfe',0,'hex');binary.writeUInt32LE(arch==='arm64'?0x100000c:0x1000007,4)}
     const entry={platform,arch,file:`${key}/kiokuko-micro-judge`,bytes:binary.length,sha256:sha256(binary),compiler:'rustc 1.85.0 synthetic-transport-fixture',sourceDigest:digest,nativeVerified:true}
-    const receipt={schemaVersion:1,target:nativeTargets[key]??'x86_64-apple-darwin',platform,arch,binarySha256:entry.sha256,sourceDigest:digest,compiler:entry.compiler,exitCode:0,log:`native-acceptance-${key}.tap`,logSha256:sha256(tap),summary:acceptanceSummary(tap.toString())}
+    const notice=Buffer.from('standard-library notice fixture');await writeFile(join(base,`native-copyright-${key}.html`),notice)
+    const receipt={schemaVersion:1,copyrightSha256:sha256(notice),target:nativeTargets[key]??'x86_64-apple-darwin',platform,arch,binarySha256:entry.sha256,sourceDigest:digest,compiler:entry.compiler,exitCode:0,log:`native-acceptance-${key}.tap`,logSha256:sha256(tap),summary:acceptanceSummary(tap.toString())}
     await writeFile(join(base,entry.file),binary);await writeFile(join(base,receipt.log),tap);await writeFile(join(base,`native-verification-${key}.json`),JSON.stringify(receipt));await writeFile(join(base,'manifest.json'),JSON.stringify({version:'kiokuko-fd-v1',artifacts:[entry]}))
   }
   for(const key of Object.keys(nativeTargets))await artifact(key)
@@ -124,18 +125,19 @@ test('synthetic transport fixtures require exactly three targets and reject miss
   for(const file of ['ci-plan.mjs','verification-contract.mjs','verification.json'])await cp(join(root,'scripts',file),join(directory,'scripts',file));
   const external=await mkdtemp(join(tmpdir(),'micro-selected-input-'));t.after(()=>rm(external,{recursive:true,force:true}));
   for(const key of Object.keys(nativeTargets))await cp(join(input,key),join(external,key),{recursive:true});await rm(input,{recursive:true});
-  const {createCiPlan,checkoutIdentity,nativeSelection,ciToolchain}=await import('./ci-plan.mjs');
+  const {createCiPlan,checkoutIdentity,nativeSelection}=await import('./ci-plan.mjs');
   const previous={GIT_DIR:process.env.GIT_DIR,GIT_WORK_TREE:process.env.GIT_WORK_TREE};process.env.GIT_DIR=join(root,'.git');process.env.GIT_WORK_TREE=directory;
   try{
     const contract=JSON.parse(await readFile(join(directory,'scripts/verification.json'),'utf8')),selection=createCiPlan(contract,{available:true,changes:[{status:'M',path:'src/dsh/task-state.ts'}]},checkoutIdentity(directory));
     const planFile=join(external,'..',`selected-${external.split('/').at(-1)}.json`);t.after(()=>rm(planFile,{force:true}));await writeFile(planFile,JSON.stringify(selection));
     for(const key of Object.keys(nativeTargets)){
-      const base=join(external,key),manifest=JSON.parse(await readFile(join(base,'manifest.json'),'utf8'));manifest.artifacts[0].compiler=ciToolchain.rust;await writeFile(join(base,'manifest.json'),JSON.stringify(manifest));
-      const receiptFile=join(base,`native-verification-${key}.json`),receipt=JSON.parse(await readFile(receiptFile,'utf8'));receipt.compiler=ciToolchain.rust;await writeFile(receiptFile,JSON.stringify(receipt));
+      const base=join(external,key),manifest=JSON.parse(await readFile(join(base,'manifest.json'),'utf8'));
       await writeFile(join(base,'selection.json'),JSON.stringify(key==='linux-x64'?nativeSelection(selection,manifest.artifacts[0]):{unselected:true}));
     }
     const selected=()=>spawnSync(process.execPath,[join(directory,'scripts/merge-micro-judge-artifacts.mjs'),external,`--ci-plan=${planFile}`],{encoding:'utf8'});
     assert.notEqual(selected().status,0,'extra native targets are not silently accepted');await rm(join(external,'linux-arm64'),{recursive:true});await rm(join(external,'darwin-arm64'),{recursive:true});
+    const noticePath=join(external,'linux-x64/native-copyright-linux-x64.html'), notice=await readFile(noticePath);
+    await writeFile(noticePath,'tampered');assert.match(selected().stderr,/standard-library notice mismatch/);await writeFile(noticePath,notice);
     const good=selected();assert.equal(good.status,0,good.stderr);const narrow=JSON.parse(await readFile(join(directory,'micro-judge/manifest.json'),'utf8'));assert.equal(narrow.artifacts.length,1);assert.equal(narrow.artifacts[0].arch,'x64');
     assert.equal(JSON.parse(await readFile(join(directory,'micro-judge/selection.json'),'utf8')).bundleScope,'representative');
     const flat=await mkdtemp(join(tmpdir(),'micro-selected-flat-'));t.after(()=>rm(flat,{recursive:true,force:true}));

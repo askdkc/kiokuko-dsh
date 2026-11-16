@@ -76,6 +76,8 @@ interface StoredSnapshot {
   outcomeCounts: Record<RepositoryTurnLearning["outcome"], number>;
   omitted: number;
 }
+type PersistedSnapshot = StoredSnapshot & { projectionVersion?: 1 };
+
 export interface RepositoryLearningAssessment {
   hypotheses: "unverified_proposals";
   compatibility: "unresolved" | "not_assessed";
@@ -107,14 +109,14 @@ function empty(repositoryKey: string): StoredSnapshot {
     omitted: 0,
   };
 }
-function current(db: SqliteDatabase, key: string): StoredSnapshot {
+function storedSnapshot(db: SqliteDatabase, key: string): PersistedSnapshot {
   const row = db
     .prepare(
       "SELECT snapshot_json FROM repository_learning_state WHERE repository_key=?",
     )
     .get<{ snapshot_json: string }>(key);
   if (!row) return empty(key);
-  const value = JSON.parse(row.snapshot_json) as StoredSnapshot;
+  const value = JSON.parse(row.snapshot_json) as PersistedSnapshot;
   if (
     value.repositoryKey !== key ||
     !Number.isSafeInteger(value.revision) ||
@@ -127,17 +129,124 @@ function current(db: SqliteDatabase, key: string): StoredSnapshot {
     throw new Error("repository_learning_snapshot_invalid");
   return value;
 }
-function pointKey(point: RepositoryLearningPoint): string {
-  if (point.kind === "observation")
-    return `turn:${point.sessionId}:${point.turnId}`;
-  const {
-    evidenceRefs: _refs,
-    supersedes: _supersedes,
-    correctionReason: _reason,
-    ...body
-  } = point.lesson!;
-  return `lesson:${point.workspace}:${point.sessionId}:${hash(canonicalJson(body))}`;
+function hypothesisBodyHash(lesson: RepositoryLearningLesson): string {
+  const { evidenceRefs: _refs, supersedes: _supersedes, correctionReason: _reason, ...body } = lesson;
+  return hash(canonicalJson(body));
 }
+
+function pointKey(point: RepositoryLearningPoint): string {
+  return point.kind === "observation"
+    ? canonicalJson(["turn", point.sessionId, point.turnId])
+    : canonicalJson(["lesson", point.workspace, point.sessionId, hypothesisBodyHash(point.lesson!)]);
+}
+
+type LedgerTurn = Omit<RepositoryTurnLearning, "repositoryRoot" | "turnId"> & { turnId: string };
+
+function turnPoints(repositoryKey: string, turn: LedgerTurn, revision: number): RepositoryLearningPoint[] {
+  const base = {
+    workspace: turn.workspace,
+    captureRevision: turn.captureRevision,
+    tags: turn.tags ?? [],
+    ...(turn.keywords ? { keywords: turn.keywords } : {}),
+    sessionId: turn.sessionId,
+    turnId: turn.turnId,
+    outcome: turn.outcome,
+    revision,
+    occurrences: 1,
+    reflectionStatus: turn.reflectionStatus ?? "not_requested" as const,
+  };
+  return [
+    { ...base, kind: "observation", summary: turn.summary, evidenceRefs: turn.evidenceRefs },
+    ...(turn.lessons ?? []).map((lesson): RepositoryLearningPoint => {
+      const point = { ...base, kind: "hypothesis" as const, lesson, evidenceRefs: [...new Set(lesson.evidenceRefs)] };
+      // Persisted supersession references use this existing public identity.
+      const legacyKey = `lesson:${turn.workspace}:${turn.sessionId}:${hypothesisBodyHash(lesson)}`;
+      return { ...point, id: `hypothesis:${hash(repositoryKey + ":" + legacyKey)}` };
+    }),
+  ];
+}
+
+function supersededIds(points: readonly RepositoryLearningPoint[]): Set<string> {
+  return new Set(points.flatMap(point => point.lesson?.supersedes ?? []));
+}
+
+function retireSuperseded(points: Map<string, RepositoryLearningPoint>, workspace: string, ids: Set<string>): void {
+  if (!ids.size) return;
+  for (const [key, point] of points)
+    if (point.workspace === workspace && point.id && ids.has(point.id)) points.delete(key);
+}
+
+function applyTurnPoints(points: Map<string, RepositoryLearningPoint>, additions: RepositoryLearningPoint[]): void {
+  const superseded = supersededIds(additions);
+  retireSuperseded(points, additions[0]!.workspace, superseded);
+  for (const point of additions) {
+    const key = pointKey(point);
+    const previous = points.get(key);
+    if (previous) {
+      point.occurrences = previous.occurrences + Number(previous.revision !== point.revision);
+      point.evidenceRefs = [...new Set([...previous.evidenceRefs, ...point.evidenceRefs])].slice(-64);
+    }
+    points.delete(key);
+    points.set(key, point);
+  }
+}
+
+function ledgerTurnCount(db: SqliteDatabase, repositoryKey: string): number {
+  return db.prepare("SELECT COUNT(*) AS count FROM repository_learning_turns WHERE repository_key=?")
+    .get<{ count: number }>(repositoryKey)!.count;
+}
+
+function repositoryLearningHistory(db: SqliteDatabase, repositoryKey: string, workspace?: string): RepositoryLearningPoint[] {
+  const scope = workspace === undefined ? [] : [workspace];
+  const rows = db.prepare(`SELECT workspace, policy_revision, session_id, turn_id, content_hash, turn_json, revision
+    FROM repository_learning_turns WHERE repository_key=? ${scope.length ? "AND workspace=?" : ""}
+    ORDER BY revision, session_id, turn_id`).all<{
+      workspace: string; policy_revision: number; session_id: string; turn_id: string;
+      content_hash: string; turn_json: string; revision: number;
+    }>(repositoryKey, ...scope);
+  const points = new Map<string, RepositoryLearningPoint>();
+  for (const row of rows) {
+    const turn = JSON.parse(row.turn_json) as LedgerTurn;
+    if (turn.workspace !== row.workspace || turn.sessionId !== row.session_id ||
+        turn.turnId !== row.turn_id || turn.captureRevision !== row.policy_revision ||
+        hash(row.turn_json) !== row.content_hash)
+      throw new Error("repository_learning_ledger_mismatch");
+    const additions = turnPoints(repositoryKey, turn, row.revision);
+    if (visiblePoint(db, additions[0]!)) applyTurnPoints(points, additions);
+    else {
+      // A later policy refusal also invalidates the superseded proposal. Its
+      // replacement cannot be delivered under the revoked policy.
+      retireSuperseded(points, additions[0]!.workspace, supersededIds(additions));
+    }
+  }
+  return [...points.values()];
+}
+
+/** Repository-local search uses the ledger independently of display retention and budgeting. */
+export function readRepositoryLearningHistory(db: SqliteDatabase, repositoryRoot: string, workspace: string): RepositoryLearningPoint[] {
+  const key = repositoryLearningKey(repositoryRoot);
+  if (ledgerTurnCount(db, key) !== storedSnapshot(db, key).turnCount)
+    throw new Error("repository_learning_ledger_incomplete");
+  return repositoryLearningHistory(db, key, workspace);
+}
+
+function retainLatest(points: RepositoryLearningPoint[]): Pick<StoredSnapshot, "points" | "omitted"> {
+  // Stable ties follow ledger turn order and the order of the last occurrence
+  // within the turn. The final sort preserves observation-before-hypothesis.
+  const ascending = points.sort((a, b) => a.revision - b.revision);
+  const retained = ascending.filter(point => point.kind === "observation").slice(-12)
+    .concat(ascending.filter(point => point.kind === "hypothesis").slice(-20))
+    .sort((a, b) => b.revision - a.revision);
+  return { points: retained, omitted: points.length - retained.length };
+}
+
+function current(db: SqliteDatabase, key: string): StoredSnapshot {
+  const { projectionVersion, ...stored } = storedSnapshot(db, key);
+  if (stored.revision === 0 || projectionVersion === 1 || ledgerTurnCount(db, key) !== stored.turnCount)
+    return stored;
+  return { ...stored, ...retainLatest(repositoryLearningHistory(db, key)) };
+}
+
 /** Payload-free retirement is permanent across plugin restart and fresh admissions. */
 export function isRetiredRepositoryTurn(
   db: SqliteDatabase,
@@ -257,93 +366,36 @@ export function saveTurn(
     }
     const before = current(db, repositoryKey);
     const revision = before.revision + 1;
-    const base = {
-      workspace: turn.workspace,
-      captureRevision: turn.captureRevision,
-      tags: turn.tags,
-      ...(turn.keywords ? { keywords: turn.keywords } : {}),
-      sessionId: turn.sessionId,
-      turnId: turn.turnId,
-      outcome: turn.outcome,
-      revision,
-      occurrences: 1,
-      reflectionStatus: turn.reflectionStatus,
-    };
-    const additions: RepositoryLearningPoint[] = [
-      {
-        ...base,
-        kind: "observation",
-        summary: turn.summary,
-        evidenceRefs: turn.evidenceRefs,
-      },
-      ...turn.lessons.map((lesson): RepositoryLearningPoint => ({
-        ...base,
-        kind: "hypothesis",
-        lesson,
-        evidenceRefs: [...new Set(lesson.evidenceRefs)],
-      })),
-    ];
+    const additions = turnPoints(repositoryKey, turn, revision);
     const visible = before.points.filter((point) => visiblePoint(db, point));
-    for (const point of [...visible, ...additions])
-      if (point.kind === "hypothesis")
-        point.id ??= `hypothesis:${hash(repositoryKey + ":" + pointKey(point))}`;
     const activeIds = new Set(
       visible
-        .filter((point) => point.workspace === turn.workspace && point.kind === "hypothesis")
-        .map((point) => point.id),
+        .filter(point => point.workspace === turn.workspace && point.kind === "hypothesis")
+        .map(point => point.id),
     );
-    const superseded = new Set(
-      turn.lessons.flatMap((lesson) => lesson.supersedes ?? []),
-    );
+    const superseded = supersededIds(additions);
     if ([...superseded].some((id) => !activeIds.has(id)))
       throw new Error("repository_learning_invalid_supersession");
     if (additions.some((point) => point.id && superseded.has(point.id)))
       throw new Error("repository_learning_self_supersession");
-    // A grounded model correction retires the previous proposal from active input,
-    // never from the historical ledger and never promotes the replacement to fact.
-    const points = new Map(
-      visible
-        .filter((point) => !point.id || !superseded.has(point.id))
-        .map((point) => [pointKey(point), point]),
-    );
-    for (const point of additions) {
-      const key = pointKey(point);
-      const previous = points.get(key);
-      if (previous) {
-        point.occurrences = previous.occurrences + 1;
-        point.evidenceRefs = [
-          ...new Set([...previous.evidenceRefs, ...point.evidenceRefs]),
-        ].slice(-64);
-      }
-      points.delete(key);
-      points.set(key, point);
-    }
-    const all = [...points.values()];
-    // Bounded projection, not deletion of historical evidence. Conflicting hypotheses coexist.
-    const retained = all
-      .filter((point) => point.kind === "observation")
-      .slice(-12)
-      .concat(all.filter((point) => point.kind === "hypothesis").slice(-20))
-      .sort((a, b) => b.revision - a.revision);
-    const snapshot: StoredSnapshot = {
-      repositoryKey,
+    // With incomplete history, only the existing active projection can identify
+    // proposals whose superseding turn might otherwise be missing.
+    const history = ledgerTurnCount(db, repositoryKey) === before.turnCount
+      ? repositoryLearningHistory(db, repositoryKey)
+      : visible;
+    const points = new Map(history.map(point => [pointKey(point), point]));
+    applyTurnPoints(points, additions);
+    const snapshot = {
+      ...before,
+      projectionVersion: 1 as const,
       revision,
       turnCount: before.turnCount + 1,
-      tags: [
-        repositoryKey,
-        ...new Set([...before.tags.slice(1), ...turn.tags]),
-      ].slice(0, 33),
-      points: retained,
+      tags: [repositoryKey, ...new Set([...before.tags.slice(1), ...turn.tags])].slice(0, 33),
       outcomeCounts: {
         ...before.outcomeCounts,
         [turn.outcome]: before.outcomeCounts[turn.outcome] + 1,
       },
-      omitted:
-        before.omitted +
-        before.points.length -
-        visible.length +
-        all.length -
-        retained.length,
+      ...retainLatest([...points.values()]),
     };
     db.prepare(
       `INSERT INTO repository_learning_turns

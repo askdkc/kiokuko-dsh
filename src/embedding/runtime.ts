@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { KiokukoError } from '../errors.js';
 import { readEntry } from '../memory/entries.js';
-import { buildEmbeddingDocument } from './document.js';
+import { buildEmbeddingDocument, renderEmbeddingProviderInput } from './document.js';
 import {
   claimEmbeddingJobs,
   EMBEDDING_JOB_MAX_ATTEMPTS,
@@ -17,12 +17,13 @@ import {
   normalizeEmbeddingQuery,
   queryEmbeddingHash,
   readQueryEmbedding,
+  renderEmbeddingQueryInput,
   writeQueryEmbedding,
 } from './query-cache.js';
 import { JavaScriptVectorSearchBackend } from './javascript-backend.js';
 import { EmbeddingProviderError } from './provider.js';
 import { OpenAICompatibleEmbeddingProvider } from './openai-compatible-provider.js';
-import { normalizeVector } from './vector.js';
+import { hashVector, normalizeVector } from './vector.js';
 import { readActiveEmbeddingProfile, readEntryEmbedding } from './store.js';
 import { defaultEmbeddingConfig, readPersistedEmbeddingSettings } from './settings.js';
 import { getDshEmbeddingPresetDirectory } from '../dsh/paths.js';
@@ -234,6 +235,36 @@ function createEnabledRuntime(
     return preparedQuery(state.profile, state.backend, stored);
   };
 
+  const embedSearchCorpus: NonNullable<EmbeddingRuntime['embedSearchCorpus']> = async (queryText, documentsText, signal) => {
+    if (closed) unavailable('Embedding runtime is closed');
+    ensureActive();
+    const controller = new AbortController();
+    const requestSignal = AbortSignal.any([signal, controller.signal]);
+    inFlight.add(controller);
+    try {
+      const identity = profile.identity;
+      const texts = identity.schemaVersion === 2
+        ? [renderEmbeddingQueryInput(queryText, identity.queryPrefix),
+          ...documentsText.map(text => renderEmbeddingProviderInput(normalizeEmbeddingQuery(text), identity.documentPrefix))]
+        : [queryText, ...documentsText].map(normalizeEmbeddingQuery);
+      const vectors: Float32Array[] = [];
+      for (let offset = 0; offset < texts.length; offset += config.batchSize) {
+        requestSignal.throwIfAborted();
+        const batch = texts.slice(offset, offset + config.batchSize);
+        const response = await provider.embed(batch, { signal: requestSignal });
+        requestSignal.throwIfAborted();
+        if (response.length !== batch.length) throw new EmbeddingProviderError('invalid_response', false);
+        vectors.push(...response.map(vector => normalizeVector(vector, profile.identity.dimensions)));
+      }
+      ensureActive();
+      const [query, ...documents] = vectors;
+      if (!query) return null;
+      return { query: preparedQuery(profile, backend, { vector: query, vectorHash: hashVector(query) }), documents };
+    } finally {
+      inFlight.delete(controller);
+    }
+  };
+
   const settleFailure = (job: ClaimedEmbeddingJob, errorCode: EmbeddingJobErrorCode): Promise<boolean> => {
     const now = state.now();
     return enqueueWrite(() => failEmbeddingJob(database, {
@@ -398,6 +429,7 @@ function createEnabledRuntime(
     backendId: backend.id,
     backend,
     prepareQuery,
+    embedSearchCorpus,
     drain,
     close,
   });

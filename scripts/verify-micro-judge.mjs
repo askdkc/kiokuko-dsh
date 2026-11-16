@@ -12,7 +12,8 @@ const platforms=new Set();let executedNative=false
 let sourceDigest
 try {sourceDigest=hash(Buffer.concat(await Promise.all(['Cargo.toml','src/main.rs','src/digest.rs'].map(file=>readFile(join(root,'crates/micro-judge',file))))))}catch(error){if(error.code!=='ENOENT')throw error}
 const licenses=JSON.parse(await readFile(join(root,'micro-judge/licenses/manifest.json'),'utf8'))
-assert.deepEqual(Object.keys(licenses).sort(),['COPYRIGHT-Rust-1.85.0.txt','LICENSE-APACHE','LICENSE-MIT'])
+assert.ok(licenses['LICENSE-APACHE'] && licenses['LICENSE-MIT'])
+assert.ok(Object.keys(licenses).every(name => /^(?:LICENSE-(?:APACHE|MIT)|COPYRIGHT-Rust-[0-9.]+\.txt)$/.test(name)))
 for(const [name,digest]of Object.entries(licenses))assert.equal(hash(await readFile(join(root,'micro-judge/licenses',name))),digest)
 for(const entry of manifest.artifacts){
   const key=`${entry.platform}-${entry.arch}`;assert.ok(!platforms.has(key));platforms.add(key)
@@ -34,6 +35,15 @@ for(const entry of manifest.artifacts){
     for(const name of ['tests','pass','fail','cancelled','skipped','todo']){
       const matches=[...log.toString().matchAll(new RegExp(`^# ${name} (\\d+)$`,'gm'))];assert.equal(matches.length,1);assert.equal(Number(matches[0][1]),receipt.summary[name]);if(!['tests','pass'].includes(name))assert.equal(receipt.summary[name],0)
     }
+  }
+  if (receipt.copyrightSha256 !== undefined) {
+    const notice = join(root, 'micro-judge', `native-copyright-${key}.html`)
+    const info = await lstat(notice)
+    assert.ok(info.isFile() && !info.isSymbolicLink() && info.size > 0 && info.size < 8000000)
+    assert.equal(hash(await readFile(notice)), receipt.copyrightSha256)
+  } else {
+    const release = /^rustc ([0-9]+\.[0-9]+\.[0-9]+) /.exec(entry.compiler)?.[1]
+    assert.ok(release && Object.hasOwn(licenses, `COPYRIGHT-Rust-${release}.txt`), 'Missing Rust standard-library notices')
   }
   if(entry.platform==='darwin'){assert.equal(bytes.subarray(0,4).toString('hex'),'cffaedfe');assert.equal(bytes.readUInt32LE(4),entry.arch==='arm64'?0x100000c:0x1000007)}
   if(entry.platform==='linux'){assert.equal(bytes.subarray(0,4).toString('hex'),'7f454c46');assert.equal(bytes[4],2);assert.equal(bytes[5],1);assert.equal(bytes.readUInt16LE(18),entry.arch==='arm64'?183:62)}

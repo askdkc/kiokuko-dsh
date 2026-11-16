@@ -19,6 +19,7 @@ for(const path of artifactPaths) {
   const manifest=JSON.parse(await regular(join(path,'manifest.json')))
   assert.equal(manifest.version,'kiokuko-fd-v1');assert.equal(manifest.artifacts.length,1)
   const entry=manifest.artifacts[0], result=await validateNativeArtifact(path,entry,source)
+  if(selection)assert.ok(result.notice, `Missing current Rust standard-library notices for ${result.key}`)
   if(selection)assert.deepEqual(JSON.parse(await regular(join(path,'selection.json'))),selectedModule.nativeSelection(selection,entry),'Native artifact belongs to another selection/source/toolchain')
   assert.ok(!gathered.has(result.key),`Duplicate native target: ${result.key}`)
   gathered.set(result.key,{entry,...result})
@@ -28,13 +29,17 @@ assert.deepEqual([...gathered.keys()].sort(),selection?selection.nativeTargets.m
 const destination=join(root,'micro-judge')
 for(const key of Object.keys(nativeTargets))if(!gathered.has(key)){
   await rm(join(destination,key),{recursive:true,force:true})
+  await rm(join(destination,`native-copyright-${key}.html`),{force:true})
   await rm(join(destination,`native-acceptance-${key}.tap`),{force:true})
   await rm(join(destination,`native-verification-${key}.json`),{force:true})
 }
-for(const {entry,key,binary,receipt,tap}of gathered.values()) {
+for(const {entry,key,binary,receipt,tap,notice}of gathered.values()) {
   await mkdir(join(destination,key),{recursive:true})
   await writeFile(join(destination,entry.file),binary);await chmod(join(destination,entry.file),0o755)
   await writeFile(join(destination,receipt.log),tap)
+  const noticePath = join(destination, `native-copyright-${key}.html`)
+  if (notice) await writeFile(noticePath, notice)
+  else await rm(noticePath, { force: true })
   await writeFile(join(destination,`native-verification-${key}.json`),`${JSON.stringify(receipt,null,2)}\n`)
 }
 const manifest=JSON.parse(await readFile(join(destination,'manifest.json'),'utf8'))

@@ -24,6 +24,7 @@ jobs:
       has_native: ${{ steps.plan.outputs.has_native }}
       has_lanes: ${{ steps.plan.outputs.has_lanes }}
       full: ${{ steps.plan.outputs.full }}
+      node_version: ${{ steps.plan.outputs.node_version }}
       dsh_sha: ${{ steps.dsh.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
@@ -31,7 +32,8 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
-          node-version: 24.16.0
+          node-version: latest
+      - run: node scripts/check-ci-toolchains.mjs
       - id: dsh
         name: Resolve current official DSH master once
         shell: bash
@@ -59,18 +61,18 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24.16.0
+          node-version: ${{ needs.select.outputs.node_version }}
           cache: npm
       - uses: actions/download-artifact@v8
         with:
           name: selected-ci-plan
           path: ${{ runner.temp }}/ci-plan
       - run: npm ci --ignore-scripts
-      - name: Install the fixed CI Rust toolchain on the disposable runner
-        run: rustup toolchain install 1.85.0 --profile minimal --no-self-update
+      - name: Install current stable Rust and its standard-library notices
+        run: rustup toolchain install stable --profile minimal --component rust-docs --no-self-update
       - name: Build and accept the selected native target
         shell: bash
-        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain 1.85.0 rustc)" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json" --output="${{ runner.temp }}/native-${{ matrix.key }}"
+        run: node scripts/build-verify-micro-judge.mjs "$(rustup which --toolchain stable rustc)" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json" --output="${{ runner.temp }}/native-${{ matrix.key }}"
       - run: node --test scripts/micro-judge-artifacts.test.mjs
       - uses: actions/upload-artifact@v7
         with:
@@ -91,7 +93,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24.16.0
+          node-version: ${{ needs.select.outputs.node_version }}
       - uses: actions/download-artifact@v8
         with:
           name: selected-ci-plan
@@ -135,7 +137,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24.16.0
+          node-version: ${{ needs.select.outputs.node_version }}
           cache: npm
       - uses: actions/download-artifact@v8
         with:
@@ -147,10 +149,6 @@ jobs:
           path: ${{ runner.temp }}/native-input
       - name: Assemble exactly the selected, current native test bundle
         run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
-      - uses: pnpm/action-setup@v6
-        if: matrix.pnpm
-        with:
-          version: ${{ matrix.pnpmVersion }}
       - name: Install selected native test prerequisites
         if: matrix.sbcl
         shell: bash
@@ -198,11 +196,12 @@ jobs:
       - name: Stage current official runtime and retain exact source identity
         if: matrix.fixture
         run: node scripts/stage-dsh-upstream.mjs .artifacts/official-dsh tests/fixtures/dsh-runtime "${{ needs.select.outputs.dsh_sha }}" .
-      - name: Restore the selected consumer-test package manager
+      - name: Install current pnpm for Kiokuko tests
         if: matrix.pnpm
-        uses: pnpm/action-setup@v6
-        with:
-          version: ${{ matrix.pnpmVersion }}
+        shell: bash
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/kiokuko-pnpm" pnpm@latest
+          echo "$RUNNER_TEMP/kiokuko-pnpm/bin" >> "$GITHUB_PATH"
       - name: Install browser runtime only for UI coverage
         if: matrix.browser
         run: npx playwright install --with-deps chromium
@@ -250,7 +249,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
         with:
-          node-version: 24.16.0
+          node-version: ${{ needs.select.outputs.node_version || 'latest' }}
       - uses: actions/download-artifact@v8
         if: needs.select.result == 'success'
         with:

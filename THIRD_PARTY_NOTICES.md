@@ -101,4 +101,4 @@ The `kiokuko-guardrail` engine source is included under `crates/guardrail` and u
 
 # Bundled finite-domain micro judge
 
-The `kiokuko-micro-judge` source under `crates/micro-judge` uses the repository MIT license. Its Apple Silicon macOS executable contains standard-library code from the official Rust 1.85.0 distribution. The unchanged official component copyright notice and MIT/Apache license texts are preserved in [micro-judge/licenses](micro-judge/licenses). Compiler and component archive checksums and native verification are recorded with the build evidence; this artifact makes no native verification claim for another platform.
+The `kiokuko-micro-judge` source under `crates/micro-judge` uses the repository MIT license. Its executables contain standard-library code from their recorded Rust compiler distributions. Current artifacts include the official standard-library notice in `micro-judge/native-copyright-<platform>.html`. The original Apple Silicon artifact’s notice and the MIT and Apache license texts are preserved in [micro-judge/licenses](micro-judge/licenses).

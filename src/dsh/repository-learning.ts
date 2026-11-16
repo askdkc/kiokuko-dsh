@@ -1,10 +1,11 @@
 import { abortable } from "./http-json.js";
 import type { DshUserQuestions } from "./intake-questions.js";
 import { observeNativeUserCancellation } from "./native-cancellation-observer.js";
-import { withImmediateTransaction } from "../db/transaction.js";
+import { withDeferredReadTransaction, withImmediateTransaction } from "../db/transaction.js";
 import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
+import type { EmbeddingRuntime } from "../embedding/types.js";
 import type { SqliteDatabase } from "../db/adapter.js";
 import { readRegularFile } from "../config/read-regular-file.js";
 import { parseProjectConfigText } from "../config/project-config.js";
@@ -27,6 +28,7 @@ import {
   admitRepositoryTurn,
   isRetiredRepositoryTurn,
   readRepositoryLearning,
+  readRepositoryLearningHistory,
   repositoryLearningKey,
   type RepositoryTurnLearning,
 } from "../memory/repository-learning.js";
@@ -35,7 +37,10 @@ import {
   type RepositoryTurnReflectionInput,
 } from "./repository-learning-reflector.js";
 import type { DecisionService } from './decisions/service.js';
-import { selectRepositoryLearning } from './repository-learning-retrieval.js';
+import { RepositoryLearningEmbedding } from './repository-learning-embedding.js';
+import { searchRepositoryLearning } from './repository-learning-search.js';
+import { canonicalJson } from '../serialization/validate.js';
+import { compactRepositoryLearningSelection, selectRepositoryLearning } from './repository-learning-retrieval.js';
 
 export interface RepositoryLearningOptions {
   mode?: 'automatic' | 'review' | 'off';
@@ -129,6 +134,7 @@ export class DshRepositoryLearning {
   private tail: Promise<unknown> = Promise.resolve();
   private stopped = false;
   private roots = new Map<string, string>();
+  private readonly embedding = new RepositoryLearningEmbedding();
   constructor(
     private host: Host,
     private runtime: Pick<DshCoreRuntime, "withDatabase">,
@@ -187,10 +193,10 @@ export class DshRepositoryLearning {
   }
   /** Re-read config at every boundary. Validation and callback share one synchronous DB scope. */
   private async withBinding<T>(expected: RepositoryBindingCandidate | undefined,
-    operation: (db: SqliteDatabase, binding: RepositoryBindingCandidate) => T, write = false): Promise<T> {
+    operation: (db: SqliteDatabase, binding: RepositoryBindingCandidate, embedding?: EmbeddingRuntime) => T, write = false): Promise<T> {
     const file = await readRegularFile(join(this.root, '.kiokuko.json'));
     const configured = file === undefined ? undefined : parseProjectConfigText(file.content);
-    return this.runtime.withDatabase(db => {
+    return this.runtime.withDatabase((db, embedding) => {
       const checked = () => {
         const identity = configured ?? db.prepare(
           'SELECT repository_id AS repositoryId, workspace FROM repository_locations JOIN repositories USING(repository_id) WHERE canonical_root=?',
@@ -201,7 +207,7 @@ export class DshRepositoryLearning {
           || expected && (expected.repositoryRoot !== binding.repositoryRoot
             || expected.repositoryId !== binding.repositoryId || expected.workspace !== binding.workspace))
           throw new Error('repository_learning_binding_changed');
-        return operation(db, binding);
+        return operation(db, binding, embedding);
       };
       return write ? withImmediateTransaction(db, checked) : checked();
     });
@@ -746,44 +752,70 @@ export class DshRepositoryLearning {
                   },
                 );
             }
-            const captured = await this.withBinding(undefined, (db, binding) => ({
-              binding, snapshot: readRepositoryLearning(db, this.root, { workspace: binding.workspace }),
-            }));
-            const { binding, snapshot } = captured;
+            const automatic = this.options.mode === 'automatic';
             const currentInput = (step.messages ?? []).filter((message: any) => message.source?.kind === 'user')
               .map((message: any) => compactText(message.content, 4000)).join('\n');
-            // Later tool-only steps have no new inbox messages. Keep this turn's
-            // original request, without carrying it into a different turn.
+            // Tool-only steps may reuse this turn's user request.
             const task = currentInput || (state.turn === step.turn ? state.request : '');
-            // Legacy review-mode embedders retain their existing projection.
-            // The normal harness uses query-bound compact memory retrieval.
-            const selected = this.options.mode === 'automatic'
-              ? await selectRepositoryLearning({ task, points: snapshot.points,
-                  requestId: `repository-memory:${agent.session.id}:${step.turn}:${snapshot.revision}`,
-                  signal: step.signal, decisions: this.options.decisions })
-              : { points: snapshot.points, source: 'keywords' as const };
-            // Selection can await a provider. A concurrent forget/reset or
-            // capture refusal drops those candidates; it never retries work.
-            const current = await this.withBinding(binding, db => readRepositoryLearning(db, this.root, { workspace: binding.workspace }));
-            if (this.options.mode === 'automatic' && selected.points.length) {
-              const visible = new Set(current.points.map(point => JSON.stringify(point)));
-              selected.points = selected.points.filter(point => visible.has(JSON.stringify(point)));
-            }
-            const compact = JSON.stringify({ ...JSON.parse(snapshot.compact), points: selected.points,
-              omitted: snapshot.omitted + snapshot.points.length - selected.points.length,
-              selection: selected.source });
+            if (automatic && !task.trim()) return clean;
+            const { binding, snapshot, history, embedding } = await this.withBinding(undefined, (db, binding, embedding) =>
+              withDeferredReadTransaction(db, () => ({
+                binding,
+                embedding: automatic && !step.signal.aborted && this.owned(agent)
+                  ? this.embedding.resolve(db, embedding) : undefined,
+                snapshot: readRepositoryLearning(db, this.root, { workspace: binding.workspace }),
+                history: automatic ? readRepositoryLearningHistory(db, this.root, binding.workspace) : [],
+              })));
+            if (step.signal?.aborted || !this.owned(agent)) return clean;
+            const search = automatic ? await searchRepositoryLearning({
+              task, points: history, embedding, signal: step.signal,
+            }) : undefined;
+            const selected = search ? await selectRepositoryLearning({ task, candidates: search.candidates,
+              requestId: `repository-memory:${agent.session.id}:${step.turn}:${snapshot.admissionEpoch}:${snapshot.revision}`,
+              signal: step.signal, decisions: this.options.decisions,
+            }) : { points: snapshot.points, source: 'keywords' as const, applicability: 'disabled' as const };
+            if (step.signal?.aborted || !this.owned(agent)) return clean;
+            // Awaiting a provider may cross a correction, scope change or reset.
+            // Only exact current ledger points can reach the model.
+            const current = await this.withBinding(binding, (db, _binding, liveEmbedding) => withDeferredReadTransaction(db, () => {
+              if (step.signal.aborted || !this.owned(agent)) return undefined;
+              if (search?.semantic === 'available' && embedding !== this.embedding.resolve(db, liveEmbedding))
+                return undefined;
+              const currentSnapshot = readRepositoryLearning(db, this.root, { workspace: binding.workspace });
+              if (currentSnapshot.admissionEpoch !== snapshot.admissionEpoch) return undefined;
+              const visible = automatic && selected.points.length
+                ? readRepositoryLearningHistory(db, this.root, binding.workspace) : currentSnapshot.points;
+              const allowed = new Set(visible.map(point => canonicalJson(point)));
+              return {
+                snapshot: currentSnapshot,
+                points: selected.points.filter(point => allowed.has(canonicalJson(point))),
+                eligible: automatic ? (selected.points.length ? visible.length : history.length)
+                  : currentSnapshot.omitted + currentSnapshot.points.length,
+              };
+            }));
+            if (!current) return clean;
+            const { points, omitted, compact } = compactRepositoryLearningSelection(
+              current.snapshot, current.points, current.eligible, selected.source,
+            );
             // No additional await after binding and visibility were checked
             // together: reset/forget must not slip into a second I/O window.
             if (step.signal?.aborted || !this.owned(agent)) return clean;
             this.diagnostic(agent, {
               phase: "retrieval",
               turn: step.turn,
-              status: selected.points.length ? "injected" : "empty",
-              revision: snapshot.revision,
-              injected: selected.points.length,
-              omitted: snapshot.omitted,
+              status: points.length ? "injected" :
+                [search?.semantic, selected.applicability].some(status => status === "unavailable" || status === "timeout")
+                  ? "unavailable" : "empty",
+              revision: current.snapshot.revision,
+              ...(search ? {
+                candidates: search.candidates.length,
+                semantic: search.semantic,
+                applicability: selected.applicability,
+              } : {}),
+              injected: points.length,
+              omitted,
             });
-            if (!selected.points.length) return clean;
+            if (!points.length) return clean;
             return {
               ...clean,
               messages: [
@@ -828,6 +860,9 @@ export class DshRepositoryLearning {
   }
   stop(): void {
     this.stopped = true;
+    const closeEmbedding = this.embedding.close();
+    this.pending.add(closeEmbedding);
+    void closeEmbedding.finally(() => this.pending.delete(closeEmbedding));
     for (const controller of this.controllers.keys()) controller.abort();
     for (const dispose of this.disposers.reverse()) dispose();
     this.states.clear();

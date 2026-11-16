@@ -1,4 +1,5 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { forgetMemory } from "../../../src/memory/forget.js";
 import test from "node:test";
@@ -12,6 +13,7 @@ import { withImmediateTransaction } from "../../../src/db/transaction.js";
 import { excludeCapture } from "../../../src/memory/capture-policy.js";
 import {
   readRepositoryLearning,
+  readRepositoryLearningHistory,
   repositoryLearningKey,
   saveTurn,
   resetRepositoryLearning,
@@ -585,3 +587,124 @@ for (const boundary of ["before-commit", "after-commit"] as const) {
     }
   });
 }
+
+test("retains the latest observations and hypotheses across repeated projection overflow", () =>
+  use((db) => {
+    for (let id = 1; id <= 24; id++) {
+      const input = turn(id);
+      input.lessons![0]!.hypothesis = `Distinct proposal ${id}`;
+      saveTurn(db, input);
+      if (![11, 12, 13, 19, 20, 21, 24].includes(id)) continue;
+      const snapshot = readRepositoryLearning(db, root, { maxChars: 64000 });
+      for (const [kind, limit] of [["observation", 12], ["hypothesis", 20]] as const) {
+        assert.deepEqual(snapshot.points.filter(point => point.kind === kind).map(point => point.revision),
+          Array.from({ length: Math.min(id, limit) }, (_, offset) => id - offset), kind);
+      }
+      assert.equal(db.prepare("SELECT COUNT(*) AS count FROM repository_learning_turns WHERE repository_key=?")
+        .get<{ count: number }>(repositoryLearningKey(root))!.count, id);
+    }
+  }));
+
+test("rebuilds the legacy projection from its ledger after reopen without changing turn receipts", () => {
+  const directory = mkdtempSync(join(tmpdir(), "kiokuko-learning-legacy-"));
+  const file = join(directory, "memory.sqlite");
+  let db = fixture(file).db;
+  try {
+    for (let id = 1; id <= 13; id++) saveTurn(db, turn(id));
+    saveTurn(db, { ...turn(12), repositoryRoot: "/synthetic/foreign", summary: "foreign observation" });
+    const key = repositoryLearningKey(root);
+    const select = () => db.prepare("SELECT snapshot_json FROM repository_learning_state WHERE repository_key=?")
+      .get<{ snapshot_json: string }>(key)!.snapshot_json;
+    const damaged = JSON.parse(select());
+    delete damaged.projectionVersion;
+    const dropped = damaged.points.find((p: any) => p.kind === "observation" && p.revision === 12);
+    const old = { ...dropped, revision: 1, turnId: "1", summary: turn(1).summary, evidenceRefs: turn(1).evidenceRefs };
+    damaged.points = damaged.points.filter((p: any) => p !== dropped).concat(old);
+    db.prepare("UPDATE repository_learning_state SET snapshot_json=? WHERE repository_key=?")
+      .run(JSON.stringify(damaged), key);
+    const receipts = () => db.prepare("SELECT revision, content_hash FROM repository_learning_turns WHERE repository_key=? ORDER BY revision").all(key);
+    const before = receipts();
+    db.close();
+    db = openConnection(file);
+    const repaired = readRepositoryLearning(db, root, { maxChars: 64000 });
+    assert.deepEqual(repaired.points.filter(p => p.kind === "observation").map(p => p.revision),
+      Array.from({ length: 12 }, (_, index) => 13 - index));
+    assert.equal(readRepositoryLearning(db, root, { maxChars: 64000 }).compact, repaired.compact);
+    assert.deepEqual(receipts(), before);
+    assert.doesNotMatch(repaired.compact, /foreign observation/);
+    saveTurn(db, turn(14));
+    assert.equal(JSON.parse(select()).projectionVersion, 1);
+    assert.deepEqual(receipts().slice(0, -1), before);
+  } finally {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("reobserving an evicted hypothesis counts durable support and updates its revision once per turn", () =>
+  use((db) => {
+    const first = turn(1);
+    saveTurn(db, first);
+    for (let id = 2; id <= 23; id++) {
+      const input = turn(id);
+      input.lessons![0]!.hypothesis = `Distinct proposal ${id}`;
+      saveTurn(db, input);
+    }
+    assert.ok(readRepositoryLearning(db, root, { maxChars: 64000 }).points.every(point => point.revision !== 1));
+    const repeated = turn(24);
+    repeated.lessons!.push({ ...repeated.lessons![0]! });
+    saveTurn(db, repeated);
+    assert.equal(saveTurn(db, repeated).inserted, false);
+    const updated = readRepositoryLearning(db, root, { maxChars: 64000 }).points
+      .find(point => point.lesson?.hypothesis === first.lessons![0]!.hypothesis)!;
+    assert.equal(updated.revision, 24);
+    assert.equal(updated.occurrences, 2);
+    assert.deepEqual(updated.evidenceRefs, [first.evidenceRefs[0], repeated.evidenceRefs[0]]);
+  }));
+
+test("concurrent writers assign distinct revisions and project the same ledger order after reopen", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "kiokuko-learning-concurrent-"));
+  const file = join(directory, "memory.sqlite");
+  fixture(file).db.close();
+  const source = pathToFileURL(join(process.cwd(), "src/memory/repository-learning.ts")).href;
+  const connection = pathToFileURL(join(process.cwd(), "src/db/connection.ts")).href;
+  const run = promisify(execFile);
+  try {
+    await Promise.all([0, 1].map(writer => run(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+      import { saveTurn } from ${JSON.stringify(source)};
+      import { openConnection } from ${JSON.stringify(connection)};
+      import { setTimeout as delay } from "node:timers/promises";
+      const db = openConnection(${JSON.stringify(file)});
+      try {
+        for (const turn of ${JSON.stringify(Array.from({ length: 14 }, (_, index) => turn(writer * 14 + index + 1)))}) {
+          saveTurn(db, turn);
+          await delay(1);
+        }
+      } finally { db.close(); }
+    `])));
+    const db = openConnection(file);
+    try {
+      const ledger = db.prepare("SELECT revision, turn_id FROM repository_learning_turns ORDER BY revision")
+        .all<{ revision: number; turn_id: string }>();
+      assert.deepEqual(ledger.map(row => row.revision), Array.from({ length: 28 }, (_, index) => index + 1));
+      const snapshot = readRepositoryLearning(db, root, { maxChars: 64000 });
+      assert.deepEqual(snapshot.points.filter(point => point.kind === "observation").map(point => point.turnId),
+        ledger.slice(-12).reverse().map(row => row.turn_id));
+      assert.equal(snapshot.points.find(point => point.kind === "hypothesis")?.occurrences, 28);
+    } finally { db.close(); }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete legacy ledger cannot claim to recover missing evidence", () =>
+  use((db) => {
+    for (let id = 1; id <= 13; id++) saveTurn(db, turn(id));
+    const key = repositoryLearningKey(root);
+    db.prepare("UPDATE repository_learning_state SET snapshot_json=json_remove(snapshot_json, '$.projectionVersion', '$.points[0]') WHERE repository_key=?").run(key);
+    db.prepare("DELETE FROM repository_learning_turns WHERE repository_key=? AND revision=13").run(key);
+    const snapshot = readRepositoryLearning(db, root, { maxChars: 64000 });
+    assert.equal(snapshot.revision, 13);
+    assert.ok(snapshot.points.every(point => point.kind !== "observation" || point.revision !== 13));
+    assert.throws(() => readRepositoryLearningHistory(db, root, "project:a"), /ledger_incomplete/);
+  }));

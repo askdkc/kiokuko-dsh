@@ -10,11 +10,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
+      node_version: ${{ steps.node.outputs.node-version }}
       dsh_sha: ${{ steps.dsh.outputs.sha }}
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with: {node-version: '24.16.0'}
+      - id: node
+        uses: actions/setup-node@v6
+        with: {node-version: latest}
+      - run: node scripts/check-ci-toolchains.mjs
       - id: dsh
         name: Resolve current official DSH master once
         run: node scripts/resolve-dsh-upstream.mjs
@@ -27,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
-        with: {node-version: '24.16.0', cache: npm}
+        with: {node-version: "${{ needs.select.outputs.node_version }}", cache: npm}
       - run: brew install sbcl
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
@@ -91,7 +94,7 @@ jobs:
           fi
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
-        with: {node-version: '24.16.0'}
+        with: {node-version: "${{ needs.select.outputs.node_version }}"}
       - run: npm ci
       - run: npm ci --prefix tests/fixtures/dsh-runtime
       - name: Check out selected official DSH

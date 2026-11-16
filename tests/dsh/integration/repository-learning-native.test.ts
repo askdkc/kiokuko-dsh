@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { openConnection } from "../../../src/db/connection.js";
-import { readRepositoryLearning } from "../../../src/memory/repository-learning.js";
+import { readRepositoryLearning, saveTurn } from "../../../src/memory/repository-learning.js";
 import { nativeSkillFixture } from "../helpers/skill-native.js";
 import { isolateSkillHome } from "../helpers/skill-home.js";
 
@@ -243,7 +243,7 @@ test(
             "-e",
             `
       import { openConnection } from ${JSON.stringify(new URL("../../../src/db/connection.js", import.meta.url).href)};
-      import { readRepositoryLearning } from ${JSON.stringify(new URL("../../../src/memory/repository-learning.js", import.meta.url).href)};
+      import { readRepositoryLearning, saveTurn } from ${JSON.stringify(new URL("../../../src/memory/repository-learning.js", import.meta.url).href)};
       const db = openConnection(process.argv[1]);
       try { process.stdout.write(JSON.stringify(readRepositoryLearning(db, process.argv[2]))); }
       finally { db.close(); }
@@ -693,3 +693,59 @@ for (const interruption of ["stop", "reset", "reload"] as const) {
     },
   );
 }
+
+test("native automatic delivery retrieves old ledger evidence once and excludes it from new observations", { timeout: 30_000 }, async () => {
+  const f = await nativeSkillFixture({ packages, ...(packageRoot ? { packageRoot } : {}), driver: 'kiokuko',
+    extra: { ...extra, repositoryLearning: { mode: 'automatic' } } });
+  const diagnostic: any[] = [];
+  const reflections: any[] = [];
+  const off = f.ctx.on('session/event', (_session: any, event: any) => {
+    if (event.type === 'plugin:kiokuko-dsh/repository-learning') diagnostic.push(event.data);
+  }, { global: true });
+  const nativeStream = f.model.stream.bind(f.model);
+  f.model.stream = async function* (request: any) {
+    if (String(request.system).startsWith('Extract compact repository-scoped learning')) {
+      reflections.push(JSON.parse(request.messages[0].content[0].text));
+      yield* f.mock.textResponse('{"lessons":[]}');
+      return;
+    }
+    if (request.purpose === 'compaction') {
+      yield* f.mock.textResponse('{"schemaVersion":4,"memoryOperations":[]}');
+      return;
+    }
+    yield* nativeStream(request);
+  };
+  try {
+    const db = openConnection(join(f.dir, 'kiokuko-dsh.sqlite3'));
+    try {
+      const workspace = db.prepare('SELECT workspace FROM repositories WHERE workspace LIKE ?')
+        .get<{ workspace: string }>('project:%')!.workspace;
+      for (let index = 1; index <= 35; index++) {
+        saveTurn(db, {
+          repositoryRoot: f.dir, workspace, sessionId: 'history', turnId: index,
+          captureRevision: 0, admissionEpoch: 0, terminalSeq: index, outcome: 'completed',
+          summary: index === 1 ? 'LedgerAmber: close the transport before releasing the socket.' : `Unrelated fixture ${index}`,
+          evidenceRefs: [`native:history:${index}`],
+        });
+      }
+      assert.ok(readRepositoryLearning(db, f.dir).points.every(point => point.revision > 1));
+    } finally { db.close(); }
+    for (const index of [0, 1]) {
+      if (index) await f.reload('compiled');
+      f.responses.push((request: any) => {
+        const memories = memoryMessages(request);
+        assert.equal(memories.length, 1);
+        assert.match(JSON.stringify(memories), /close the transport before releasing the socket/);
+        return f.mock.textResponse('I can discuss that label.');
+      });
+      await f.turn('What does LedgerAmber refer to? Please discuss it without tools.');
+      assert.equal(f.responses.length, 0);
+    }
+    assert.ok(diagnostic.some(value => value.phase === 'retrieval' && value.candidates >= 1 && value.injected === 1));
+    const deadline = Date.now() + 5000;
+    while (!reflections.length && Date.now() < deadline) await delay(10);
+    assert.ok(reflections.length > 0);
+    for (const reflection of reflections)
+      assert.doesNotMatch(JSON.stringify(reflection.observations), /close the transport before releasing the socket/);
+  } finally { off(); await f.close(); }
+});

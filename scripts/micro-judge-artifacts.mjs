@@ -64,5 +64,7 @@ export async function validateNativeArtifact(root, entry, expectedSource) {
   const tap = await regular(join(root,receipt.log))
   assert.equal(sha256(tap), receipt.logSha256)
   assert.deepEqual(acceptanceSummary(tap.toString()), receipt.summary)
-  return { key, binary, receipt, tap }
+  const notice = receipt.copyrightSha256 === undefined ? undefined : await regular(join(root, `native-copyright-${key}.html`))
+  if (notice) assert.equal(sha256(notice), receipt.copyrightSha256, 'Native standard-library notice mismatch')
+  return { key, binary, receipt, tap, notice }
 }

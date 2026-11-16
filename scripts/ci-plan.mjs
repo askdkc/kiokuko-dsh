@@ -11,7 +11,6 @@ export const ciPlatforms = Object.freeze({
   'linux-x64': { runner: 'ubuntu-24.04', platform: 'linux', architecture: 'x64' },
   'darwin-arm64': { runner: 'macos-15', platform: 'darwin', architecture: 'arm64' },
 });
-export const ciToolchain = Object.freeze({ node: 'v24.16.0', npm: '11.13.0', rust: 'rustc 1.85.0 (4d91de4e4 2025-02-17)' });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const ordinaryRoots = /^(?:src\/(?:akinator|context|deep-thinker|diff-review|embedding|ledger|memory|model-tools)\/|src\/dsh\/(?:answer-review|coding-workflow|decisions|model-auto|models|observation-pack|orchestration|semantic-compaction|typesafe)\/)/;
 const ordinaryFiles = /^src\/dsh\/(?:agenticreplay-|answer-|context-|continuity-|correction-|execution-|intake-|memory-|request-|session-|task-|tool-|turn-)[^/]+\.ts$/;
@@ -118,7 +117,6 @@ export function createCiPlan(contract, request, identity) {
     lane.sbcl = checks.some(check => check.requires?.includes('sbcl'));
     lane.browser = lane.selectors.some(selector => selector.profile === 'browser');
     lane.pnpm = checks.some(check => check.requires?.includes('pnpm')) || lane.browser;
-    lane.pnpmVersion = lane.browser ? '11.24.0' : '11.7.0';
     lane.timeout = chosen.mode === 'representative' && (lane.id.startsWith('core-') || lane.id.startsWith('host-')) ? 40
       : lane.selectors.some(selector => selector.profile === 'lisp' && selector.partition?.startsWith('native-')) ? 25
       : lane.selectors.every(selector => selector.profile === 'semantic') ? 15 : 20;
@@ -137,17 +135,15 @@ export function validateCiPlan(contract, selection, identity) {
   catch { return false; }
 }
 export function checkoutIdentity(root, validationPlatform, ciPlatform) {
-  const toolchain = { ...ciToolchain, node: process.version, npm: execFileSync('npm', ['--version'], { cwd: root, encoding: 'utf8' }).trim() };
+  const toolchain = { node: process.version, npm: execFileSync('npm', ['--version'], { cwd: root, encoding: 'utf8' }).trim() };
   if(validationPlatform) {
     assert.notEqual(process.env.GITHUB_ACTIONS, 'true', 'Local validation plans cannot be used by GitHub CI');
     assert.equal(validationPlatform, `${process.platform}-${process.arch}`, 'Local validation host mismatch');
-    toolchain.rust = execFileSync('rustc', ['--version'], {cwd:root,encoding:'utf8'}).trim();
   }
   if(ciPlatform) {
     assert.equal(ciPlatform,'linux-x64','Only the Linux x64 Depot CI platform is supported');
     assert.equal(ciPlatform,`${process.platform}-${process.arch}`,'CI platform host mismatch');
   }
-  if (process.env.GITHUB_ACTIONS === 'true') assert.deepEqual(toolchain, ciToolchain, 'CI toolchain mismatch');
   return { commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
     sourceDigest: sourceDigest(root, { nativeTransport: false }),
     contractDigest: digest(readFileSync(path.join(root, 'scripts/verification.json'))), toolchain,
@@ -163,7 +159,6 @@ export function readCiPlan(root, file) {
 }
 export function nativeSelection(selection, entry) {
   assert.ok(selection.nativeTargets.some(target => target.key === `${entry.platform}-${entry.arch}`), 'Unselected native target');
-  assert.equal(entry.compiler, selection.identity.toolchain.rust, 'Selected Rust toolchain mismatch');
   return { schema: 'selected-native-v1', planDigest: selection.digest, identity: selection.identity,
     bundleScope: selection.bundleScope, key: `${entry.platform}-${entry.arch}`, binarySha256: entry.sha256, compiler: entry.compiler };
 }
@@ -194,9 +189,8 @@ if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === imp
     || String(process.env.GITHUB_REF ?? '').startsWith('refs/tags/') };
   execFileSync('git', request.base ? ['diff', '--check', request.base, 'HEAD'] : ['diff', '--check'], { cwd: root, stdio: 'inherit' });
   const selection = createCiPlan(JSON.parse(readFileSync(path.join(root, 'scripts/verification.json'))), request, checkoutIdentity(root,undefined,ciPlatform));
-  assert.equal(process.version, ciToolchain.node); assert.equal(execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim(), ciToolchain.npm);
   writeFileSync(output, JSON.stringify(selection, null, 2) + '\n');
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT,
-    `dsh=${JSON.stringify(selection.dshTargets)}\nhas_dsh=${selection.dshTargets.length > 0}\nnative=${JSON.stringify(selection.nativeTargets)}\nlanes=${JSON.stringify(selection.lanes)}\nhas_native=${selection.nativeTargets.length > 0}\nhas_lanes=${selection.lanes.length > 0}\nfull=${selection.mode === 'full'}\n`);
+    `node_version=${process.version}\ndsh=${JSON.stringify(selection.dshTargets)}\nhas_dsh=${selection.dshTargets.length > 0}\nnative=${JSON.stringify(selection.nativeTargets)}\nlanes=${JSON.stringify(selection.lanes)}\nhas_native=${selection.nativeTargets.length > 0}\nhas_lanes=${selection.lanes.length > 0}\nfull=${selection.mode === 'full'}\n`);
   console.log(JSON.stringify({ mode: selection.mode, reason: selection.reason, jobs: selection.jobCount, native: selection.nativeTargets.map(x => x.key), lanes: selection.lanes.map(x => x.id), digest: selection.digest }));
 }

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { spawn, execFileSync } from 'node:child_process'
 import { once } from 'node:events'
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { Duplex } from 'node:stream'
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -9,6 +11,32 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { processIdentity, sameProcess } from '../../../../lisp/process-identity.mjs'
 import { sandboxLaunch } from '../../../../src/dsh/lisp/sandbox.js'
+
+test('Linux process identity accepts disappearance during proc stat reads only', t => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
+  let code = 'ESRCH'
+  const pid = 1234
+  const kill = t.mock.method(process, 'kill', () => true)
+  const read = t.mock.method(fs, 'readFileSync', (path: string) => {
+    assert.equal(path, `/proc/${pid}/stat`)
+    throw Object.assign(new Error('fixture read error'), { code })
+  })
+  syncBuiltinESMExports()
+  try {
+    assert.equal(sameProcess(pid, 'observed identity'), false)
+    code = 'ENOENT'
+    assert.equal(sameProcess(pid, 'observed identity'), false)
+    code = 'EACCES'
+    assert.throws(() => sameProcess(pid, 'observed identity'), { code })
+    assert.deepEqual(kill.mock.calls.map(call => call.arguments), [[pid, 0], [pid, 0], [pid, 0]])
+  } finally {
+    read.mock.restore()
+    kill.mock.restore()
+    syncBuiltinESMExports()
+    Object.defineProperty(process, 'platform', platform)
+  }
+})
 
 // Real processes model bwrap's monitor/setup/init ownership boundary. This is
 // not a Linux namespace or protected-SBCL test; those run in the native lane.

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { cp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
-import { acceptanceSummary, compilerIdentity, nativeTargets, sha256, validateNativeArtifact } from './micro-judge-artifacts.mjs'
+import { acceptanceSummary, compilerIdentity, nativeTargets, regular, sha256, validateNativeArtifact } from './micro-judge-artifacts.mjs'
 const root = resolve(import.meta.dirname, '..'), rustc = process.argv[2]
 const output = process.argv.find(a => a.startsWith('--output='))?.slice(9)
 const selectedFile = process.argv.find(a => a.startsWith('--ci-plan='))?.slice(10)
@@ -14,7 +14,6 @@ assert.ok(target, `Unsupported native build target: ${key}`)
 const compiler = spawnSync(rustc, ['-vV'], { encoding:'utf8' })
 assert.equal(compiler.status, 0, 'Cannot inspect the existing Rust compiler')
 const identity = compilerIdentity(compiler.stdout.split('\n')[0])
-if(selection)assert.equal(identity,selection.identity.toolchain.rust,'Selected Rust toolchain mismatch')
 assert.ok(compiler.stdout.split('\n').includes(`host: ${target}`), 'Native compiler host mismatch')
 const build = spawnSync(process.execPath, ['scripts/build-micro-judge.mjs', rustc], { cwd:root, stdio:'inherit' })
 assert.equal(build.status, 0, 'Rust build failed')
@@ -33,8 +32,13 @@ const tap = `${test.stdout ?? ''}${test.stderr ?? ''}`, log = `native-acceptance
 await writeFile(join(root,'micro-judge',log),tap)
 assert.equal(test.status,0,`Native acceptance failed (${test.error ?? ''}):\n${tap.slice(-12000)}`)
 const summary = acceptanceSummary(tap)
+const sysroot = spawnSync(rustc, ['--print', 'sysroot'], { encoding: 'utf8' })
+assert.equal(sysroot.status, 0, 'Cannot locate the compiler standard-library notices')
+const notice = await regular(join(sysroot.stdout.trim(), 'share/doc/rust/COPYRIGHT-library.html'))
+const noticeName = `native-copyright-${key}.html`
+await writeFile(join(root, 'micro-judge', noticeName), notice)
 const receipt = {schemaVersion:1, platform:process.platform, arch:process.arch, target, binarySha256:entry.sha256,
-  sourceDigest:entry.sourceDigest, compiler:entry.compiler, exitCode:test.status, summary, log, logSha256:sha256(tap)}
+  sourceDigest:entry.sourceDigest, compiler:entry.compiler, copyrightSha256:sha256(notice), exitCode:test.status, summary, log, logSha256:sha256(tap)}
 await writeFile(join(root,`micro-judge/native-verification-${key}.json`),`${JSON.stringify(receipt,null,2)}\n`)
 entry.nativeVerified=true
 await validateNativeArtifact(join(root,'micro-judge'),entry,entry.sourceDigest)
@@ -44,7 +48,7 @@ assert.equal(probe.status,0,'Verified bundle native probe failed')
 if(output) {
   if(selection)assert.equal((await import('./ci-plan.mjs')).readCiPlan(root,selectedFile).digest,selection.digest)
   const destination=resolve(output); await mkdir(destination,{recursive:false})
-  for(const file of [entry.file,log,`native-verification-${key}.json`]) {
+  for(const file of [entry.file,log,noticeName,`native-verification-${key}.json`]) {
     await mkdir(resolve(destination,file,'..'),{recursive:true}); await cp(join(root,'micro-judge',file),join(destination,file))
   }
   await writeFile(join(destination,'manifest.json'),`${JSON.stringify({version:manifest.version,artifacts:[entry]},null,2)}\n`)
