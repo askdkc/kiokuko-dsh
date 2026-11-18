@@ -11,6 +11,7 @@ export class ConfiguredSkillPrompts {
   readonly mode: SkillPromptMode
   #loaded?: Promise<ReadonlyMap<string, SkillPromptDelivery>>
   #sourceContents = new Map<string, string>()
+  #warnedSkills = new Set<string>()
   #diagnostics = new Map<string, Omit<SkillPromptDelivery, 'content'>>()
   constructor(config: { mode?: SkillPromptMode }, private readonly artifact: URL,
     private readonly sources: () => Promise<readonly SkillSource[]>) {
@@ -50,6 +51,11 @@ export class ConfiguredSkillPrompts {
     if (result) {
       const { content: _content, ...diagnostic } = result
       this.#diagnostics.set(result.id, diagnostic)
+      if (result.fallback && !this.#warnedSkills.has(name)) {
+        this.#warnedSkills.add(name)
+        const warning = { skill: name, requested: this.mode, delivered: result.representation, reason: result.fallback }
+        console.warn(`[kiokuko-dsh] [warn] Skill prompt fallback ${JSON.stringify(warning)}`)
+      }
     }
     return result
   }

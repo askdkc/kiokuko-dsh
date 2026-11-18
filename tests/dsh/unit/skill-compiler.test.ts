@@ -149,6 +149,26 @@ test('runtime never compiles: absent, stale and corrupt artifacts deliver full s
   } finally { await rm(dir, {recursive:true, force:true}) }
 })
 
+test('compiled delivery warns once per affected Skill across resource reads', async t => {
+  const warn = t.mock.method(console, 'warn', () => {})
+  const dir = await mkdtemp(join(tmpdir(), 'skill-warning-'))
+  t.after(() => rm(dir, { recursive: true, force: true }))
+  const artifact = pathToFileURL(join(dir, 'bundle.json'))
+  const sources = [source(contract), { ...source('reference'), relativePath: 'references/example.md' },
+    { ...source('second Skill'), name: 'other' }]
+  await writeFile(artifact, JSON.stringify(compileSkillBundle(sources)))
+  const prompts = new DshSkillPrompts({ mode: 'compiled' }, artifact, async () => sources)
+  for (const resource of sources) await prompts.require(resource.name, resource.relativePath)
+  assert.equal(warn.mock.callCount(), 0, 'valid compiled and verbatim resources are silent')
+
+  const changed = sources.map(resource => ({ ...resource, content: resource.content + ' updated' }))
+  const stale = new DshSkillPrompts({ mode: 'compiled' }, artifact, async () => changed)
+  for (const resource of changed) assert.equal(await stale.require(resource.name, resource.relativePath), resource.content)
+  assert.deepEqual(warn.mock.calls.map(call => call.arguments), ['fixture', 'other'].map(skill => [
+    `[kiokuko-dsh] [warn] Skill prompt fallback {"skill":"${skill}","requested":"compiled","delivered":"full","reason":"resource_mismatch"}`,
+  ]))
+})
+
  test('approval policy survives compiled, full and missing-bundle fallback delivery', async () => {
   const sources = await loadSkillSources()
   const dir = await mkdtemp(join(tmpdir(), 'lisp-approval-guidance-'))

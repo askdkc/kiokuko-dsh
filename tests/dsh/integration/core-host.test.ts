@@ -370,14 +370,21 @@ test('a local writing feature can prepare and dispose through the same contract 
   assert.deepEqual(events, ['Write a concise project summary.', 'stop', 'drain', 'dispose'])
 })
 
-test('resource-only extension is available in full and compiled fallback without importing absent optional resources', async () => {
+test('resource-only extension is available in full and compiled fallback without importing absent optional resources', async t => {
+  const warn = t.mock.method(console, 'warn', () => {})
   const content = '---\nname: writing\ndescription: Organize text\n---\n<!-- KIOKUKO MANAGED STANDARD SKILL: writing -->\nOrganize the requested text.'
   const resources = [{ name: 'writing', relativePath: 'SKILL.md', load: async () => content }]
   for (const mode of ['full', 'compiled'] as const) {
     const prompts = configuredSkillPrompts(resources, mode, new URL('file:///nonexistent/kiokuko-test-bundle.json'))
     const provider = configuredSkillProvider(resources, prompts)
     const list = await provider.list({}) as { candidates: readonly any[] }
-    assert.equal((await provider.get(list.candidates[0], {}))?.content, content)
+    assert.equal(warn.mock.callCount(), 0, 'listing Skills is silent')
+    await Promise.all([1, 2].map(async () => {
+      assert.equal((await provider.get(list.candidates[0], {}))?.content, content)
+    }))
+    assert.deepEqual(warn.mock.calls.map(call => call.arguments), mode === 'full' ? [] : [
+      ['[kiokuko-dsh] [warn] Skill prompt fallback {"skill":"writing","requested":"compiled","delivered":"full","reason":"bundle_unavailable"}'],
+    ])
     assert.equal(await prompts.get('kiokuko-lisp'), undefined)
     provider.dispose(); assert.deepEqual(await provider.list({}), { candidates: [], complete: true })
   }
