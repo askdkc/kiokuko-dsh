@@ -89,6 +89,15 @@ async function fixture(compression: 'zstd' | 'none' = 'zstd') {
       await writeFile(path, original)
       return { id, path, currentPath, original, header, events }
     },
+    async mountSessionQuery() {
+      for (const name of ['dsh-session', 'dsh-session-projection', 'dsh-session-query']) {
+        const plugin = await import(pathToFileURL(modulePath(name)).href)
+        const service = ctx.plugin(plugin.default ?? plugin)
+        disposers.push(() => service.dispose())
+        await service
+      }
+      assert.ok(ctx.sessionQuery, 'native session query must be available')
+    },
     async mount() {
       const handle = await mountDshComposition(ctx, {})
       disposers.push(handle.dispose)
@@ -284,12 +293,7 @@ async function restored(backend: any, id: string, access = 'read') {
 for (const version of [0, 1, 2] as const) for (const customEvents of [false, true]) test(`v${version} session ID lookup ${customEvents ? 'reports the unsupported Kiokuko history without changing it' : 'reads supported history through the native query'}`, options, async () => {
   const f = await fixture()
   try {
-    const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
-    for (const plugin of [(f.session.default ?? f.session), (query.default ?? query)]) {
-      const fiber = f.ctx.plugin(plugin)
-      await fiber
-      f.disposers.push(() => fiber.dispose())
-    }
+    await f.mountSessionQuery()
     const old = await f.legacy(`historical-v${version}`, [
       { type: 'session/title', seq: 0, time: 1, data: { title: 'Historical session', messageSeqs: [], source: { kind: 'user' } } },
       ...(customEvents ? rows().slice(1) : []),
@@ -773,12 +777,7 @@ test('public plugin startup repairs unopened histories on first load and reload'
 test('normal plugin loading restores the session query used by the chat page', options, async () => {
   const f = await fixture()
   try {
-    const query = await import(pathToFileURL(modulePath('dsh-session-query')).href)
-    for (const plugin of [(f.session.default ?? f.session), (query.default ?? query)]) {
-      const fiber = f.ctx.plugin(plugin)
-      await fiber
-      f.disposers.push(() => fiber.dispose())
-    }
+    await f.mountSessionQuery()
     const old = await f.old('legacy-page-history')
     await assert.rejects(() => f.ctx.sessionQuery.observeSession(old.id), /failed to observe session.*unknown to this harness/)
     const host = f.ctx.plugin({ name: 'history-host', apply(ctx: any) { return ctx.provide('kiokukoDsh', {}) } })
