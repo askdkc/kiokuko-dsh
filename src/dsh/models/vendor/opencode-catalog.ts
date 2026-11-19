@@ -53,7 +53,9 @@ export function normalizeCatalog(provider: OpenCodeRoute, roster: readonly strin
         if (old) { models.push(structuredClone(old)); continue }
         throw new Error('metadata unavailable for this route and id')
       }
-      const raw = object(entries[id]); const wire = raw.provider === undefined ? section.npm : object(raw.provider).npm
+      const raw = object(entries[id])
+      const modelProvider = raw.provider === undefined ? undefined : object(raw.provider)
+      const wire = modelProvider?.npm === undefined ? section.npm : modelProvider.npm
       const protocol = typeof wire === 'string' && Object.hasOwn(PROTOCOLS, wire) ? PROTOCOLS[wire] : undefined
       const limit = object(raw.limit); const modalities = object(raw.modalities)
       if (!protocol) throw new Error('unsupported or unknown wire protocol')
