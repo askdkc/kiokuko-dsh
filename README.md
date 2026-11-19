@@ -8,20 +8,6 @@ Kiokuko adds memory, planning, verification, and observability to
 
 Memory is advisory. After a native turn ends, the host compacts useful evidence into a summary, tags and keywords and saves it automatically in the background. Later requests retrieve relevant candidates, optionally selected by Akinator. `repositoryLearning.mode: review` retains proposal approval; `off` disables this flow. Memory processing never holds the next task. [Automatic memory flow](docs/native-memory-flow.md); [manual review, recall and forgetting](docs/replay-memory-review.md).
 
-## Kiokuko-owned harness (unreleased)
-
-This source build registers `kiokuko-dsh/harness` as the DSH agent factory and disables the standard `agent-loop` in its bundle. Kiokuko schedules turns, model requests and native tool execution; DSH continues to supply its public agent/session API, model adapters, UI and permission enforcement. Use the built local tarball when validating this change; it has not been published.
-
-```bash
-dsh plugin --profile dsh-cli add ./kiokuko-dsh-0.2.39.tgz --ignore-scripts
-dsh --profile dsh-cli --dump-config
-dsh-cli
-```
-
-The dump must contain one enabled `kiokuko-dsh/harness` and a disabled `agent-loop`. For the legacy plugin mode, apply the installed `kiokuko-dsh/dsh/cordis.legacy.patch.yml` after the bundle. `dsh-cli --ignore-kiokuko` is a per-launch opt-out when supported by the installed CLI. See [configuration, lifecycle and verification limits](docs/kiokuko-harness.md), including the SBCL prerequisite and the distinction between scripted adapters and live assistant transport.
-
-Inspect sources and corrections with `/kioku-memory explain ENTRY_ID`; explicitly forget a memory with `/kioku-memory forget ENTRY_ID --revision N`. [Evidence, explanations and forgetting](docs/memory-evidence.md).
-
 ## Features
 
 - **Kiokuko Models** — Connect and authenticate from Web Settings or `/kiokuko model`, independently of native Models settings. Includes Infron Standard/Flex. [Setup and shared credentials](docs/kiokuko-models.md)

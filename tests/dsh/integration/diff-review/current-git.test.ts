@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GitReader, parseHunks, type SubprocessService } from '../../../../src/diff-review/current-git-source.js'
+import { sanitizeFile } from '../../../../src/diff-review/redaction.js'
 import { captureNativeTurn } from '../../../../src/diff-review/native-turn-source.js'
 import { diffReviewResponse } from '../../../../src/dsh/diff-review-surface.js'
 import { resolveReviewSession } from '../../../../src/dsh/session-review-context.js'
@@ -101,6 +102,41 @@ test('unborn HEAD, rename, symlink and untracked edits keep their distinct facts
     assert.equal(await reader.matchesCapturedFiles(captured.files), true)
     await writeFile(join(root, 'untracked.txt'), 'after\n')
     assert.equal(await reader.matchesCapturedFiles(captured.files), false)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('a secret path on either side of a rename removes all file details', () => {
+  for (const [oldPath, newPath] of [['.env.production', 'example.txt'], ['example.txt', '.env'], ['.env', 'dist/example.txt']] as const) {
+    const file = sanitizeFile({ fileId: 'id', layer: 'staged', kind: 'text', oldPath, newPath,
+      displayPath: newPath, patch: '+fixture', hunks: parseHunks('@@ -0,0 +1 @@\n+fixture') })
+    assert.deepEqual(file, { fileId: 'id', layer: 'staged', displayPath: '[excluded path]', kind: 'excluded', reason: 'secret_path', hunks: [] })
+  }
+})
+
+test('Git capture skips secret renames before reading staged or working patches', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'kiokuko-review-redaction-'))
+  try {
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root })
+    git('init', '-q')
+    await writeFile(join(root, '.env.production'), 'fixture baseline\n')
+    await writeFile(join(root, 'ordinary.txt'), 'one\n')
+    git('add', '-f', '.env.production', 'ordinary.txt')
+    git('-c', 'user.name=Fixture', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'baseline')
+    git('mv', '.env.production', 'example.txt')
+    await writeFile(join(root, 'example.txt'), 'fixture working edit\n')
+    await writeFile(join(root, 'ordinary.txt'), 'two\n')
+    const reader = new GitReader({ ...subprocess, spawn(spec) {
+      if (spec.argv.includes('show')) {
+        assert.ok(spec.argv.at(-1)?.endsWith(':ordinary.txt'))
+      } else if (spec.argv.some(arg => arg.startsWith('--unified='))) {
+        assert.ok(spec.argv.includes('--') && spec.argv.includes('ordinary.txt'))
+        assert.ok(!spec.argv.includes('example.txt') && !spec.argv.includes('.env.production'))
+      }
+      return subprocess.spawn(spec)
+    } }, await realpath(root), { maxFiles: 10, maxFileBytes: 8192, maxSnapshotBytes: 32768, timeoutMs: 15000 })
+    const captured = await reader.capture('current', [], new AbortController().signal)
+    assert.deepEqual(captured.files.filter(file => file.kind === 'excluded').map(file => file.layer), ['staged', 'unstaged'])
+    assert.ok(captured.files.find(file => file.newPath === 'ordinary.txt')?.patch?.includes('+two'))
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

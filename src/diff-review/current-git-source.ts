@@ -81,16 +81,18 @@ export class GitReader {
     return result
   }
 
-  async fingerprint(signal: AbortSignal): Promise<string> {
-    const [status, staged, unstaged, stagedPatch, unstagedPatch, head] = await Promise.all([
-      this.required(['status', '--porcelain=v1', '-z', '--untracked-files=normal', '--ignore-submodules=none'], signal, 128 * 1024),
-      this.required(['diff', '--cached', '--raw', '-z', '--no-ext-diff', '--no-textconv'], signal, 256 * 1024),
+  async fingerprint(signal: AbortSignal, entries?: StatusEntry[]): Promise<string> {
+    const status = entries ?? await this.status(signal)
+    // Staged blobs are identified by their object IDs. Unstaged edits need a content fingerprint.
+    const workingPaths = status.filter(entry => entry.y !== ' ' && entry.y !== '?' &&
+      exclusionReason(entry.path, undefined, entry.oldPath) !== 'secret_path').flatMap(entry => entry.oldPath ? [entry.oldPath, entry.path] : [entry.path])
+    const [staged, unstaged, unstagedPatch, head] = await Promise.all([
+      this.required(['diff', '--cached', '--raw', '--no-abbrev', '-z', '--no-ext-diff', '--no-textconv'], signal, 256 * 1024),
       this.required(['diff', '--raw', '-z', '--no-ext-diff', '--no-textconv'], signal, 256 * 1024),
-      this.required(['diff', '--cached', '--root', '--no-ext-diff', '--no-textconv', '--no-color', '--unified=0'], signal),
-      this.required(['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--unified=0'], signal),
+      workingPaths.length ? this.required(['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--unified=0', '--', ...workingPaths], signal) : '',
       this.run(['rev-parse', '--verify', 'HEAD'], signal, 128),
     ])
-    return sha256(JSON.stringify([status, staged, unstaged, stagedPatch, unstagedPatch, head.code === 0 ? head.output.trim() : null]))
+    return sha256(JSON.stringify([status, staged, unstaged, unstagedPatch, head.code === 0 ? head.output.trim() : null]))
   }
 
   async matchesCapturedFiles(files: readonly DiffFile[]): Promise<boolean> {
@@ -110,8 +112,8 @@ export class GitReader {
 
   async capture(mode: ReviewMode, selectedUntracked: readonly string[], signal: AbortSignal): Promise<{ files: DiffFile[]; total: number; headOid?: string; indexDigest: string }> {
     if (!await this.available(signal)) throw new DiffReviewError('repo_unavailable', 422)
-    const before = await this.fingerprint(signal)
     const entries = await this.status(signal)
+    const before = await this.fingerprint(signal, entries)
     const selected = new Set(selectedUntracked)
     if (selected.size !== selectedUntracked.length || [...selected].some(path => !safeRelativePath(path) || !entries.some(e => e.x === '?' && e.path === path))) {
       throw new DiffReviewError('invalid_untracked_selection', 400)
@@ -147,8 +149,8 @@ export class GitReader {
     const path = entry.path
     const displayPath = path
     const base: DiffFile = { fileId: randomUUID(), layer, ...(entry.oldPath ? { oldPath: entry.oldPath } : {}), newPath: path, displayPath, kind: 'text', hunks: [] }
-    const secretPath = exclusionReason(path)
-    if (secretPath) return sanitizeFile({ ...base, kind: 'excluded', reason: secretPath })
+    const checked = sanitizeFile(base)
+    if (checked.kind === 'excluded') return checked
     if (entry.x === 'U' || entry.y === 'U' || entry.x === 'A' && entry.y === 'A' || entry.x === 'D' && entry.y === 'D') return { ...base, kind: 'conflict', reason: 'unmerged' }
     if (layer === 'untracked') {
       const content = await this.readWorking(path)
@@ -163,7 +165,7 @@ export class GitReader {
       const hunk: DiffHunk = { id: sha256(lines.join('\n')).slice(0, 16), oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines }
       return sanitizeFile({ ...base, newDigest: sha256(content), hunks: [hunk], patch: `@@ -0,0 +1,${lines.length} @@\n${lines.join('\n')}` })
     }
-    const args = ['diff', ...(layer === 'staged' ? ['--cached', '--root'] : []), '--no-ext-diff', '--no-textconv', '--no-color', '--unified=3', '--', ...(entry.oldPath ? [entry.oldPath] : []), path]
+    const args = ['--literal-pathspecs', 'diff', ...(layer === 'staged' ? ['--cached', '--root'] : []), '--no-ext-diff', '--no-textconv', '--no-color', '--unified=3', '--', ...(entry.oldPath ? [entry.oldPath] : []), path]
     let patch: string
     try { patch = await this.required(args, signal, this.limits.maxFileBytes * 2) }
     catch (error) {
