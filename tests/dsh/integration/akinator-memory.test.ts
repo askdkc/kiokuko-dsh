@@ -58,6 +58,21 @@ test('multiline Akinator source target survives the host profile and durable int
   } finally { f.close(); }
 });
 
+test('opening a run validates only the matching idempotency record', () => {
+  const f = fixture();
+  try {
+    const previous = f.request('previous');
+    const first = f.service.openRun(previous);
+    f.db.prepare("UPDATE dsh_intake_idempotency SET response_json = 'invalid' WHERE scope = 'dsh.run.open'").run();
+
+    const fresh = f.request('fresh');
+    const opened = f.service.openRun(fresh);
+    assert.notEqual(opened.runId, first.runId);
+    assert.deepEqual(f.service.openRun(fresh), opened);
+    assert.throws(() => f.service.openRun(previous), { code: 'INTEGRITY_ERROR' });
+  } finally { f.close(); }
+});
+
 test('target adoption persists memory provenance without fake answers; replay ignores history and mode changes', () => {
   const f = fixture();
   try {

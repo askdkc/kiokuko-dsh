@@ -176,26 +176,14 @@ function findStoredRecord(
   database: SqliteDatabase,
   validated: ValidatedInput,
 ): { requestHash: string; response: JsonValue } | undefined {
-  const select = `
+  const row = database.prepare(`
     SELECT scope, key_hash, request_hash, response_json, created_at
     FROM dsh_intake_idempotency
-  `;
-  const direct = database.prepare(`${select} WHERE scope = ? AND key_hash = ?`).get<StoredIdempotencyRow>(
-    validated.scope,
-    validated.keyHash,
-  );
-  if (direct) {
-    const response = storedResponse(direct, validated.scope);
-    return { requestHash: direct.request_hash as string, response };
-  }
-
-  for (const row of database.prepare(`${select} WHERE scope = ?`).all<StoredIdempotencyRow>(validated.scope)) {
-    const response = storedResponse(row, validated.scope);
-    if (row.key_hash === validated.keyHash) {
-      return { requestHash: row.request_hash as string, response };
-    }
-  }
-  return undefined;
+    WHERE scope = ? AND key_hash = ?
+  `).get<StoredIdempotencyRow>(validated.scope, validated.keyHash);
+  if (!row) return undefined;
+  const response = storedResponse(row, validated.scope);
+  return { requestHash: row.request_hash as string, response };
 }
 
 function validateOperation(operation: unknown): void {
