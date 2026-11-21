@@ -54,12 +54,13 @@ export const ReasoningEffortsSchema = z
     "Declare at least one thinking level beyond off",
   );
 export type ReasoningEfforts = z.infer<typeof ReasoningEffortsSchema>;
-/** The thinking levels a fresh declaration offers: the OpenAI-style standard set. */
+/** The thinking levels a fresh declaration offers: the OpenAI-style standard set plus `max`. */
 export const DECLARED_REASONING_EFFORTS: ReasoningEfforts = {
   off: null,
   low: "low",
   medium: "medium",
   high: "high",
+  max: "max",
 };
 export const ManualModelSchema = z
   .object({

@@ -67,12 +67,18 @@ const MODEL_CONNECTION_DEFAULTS: Record<string, readonly string[]> = {
   ollama: ["Ollama", "http://localhost:11434/v1", "chat-completions"],
   custom: ["Custom connection", "http://localhost:8080/v1", "chat-completions"],
 };
-/** Declared thinking levels for a model whose catalog entry publishes none. */
+/**
+ * Declared thinking levels for a model whose catalog entry publishes none.
+ * `max` rides the same wire spelling the bundled catalogs publish, so a model
+ * the catalog already offers at max keeps that level when a declaration
+ * replaces adoption.
+ */
 const STANDARD_REASONING_EFFORTS = {
   off: null,
   low: "low",
   medium: "medium",
   high: "high",
+  max: "max",
 } as const;
 /** Providers whose stored credential can also be an OAuth sign-in. */
 const OAUTH_KINDS = ["codex", "claude", "xai", "openai", "openrouter", "nous"];

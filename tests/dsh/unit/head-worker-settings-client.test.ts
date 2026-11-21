@@ -129,12 +129,14 @@ test("real settings component declares thinking levels for a registered model an
     box().props.onChange({target:{checked:true}});await f.settle();
     const declared=(await f.store.read()).connections[0]!.models[0]!;
     assert.equal(declared.reasoning,true);
-    assert.deepEqual(declared.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high"});
+    assert.deepEqual(declared.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high",max:"max"});
     assert.equal(box().props.checked,true,"the reloaded panel reflects the declaration");
+    const listed=((await f.service.models(c.id)) as any[])[0]!;
+    assert.deepEqual(listed.reasoning?.efforts.map((effort:any)=>effort.id),["off","low","medium","high","max"],"the native picker offers the declared max level");
     f.discover(async()=>[{id:model.id,name:model.name,contextWindow:model.contextWindow,maxTokens:model.maxTokens}]);
     click(f,"Refresh models");await f.settle();
     const refreshed=(await f.store.read()).connections[0]!.models[0]!;
     assert.equal(refreshed.reasoning,true);
-    assert.deepEqual(refreshed.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high"},"the declared levels survive refresh");
+    assert.deepEqual(refreshed.reasoningEfforts,{off:null,low:"low",medium:"medium",high:"high",max:"max"},"the declared levels survive refresh");
   }finally{await f.close();}
 });

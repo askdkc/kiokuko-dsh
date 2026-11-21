@@ -92,8 +92,8 @@ refresh reports.
 The gateway listing publishes no reasoning capability, so **Refresh models** also
 adopts the thinking levels of ids the bundled Chat Completions catalog knows (for
 example `openai/gpt-6-luna`). Every registered model row has a **Thinking levels**
-checkbox: enabling it declares `off`, `low`, `medium`, `high`, which is how a model
-the catalog does not publish becomes selectable. A declaration outranks catalog
+checkbox: enabling it declares `off`, `low`, `medium`, `high` and `max`, which is how a
+model the catalog does not publish becomes selectable. A declaration outranks catalog
 adoption, so it survives the next refresh; the native model picker then offers the
 declared levels and sends the chosen one as `reasoning_effort` with the same
 request's service tier. A model with neither a catalog entry nor a declaration
