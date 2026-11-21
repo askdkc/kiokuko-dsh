@@ -22,18 +22,18 @@ function pruneOptions(words: readonly string[]): { olderThanDays?: number; maxBy
 /** Human-only native command. No HTTP route or model tool is registered. */
 export function mountDshAgenticReplayCommand(ctx: DshPonytailCommandContext, enabled: boolean, services?: DshAgenticReplayHostServices): () => void {
   const reader = services ? new DshAgenticReplayReadService(services.config, services.withIndex) : undefined
-  return ctx.commands.register({ name: 'kioku-agenticreplay', description: 'Session recording: status [--json] | list | start | stop | show <run> [cursor] | export <run> | prune --older-than <days> [--max-bytes <n>]',
-    input: { hint: 'status [--json] | list | start | stop | show <run> [cursor] | export <run> | prune --older-than <days> [--max-bytes <n>]' }, recordInput: false,
+  return ctx.commands.register({ name: 'kioku-agenticreplay', description: 'Session recording: status [--json] | list | start | stop | show <run> [cursor] | export <run> | diagnose <run> | prune --older-than <days> [--max-bytes <n>]',
+    input: { hint: 'status [--json] | list | start | stop | show <run> [cursor] | export <run> | diagnose <run> | prune --older-than <days> [--max-bytes <n>]' }, recordInput: false,
     handler: async invocation => {
       try {
         const agent = invocation.agent, session = agent?.session
         if (!agent || !session || (agent.sessionId !== undefined && agent.sessionId !== session.id)) throw new AgenticReplayError('session_required')
         const args = invocation.rawInput.trim().split(/\s+/u)
         const [action, runId, cursor] = args
-        if (!['status','list','start','stop','show','export','prune'].includes(action ?? '')
-          || args.length > (action === 'show' ? 3 : action === 'prune' ? 5 : action === 'export' || action === 'status' ? 2 : 1)
+        if (!['status','list','start','stop','show','export','diagnose','prune'].includes(action ?? '')
+          || args.length > (action === 'show' ? 3 : action === 'prune' ? 5 : action === 'export' || action === 'diagnose' || action === 'status' ? 2 : 1)
           || (action === 'status' && runId !== undefined && runId !== '--json')
-          || ((action === 'show' || action === 'export') && !runId)) throw new AgenticReplayError('invalid_command')
+          || ((action === 'show' || action === 'export' || action === 'diagnose') && !runId)) throw new AgenticReplayError('invalid_command')
         if (!enabled) return { kind: 'success', text: action === 'status'
           ? runId === '--json' ? JSON.stringify({ capability: 'disabled' }, null, 2)
             : 'AgenticReplay: 機能が無効です\n設定で agenticReplay.enabled を true にして DSH を再読み込みしてください。'
@@ -54,6 +54,7 @@ export function mountDshAgenticReplayCommand(ctx: DshPonytailCommandContext, ena
           case 'stop': await services.setSessionRecording(binding, false); result = await status(); break
           case 'show': result = await reader.show(binding, runId!, cursor); break
           case 'export': result = { path: await reader.export(binding, runId!), exactReplay: false }; break
+          case 'diagnose': result = await reader.diagnose(binding, runId!); break
           case 'prune': result = await reader.prune(binding, pruneOptions(args.slice(1))); break
         }
         return { kind: 'success', text: JSON.stringify(result, null, 2) }

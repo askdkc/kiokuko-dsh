@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import type { AgenticReplayConfig } from './config.js'
 import { AgenticReplayError, type AgenticReplayTrace, type DshAgenticReplayBinding, type WithAgenticReplayIndex } from './agenticreplay-types.js'
 import { checkedRunDir, checkPrivatePath, AGENTICREPLAY_RUN_ID, privateDirectory, workspaceKey, ensureAgenticReplayGitignore } from './agenticreplay-security.js'
-import { readAgenticReplayManifest, readAgenticReplayPage, scanAgenticReplayTrace } from './agenticreplay-files.js'
+import { readAgenticReplayManifest, readAgenticReplayPage, scanAgenticReplayTrace, scanAgenticReplayVerifiedPrefix } from './agenticreplay-files.js'
 
 export interface AgenticReplayPruneOptions { olderThanDays?: number; maxBytes?: number }
 const PRUNABLE_STATES = new Set(['completed', 'failed', 'incomplete'])
@@ -78,15 +78,51 @@ export class DshAgenticReplayReadService {
     }
     return { deleted, bytes, candidates: selected.length }
   }
-  async #authorized(binding: DshAgenticReplayBinding, id: string) {
+  async #row(binding: DshAgenticReplayBinding, id: string) {
     if (!AGENTICREPLAY_RUN_ID.test(id)) throw new AgenticReplayError('trace_not_found')
     const row = await this.withIndex(store => store.get(binding.sessionId, workspaceKey(binding.workspaceRoot), id))
     if (!row || row.store_root !== binding.storeRoot || row.session_cwd !== binding.sessionCwd) throw new AgenticReplayError('trace_not_found')
+    return row
+  }
+  async #authorized(binding: DshAgenticReplayBinding, id: string) {
+    const row = await this.#row(binding, id)
     if (row.state !== 'completed') throw new AgenticReplayError('trace_not_completed')
     const dir = await checkedRunDir(row.store_root, id)
     const manifest = await readAgenticReplayManifest(dir, id)
     if (!manifest.ended_at || manifest.counts?.events !== row.event_count) throw new AgenticReplayError('trace_integrity_mismatch')
     return { row, dir }
+  }
+  /**
+   * Audit an unfinished or damaged trace without relaxing the complete-export reader.
+   * Same workspace/session binding, typed stop reason, counts only: no bodies or blobs.
+   */
+  async diagnose(binding: DshAgenticReplayBinding, id: string) {
+    const row = await this.#row(binding, id)
+    const dir = await checkedRunDir(row.store_root, id)
+    const scan = await scanAgenticReplayVerifiedPrefix(dir, {
+      maxEvents: this.config.maxHtmlExportEvents,
+      maxBytes: this.config.maxHtmlExportInputBytes,
+      maxPageEvents: this.config.maxTimelineEventsPerPage,
+      maxPageBytes: this.config.maxTimelineReadBytesPerPage,
+    })
+    let manifestEvents: number | null = null
+    let manifestEnded = false
+    try {
+      const manifest = await readAgenticReplayManifest(dir, id)
+      manifestEvents = typeof manifest.counts?.events === 'number' ? manifest.counts.events : null
+      manifestEnded = manifest.ended_at !== undefined && manifest.ended_at !== null
+    } catch { /* An unreadable manifest leaves the trace unverified, never successful. */ }
+    return {
+      runId: id,
+      state: row.state,
+      verifiedEvents: scan.verifiedEvents,
+      lastSeq: scan.lastSeq,
+      stop: scan.stop,
+      manifestEvents,
+      complete: row.state === 'completed' && scan.stop === 'eof' && manifestEnded
+        && manifestEvents === scan.verifiedEvents
+        && row.missing_event_count === 0 && row.unresolved_call_count === 0,
+    }
   }
   #encode(id: string, offset: number, seq: number): string {
     const body = Buffer.from(JSON.stringify({ v: 1, id, offset, seq })).toString('base64url')

@@ -586,8 +586,10 @@ affirmative choice then starts capture, while skipping or an unavailable questio
 UI continues without recording and child sessions need an explicit start. The decision survives reloads, and a saved
 refusal outranks the recording default. The first recorded model/tool observation creates
 `.agenticreplay/runs/` in the verified session workspace. Set `config.agenticReplay.enabled: false` and reload to disable
-recording. `/kioku-agenticreplay stop`, `list`, `show <run ID>` and
-`export <run ID>` finalize and inspect the selected session's trace. This records
+recording. `/kioku-agenticreplay stop`, `list`, `show <run ID>`,
+`export <run ID>` and `diagnose <run ID>` finalize and inspect the selected session's trace. `diagnose` also
+reads unfinished or damaged traces and reports verified event counts plus a typed
+stop reason. This records
 DSH internal events, not a complete replayable HTTP/filesystem capture.
 See [AgenticReplay recording](agenticreplay-recording.md) for configuration, limits, sensitive data,
 storage, disabling and removal.

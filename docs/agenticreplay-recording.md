@@ -112,6 +112,7 @@ Use the native session's human command interface:
 /kioku-agenticreplay show run_<id>
 /kioku-agenticreplay show run_<id> <cursor>
 /kioku-agenticreplay export run_<id>
+/kioku-agenticreplay diagnose run_<id>
 /kioku-agenticreplay prune --older-than <days>
 /kioku-agenticreplay prune --max-bytes <n>
 /kioku-agenticreplay start
@@ -123,6 +124,16 @@ choice as disabled. Start saves the choice as enabled and opens a new recording
 generation; it never reopens old events. `show`/`export` accept only
 completed traces from that native session and workspace. Cursors expire when the
 plugin reloads. Lists contain the most recent 200 generations.
+
+`diagnose` accepts a recording in any state from that same native session and
+workspace. It returns the index state, the number of fully verified events before
+the first damage or bound, the last verified sequence, and a typed stop reason:
+`eof`, `torn_tail`, `corrupt`, `sequence_gap`, `changed` or `limit`. It reuses the
+strict event parser, stops explicitly at a torn tail, a damaged middle line, a
+sequence gap, a concurrent write, or the configured byte, event, line or blob
+bound, and returns counts only — never event bodies or blobs. A damaged or
+unfinished trace is never reported as complete, and `show`/`export` keep their
+completed-trace requirement.
 
 `prune` deletes closed recordings from the whole workspace store, not only this
 session. It requires at least one of `--older-than <days>` or `--max-bytes <n>`;

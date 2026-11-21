@@ -86,6 +86,73 @@ export async function readAgenticReplayPage(dir: string, offset: number, previou
       raw: buffer.subarray(0, used), readBytes: readBytes + blobBytes }
   } finally { await handle.close() }
 }
+export interface AgenticReplayPrefixScanLimits {
+  readonly maxEvents: number
+  readonly maxBytes: number
+  readonly maxPageEvents: number
+  readonly maxPageBytes: number
+}
+/** Why a bounded diagnostic scan stopped; only `eof` means the prefix reached the current end. */
+export type AgenticReplayPrefixStop = 'eof' | 'torn_tail' | 'corrupt' | 'sequence_gap' | 'changed' | 'limit'
+export interface AgenticReplayPrefixScan {
+  readonly verifiedEvents: number
+  readonly lastSeq: number
+  readonly stop: AgenticReplayPrefixStop
+}
+/**
+ * Diagnostic-only prefix reader. It reuses the strict page parser and keeps the
+ * count of fully validated events before the first damage or bound. It never
+ * relaxes the complete-export parser and never returns event bodies or blobs.
+ */
+export async function scanAgenticReplayVerifiedPrefix(
+  dir: string,
+  limits: AgenticReplayPrefixScanLimits,
+): Promise<AgenticReplayPrefixScan> {
+  const bounded = (value: number): boolean => Number.isSafeInteger(value) && value >= 1
+  if (!bounded(limits.maxEvents) || !bounded(limits.maxBytes)
+    || !bounded(limits.maxPageEvents) || !bounded(limits.maxPageBytes))
+    return { verifiedEvents: 0, lastSeq: -1, stop: 'limit' }
+  const file = await checkPrivatePath(await resolveAgenticReplayEventsFile(dir), false)
+  const stop = (reason: AgenticReplayPrefixStop, verifiedEvents: number, lastSeq: number): AgenticReplayPrefixScan =>
+    ({ verifiedEvents, lastSeq, stop: reason })
+  if (file.size > limits.maxBytes) return stop('limit', 0, -1)
+  let offset = 0, seq = -1, verified = 0, spent = 0
+  let pageEvents = limits.maxPageEvents
+  while (verified < limits.maxEvents) {
+    const remaining = limits.maxBytes - spent
+    if (remaining < 1) return stop('limit', verified, seq)
+    let page
+    try {
+      page = await readAgenticReplayPage(dir, offset, seq,
+        Math.min(pageEvents, limits.maxEvents - verified),
+        Math.min(limits.maxPageBytes, remaining))
+    } catch (error) {
+      // A multi-event page reports one damaged line by failing the whole page.
+      // Re-read the same offset one event at a time so the verified prefix survives.
+      const recoverable = !(error instanceof AgenticReplayError) || error.code !== 'unsafe_path'
+      if (recoverable && pageEvents > 1) { pageEvents = 1; continue }
+      if (!(error instanceof AgenticReplayError)) return stop('corrupt', verified, seq)
+      switch (error.code) {
+        case 'truncated_jsonl': return stop('torn_tail', verified, seq)
+        case 'invalid_cursor': return stop('sequence_gap', verified, seq)
+        case 'file_changed': return stop('changed', verified, seq)
+        case 'timeline_line_limit':
+        case 'timeline_blob_limit': return stop('limit', verified, seq)
+        case 'blob_mismatch': return stop('corrupt', verified, seq)
+        default: throw error
+      }
+    }
+    spent += page.readBytes
+    if (page.events.length > 0) {
+      verified += page.events.length
+      seq = page.previousSeq
+      offset = page.offset
+    }
+    if (page.done) return stop('eof', verified, seq)
+    if (page.events.length === 0) return stop('limit', verified, seq)
+  }
+  return stop('limit', verified, seq)
+}
 /** Only the known run directory is walked, with fixed maximum depth and byte budget. */
 export async function agenticReplayDiskBytes(dir: string, maxBytes: number): Promise<number> {
   let total = 0

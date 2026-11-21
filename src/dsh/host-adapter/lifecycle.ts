@@ -628,7 +628,10 @@ export function createLifecycle(deps: LifecycleDependencies) {
           status = item.failed ? "failed" : "cancelled";
         else if (item.failed) status = "failed";
         else {
-          if (!(await completionReady(item))) continue;
+          // Discard-time bulk closure uses the same invariant as an idle close:
+          // the exact native turn must have finished and its evidence must hold.
+          if (!nativeTurnCompleted(item) || !(await completionReady(item)))
+            continue;
           status = "completed";
         }
         if (status === "completed") {

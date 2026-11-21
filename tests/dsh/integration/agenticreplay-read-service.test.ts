@@ -128,6 +128,11 @@ test('native command requires exact agent/session before every operation, includ
     }
     const result = await definition.handler({ rawInput: `show ${row.agenticreplay_run_id}`, signal, agent })
     assert.equal(result.kind, 'success')
+    const diagnosed = await definition.handler({ rawInput: `diagnose ${row.agenticreplay_run_id}`, signal, agent })
+    assert.equal(diagnosed.kind, 'success')
+    assert.equal(JSON.parse(diagnosed.text!).complete, true)
+    assert.deepEqual(await definition.handler({ rawInput: 'diagnose', signal, agent }),
+      { kind: 'error', text: 'invalid_command' })
     const status = await definition.handler({ rawInput: 'status', signal, agent })
     assert.equal(status.kind, 'success')
     assert.match(status.text!, /^AgenticReplay: 記録完了\n/u)
@@ -172,6 +177,89 @@ test('native command requires exact agent/session before every operation, includ
     assert.deepEqual(JSON.parse((await definition.handler({ rawInput: 'status --json', signal, agent })).text!), { capability: 'disabled' })
   } finally { await f.dispose() }
 })
+test('diagnostics count verified events and stop explicitly without relaxing full export', async () => {
+  const f = await agenticReplayFixture()
+  try {
+    const row = await completed(f), id = row.agenticreplay_run_id
+    const finished = await f.reader.diagnose(f.binding, id)
+    assert.deepEqual(Object.keys(finished).sort(),
+      ['complete', 'lastSeq', 'manifestEvents', 'runId', 'state', 'stop', 'verifiedEvents'],
+      'a diagnosis returns counts and typed reasons, never event bodies or blobs')
+    assert.equal(finished.complete, true)
+    assert.equal(finished.state, 'completed')
+    assert.equal(finished.stop, 'eof')
+    assert.equal(finished.verifiedEvents, row.event_count)
+    assert.equal(finished.lastSeq, row.event_count - 1)
+    // A writer that has not closed its recording is never reported as complete.
+    f.store.save({ ...row, state: 'recording', ended_at: null })
+    const inProgress = await f.reader.diagnose(f.binding, id)
+    assert.equal(inProgress.state, 'recording')
+    assert.equal(inProgress.stop, 'eof')
+    assert.equal(inProgress.verifiedEvents, row.event_count)
+    assert.equal(inProgress.complete, false)
+    f.store.save({ ...row, state: 'incomplete', missing_event_count: 1 })
+    assert.equal((await f.reader.diagnose(f.binding, id)).complete, false)
+    f.store.save(row)
+    const file = join(await recordedRunDirectory(f.root, id), 'events.jsonl')
+    const bytes = await readFile(file)
+    // An interrupted write keeps the verified prefix and never becomes a success.
+    await writeFile(file, Buffer.concat([bytes, Buffer.from('{"seq":1,')]))
+    const torn = await f.reader.diagnose(f.binding, id)
+    assert.equal(torn.stop, 'torn_tail')
+    assert.equal(torn.verifiedEvents, row.event_count)
+    assert.equal(torn.complete, false)
+    await assert.rejects(f.reader.export(f.binding, id), /truncated_jsonl/u,
+      'the complete-export parser still rejects the torn tail')
+    const lines = bytes.toString('utf8').split('\n')
+    assert.ok(lines.length >= 4, 'fixture must hold several events to damage a middle line')
+    const corrupted = [...lines]
+    corrupted[1] = '{"seq":1,'
+    await writeFile(file, corrupted.join('\n'))
+    const corrupt = await f.reader.diagnose(f.binding, id)
+    assert.equal(corrupt.stop, 'corrupt')
+    assert.equal(corrupt.verifiedEvents, 1)
+    assert.equal(corrupt.complete, false)
+    const gapped = [...lines]
+    gapped[1] = JSON.stringify({ ...JSON.parse(lines[1]!), seq: 42 })
+    await writeFile(file, gapped.join('\n'))
+    const gap = await f.reader.diagnose(f.binding, id)
+    assert.equal(gap.stop, 'sequence_gap')
+    assert.equal(gap.verifiedEvents, 1)
+    await writeFile(file, bytes)
+    // Explicit bounds stop the diagnostic instead of reading without limit.
+    const oversized = await new DshAgenticReplayReadService({ ...f.config, maxHtmlExportInputBytes: 1 }, f.withIndex)
+      .diagnose(f.binding, id)
+    assert.equal(oversized.stop, 'limit')
+    assert.equal(oversized.verifiedEvents, 0)
+    const narrow = await new DshAgenticReplayReadService({ ...f.config, maxTimelineReadBytesPerPage: 16 }, f.withIndex)
+      .diagnose(f.binding, id)
+    assert.equal(narrow.stop, 'limit')
+    assert.equal(narrow.verifiedEvents, 0)
+    for (const other of [{ sessionId: 'other' }, { workspaceRoot: join(f.root, 'other') }])
+      await assert.rejects(f.reader.diagnose({ ...f.binding, ...other }, id), /trace_not_found/u)
+    await assert.rejects(f.reader.diagnose(f.binding, '../../etc/passwd'), /trace_not_found/u)
+  } finally { await f.dispose() }
+})
+
+test('a stored blob above the diagnostic byte budget stops as a limit', async () => {
+  const f = await agenticReplayFixture({ capture: { content: 'redacted' } })
+  try {
+    const body = 'blob-material-'.repeat(2000)
+    await collect(f.recorder.stream(f.binding,
+      { ...request, messages: [{ role: 'user', content: [{ type: 'text', text: body }] }] },
+      () => chunks(response(body))))
+    await f.recorder.closeSessionRecording(f.binding.sessionId, 'manual')
+    const row = (await f.reader.list(f.binding))[0]!
+    const full = await f.reader.diagnose(f.binding, row.agenticreplay_run_id)
+    assert.equal(full.complete, true)
+    // Between one JSONL line and its blob: the blob cap ends the diagnostic, not a body read.
+    const narrow = new DshAgenticReplayReadService({ ...f.config, maxTimelineReadBytesPerPage: 4096 }, f.withIndex)
+    const limited = await narrow.diagnose(f.binding, row.agenticreplay_run_id)
+    assert.equal(limited.stop, 'limit')
+    assert.equal(limited.complete, false)
+  } finally { await f.dispose() }
+})
+
 test('crash reconciliation never changes live owners or reopens trace files', async () => {
   const f = await agenticReplayFixture()
   try {

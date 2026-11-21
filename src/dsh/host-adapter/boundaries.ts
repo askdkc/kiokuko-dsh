@@ -12,7 +12,12 @@ import type { DshSessionLogMirror, DshMirrorEventSession } from '../session-log-
 import type { DshRunLifecycle } from '../session-bridge.js'
 import { dshTurnBoundarySeq, type DshSessionEventSource } from '../session-memory-finalizer.js'
 import { DshBoundaryWorker } from '../boundary-worker.js'
-import { DshCompletionReporter } from '../completion-report.js'
+import {
+  DshCompletionReporter,
+  decideCompletionRecovery,
+  dshTurnEndBoundary,
+  readCompletionRecoveryFacts,
+} from '../completion-report.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
 import { canonicalContentHash } from '../../serialization/validate.js'
 import { projectDshContext } from '../context-projection.js'
@@ -191,15 +196,24 @@ export function createBoundaries(deps: BoundaryDependencies) {
     if (nativeAgent.status === 'running') return
     await deliverCompletionReport(nativeSession)
     const terminal = await runtime.withDatabase(database => database.prepare(`
-      SELECT report.run_id AS runId, report.native_turn AS nativeTurn, run.status
-      FROM dsh_completion_reports AS report JOIN ledger_runs AS run ON run.run_id = report.run_id
+      SELECT report.run_id AS runId, report.native_turn AS nativeTurn, receipt.next_action AS nextAction
+      FROM dsh_completion_reports AS report
+      JOIN dsh_turn_receipts AS receipt ON receipt.receipt_id = report.receipt_id
+      JOIN ledger_runs AS run ON run.run_id = report.run_id
       WHERE report.dsh_session_id = ? AND report.status = 'delivered' AND run.status = 'active'
-    `).all<{ runId: string; nativeTurn: number; status: string }>(sessionId))
+    `).all<{ runId: string; nativeTurn: number; nextAction: string | null }>(sessionId))
     for (const restored of terminal) {
       if (currentSession(sessionId)?.runId === restored.runId) continue
-      const end = dshTurnBoundarySeq(nativeSession as DshSessionEventSource, restored.nativeTurn, 'end')
+      // Never borrow another turn's end: the exact reported turn must have exactly one boundary.
+      const end = dshTurnEndBoundary(nativeSession.snapshotEvents!(), restored.nativeTurn)
       if (end === undefined) continue
-      await closeTurn({ runId: restored.runId, status: 'completed', sourceEndSeq: end })
+      const facts = await runtime.withDatabase(database => readCompletionRecoveryFacts(database, {
+        runId: restored.runId, nextAction: restored.nextAction, endReason: end.reason,
+      }))
+      const decision = decideCompletionRecovery(facts)
+      // An explicit stop maps to its existing terminal type; unknown evidence stays open.
+      if (decision.close === undefined) continue
+      await closeTurn({ runId: restored.runId, status: decision.close, sourceEndSeq: end.seq })
     }
     const pending = await runtime.withDatabase((database) => database.prepare(`
       SELECT receipt.run_id AS runId, receipt.native_turn AS nativeTurn,
