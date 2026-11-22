@@ -11,8 +11,9 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
   const result = await provider.list({})
   const listed = 'complete' in result ? result : { candidates: result, complete: true as const }
   assert.equal(listed.complete, true)
-  assert.equal(listed.candidates.length, 17)
+  assert.equal(listed.candidates.length, 18)
   assert.deepEqual(listed.candidates.map((candidate) => candidate.name), [
+    'kiokuko-pstack',
     'kiokuko-investigate',
     'kiokuko-architecture',
     'kiokuko-review',
@@ -32,7 +33,7 @@ test('bundled provider exposes complete model/user-invocable definitions and dis
     'kiokuko-lisp',
     'natural-japanese-output',
   ])
-  assert.equal(createDshCapabilityCatalog(listed.candidates).skills.length, 17)
+  assert.equal(createDshCapabilityCatalog(listed.candidates).skills.length, 18)
   assert.ok(listed.candidates.every((candidate) => candidate.invocation.modelInvocable && candidate.invocation.userInvocable))
   const soul = listed.candidates.find((candidate) => candidate.name === 'kiokuko-soul')!
   const definition = await provider.get(soul, {})

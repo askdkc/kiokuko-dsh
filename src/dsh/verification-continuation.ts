@@ -71,8 +71,13 @@ export async function continueVerification(input: {
           assessment.managedOperationsReady === false || assessment.nativeChildrenPending) return
         const workflow = readCodingWorkflow(db, authority.taskId)
         if (workflow?.blocker || workflow?.pendingScopeChange) return
+        const coding = workflow !== undefined
+        if (workflow && (workflow.choice.state === 'pending' || workflow.choice.state === 'cancelled' ||
+          ['blocked', 'cancelled', 'superseded'].includes(workflow.state))) return
         const actionable = assessment.criteria.some(criterion => criterion.state !== 'satisfied' &&
-          !['no_binding', 'binding_not_approved', 'criterion_changed', 'unsupported_completion_method'].includes(criterion.reason))
+          (workflow?.verifyRepositoryCi && criterion.criterionId === `ci-${workflow.workflowId}` &&
+            ['no_binding', 'criterion_changed'].includes(criterion.reason) ||
+            !['no_binding', 'binding_not_approved', 'criterion_changed', 'unsupported_completion_method'].includes(criterion.reason)))
         if (!actionable) return
         const decision = claimAutomaticContinuationInTransaction(db, {
           claimId: id,
@@ -80,7 +85,8 @@ export async function continueVerification(input: {
           dshSessionId: authority.sessionId,
           instructionDigest: verificationInstruction,
           progressDigest: continuationProgress(db, authority.taskId, authority.repositoryRoot, assessment),
-          deliveryLimit: verificationWakeLimit,
+          // Allow another repair/check cycle for each independently satisfied coding criterion.
+          deliveryLimit: verificationWakeLimit * (1 + (coding ? assessment.criteria.filter(item => item.state === 'satisfied').length : 0)),
         })
         if (!decision.replayed && ['deliver', 'replan'].includes(decision.decision)) {
           db.prepare(`UPDATE dsh_loop_guard_claims SET verification_delivery_phase='reserved' WHERE claim_id=?`).run(id)
@@ -111,7 +117,7 @@ export async function continueVerification(input: {
       })
       if (!dispatch) return
       const message = continuationMessage(id, claim.decision === 'deliver'
-        ? 'The current request is still open. Use task_completion status to find the missing verification. Establish current host-observed evidence using the selected route, or explain the specific obstacle if verification cannot run.'
+        ? 'The current request is still open. Use task_completion status to find the missing verification. Bind missing checks to current sources, then establish host-observed evidence using the selected route, or explain the specific obstacle if verification cannot run.'
         : 'The previous verification attempt did not change the observed result. Try a different authorized check for the same request. If no check can run, report which condition is unverified and why.')
       agent.followup!({ ...message, source: { ...message.source, name: 'completion-verification' } })
       db.prepare(`UPDATE dsh_loop_guard_claims SET verification_delivery_phase='dispatched'

@@ -233,11 +233,23 @@ function runMode(database: SqliteDatabase, runId: string): CompletionMode {
   );
 }
 
-function criteriaForRun(
+function criteriaForRun(database: SqliteDatabase, runId: string) {
+  const coding = readCodingWorkflow(database, runId);
+  const result = requestedCriteria(database, runId, coding);
+  if (coding?.verifyRepositoryCi) result.criteria.push({
+    id: `ci-${coding.workflowId}`,
+    description: "Verify applicable repository CI checks on the final changes. Bind the affected sources, CI configuration and checks. Inspect job conditions and record any unavailable platform.",
+    revision: coding.scopeVersion,
+    approval: "explicit",
+  });
+  return result;
+}
+
+function requestedCriteria(
   database: SqliteDatabase,
   runId: string,
+  coding: ReturnType<typeof readCodingWorkflow>,
 ): { criteria: CompletionCriterion[]; repositoryRoot: string } {
-  const coding = readCodingWorkflow(database, runId);
   if (coding?.definition)
     return {
       repositoryRoot: coding.repositoryRoot,
@@ -583,7 +595,7 @@ export function beginTaskCompletionExecution(
       : (matching.find(
           (row) => row.criterion_id === coding.protocol!.criterionId,
         ) ?? matching[0])
-    : ((hasReuse ? matching.find(row => assessment!.criteria.some(criterion =>
+    : ((assessment ? matching.find(row => assessment.criteria.some(criterion =>
         criterion.criterionId === row.criterion_id && criterion.state !== "satisfied")) : undefined) ?? matching[0]);
   if (!current) return false;
   const method = CompletionMethodSchema.parse(JSON.parse(current.method_json));
@@ -805,6 +817,7 @@ export function finishTaskCompletionExecution(
       )
       .all<{ criterion_id: string }>(input.runId, row.method_digest);
     for (const affectedCriterion of affected) {
+      if (!affectedCriterion.criterion_id.startsWith(`coding:${coding.workflowId}:`)) continue;
       const id = affectedCriterion.criterion_id.slice(
         `coding:${coding.workflowId}:`.length,
       );

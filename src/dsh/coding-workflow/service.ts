@@ -70,11 +70,12 @@ export function codingVerificationText(db: SqliteDatabase, identity: CodingIdent
     ?? items.find(item => item.state === 'ready' || item.state === 'running')
   const ids = active?.criterionIds ?? value.definition.goal.criterionIds
   const outstanding = assessment.criteria.filter(check => check.state !== 'satisfied')
-  const focused = outstanding.filter(check => ids.some(id => codingCriterionId(value, id) === check.criterionId))
+  const focused = outstanding.filter(check => ids.some(id => codingCriterionId(value, id) === check.criterionId)
+    || !active && check.criterionId === `ci-${value.workflowId}`)
   const checks = focused.slice(0, 4).map(check => {
-    const criterion = value.definition!.criteria.find(item => codingCriterionId(value, item.criterionId) === check.criterionId)!
+    const criterion = value.definition!.criteria.find(item => codingCriterionId(value, item.criterionId) === check.criterionId)
     const safe = (text: string) => (redactDshSourceText(text) ?? '[withheld]').slice(0, 128)
-    return { criterionId: criterion.criterionId, state: check.state, procedure: safe(criterion.procedure), expected: safe(criterion.expected) }
+    return { criterionId: criterion?.criterionId ?? check.criterionId, state: check.state, procedure: safe(criterion?.procedure ?? check.description), expected: safe(criterion?.expected ?? 'Applicable CI checks pass on the final sources') }
   })
   const next = terminal || assessment.verified ? 'report_observed_checks' : value.pendingScopeChange ? 'recheck_changed_scope'
     : value.blocker?.criterionIds.length === 0 || !active && !items.every(item => item.state === 'satisfied') ? 'resolve_blocker'

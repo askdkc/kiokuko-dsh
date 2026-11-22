@@ -414,7 +414,13 @@ function CompletionReport(props: Record<string, unknown>): unknown {
     style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%', minWidth: 0, padding: '12px 0', lineHeight: 1.65 }, children: node.data.text })
 }
 
-interface DeepDisplayItem { id: string; kind: 'report' | 'status'; text: string; delivered: boolean }
+interface DeepDisplayItem {
+  id: string
+  kind: 'report' | 'status'
+  text: string
+  delivered: boolean
+  currentRunStatus?: string
+}
 interface LispDisplayState { enabled: boolean; state: string; runtimePid?: number | null; runtimeHealthy?: boolean; recovery?: string; error?: { message: string; recovery: string }; operations?: { id: string; state: string }[]; managedOperations?: { id: string; route: string; kind: string; state: string }[]; managedUnknownOperations?: { id: string; route: string; kind: string; state: string }[] }
 /** Recovery stays available even when the model loop is stopped. */
 function LispSessionStatus(props: Record<string, unknown>): unknown {
@@ -559,7 +565,13 @@ function DeepSessionReports(props: Record<string, unknown>): unknown {
       style:{width:'min(48rem, calc(100vw - 2rem))',maxHeight:'calc(100dvh - 2rem)',boxSizing:'border-box',margin:'auto',padding:'20px',border:'1px solid var(--dsw-alias-border-l4, #ddd)',borderRadius:'16px',background:'var(--dsw-alias-background-primary, Canvas)',color:'var(--dsw-alias-label-primary, CanvasText)',overflow:'auto'},
       children:[jsxs('div',{style:{display:'flex',justifyContent:'space-between',gap:'16px',alignItems:'center'},children:[jsx('h2',{style:{fontSize:'20px',margin:0},children:label}),jsx('button',{type:'button',className:'kiokuko-session-log-button',onClick:()=>setOpen(false),children:'閉じる'})]}),
         jsx('p',{style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere'},children:error || status}),
-        ...items.filter(item=>item.kind==='report').map(item=>jsx('section', {key:item.id,'aria-label':'保存済みの回答',tabIndex:0,style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxWidth:'100%',padding:'12px 0',lineHeight:1.65},children:item.text}))]}),
+        ...items.filter(item=>item.kind==='report').map(item=>jsx('section', {key:item.id,'aria-label':'保存済みの回答',tabIndex:0,style:{whiteSpace:'pre-wrap',overflowWrap:'anywhere',maxWidth:'100%',padding:'12px 0',lineHeight:1.65},children: notices
+          ? jsxs(Fragment, { children: [
+            jsx('p', { children: `現在の作業状態：${item.currentRunStatus ?? '不明'}` }),
+            jsx('strong', { children: '報告作成時の記録' }),
+            jsx('div', { children: item.text }),
+          ] })
+          : item.text }))]}),
   ] })
 }
 

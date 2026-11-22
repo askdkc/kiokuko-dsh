@@ -1,3 +1,4 @@
+import { CODING_LOOP_SKILLS } from '../standard-skills.js'
 import { ownedExplanationCalls } from '../explanation-provenance.js'
 import { auxiliaryDatabase } from '../auxiliary-database.js'
 import { clarificationClaims } from '../clarification-claims.js'
@@ -1036,20 +1037,14 @@ export async function mountCore(
           },
         )}`,
       )
-    if (
-      codingWorkRequested(
-        current.taskText,
-        task.requestIntent,
-        task.profile.taskType,
-      )
-    )
-      guidance.push(CODING_GUIDANCE)
+    const coding = codingWorkRequested(current.taskText, task.requestIntent, task.profile.taskType)
+    if (coding) guidance.push(CODING_GUIDANCE)
     if (
       memoryApplicationMode(task.profile) !== 'none' &&
       task.context?.items.length
     )
       guidance.push(MEMORY_APPLICATION_GUIDANCE)
-    for (const name of task.selectedSkills ?? []) {
+    for (const name of new Set([...(task.selectedSkills ?? []), ...(coding ? CODING_LOOP_SKILLS : [])])) {
       if (name === 'kiokuko-soul') continue
       const loaded = await prompts.get(name)
       guidance.push(

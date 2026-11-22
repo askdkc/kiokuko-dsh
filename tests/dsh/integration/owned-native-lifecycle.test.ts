@@ -84,3 +84,50 @@ test('isolated native profile: repair -> real test -> receipt -> candidate -> re
 
   }finally{db?.close();await f.close()}
 })
+
+test('coding Skills deliver a parser repair through failing CI to verified completion', {
+  skip: packages ? false : 'requires pinned native DSH', timeout: 60000,
+}, async () => {
+  const f = await nativeSkillFixture({ packages: packages!, explicit: false, mode: 'compiled',
+    ...(process.env.KIOKUKO_OWNED_PACKAGE_ROOT ? { packageRoot: process.env.KIOKUKO_OWNED_PACKAGE_ROOT } : {}),
+    startupChoice: 'decision OFF / Lisp OFF', extra: { lisp: { enabled: false }, typedDecisions: { mode: 'off' },
+      answerReview: { mode: 'off' }, toolExposure: { mode: 'full' } } })
+  try {
+    const config = '.github/workflows/test.yml'
+    const command = 'node --test --test-reporter=tap ci.test.mjs'
+    await mkdir(join(f.dir, '.github/workflows'), { recursive: true })
+    await writeFile(join(f.dir, config), `name: test\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: ${command}\n`)
+    await writeFile(join(f.dir, 'parser.mjs'), 'export const parse = x => x + 1\n')
+    await writeFile(join(f.dir, 'ci.test.mjs'), "import test from 'node:test'; import assert from 'node:assert/strict'; import {parse} from './parser.mjs'; test('numeric input', () => assert.equal(parse('2'), 2));")
+    const method = { kind: 'native_command', command, cwd: '.', sourcePaths: ['parser.mjs', 'ci.test.mjs', config], assertion: 'selected_tests_pass' }
+    const bind = (id: string, isCi: boolean) => (request: any) => {
+      const criteria = toolValue(request, 'status').criteria as { criterionId: string }[]
+      const criterion = criteria.find(check => check.criterionId.startsWith('ci-') === isCi)
+      assert.ok(criterion)
+      return f.mock.toolCallResponse(id, 'task_completion', { action: 'bind', criterionId: criterion.criterionId, method })
+    }
+    f.responses.push(interpretedPreparation(f.mock, 'prepare', 'new', 'change', 'debug'),
+      f.mock.toolCallResponse('status', 'task_completion', { action: 'status' }),
+      bind('bind-ci', true), bind('bind-request', false),
+      f.mock.toolCallResponse('red', 'kioku_exec', { command }),
+      (request: any) => {
+        assert.equal(toolValue(request, 'red').exitCode, 1)
+        return f.mock.toolCallResponse('repair', 'kioku_edit', { path: 'parser.mjs', oldText: 'x + 1', newText: 'Number(x)' })
+      },
+      f.mock.toolCallResponse('green', 'kioku_exec', { command }),
+      (request: any) => {
+        assert.equal(toolValue(request, 'green').receipt.verification, 'passed')
+        return f.mock.toolCallResponse('confirm-request', 'kioku_exec', { command })
+      },
+      f.mock.toolCallResponse('finished', 'task_completion', { action: 'status' }),
+      (request: any) => {
+        const status = toolValue(request, 'finished')
+        assert.ok(status.verified, JSON.stringify(status.criteria))
+        return f.mock.textResponse('Verified the parser and the CI test.')
+      })
+    await f.turn('Fix the numeric parser in parser.mjs. 通常実行で。')
+    assert.equal(await readFile(join(f.dir, 'parser.mjs'), 'utf8'), 'export const parse = x => Number(x)\n')
+    const prompts = JSON.stringify(f.model.requests)
+    for (const heading of ['# pstack for DSH', '# Coding Ideal Routine']) assert.ok(prompts.includes(heading), heading)
+  } finally { await f.close() }
+})

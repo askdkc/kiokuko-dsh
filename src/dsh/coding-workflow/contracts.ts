@@ -95,6 +95,7 @@ export interface CodingWorkflow extends CodingIdentity {
   revision: number; scopeVersion: number; state: CodingState; definition?: CodingDefinition;
   choice: CodingChoice; retiredIds: string[]; activeItemId?: string; blocker?: CodingBlocker;
   attempts: Record<string, { fingerprint: string; count: number; retryAt: number; sourceDigest?: string }>;
+  verifyRepositoryCi?: true;
   protocol?: ProtocolState;
   annotation?: { id: string; notes: string; evidenceRefs: string[]; unresolvedEvidenceRefs: string[] }
   pendingScopeChange?: { requestDigest: string; evidenceRefs: string[] }

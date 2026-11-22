@@ -79,6 +79,7 @@ This is an independent integration, not an official Convai Innovations or Apple 
 ## pstack skill ideas
 
 Adapted from cursor/plugins pstack, revision 23e4138daa01c42d4969f7a5465f82704e64f798.
+The coding loop in `kiokuko-pstack` also adapts the bug-fix playbook from revision 792440e8a560a4a3f63748cdee70491ecd412982.
 Copyright (c) 2026 Lauren Tan. MIT License.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:

@@ -48,6 +48,9 @@ test('coding routine is bundled, selected by coding policy and delivered to the 
       const messages = await buildDshMessageSources({ task: coding.task, intakeStatus: 'ready', nextAction: 'proceed', context: null,
         memoryPolicy: { memoryReasoningRequired: false, contextWithheld: false }, routeSkillNames: routes })
       assert.equal(messages.find(message => message.name === name)?.text, definition.content)
+      assert.ok(routes.includes('kiokuko-single-purpose-functions'))
+      assert.ok(routes.includes('kiokuko-pstack'))
+      assert.match(messages.find(message => message.name === 'kiokuko-pstack')?.text ?? '', /CI/)
     }
     const unrelated = resolveCapabilities({ task: 'Explain a poem.',
       profile: { taskType: 'writing', target: 'poem', expected: 'explanation', constraints: null },

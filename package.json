@@ -129,7 +129,7 @@
         "Bundled finite-domain micro-judge manifest, native verification receipt and exact platform artifact"
       ],
       "writePaths": [
-        "Seventeen bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
+        "Bundled managed Skills and references under ~/.agents/skills on enabled plugin load",
         "Existing kiokuko-dsh managed block in startup-directory AGENTS.md, including explicitly DSH-owned legacy blocks; other instructions are preserved",
         "Configured Kiokuko database and pre-migration backups",
         "DSH run, lease, receipt, retrieval, Deep inputs/artifacts/budgets/reports, post-completion memory-finalization, and embedding state inside that database",

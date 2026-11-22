@@ -2,6 +2,8 @@
 
 Seven specialists add investigation, architecture, review, benchmarking, verification recipes, skill authoring and technical writing. SOUL selects them only for relevant tasks. Existing code/UI/memory contracts remain authoritative. See [the adaptation ledger](pstack-adaptation.json) for the upstream skills and playbooks, pinned to the recorded commit. Upstream code is not installed or executed.
 
+During implementation, the host also delivers `kiokuko-pstack` with the coding routine, completion and function Skills. For new coding workflows in repositories with a recognized CI configuration, `task_completion status` includes a separate CI criterion. Bind it to the applicable local checks and their sources. After the execution route is selected the host can wake an idle task with an unbound CI check. The retry guard parks repeated failures and preserves the open task.
+
 The common guidance targets GPT-6 Astra and GPT-6.1 Sol without selecting either model or forcing a reasoning budget. Outcomes, constraints and evidence take precedence over ritual steps. Model quality remains **unmeasured** until both actual models are evaluated; local content and delivery tests do not establish model improvement.
 
 ## Evaluation

@@ -1,3 +1,6 @@
+import { initializeCodingWorkflow } from '../../../src/dsh/coding-workflow/store.js'
+import { answerCodingChoice } from '../../../src/dsh/coding-workflow/service.js'
+import { spawnSync } from 'node:child_process'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import { continuationProgress } from '../../../src/dsh/continuation-evidence.js'
 import { continueVerification } from '../../../src/dsh/verification-continuation.js'
@@ -106,6 +109,86 @@ test('typed verification binds specification identity separately from host-obser
     assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'satisfied')
     await writeFile(join(f.root, 'src/check.test.ts'), 'changed typed target')
     assert.equal(assessTaskCompletion(f.database, f.runId).criteria[0]?.state, 'stale')
+  } finally { await f.cleanup() }
+})
+
+test('coding resumes unbound checks only after the human selects the execution route', async () => {
+  const f = await fixture('shadow')
+  try {
+    const task = 'Fix the parser'
+    const message = { id: 'fix-original', role: 'user', content: [{ type: 'text', text: task }] }
+    const context = createRequestIntentContext({ task, messageRefs: requestIntentMessageRefs([message], task) })!
+    const decision = bindMainModelRequestIntent({ relation: 'new', action: 'change', changeScope: 'implementation',
+      evidenceRefs: requestIntentReferenceIds(context) }, context)
+    assert.ok(decision)
+    initializeTaskCompletion(f.database, f.runId, 'shadow', decision)
+    const ledger = new LedgerStore(f.database)
+    if (ledger.readRun(f.runId)?.status === 'intake') ledger.updateRunStatus(f.runId, 'active')
+    const identity = { runId: f.runId, taskId: f.runId, sessionId: 'completion-session', repositoryRoot: f.root }
+    bindTaskRepository(f.database, identity)
+    const authority = captureTaskLease(f.database, identity)
+    await mkdir(join(f.root, '.github/workflows'), { recursive: true })
+    await writeFile(join(f.root, '.github/workflows/test.yml'), 'name: tests')
+    const workflow = initializeCodingWorkflow(f.database, { ...identity, requestId: 'fix-original', task })
+    const messages: unknown[] = []
+    const agent = { status: 'idle', inbox: { nextStep: [], nextTurn: [] }, cancel() {},
+      followup(message: unknown) { messages.push(message) } }
+    const wake = (turn: number) => continueVerification({
+      runtime: { withDatabase: async (fn: (database: typeof f.database) => unknown) => fn(f.database) } as any,
+      agent, authority, turn, current: () => true,
+    })
+    await wake(1)
+    assert.equal(messages.length, 0)
+    answerCodingChoice(f.database, identity, { callId: 'choose', expectedRevision: workflow.revision,
+      workflowId: workflow.workflowId, scopeVersion: workflow.scopeVersion, questionId: workflow.choice.questionId,
+      questionRevision: workflow.choice.revision, answerRef: 'human', choice: 'no' })
+    await wake(2)
+    assert.equal(messages.length, 1)
+    await wake(2)
+    assert.equal(messages.length, 1)
+    const assessment = assessTaskCompletion(f.database, f.runId)
+    const ci = assessment.criteria.find(item => item.description.includes('CI checks'))
+    assert.ok(ci, 'coding in a CI repository must also verify its applicable jobs')
+    assert.equal(ci.reason, 'no_binding')
+    const run = (callId: string, file: string) => {
+      const args = ['--test', '--test-reporter=tap', file]
+      assert.ok(beginTaskCompletionExecution(f.database, { runId: f.runId, callId,
+        command: ['node', ...args].join(' '), repositoryRoot: f.root }))
+      const env = { ...process.env }
+      delete env.NODE_TEST_CONTEXT
+      const result = spawnSync(process.execPath, args, { cwd: f.root, encoding: 'utf8', env })
+      assert.ifError(result.error)
+      finishTaskCompletionExecution(f.database, { runId: f.runId, callId, result: observeProcessResult({
+        isError: result.status !== 0, value: { exitCode: result.status, signal: result.signal, aborted: false,
+          timedOut: false, processStarted: true, processStopped: true, outputComplete: true },
+        content: [{ type: 'text', text: result.stdout }],
+      }) })
+      return result.status
+    }
+    await writeFile(join(f.root, 'src/check.test.ts'), "import test from 'node:test'; test('smoke', () => {});")
+    for (const item of f.criteria)
+      bindTaskCriterion(f.database, { runId: f.runId, callId: item.criterionId, criterionId: item.criterionId,
+        method: f.method, approved: true })
+    assert.equal(run('focused', 'src/check.test.ts'), 0)
+    assert.equal(assessTaskCompletion(f.database, f.runId).verified, false, 'the focused check cannot close the CI criterion')
+    const ciFile = 'src/ci.test.mjs'
+    await writeFile(join(f.root, ciFile), "import test from 'node:test'; import assert from 'node:assert/strict'; import { value } from './value.mjs'; test('public value', () => assert.equal(value, 2));")
+    await writeFile(join(f.root, 'src/value.mjs'), 'export const value = 1')
+    bindTaskCriterion(f.database, { runId: f.runId, callId: 'bind-ci', criterionId: ci.criterionId, approved: true,
+      method: { ...f.method, command: 'node --test --test-reporter=tap ' + ciFile,
+        sourcePaths: [ciFile, 'src/value.mjs', '.github/workflows/test.yml'] } })
+    assert.equal(run('ci-red', ciFile), 1)
+    await wake(3)
+    assert.equal(messages.length, 2)
+    await writeFile(join(f.root, 'src/value.mjs'), 'export const value = 2')
+    await wake(4)
+    assert.equal(messages.length, 3, 'completed checks permit a subsequent repair cycle')
+    assert.equal(run('ci-green', ciFile), 0)
+    assert.ok(assessTaskCompletion(f.database, f.runId).verified)
+    await wake(5)
+    assert.equal(messages.length, 3, 'all required evidence stops the loop')
+    await writeFile(join(f.root, '.github/workflows/test.yml'), 'name: revised tests')
+    assert.equal(assessTaskCompletion(f.database, f.runId).verified, false, 'editing the CI definition invalidates its result')
   } finally { await f.cleanup() }
 })
 

@@ -9,6 +9,8 @@ import { migrateDatabase } from '../../../src/db/migrate.js'
 import { prepareAgentTask } from '../../../src/dsh/task-intake.js'
 import { createBoundaries } from '../../../src/dsh/host-adapter/boundaries.js'
 import { DshCompletionReporter, decideCompletionRecovery, dshTurnEndBoundary } from '../../../src/dsh/completion-report.js'
+import { dshNoticeResponse } from '../../../src/dsh/session-notice-surface.js'
+import type { DeepPlanningController } from '../../../src/deep-thinker/controller.js'
 import { LedgerStore } from '../../../src/ledger/store.js'
 import {
   assessTaskCompletion,
@@ -167,6 +169,34 @@ test('a missing final turn end never records the active run as complete', async 
     assert.match(text, /Purpose verification: no acceptance evidence tied to this request was observed/u)
     assert.doesNotMatch(text, /recorded as complete/u)
     assert.equal(f.reportStatus(), 'delivered')
+  } finally { await f.dispose() }
+})
+
+test('polling a saved report reflects a later ledger close while preserving its verification snapshot', async () => {
+  const f = await fixture()
+  try {
+    f.report(1, 'complete')
+    f.events.push(f.end(1, 'completed', 4))
+    await f.reporter.deliver(f.session)
+    const saved = f.reportNotice()
+    assert.match(saved!, /《active》/u)
+    assert.match(saved!, /no acceptance evidence tied to this request was observed/u)
+    const host = {
+      store: { database: async (fn: (db: typeof f.db) => unknown) => fn(f.db) },
+      options: { sessions: new Map([[f.session.id, f.session]]) },
+    } as unknown as DeepPlanningController
+    const request = new Request(`http://localhost/api/kiokuko.notices?sessionId=${f.session.id}`)
+    const before = await dshNoticeResponse(host, request)
+    request.headers.set('if-none-match', before.headers.get('etag')!)
+    new LedgerStore(f.db).updateRunStatus(f.runId, 'completed')
+    const after = await dshNoticeResponse(host, request)
+    assert.equal(after.status, 200, 'ledger-only transitions invalidate the cached report')
+    const { items: [report] } = await after.json()
+    assert.equal(report.currentRunStatus, 'completed')
+    assert.equal(report.text, saved)
+    assert.equal(f.reportNotice(), saved)
+    request.headers.set('if-none-match', after.headers.get('etag')!)
+    assert.equal((await dshNoticeResponse(host, request)).status, 304)
   } finally { await f.dispose() }
 })
 

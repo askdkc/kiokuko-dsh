@@ -11,6 +11,7 @@ import type { StoredExecutionSelection } from '../execution-selection.js'
 import type { DshSessionEventSource } from '../session-memory-finalizer.js'
 import type { TurnRecord } from './turn-state.js'
 import { codingStatus } from '../coding-workflow/service.js'
+import { CODING_LOOP_SKILLS } from '../standard-skills.js'
 import { CODING_GUIDANCE } from '../coding-workflow/host.js'
 import {readTaskCorrections} from '../correction-context.js'
 import {canonicalContentHash} from '../../serialization/validate.js'
@@ -58,7 +59,9 @@ export function createContextMessages({
       item.prepared={...item.prepared,context:selected.context??item.prepared.context,corrections:selected.corrections,
         memoryPolicy:{...item.prepared.memoryPolicy,memoryReasoningRequired:selected.context!==null||item.prepared.memoryPolicy.memoryReasoningRequired}}
     }
+    const workflow = await runtime.withDatabase(db=>codingStatus(db,{runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot}))
     const messages = [...await injectDshContext({
+      routeSkillNames: workflow.applicable ? CODING_LOOP_SKILLS : [],
       skillPrompts: getSkillPrompts(),
       systemSkillNames: systemSkillsFor(event.nativeAgent ?? event.agent) ?? new Set(),
       prepared: item.prepared,
@@ -68,7 +71,6 @@ export function createContextMessages({
       userTaskInConversation: true,
     })]
     const previousReport = await deepPlanning.previousReport(event.sessionId)
-    const workflow = await runtime.withDatabase(db=>codingStatus(db,{runId:item.runId,sessionId:item.sessionId,repositoryRoot:item.repositoryRoot}))
     if(workflow.applicable)messages.push({role:'user',source:'user-task',name:'coding-workflow',content:`${CODING_GUIDANCE}\n${JSON.stringify(workflow)}`})
     const executionSelection = getSelection(item.runId)?.value
     const lispChoice = workflow.applicable

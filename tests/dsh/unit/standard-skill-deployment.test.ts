@@ -16,7 +16,7 @@ test('deployment creates all bundled Skills and references, updates managed copi
   const home = await fixture(t)
   const parity = await loadStandardSkillParity()
   const initial = await synchronizeStandardSkills(home)
-  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 42, updated: 0, unchanged: 0 })
+  assert.deepEqual(initial, { directory: path.join(home, '.agents', 'skills'), created: 43, updated: 0, unchanged: 0 })
   const root = initial.directory
   const sourceRoot = new URL('../../../skills/', import.meta.url)
   // Lisp is an opt-in, session-scoped Skill; it must not be installed globally.
@@ -40,7 +40,7 @@ test('deployment creates all bundled Skills and references, updates managed copi
   assert.equal(await readFile(path.join(root, 'notes.txt'), 'utf8'), 'user notes')
   assert.equal(await readFile(path.join(root, 'kiokuko-simple-work', 'custom.md'), 'utf8'), 'user extension')
   const before = await lstat(soulPath)
-  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 42 })
+  assert.deepEqual(await synchronizeStandardSkills(home), { directory: root, created: 0, updated: 0, unchanged: 43 })
   assert.equal((await lstat(soulPath)).mtimeMs, before.mtimeMs)
 })
 
@@ -110,7 +110,7 @@ test('retirement removes only byte-identical bundled files, preserves user files
 
   assert.deepEqual(await retireStandardSkills(home), {
     directory: deployed.directory,
-    removed: 41,
+    removed: 42,
     preserved: 2,
   })
   assert.deepEqual((await readdir(deployed.directory)).sort(), ['japanese-translation-for-oss-models', 'notes.txt'])
@@ -131,10 +131,10 @@ test('retirement check reports removable files without changing the deployed tre
   const deployed = await synchronizeStandardSkills(home)
   assert.deepEqual(await retireStandardSkills(home, { check: true }), {
     directory: deployed.directory,
-    removed: 42,
+    removed: 43,
     preserved: 0,
   })
-  assert.equal((await readdir(deployed.directory)).length, 16)
+  assert.equal((await readdir(deployed.directory)).length, 17)
   assert.equal(await readFile(path.join(deployed.directory, 'kiokuko-soul', 'SKILL.md'), 'utf8'),
     (await loadStandardSkillParity()).files.find(file => file.skillName === 'kiokuko-soul' && file.relativePath === 'SKILL.md')!.content)
 })

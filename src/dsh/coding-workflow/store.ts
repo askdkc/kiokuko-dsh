@@ -1,3 +1,4 @@
+import { globSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { SqliteDatabase } from '../../db/adapter.js'
 import { withImmediateTransaction } from '../../db/transaction.js'
@@ -122,6 +123,9 @@ function initializeCodingWorkflowInTransaction(db: SqliteDatabase, input: Coding
   const workflowId = randomUUID()
   const value: CodingWorkflow = { runId: input.runId, sessionId: input.sessionId, repositoryRoot: input.repositoryRoot,
     requestId: input.requestId, request: input.task, requestDigest: canonicalContentHash(input.task),
+    ...(globSync(['.github/workflows/*.{yml,yaml}', '.gitlab-ci.yml', '.circleci/config.yml', 'azure-pipelines.yml',
+      'Jenkinsfile', '.travis.yml', '.buildkite/pipeline.{yml,yaml}'], { cwd: input.repositoryRoot, withFileTypes: true })
+      .some(entry => entry.isFile()) ? { verifyRepositoryCi: true as const } : {}),
     workflowId, revision: 1, scopeVersion: 1, state: 'preparing', retiredIds: [], attempts: {},
     choice: { state: 'pending', scopeVersion: 1, questionId: `coding-lisp-${workflowId}-1`, revision: 1 } }
   db.prepare('INSERT INTO dsh_coding_workflows VALUES(?,?,?,?,?,?,?,?)')

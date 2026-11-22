@@ -46,7 +46,13 @@ export async function dshNoticeResponse(host: DeepPlanningController, request: R
       return Response.json({ ok: true }, { headers })
     }
     const items = await host.store.database(db => {
-      const reports = db.prepare("SELECT id,kind,text,delivered FROM dsh_session_notices WHERE dsh_session_id=? AND kind='report' ORDER BY rowid DESC LIMIT 8").all(sessionId)
+      const reports = db.prepare(`
+        SELECT notice.id, notice.kind, notice.text, notice.delivered, run.status AS currentRunStatus
+        FROM dsh_session_notices AS notice
+        JOIN ledger_runs AS run ON run.run_id = notice.run_id AND run.dsh_session_id = notice.dsh_session_id
+        WHERE notice.dsh_session_id = ? AND notice.kind = 'report'
+        ORDER BY notice.rowid DESC LIMIT 8
+      `).all(sessionId)
       const status = db.prepare("SELECT id,kind,text,delivered FROM dsh_session_notices WHERE dsh_session_id=? AND kind='status' ORDER BY rowid DESC LIMIT 1").get(sessionId)
       return [...reports, ...(status ? [status] : [])].map(row => ({ ...row, delivered: row.delivered === 1 }))
     })

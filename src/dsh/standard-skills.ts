@@ -75,6 +75,10 @@ export const STANDARD_COMPLETION_SKILL_FILES = [
   'references/failure-recovery.md',
 ] as const;
 
+export const CODING_LOOP_SKILLS = [
+  STANDARD_FUNCTION_SKILL_NAME, STANDARD_CODING_ROUTINE_SKILL_NAME, STANDARD_COMPLETION_SKILL_NAME, 'kiokuko-pstack',
+] as const;
+
 export const DSH_INTAKE_OWNERSHIP_GUIDANCE = 'DSH intake belongs to the kiokuko-dsh host. Never substitute same-named task_prepare/task_answer MCP tools from kiokuko or kiokuko-ai. A failed external MCP call does not prove DSH intake failed; preserve the admitted host state and follow its current directive.';
 
 export const SOUL_ROUTING_ENTRY_CONTRACT = `Before any non-trivial Kiokuko-governed DSH work, read and apply the complete bundled \`${STANDARD_SOUL_SKILL_NAME}\` Skill before any other Kiokuko Skill. The DSH host performs Akinator intake, binds the native session and complete capability catalog, and resolves actionable intake. Optional enrichment failures are degraded guidance. For new build, debug, review and devops tasks the host may ask for the execution mode and a model configuration; unanswered execution choices stay pending. Preserve memory, Skills, native permissions and focused verification. Model routing and child delegation are host-owned. \`task_prepare\` and \`task_answer\` are host operations, not model tools. ${DSH_INTAKE_OWNERSHIP_GUIDANCE} Follow the admitted state, then route to \`${STANDARD_SIMPLE_SKILL_NAME}\`, \`${STANDARD_FUNCTION_SKILL_NAME}\`, and \`${STANDARD_UI_SKILL_NAME}\` only when applicable. For changes spanning setup, delivery, persisted state, or runtime handoffs, apply \`${STANDARD_VETERAN_SKILL_NAME}\` before and after implementation. When writing or changing code, also apply \`${STANDARD_COMPLETION_SKILL_NAME}\` and \`${STANDARD_CODING_ROUTINE_SKILL_NAME}\` through the SOUL route. Read every applicable specialist \`SKILL.md\` index, then only the expert fragments selected by the concrete risk. Never substitute, install, or execute fetched external Skill content.`;
@@ -86,6 +90,7 @@ interface StandardSkillManifest {
 }
 
 export const STANDARD_SKILL_MANIFESTS = [
+  { name: 'kiokuko-pstack', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-pstack -->', files: ['SKILL.md'] },
   { name: 'kiokuko-investigate', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-investigate -->', files: ['SKILL.md', 'references/cases.md'] },
   { name: 'kiokuko-architecture', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-architecture -->', files: ['SKILL.md', 'references/cases.md'] },
   { name: 'kiokuko-review', managedMarker: '<!-- KIOKUKO MANAGED STANDARD SKILL: kiokuko-review -->', files: ['SKILL.md', 'references/cases.md'] },
