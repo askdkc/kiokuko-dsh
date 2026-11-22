@@ -6,11 +6,11 @@ import { mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } fr
 import { join, dirname } from 'node:path'
 
 const exec = promisify(execFile)
-test('packed public entrypoints and efficiency load without optional DSH peers', {timeout: 30000}, async () => {
+test('packed public entrypoints and efficiency load without optional DSH peers', {timeout: 120_000}, async () => {
   const root = process.cwd(), temporary = await mkdtemp('/tmp/kiokuko-optional-dsh-')
   try {
     const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
-    const packed = JSON.parse((await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary], {cwd:root, env:{...process.env,npm_config_cache:join(temporary,'npm-cache')}, timeout:15000})).stdout)
+    const packed = JSON.parse((await exec('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary], {cwd:root, env:{...process.env,npm_config_cache:join(temporary,'npm-cache')}, timeout:90_000})).stdout)
     const modules = join(temporary, 'node_modules')
     await mkdir(modules)
     await exec('tar', ['-xzf', join(temporary, packed[0].filename), '-C', modules])

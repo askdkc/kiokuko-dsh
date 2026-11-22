@@ -1,3 +1,4 @@
+import { imageTarget } from "../image-target.js";
 import { llmError } from '../../llm-error.js'
 /** Convert DSH conversation blocks into low-level SDK prompts without an agent loop. */
 import { projectToolUpdates, fileHandleText, type GenerateOptions, type ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -79,7 +80,7 @@ export async function encodePrompt(options: GenerateOptions, model: OpenCodeMode
       if (block.offloaded || !model.inputModalities.includes('image')) return { type: 'text' as const, text: '[image omitted from this request]' }
       const store = attachments?.(); if (!store) throw llmError('Image attachment service unavailable', 'ATTACHMENT_UNAVAILABLE')
       const { requestImageDimensions } = await import('@deepseek-ai/dsh-attachment')
-      const image = await store.readImageRequest(block.attachment, { ...requestImageDimensions(block.attachment.width, block.attachment.height, 4_194_304), maxBytes: 1024 * 1024 }, options.signal)
+      const image = await store.readImageRequest(block.attachment, imageTarget(requestImageDimensions(block.attachment.width, block.attachment.height, 4_194_304), 1024 * 1024), options.signal)
       imageBytes += Math.ceil(image.bytes / 3) * 4
       if (imageBytes > 20 * 1024 * 1024) throw llmError('Image request exceeds 20 MiB', 'IMAGE_OFFLOAD_REQUIRED', { offloadImages: 1 })
       return { type: 'file' as const, mediaType: image.mediaType, data: { type: 'data' as const, data: image.data } }

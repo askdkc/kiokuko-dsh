@@ -69,7 +69,7 @@ export class AnswerReviewCoordinator {
       if (entry?.state === 'idle' && this.decisions.groundingReviewEnabled()) {
         const config = await this.decisions.bind(entry.binding.requestId, entry.controller.signal)
         if (config.groundingReview && config.groundingReview.mode !== 'legacy' && Array.isArray(result.sections)) {
-          result = { ...result, sections: [...result.sections, { name: 'kiokuko:grounding-citations', text: 'When reporting a fact from a tool result, cite its exact tool call ID using [tool-call:ID] in the same paragraph. Preserve target, revision, scope, time, numbers and negation. Do not invent IDs. If no corresponding evidence exists, state uncertainty. These citations support optional post-answer review.' }] }
+          result = { ...result, sections: [...result.sections, { name: 'kiokuko:grounding-citations', order: 90004, text: 'When reporting a fact from a tool result, cite its exact tool call ID using [tool-call:ID] in the same paragraph. Preserve target, revision, scope, time, numbers and negation. Do not invent IDs. If no corresponding evidence exists, state uncertainty. These citations support optional post-answer review.' }] }
         }
       }
       return !agent.ctx?.get?.('tools', false)?.setExecutor && entry?.model && (entry.state === 'reserved' || entry.state === 'consumed')

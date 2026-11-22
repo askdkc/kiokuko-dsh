@@ -106,10 +106,10 @@ if (request.questions[0]?.id.startsWith('task-startup:')) return answerTaskStart
           assert.equal(row.runtimePrograms.length, 2, 'the program runs while the decision is unresolved, after the SDK review status call')
           assert.deepEqual(names, ['run_code'])
           const item={entryId:row.memory.id,revision:row.memory.revision}
-          response = mock.toolCallResponse('review', 'run_code', { description: 'Submit the pending memory review', code: `return await tools.task_memory_review({ action: "review", review: ${JSON.stringify({
+          response = mock.toolCallResponse('review', 'run_code', { description: 'Submit the pending memory review', code: `console.log(JSON.stringify(await tools.task_memory_review({ action: "review", review: ${JSON.stringify({
             generation: 1, entryId: item.entryId, entryRevision: item.revision, expectedRevision: 0,
             decision: 'not_applicable', paths: [], basis: 'The stored production-migration lesson does not apply to this fixed isolated protocol fixture.',
-          })} })` })
+          })} })))` })
         } else if (step === 5) {
           row.review = messageResult('review'); assert.equal(row.review.isError, false)
           assert.deepEqual(names, ['run_code'], 'PTC presentation stays unchanged after memory decisions')

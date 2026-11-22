@@ -93,7 +93,7 @@ for (const outcome of (kind === 'root' ? ['write', 'prepare-then-write', 'native
         fibers.push(await ctx.plugin(await load('dsh-tool-executor-ptc'),{}))
       }
       const call=(id:string,name:string,args:object)=>presentation==='native'?mock.toolCallResponse(id,name,args)
-        :mock.toolCallResponse(id,'run_code',{description:'Continue the requested file update',code:`return await tools.${name}(${JSON.stringify(args)})`})
+        :mock.toolCallResponse(id,'run_code',{description:'Continue the requested file update',code:name === 'prepare_requested_work' ? `return await tools.prepare_requested_work(${JSON.stringify(args)})` : `console.log(JSON.stringify(await tools.${name}(${JSON.stringify(args)})))`})
       const message=llm.createUserMessage({source:{kind:'user'},content:[{type:'text',text:task}]})
       responses.push(call('read-existing','read',{file_path:'policy.mjs'}))
       if(outcome==='prepare-then-write'){

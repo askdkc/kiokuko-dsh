@@ -31,7 +31,7 @@ export function loadJapaneseOutputSkill(): Promise<BundledJapaneseSkill> {
 }
 
 export interface PromptAssembly {
-  sections: { name: string; text: string }[]
+  sections: { name: string; order?: number; text: string }[]
   variables: Record<string, string | undefined>
 }
 
@@ -52,6 +52,6 @@ export async function applyJapaneseOutputSkill<T extends PromptAssembly>(assembl
     prompts ? await prompts.require(skill.name) : skill.content,
   ].join('\n\n')
   // Interpolate once so literal {{...}} in the bundled Skill is never a prompt variable.
-  sections.push({ name: JAPANESE_OUTPUT_SECTION, text: `{{${PROMPT_VARIABLE}}}` })
+  sections.push({ name: JAPANESE_OUTPUT_SECTION, order: 90001, text: `{{${PROMPT_VARIABLE}}}` })
   return { ...assembly, sections, variables }
 }

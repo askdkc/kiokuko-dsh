@@ -59,7 +59,6 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
     ...(nested ? { parent: Symbol('nested-read'), rootCallId: 'root' } : {}),
   })
   try {
-    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin({ name: 'read-fixture', apply(c: any) {
       c.provide('agents', { get: (id: string) => agents.get(id) })
       c.provide('sessions', { get: (id: string) => agents.get(id)?.session })
@@ -80,6 +79,7 @@ for (const placement of ['global', 'agent', 'preset', 'mixed', 'restricted-prese
         editText: async () => { mutations++; throw new Error('must not edit') },
       })
     } }))
+    fibers.push(await ctx.plugin(prompt.default, {})); await mountNativeTools(ctx, tools, packages!, fibers)
     fibers.push(await ctx.plugin(workingDirectory.default, { defaultDirectory: base }))
     const preset = { agentPreset: 'fixture' }
     const presetScope = scope.createScope(ctx, preset)

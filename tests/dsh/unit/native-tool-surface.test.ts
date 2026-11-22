@@ -15,6 +15,7 @@ test('native projection is per-agent, preserves the bound catalog and restores i
   const ctx = new Context()
   const scopes: any[] = []
   try {
+    await ctx.plugin((await load('dsh-session-projection')).default)
     await ctx.plugin(Prompt)
     await ctx.plugin(Tools)
     for (const name of ['owned_a', 'owned_b', 'external']) ctx.tools.register(defineTool({

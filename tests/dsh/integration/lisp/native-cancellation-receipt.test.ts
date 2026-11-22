@@ -63,7 +63,7 @@ for (const { jobs, retained, scenario, title } of cases) test(title, { timeout: 
       c.provide('commands', { register: (d: any) => { commands.set(d.name, d); return () => commands.delete(d.name) } })
       c.provide('planMode', { get: () => ({ active: false }) })
     } }))
-    for (const name of ['dsh-session-projection', 'dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-shell-env', 'dsh-bash-local']) {
+    for (const name of ['dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-shell-env', 'dsh-bash-local']) {
       const config = name === 'dsh-fs-local' ? { cwd: root } : name === 'dsh-working-directory' ? { defaultDirectory: root }
         : name === 'dsh-bash-local' ? { timeoutMs: 10000, graceMs: 200 } : {}
       fibers.push(await ctx.plugin((await load(name)).default ?? await load(name), config))

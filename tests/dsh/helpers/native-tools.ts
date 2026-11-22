@@ -2,8 +2,16 @@ import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+/** Minimal test hosts must provide the registry used for prompt admission. */
+async function mountPromptProjections(ctx: any, packages: string, fibers: any[]): Promise<void> {
+  if (ctx.get('sessionProjections')) return
+  const projection = await import(pathToFileURL(join(packages, '@deepseek-ai/dsh-session-projection/lib/index.js')).href)
+  fibers.push(await ctx.plugin(projection.default, {}))
+}
+
 /** Install the selected host's actual native executor, not a registry shim. */
 export async function mountNativeTools(ctx: any, tools: any, packages: string, fibers: any[]): Promise<void> {
+  await mountPromptProjections(ctx, packages, fibers)
   const current = typeof tools.default?.prototype?.setExecutor === 'function'
   fibers.push(await ctx.plugin(tools.default, current ? {} : { mode: 'native' }))
   if (current) {
@@ -34,6 +42,7 @@ export async function executeNativeTool(ctx: any, packages: string, input: any):
 /** Select the current host executor after its real PTC runtime is mounted. */
 export async function mountToolExecutor(ctx: any, tools: any, packages: string, mode: 'native' | 'ptc', fibers: any[]): Promise<void> {
   if (mode === 'native') return mountNativeTools(ctx, tools, packages, fibers)
+  await mountPromptProjections(ctx, packages, fibers)
   assert.equal(typeof tools.default?.prototype?.setExecutor, 'function', 'PTC fixtures require the selected executor API')
   fibers.push(await ctx.plugin(tools.default, {}))
   const executor = await import(pathToFileURL(join(packages, '@deepseek-ai/dsh-tool-executor-ptc/lib/index.js')).href)

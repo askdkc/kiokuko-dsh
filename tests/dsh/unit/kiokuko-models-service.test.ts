@@ -252,7 +252,7 @@ test("all supported connection kinds register stable owned routes and custom pro
       const profile = connectionProfile(ConnectionSchema.parse({ ...connection("http://localhost:8080", "custom", "kiokuko-protocol"), protocol }));
       assert.equal(profile.api, api);
       assert.equal(profile.piProvider!.getModels()[0]!.api, api);
-      assert.partialDeepStrictEqual(profile, { maxRequestImages: 50, imageOffloadCountQuantum: 10 });
+      assert.partialDeepStrictEqual(profile, { maxRequestImages: 50, requestImageBudgetCount: 20, maxImageBytes: 1048576, imageOffloadCountQuantum: 10 });
     }
     assert.throws(() => ConnectionSchema.parse({ ...connection("http://localhost:8080"), protocol: "responses" }));
     assert.doesNotMatch(JSON.stringify(await f.service.list()), /fixture-token|fixture-refresh|fixture-key/);
@@ -898,7 +898,10 @@ for (const kind of ["infron", "nous"] as const) {
       const f = await fixture(() => ({ async readImageRequest(ref, target) {
         reads++;
         assert.deepEqual(ref, image);
-        assert.deepEqual(target, { width: 1, height: 1, maxBytes: 1048576 });
+        const budget = "maxImageBytes" in target
+          ? { maxImageBytes: 786432, imageTargetBytes: 786432 } // 20 MiB / 20 images, after base64 overhead
+          : { maxBytes: 1048576 };
+        assert.deepEqual(target, { width: 1, height: 1, ...budget });
         return { attachment: ref, variantId: "b".repeat(64) as any, data: png,
           mediaType: "image/png", bytes: png.length, width: 1, height: 1,
           depth: "uchar", space: "srgb", hasAlpha: true };
@@ -1307,7 +1310,7 @@ test("model wrapper delegates alpha.3 image budgets and preserves the alpha.2 fa
     const adapter = f.adapter() as LlmAdapter & { imageRequestTarget: (id:string, model:string, image:any) => unknown; routes: Map<string, any> };
     const route = adapter.routes.get(value.id);
     const image = { width:2048, height:1024, bytes:900000, id:'fixture-image', mediaType:'image/png' };
-    const target = {width:512, height:256, maxBytes:120000};
+    const target = {width:512, height:256, maxImageBytes:120000, imageTargetBytes:60000};
     const calls:unknown[]=[];
     route.adapter.imageRequestTarget = (provider:string, model:string, received:unknown) => {
       calls.push([provider, model, received]); return target;
@@ -1318,7 +1321,7 @@ test("model wrapper delegates alpha.3 image budgets and preserves the alpha.2 fa
     // alpha.2 has no prototype capability; this models its older shape explicitly.
     const prior = route.adapter.imageRequestTarget;
     route.adapter.imageRequestTarget = undefined;
-    assert.deepEqual(adapter.imageRequestTarget(value.id, 'fixture', image), {width:2048,height:1024,maxBytes:900000});
+    assert.deepEqual(adapter.imageRequestTarget(value.id, 'fixture', image), {width:2048,height:1024,maxBytes:900000,maxImageBytes:900000,imageTargetBytes:900000});
     route.adapter.imageRequestTarget = prior;
   } finally { await f.close(); }
 });

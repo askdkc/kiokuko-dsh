@@ -978,7 +978,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       const binding = owner(candidate)
       await admitWorker(candidate)
       const access = await workflowAccess(binding.agent)
-      assembly = { ...assembly, sections: [...assembly.sections.filter(section => section.name !== 'kiokuko:lisp-workflow-access'), {name: 'kiokuko:lisp-workflow-access', text: JSON.stringify(access)}] }
+      assembly = { ...assembly, sections: [...assembly.sections.filter(section => section.name !== 'kiokuko:lisp-workflow-access'), {name: 'kiokuko:lisp-workflow-access', order: 90002, text: JSON.stringify(access)}] }
       if (access.visibility === 'hidden') {
         unregister(binding.agent)
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
@@ -986,7 +986,7 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       }
       if (!manager.enabled.has(binding.owner.sessionId)) {
         const surface = assembly as typeof assembly & { tools?: { name: string }[] }
-        return { ...assembly, sections: [...assembly.sections, { name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) }],
+        return { ...assembly, sections: [...assembly.sections, { name:'kiokuko:lisp-coding-preparation', order: 90003, text:JSON.stringify(preparation.status(binding.agent)) }],
           ...(surface.tools ? {tools:surface.tools.filter(tool=>!LISP_TOOLS.includes(tool.name as LispTool))} : {}) }
       }
       register(binding.agent)
@@ -998,8 +998,8 @@ export async function mountLispSurface(ctx: Context, runtime: DshRuntime, config
       // exact schemas instead of turning one denied capability into a turn gate.
       const sections = assembly.sections.filter(section => section.name !== 'kiokuko:lisp')
       sections.splice(Math.max(0, sections.findIndex(section => section.name === 'kiokuko:soul') + 1), 0,
-        { name: 'kiokuko:lisp', text: '{{kiokuko_lisp}}' })
-      sections.push({ name:'kiokuko:lisp-coding-preparation', text:JSON.stringify(preparation.status(binding.agent)) })
+        { name: 'kiokuko:lisp', order: -90000, text: '{{kiokuko_lisp}}' })
+      sections.push({ name:'kiokuko:lisp-coding-preparation', order: 90003, text:JSON.stringify(preparation.status(binding.agent)) })
       const projected = { ...assembly, sections, variables: { ...assembly.variables, kiokuko_lisp: guide },
         // Current DSH owns executor schemas and step admission. Do not replace
         // a selected PTC transport with native calls or widen its admitted set.

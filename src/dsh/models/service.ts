@@ -1,3 +1,4 @@
+import { imageTarget } from "./image-target.js";
 import { registerOwnedModels } from "./metadata.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -121,7 +122,7 @@ class ModelsAdapter extends ProjectionAwareAdapter {
     const adapter = r.adapter as LlmAdapter & Partial<ImageProjection>;
     return typeof adapter.imageRequestTarget === 'function'
       ? adapter.imageRequestTarget(r.underlying, model, image)
-      : { width: image.width, height: image.height, maxBytes: image.bytes };
+      : imageTarget(image, image.bytes);
   }
   override imageRequestPricing(id: string, model: string) {
     const r = this.route(id);

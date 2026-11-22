@@ -41,7 +41,7 @@ for(const mode of ['unknown','research','optional-workflow','controlled','explic
  const controller=new AbortController(),runtime:any={executionJournalDirectory:join(base,'journal'),withDatabase:async(fn:any)=>fn(db)}
  try{
   fibers.push(await ctx.plugin(prompt.default,{}));await mountNativeTools(ctx,tools,packages,fibers)
-  for(const name of ['dsh-session-projection','dsh-fs-local','dsh-working-directory','dsh-subprocess-local','dsh-bash-local','dsh-shell-env','dsh-tool-bash','dsh-user-approval']) {
+  for(const name of ['dsh-fs-local','dsh-working-directory','dsh-subprocess-local','dsh-bash-local','dsh-shell-env','dsh-tool-bash','dsh-user-approval']) {
    const module=await load(name),config=name==='dsh-fs-local'||name==='dsh-bash-local'?{cwd:base}:name==='dsh-working-directory'?{defaultDirectory:base}:name==='dsh-shell-env'?{dshHome:base}:name==='dsh-user-approval'?{policy:'ask'}:{}
    fibers.push(await ctx.plugin(module.default??module,config))
   }

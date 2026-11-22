@@ -123,11 +123,12 @@ const unsaved = () => ({
 async function optionalRead<T>(
   operation: Promise<T>,
   signal?: AbortSignal,
+  timeoutMs = 2000,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined,
     onAbort: (() => void) | undefined;
   const unavailable = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("memory_unavailable")), 2000);
+    timer = setTimeout(() => reject(new Error("memory_unavailable")), timeoutMs);
     onAbort = () => reject(new Error("memory_cancelled"));
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) onAbort();
@@ -942,6 +943,7 @@ export class DshLifecycleMemory {
             await optionalRead(
               this.replay.recorder.flushDiagnostics(sessionId),
               controller.signal,
+              30_000, // Allow queued trace writes to drain after the user requests review.
             );
           if (
             !this.owned(state.agent) ||

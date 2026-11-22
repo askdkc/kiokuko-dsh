@@ -290,10 +290,12 @@ export function connectionProfile(
     piProvider: provider,
     streamIdleTimeoutMs: 300_000,
     maxRequestImages: 50,
+    requestImageBudgetCount: 20,
     imageOffloadCountQuantum: 10,
     maxRequestImageBytes: 20 * 1024 * 1024,
     requestImagePixelBudget: 2048 * 2048,
-    requestImageMaxBytes: 1024 * 1024,
+    requestImageMaxBytes: 1024 * 1024, // DSH before 0.2.3
+    maxImageBytes: 1024 * 1024,
     configuredMaxTokens: new Map(
       models.map((m) => [m.id, requestMaxTokens(m.maxTokens, m.contextWindow)]),
     ),

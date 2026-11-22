@@ -224,7 +224,7 @@ test('Deep native: Japanese Skill reaches all OSS workers without tool access an
     const reservations=await f.deep.store.database(db=>db.prepare("SELECT tokens FROM dsh_deep_budget_reservations WHERE run_id=? AND kind='agent' ORDER BY rowid").all<{tokens:number}>(state.runId))
     for(const [index,request] of requests.entries()) {
       const system=request.system??request.messages.filter((m:any)=>m.role==='system').flatMap((m:any)=>m.content).map((b:any)=>b.text??'').join('\n')
-      assert.ok(system.includes(skill.content))
+      assert.ok(system.includes(skill.content.trimEnd()))
       assert.match(system,/human-readable Japanese string values/u)
       assert.equal(request.tools.some((tool:any)=>/skill|shell|bash|spawn/.test(tool.name)),false)
       assert.equal(reservations[index]!.tokens,estimateRequestTokens(Buffer.byteLength(JSON.stringify({system:request.system,messages:request.messages,tools:request.tools})),4096))

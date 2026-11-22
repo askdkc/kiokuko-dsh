@@ -32,7 +32,7 @@ async function harness(mode: 'native' | 'ptc' = 'native') {
     load('packages/core/tool-executor-native'), load('packages/core/scope'),
   ])
   const ctx = new cordis.Context(), fibers: any[] = []; let ptcRuns = 0
-  fibers.push(await ctx.plugin(prompt.default, {}), await ctx.plugin(tools.default, {}))
+  fibers.push(await ctx.plugin((await load('packages/session/session-projection')).default, {}), await ctx.plugin(prompt.default, {}), await ctx.plugin(tools.default, {}))
   if (mode === 'native') fibers.push(await ctx.plugin(native, {}))
   else {
     fibers.push(await ctx.plugin({ name: 'unused-ptc-runtime', apply(c: any) { c.provide('ptcRuntime', { language: 'typescript', programFormat: 'function-body', run() { ptcRuns++; throw new Error('This test does not execute PTC programs') } }) } }))

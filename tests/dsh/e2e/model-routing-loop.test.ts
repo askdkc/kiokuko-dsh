@@ -187,14 +187,14 @@ test('native routing delivers the full Japanese Skill to selected OSS models and
       const request=provider.requests.at(-1)!
       assert.equal(request.model,model)
       const prompt=systemText(request)
-      assert.ok(prompt.includes(skill.content),model)
-      assert.equal(prompt.split(skill.content).length,2,model)
+      assert.ok(prompt.includes(skill.content.trimEnd()),model)
+      assert.equal(prompt.split(skill.content.trimEnd()).length,2,model)
       assert.ok(request.messages.some((m:any)=>m.role==='user'&&m.content.some((b:any)=>b.type==='text'&&b.text===input)))
     }
     selection=undefined;await turn(h,agent,'Answer in English.')
     assert.equal(provider.requests.length,8)
     assert.equal(provider.requests.at(-1)!.model,'gpt-4.1')
-    assert.equal(systemText(provider.requests.at(-1)).includes(skill.content),false)
+    assert.equal(systemText(provider.requests.at(-1)).includes(skill.content.trimEnd()),false)
   } finally {dispose();await h.dispose()}
 })
 test('native model-auto applies the selected effort to first prompt and request, then manual selection pins the next task', {

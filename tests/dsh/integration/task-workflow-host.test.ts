@@ -220,6 +220,7 @@ test('native task schema streams through the managed OpenCode Go route while hos
   const intake = new OnDemandIntake({ validate: async () => {}, existing: async () => false, classify: async () => ({ deferInference: true }),
     prepare: async () => { throw new Error('Schema probe must not prepare a task') }, ready: () => false })
   try {
+    fibers.push(await ctx.plugin((await load('dsh-session-projection')).default, {}))
     fibers.push(await ctx.plugin(prompt.default, {}))
     await mountNativeTools(ctx, tools, packages, fibers)
     disposeSurface = mountTaskWorkflowSurface(ctx, new DshTaskWorkflow({ ...f.options, demand: intake }), intake)
@@ -297,9 +298,10 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
   let disposeSurface: (() => void) | undefined, disposeOwned: (() => Promise<void>) | undefined, restoreRuntime: (() => void) | undefined
   let intake: OnDemandIntake | undefined, programs = 0, writes = 0
   try {
+    fibers.push(await ctx.plugin((await load('dsh-session-projection')).default, {}))
     fibers.push(await ctx.plugin(prompt.default, {}))
     if (mode === 'ptc') {
-      for (const name of ['dsh-session-projection', 'dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node']) {
+      for (const name of ['dsh-fs-local', 'dsh-working-directory', 'dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node']) {
         const plugin = await load(name), config = name === 'dsh-fs-local' ? { cwd: f.root } : name === 'dsh-working-directory' ? { defaultDirectory: f.root }
           : name === 'dsh-sandbox-policy' ? { mode: 'read-only', workspaceRoot: f.root } : name === 'dsh-ptc-runtime-node' ? { timeoutMs: 10000 } : {}
         fibers.push(await ctx.plugin(plugin.default, config))
@@ -395,7 +397,7 @@ for (const mode of ['native', 'ptc'] as const) test(`${mode}: actual task contro
         output: { schema: {}, render: () => [] }, execute: () => { writes++; return 'continued' } })
       try {
         const probe = await executeNativeTool(ctx, packages, { callId: `probe-${status}`, name: mode === 'ptc' ? 'run_code' : 'resume_probe',
-          arguments: mode === 'ptc' ? { description: 'Continue the revalidated task', code: 'return await tools.resume_probe({})' } : {}, agent: f.agent, signal: signal() })
+          arguments: mode === 'ptc' ? { description: 'Continue the revalidated task', code: 'await tools.resume_probe({})' } : {}, agent: f.agent, signal: signal() })
         assert.equal(probe.isError, false, JSON.stringify(probe))
         assert.equal(preparations, index + 1, 'same-scope continuation must still pass preparation')
         assert.equal(writes, index + 1)

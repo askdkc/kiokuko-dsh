@@ -36,7 +36,7 @@ for (const mode of ['native', 'ptc'] as const) test(`raw register validates tran
     let call = 0
     async function invoke(args: unknown) {
       return executeNativeTool(ctx, packages!, { callId: `call-${++call}`, name: mode === 'native' ? 'curator_check' : 'run_code',
-        arguments: mode === 'native' ? args : { description: 'Check raw transport boundary', code: `return await tools.curator_check(${JSON.stringify(args)})` }, signal: new AbortController().signal })
+        arguments: mode === 'native' ? args : { description: 'Check raw transport boundary', code: `await tools.curator_check(${JSON.stringify(args)})` }, signal: new AbortController().signal })
     }
     for (const args of [{ limit: 'many' }, { includeUnready: 1 }, { cwd: 'workspace', workspace: 1 }, { cwd: 'workspace', workspace: 'outer', workspaceId: 'forged' }]) {
       const result = await invoke(args)

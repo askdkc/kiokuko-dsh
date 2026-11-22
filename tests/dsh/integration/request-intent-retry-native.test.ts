@@ -104,10 +104,10 @@ for (const mode of ['native', 'ptc'] as const)
           }),
         )
         try {
+          fibers.push(await ctx.plugin((await load('dsh-session-projection')).default, {}))
           fibers.push(await ctx.plugin(prompt.default, {}))
           if (mode === 'ptc') {
             for (const name of [
-              'dsh-session-projection',
               'dsh-fs-local',
               'dsh-working-directory',
               'dsh-subprocess-local',
@@ -368,7 +368,7 @@ for (const mode of ['native', 'ptc'] as const)
                 mode === 'ptc'
                   ? {
                       description: 'Attempt work',
-                      code: 'return await tools.effect_probe({})',
+                      code: 'await tools.effect_probe({})',
                     }
                   : {},
               agent,
