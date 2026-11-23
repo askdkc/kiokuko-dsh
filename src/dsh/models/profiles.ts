@@ -1,3 +1,4 @@
+import { chatGPTProvider, type ChatGPTAccount } from "./chatgpt.js";
 import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
 import { openCodeSessionProvider } from "./opencode-session.js";
 import type { ResolvedPiAiProviderProfile } from "@deepseek-ai/dsh-llm-pi-ai";
@@ -198,6 +199,7 @@ export function thinkingLevelMap(
 export function connectionProfile(
   connection: Connection,
   report?: (tier: InfronServiceTier | "unknown") => void,
+  chatGPT?: ChatGPTAccount,
 ): ResolvedPiAiProviderProfile {
   // The Anthropic SDK appends /v1/messages itself. Accept an API prefix ending
   // in /v1 in the shared editor without sending /v1/v1/messages.
@@ -223,7 +225,7 @@ export function connectionProfile(
       ? "openai-codex-responses"
       : protocolApi(connection.protocol);
   const shipped = original?.getModels() ?? [];
-  const models: PiModel[] = connection.models.length
+  const models: PiModel[] = connection.models.length || connection.kind === "chatgpt"
     ? connection.models.map(
         (m) =>
           ({
@@ -281,6 +283,7 @@ export function connectionProfile(
   delete (provider as { refreshModels?: unknown }).refreshModels;
   if (connection.kind === "infron")
     provider = infronProvider(provider, connection.serviceTier, report);
+  if (chatGPT) provider = chatGPTProvider(provider, chatGPT);
   provider = openCodeSessionProvider(provider, connection.baseURL);
   const profile = {
     provider: connection.id,

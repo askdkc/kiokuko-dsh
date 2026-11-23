@@ -6,14 +6,16 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import type { LlmAdapter } from "@deepseek-ai/dsh-llm";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { KiokukoModelsService } from "../../../src/dsh/models/service.js";
+import { createChatGPT } from "../../../src/dsh/models/vendor/chatgpt-devkit/index.js";
+import { SignJWT, generateKeyPair, exportJWK } from "jose";
+import { KiokukoModelsService, type ModelsServiceOptions } from "../../../src/dsh/models/service.js";
 import { ModelsConfigStore } from "../../../src/dsh/models/config-store.js";
 import { CredentialFile } from "../../../src/dsh/models/vendor/credentials.js";
 import { modelsResponse, mountKiokukoModels } from "../../../src/dsh/models/surface.js";
 import { ConnectionSchema, CONNECTION_DEFAULTS, CONNECTION_KINDS, credentialKey } from "../../../src/dsh/models/contracts.js";
 import { connectionProfile, requestMaxTokens } from "../../../src/dsh/models/profiles.js";
 
-async function fixture(attachments?: () => Pick<import("@deepseek-ai/dsh-attachment").AttachmentStore, "readImageRequest">) {
+async function fixture(attachments?: () => Pick<import("@deepseek-ai/dsh-attachment").AttachmentStore, "readImageRequest">, createChatGPTAccount?: ModelsServiceOptions["createChatGPTAccount"]) {
   const dir = await mkdtemp(join(tmpdir(), "models-test-")),
     store = new CredentialFile(join(dir, "credentials.json"));
   let adapter: LlmAdapter | undefined,
@@ -50,6 +52,7 @@ async function fixture(attachments?: () => Pick<import("@deepseek-ai/dsh-attachm
   const config = new ModelsConfigStore(join(dir, "models.json"));
   const service = new KiokukoModelsService({
     llm,
+    ...(createChatGPTAccount ? { createChatGPTAccount } : {}),
     config,
     credentials: store,
     ...(attachments ? { attachments } : {}),
@@ -239,6 +242,10 @@ test("all supported connection kinds register stable owned routes and custom pro
       const value = ConnectionSchema.parse({ id: `kiokuko-${kind}`, kind, name, baseURL, protocol,
         models: ["custom", "infron", "ollama", "nous"].includes(kind) ? [model] : [] });
       await f.service.save(value, revision++);
+      if (kind === "chatgpt") {
+        assert.deepEqual(await f.service.models(value.id), []);
+        continue; // Account-scoped catalog is exercised through sign-in below.
+      }
       if (kind !== "ollama") await f.store.modify(credentialKey(value), async () => kind === "codex"
         ? { type: "oauth", access: "fixture-token", refresh: "fixture-refresh", expires: Date.now() + 60_000 }
         : { type: "api_key", key: "fixture-key" });
@@ -1380,3 +1387,90 @@ test('saved provider registration survives a sibling execution plugin startup fa
     await f.llm.resolveCallConfig({provider:c.id,model:model.id})
   } finally { await ctx.fiber.dispose(); await f.close() }
 })
+
+test("ChatGPT plan connections accept only the official Responses endpoint", () => {
+  const c = { id: "kiokuko-chatgpt", kind: "chatgpt", name: "ChatGPT", baseURL: "https://api.openai.com/v1", protocol: "responses" };
+  assert.ok(ConnectionSchema.safeParse(c).success);
+  assert.equal(ConnectionSchema.safeParse({...c, protocol: "chat-completions"}).success, false);
+  assert.equal(ConnectionSchema.safeParse({...c, baseURL: "https://proxy.example/v1"}).success, false);
+});
+
+test("ChatGPT DevKit login discovers plan models, streams a DSH chat and disconnects", async t => {
+  // Exercise the actual SDK, loopback callback and DSH adapter without a personal login.
+  const { privateKey, publicKey } = await generateKeyPair("RS256");
+  const issuer = "https://auth.openai.com";
+  const clientId = "fixture_registration";
+  const key = await crypto.subtle.generateKey({name:"AES-GCM", length:256}, false, ["encrypt","decrypt"]);
+  const f = await fixture(undefined, (storageDir, openBrowser) => createChatGPT({
+    appId: "fixture", appName: "Kiokuko DSH", redirectPort: 0, storageDir, openBrowser,
+    credentialEncryption: {
+      id:"test-aes", isAvailable: () => true,
+      async encrypt(text) {
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        return Buffer.concat([iv, Buffer.from(await crypto.subtle.encrypt({name:"AES-GCM",iv}, key, Buffer.from(text)))]);
+      },
+      async decrypt(bytes) {
+        return Buffer.from(await crypto.subtle.decrypt({name:"AES-GCM",iv:Uint8Array.from(bytes.subarray(0,12))},key,Uint8Array.from(bytes.subarray(12)))).toString();
+      },
+    },
+  }));
+  const fetchCallback = globalThis.fetch;
+  let nonce = "", requests = 0, revoked = false;
+  t.mock.method(globalThis, "fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/.well-known/openid-configuration")) return Response.json({issuer, authorization_endpoint:issuer+"/authorize", token_endpoint:issuer+"/token", jwks_uri:issuer+"/keys", revocation_endpoint:issuer+"/revoke"});
+    if (url === issuer+"/keys") return Response.json({ keys:[{...await exportJWK(publicKey), kid:"test", alg:"RS256"}] });
+    if (url === issuer+"/token") return Response.json({id_token:await new SignJWT({nonce}).setIssuedAt().setIssuer(issuer).setSubject("fixture").setAudience(clientId).setExpirationTime("1h").setProtectedHeader({alg:"RS256",kid:"test"}).sign(privateKey),
+      token_type:"Bearer",scope:"openid offline_access chatgpt.tokens.use.direct",access_token:"only-inside-sdk",refresh_token:"fixture-refresh",expires_in:3600});
+    if (url === issuer+"/revoke") { revoked = true; return new Response(null,{status:200}); }
+    assert.equal(new Headers(init?.headers).get("authorization"),"Bearer only-inside-sdk");
+    if (url === "https://api.openai.com/v1/models") return Response.json({models:[
+      {slug:"gpt-6-luna",display_name:"My plan model",visibility:"list"},
+      {slug:"hidden",display_name:"Hidden",visibility:"hide"}]});
+    assert.equal(url, "https://api.openai.com/v1/responses");
+    assert.equal(init?.redirect,"error");
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.store,false);
+    assert.equal(body.max_output_tokens,undefined);
+    assert.equal(body.model,"gpt-6-luna");
+    assert.match(JSON.stringify(body.input), /hello/);
+    requests++;
+    const item = {id:"msg_fixture",type:"message",role:"assistant",status:"completed",content:[{type:"output_text",text:"SIGNED IN",annotations:[]}]};
+    const events = [
+      {type:"response.created",response:{id:"resp_fixture"}},
+      {type:"response.output_item.added",output_index:0,item:{...item,content:[]}},
+      {type:"response.output_text.delta",output_index:0,content_index:0,delta:"SIGNED IN"},
+      {type:"response.output_item.done",output_index:0,item},
+      {type:"response.completed",response:{id:"resp_fixture",status:"completed",output:[item],usage:{input_tokens:1,output_tokens:1,total_tokens:2}}},
+    ];
+    return new Response(events.map(e => "event: "+e.type+"\ndata: "+JSON.stringify(e)+"\n\n").join(""), {headers:{"content-type":"text/event-stream"}});
+  });
+  try {
+    const id = "kiokuko-chatgpt";
+    await f.service.save({id,kind:"chatgpt",name:"ChatGPT",baseURL:"https://api.openai.com/v1",protocol:"responses"},0);
+    const run = f.service.startLogin(id);
+    await t.waitFor(() => assert.ok(f.service.authStatus(run).events.length > 0, f.service.authStatus(run).error), {timeout:5000});
+    const event = f.service.authStatus(run).events[0]!;
+    assert.equal(event.type,"auth_url");
+    const authorization = new URL(event.url);
+    nonce = authorization.searchParams.get("nonce")!;
+    assert.equal(authorization.searchParams.get("agent_name_hint"),"Kiokuko DSH");
+    const callback = new URL(authorization.searchParams.get("redirect_uri")!);
+    callback.searchParams.set("state",authorization.searchParams.get("state")!);
+    callback.searchParams.set("client_id", clientId);
+    callback.searchParams.set("code","fixture-code");
+    assert.equal((await fetchCallback(callback)).status,200);
+    await t.waitFor(() => assert.notEqual(f.service.authStatus(run).status, "pending"),{timeout:5000});
+    assert.equal(f.service.authStatus(run).status,"success",f.service.authStatus(run).error);
+    assert.deepEqual((await f.service.models(id)).map(m => m.id), ["gpt-6-luna"]);
+    await f.service.select(id,"gpt-6-luna","current","chat");
+    const chunks = await collect(f.adapter().stream({provider:id,model:"gpt-6-luna",messages:[createUserMessage({content:[{type:"text",text:"hello"}],source:{kind:"user"}})]}));
+    assert.match(JSON.stringify(chunks), /SIGNED IN/);
+    assert.equal(requests,1);
+    assert.deepEqual(await f.store.list(),[]);
+    assert.doesNotMatch(JSON.stringify(await f.service.list()),/only-inside-sdk|fixture-refresh/);
+    await f.service.logout(id);
+    assert.equal(revoked,true);
+    assert.deepEqual(await f.service.models(id),[]);
+  } finally { await f.close(); }
+});

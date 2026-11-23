@@ -4,6 +4,18 @@ In the Web profile, open **Settings → Kiokuko Models**, or enter exactly
 `/kiokuko model` in a chat. The host executes this command without a model request.
 Both entry points use the same panel, including before a native provider is configured.
 
+## Sign in with ChatGPT
+
+1. Open **Add connection → ChatGPT plan → Sign in with ChatGPT**.
+2. Open the authentication link on the machine running DSH. Sign in to an eligible ChatGPT account and allow Kiokuko DSH to use your plan.
+3. Choose one of the models returned for your account and select **Use in current chat** or **Default for new chats**.
+
+**Manage ChatGPT plan usage** opens your account's usage settings. **Advanced settings → Disconnect ChatGPT** removes local tokens and asks OpenAI to revoke access. If sign-in succeeds but discovery fails, choose **Refresh models** to retry.
+
+The bundled SDK is for personal, noncommercial use. This connection stores encrypted credentials under the DSH profile. Its encryption key is held by macOS Keychain, Windows Credential Manager, or Linux Secret Service. Unlock your OS credential store before signing in. The existing OpenAI API and Codex options remain available separately. [DevKit license](chatgpt-devkit-LICENSE.txt).
+
+## Other providers
+
 Choose a provider under **Add connection** and paste its API key: **Save and connect**
 stores the connection and the key together, then asks the adapter which models the
 connection serves. Pressing Enter in the key field runs the same action. OAuth
@@ -19,7 +31,7 @@ manual registration available. A model whose endpoint and catalog both withhold
 capacities is stored with the adapter's profile defaults (`defaultContextWindow` 262144,
 `defaultMaxTokens` 32768) so a listing that names ids only still yields usable models.
 
-Supported connections: OpenAI API, Codex, Claude, xAI, DeepSeek, OpenCode Zen/Go,
+Supported connections: ChatGPT plan, OpenAI API, Codex, Claude, xAI, DeepSeek, OpenCode Zen/Go,
 OpenRouter, Nous/Hermes, Infron, Ollama and custom connections. OAuth availability
 comes from the installed provider implementation; unsupported flows are not invented.
 Ollama needs no key. Custom connections explicitly select Chat Completions, Responses
@@ -102,7 +114,7 @@ offers no levels until you enable them.
 ## Storage and permissions
 
 Non-secret connection settings live in `kiokuko-models.json` under the active profile
-directory. Changes use a revision check, a file lock and atomic replacement. Credentials
+directory. Changes use a revision check, a file lock and atomic replacement. Other providers’ credentials
 share dsh-auth's `$DSH_HOME/dsh-auth/credentials.json` location (normally
 `~/.dsh/dsh-auth/credentials.json`, with the existing `DSH_AUTH_CREDENTIALS` override), provider keys and format. Credentials are written with
 mode 0600, using the vendored lock and atomic-update implementation. Shared OAuth refresh

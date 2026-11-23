@@ -155,10 +155,12 @@
         "Configured TypeSafe or explicitly selected OpenAI Decisions fixed endpoint, or explicit Nimble HTTPS/loopback endpoint, for automatic task/Skill/draft decisions and independent original-source/candidate comparison, projected memory reuse after a synthetic readiness probe, and Lisp; no redirects, retries or provider substitution; exact roles.check no-tool fallback for complete draft review",
         "Explicit Laya-CoreML Unix socket for local finite decisions using the existing v1 worker or optional strict operations; no subprocess client, automatic worker startup, model downloads or provider substitution",
         "DSH-configured admitted provider/model for default-active source-backed index reasoning: up to 8 worker dispatches per workspace per UTC day; no retrieval-time generation or automatic resend of uncertain dispatches",
-        "User-configured AI API endpoints and vendored provider OAuth flows through Kiokuko Models"
+        "User-configured AI API endpoints and vendored provider OAuth flows through Kiokuko Models",
+        "Optional personal-use ChatGPT plan connection through the bundled OpenAI DevKit, loopback OAuth callback and official models and Responses endpoints"
       ],
       "credentials": [
         "Optional user-provided GitHub or embedding credentials; never bundled or persisted by the plugin",
+        "Per-connection ChatGPT credentials encrypted in the active profile with an OS-keystore key",
         "TYPESAFE_API_KEY resolved per explicit call; optional DSH-managed set/unset via /kioku-typesafe-key, inherited environment precedence, no worker or Kiokuko storage exposure; input visible while typing",
         "OPENAI_API_KEY resolved separately through DSH credentials, or inherited environment only without a credentials service; never stored in decision records or substituted with a TypeSafe key",
         "Optional separate Nimble bearer credential reference through DSH; TYPESAFE_API_KEY is prohibited for Nimble; credentials are never persisted in decision records",
@@ -275,8 +277,12 @@
   "dependencies": {
     "@deepseek-ai/cosmokit": "~1.8.6-alpha.2",
     "@deepseek-ai/schemastery": "~3.18.5-alpha.2",
+    "@napi-rs/keyring": "2.1.2",
     "agenticreplay": "latest",
+    "jose": "6.2.18",
     "jsonc-parser": "3.3.1",
+    "openai": "7.62.0",
+    "proper-lockfile": "4.1.2",
     "semver": "7.8.5",
     "yaml": "2.9.0",
     "zod": "4.6.6"
@@ -352,6 +358,7 @@
     "@huggingface/hub": "2.16.1",
     "@huggingface/transformers": "4.2.0",
     "@types/node": "24.13.3",
+    "@types/proper-lockfile": "4.1.4",
     "@types/semver": "7.8.0",
     "esbuild": "0.28.2",
     "playwright": "1.63.0",

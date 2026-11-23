@@ -42,6 +42,7 @@ export function apply(ctx: DshClientContext): void {
 
 const MODELS_NS = "kiokuko-models";
 const MODEL_CONNECTION_DEFAULTS: Record<string, readonly string[]> = {
+  chatgpt: ["ChatGPT plan", "https://api.openai.com/v1", "responses"],
   openai: ["OpenAI API", "https://api.openai.com/v1", "responses"],
   codex: ["Codex", "https://chatgpt.com/backend-api/codex", "responses"],
   claude: ["Claude", "https://api.anthropic.com", "messages"],
@@ -81,7 +82,7 @@ const STANDARD_REASONING_EFFORTS = {
   max: "max",
 } as const;
 /** Providers whose stored credential can also be an OAuth sign-in. */
-const OAUTH_KINDS = ["codex", "claude", "xai", "openai", "openrouter", "nous"];
+const OAUTH_KINDS = ["chatgpt", "codex", "claude", "xai", "openrouter", "nous"];
 async function modelsApi(
   body?: Record<string, unknown>,
   query = "",
@@ -363,7 +364,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
             disabled:
               busy ||
               (label === "Base URL" &&
-                ["codex", "opencode", "opencode-go"].includes(
+                ["chatgpt", "codex", "opencode", "opencode-go"].includes(
                   connection?.kind,
                 )),
             onChange: (e: any) => onChange(e.target.value),
@@ -509,7 +510,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                     }),
                   ],
                 }),
-                ...(connection.kind !== "codex" && connection.kind !== "ollama"
+                ...(connection.kind !== "chatgpt" && connection.kind !== "codex" && connection.kind !== "ollama"
                   ? [
                       input(
                         "API key / bearer token",
@@ -525,11 +526,11 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                 jsxs("div", {
                   className: "kiokuko-models-actions",
                   children: [
-                    button("Save and connect", () => void run(connect)),
+                    ...(connection.kind === "chatgpt" ? [] : [button("Save and connect", () => void run(connect))]),
                     ...(OAUTH_KINDS.includes(connection.kind)
                       ? [
                           button(
-                            "Log in",
+                            connection.kind === "chatgpt" ? "Sign in with ChatGPT" : "Log in",
                             () => void run(startLogin),
                             auth?.status === "pending",
                           ),
@@ -539,10 +540,16 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                 }),
                 jsx("p", {
                   children:
-                    connection.kind === "ollama"
+                    connection.kind === "chatgpt"
+                      ? "Sign in and allow ChatGPT plan usage. Choose an available model below."
+                      : connection.kind === "ollama"
                       ? "Ollama needs no key. Save and connect to list its models."
                       : "Paste the API key and press Enter, or use Save and connect. The key is stored with dsh-cli's shared credentials.",
                 }),
+                ...(connection.kind === "chatgpt" ? [jsx("a", {
+                  href: "https://chatgpt.com/settings/usage", target: "_blank", rel: "noopener noreferrer",
+                  children: "Manage ChatGPT plan usage",
+                })] : []),
                 ...(auth?.status === "pending"
                   ? [
                       jsxs("div", {
@@ -707,6 +714,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                             disabled:
                               busy ||
                               [
+                                "chatgpt",
                                 "codex",
                                 "infron",
                                 "opencode",
@@ -787,18 +795,18 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                         }),
                     ),
                     button(
-                      "Log out (also dsh-cli)",
+                      connection.kind === "chatgpt" ? "Disconnect ChatGPT" : "Log out (also dsh-cli)",
                       () =>
                         void run(async () => {
                           await persist();
                           await modelsApi({ op: "logout", id: connection.id });
                           setKey("");
                           setModels([]);
-                          await load();
+                          await reopen();
                           setNotice("Signed out");
                         }),
                     ),
-                    ...(!["opencode", "opencode-go"].includes(connection.kind)
+                    ...(!["chatgpt", "opencode", "opencode-go"].includes(connection.kind)
                       ? [
                           jsx("details", {
                             open: manualOpen,
@@ -903,7 +911,7 @@ function KiokukoModelsPanel(props: Record<string, unknown>): unknown {
                   ? [
                       jsx("p", {
                         children:
-                          "No models yet. Save and connect to discover them, or register one under Advanced settings.",
+                          connection.kind === "chatgpt" ? "No plan models available. After sign-in, use Refresh models in Advanced settings." : "No models yet. Save and connect to discover them, or register one under Advanced settings.",
                       }),
                     ]
                   : []),

@@ -64,6 +64,9 @@
     "dist/models-client.cjs",
     "dist/models-client.d.ts",
     "dist/security/sanitize.js",
+    "docs/chatgpt-devkit-LICENSE.txt",
+    "docs/chatgpt-devkit/THIRD_PARTY_NOTICES.md",
+    "docs/chatgpt-devkit/docs/dependency-inventory.json",
     "docs/dsh-auth-LICENSE.txt"
   ]
 }

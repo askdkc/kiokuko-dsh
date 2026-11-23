@@ -103,3 +103,8 @@ The `kiokuko-guardrail` engine source is included under `crates/guardrail` and u
 # Bundled finite-domain micro judge
 
 The `kiokuko-micro-judge` source under `crates/micro-judge` uses the repository MIT license. Its executables contain standard-library code from their recorded Rust compiler distributions. Current artifacts include the official standard-library notice in `micro-judge/native-copyright-<platform>.html`. The original Apple Silicon artifact’s notice and the MIT and Apache license texts are preserved in [micro-judge/licenses](micro-judge/licenses).
+
+
+### Sign in with ChatGPT DevKit
+
+The local SDK under `src/dsh/models/vendor/chatgpt-devkit` is copyright 2026 OpenAI and distributed under the [Sign-in with ChatGPT DevKit Noncommercial License v1.0](docs/chatgpt-devkit-LICENSE.txt). This build includes it for personal, noncommercial use. The upstream revision is [0a36fef](https://github.com/openai/sign-in-with-chatgpt-devkit/tree/0a36fefeb913055c8c7a1a29b63d82b96b2e841a/packages/local). The marked changes in `index.ts` and `types.ts` let the DSH adapter stream structured Responses through the SDK's authenticated connection. Those modifications are distributed under the same DevKit license. [Upstream third-party notices](docs/chatgpt-devkit/THIRD_PARTY_NOTICES.md).

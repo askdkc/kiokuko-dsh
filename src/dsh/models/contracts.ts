@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { HeadWorkerConfigurationSchema } from "../head-worker-configuration.js";
 export const CONNECTION_KINDS = [
+  "chatgpt",
   "openai",
   "codex",
   "claude",
@@ -111,6 +112,8 @@ export const ConnectionSchema = z
   })
   .strict()
   .superRefine((v, ctx) => {
+    if (v.kind === "chatgpt" && (v.baseURL !== "https://api.openai.com/v1" || v.protocol !== "responses"))
+      ctx.addIssue({ code: "custom", message: "ChatGPT requires the official Responses endpoint" });
     if (v.kind === "infron" && v.protocol !== "chat-completions")
       ctx.addIssue({
         code: "custom",
@@ -141,6 +144,7 @@ export const ModelsDocumentSchema = z
   );
 export type ModelsDocument = z.infer<typeof ModelsDocumentSchema>;
 export const CONNECTION_DEFAULTS = {
+  chatgpt: ["ChatGPT plan", "https://api.openai.com/v1", "responses"],
   openai: ["OpenAI API", "https://api.openai.com/v1", "responses"],
   codex: ["Codex", "https://chatgpt.com/backend-api/codex", "responses"],
   claude: ["Claude", "https://api.anthropic.com", "messages"],
@@ -168,6 +172,7 @@ export const CONNECTION_DEFAULTS = {
 } as const;
 /** Routes and the shared CLI credential addresses have independent identities. */
 export function credentialKey(connection: Connection): string {
+  if (connection.kind === "chatgpt") return connection.id;
   return connection.kind === "codex"
     ? "openai-codex"
     : connection.kind === "claude"

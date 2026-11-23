@@ -325,3 +325,6 @@ logout affects dsh-cli too. The authenticated Web transport protects the JSON PO
 operations. No secret enters model-visible commands or ordinary settings responses.
 Infron sends the explicitly selected Standard/Flex tier; it does not silently change
 tier on failure. [Storage, permissions and recovery](docs/kiokuko-models.md).
+
+
+The optional **ChatGPT plan** connection uses a temporary IPv4 loopback callback and the official OpenAI authorization, models and Responses endpoints. Each connection keeps its SDK state encrypted in the active profile and uses the OS credential store for the encryption key. The browser panel receives sign-in status and the authorization link. Disconnect removes the local tokens and requests remote revocation.

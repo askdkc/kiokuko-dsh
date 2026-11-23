@@ -1,6 +1,7 @@
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
+import { ChatGPTError } from "./vendor/chatgpt-devkit/errors.js";
 import { KiokukoModelsService } from "./service.js";
 import { ModelsConfigStore } from "./config-store.js";
 import { modelServiceKey } from "./metadata.js";
@@ -85,7 +86,7 @@ export async function modelsResponse(
   } catch (error) {
     // Only locally generated, bounded diagnostics; validation/provider/token errors are not wire-safe.
     const message = error instanceof Error ? error.message : "";
-    const safe =
+    const safe = error instanceof ChatGPTError ? message.slice(0, 300) :
       /^(Unknown |Connection |Configuration |Model discovery |No models |No authentication |Authentication |OAuth |Codex |Saving the default |Open a chat |Model is not available |This connection |Enter a valid |Origin |JSON |Request exceeds|Installed adapter|Kiokuko Models|Head\/worker)/.test(
         message,
       )

@@ -178,6 +178,10 @@ answerReview:
 Set `answerReview.mode: off` to disable it. It inherits `typedDecisions`, adds evaluation inference (and at most one main-model turn), and does not delay the first answer. If the selected provider is unavailable, review is skipped and the original answer is preserved; no other provider is substituted. Laya v1 findings are unverified suggestions because worker-side truncation cannot be checked. `/kioku-decisions status` reports progress and skip reasons; it does not certify correctness.
 
 
+### Use your ChatGPT plan in DSH
+
+In local DSH Web, open **Settings → Kiokuko Models → Add connection → ChatGPT plan**. Select **Sign in with ChatGPT**, open the authentication link, and allow plan usage. Choose an available model for the current chat or as the default. This personal-use integration bundles OpenAI’s noncommercial DevKit. [Account setup and storage](docs/kiokuko-models.md#sign-in-with-chatgpt).
+
 <a id="openai-decisions-setup"></a>
 ### Set up OpenAI Decisions
 

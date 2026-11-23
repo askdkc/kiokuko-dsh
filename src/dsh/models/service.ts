@@ -1,3 +1,6 @@
+import { join, dirname } from "node:path";
+import { chatGPTAccount, type ChatGPTAccount } from "./chatgpt.js";
+import { ChatGPTError } from "./vendor/chatgpt-devkit/index.js";
 import { imageTarget } from "./image-target.js";
 import { registerOwnedModels } from "./metadata.js";
 import { randomUUID } from "node:crypto";
@@ -57,6 +60,7 @@ type Route = {
   connection: Connection;
   adapter: LlmAdapter;
   underlying: string;
+  chatGPT?: ChatGPTAccount;
   models?: () => readonly LlmModelInfo[];
 };
 /**
@@ -131,6 +135,7 @@ class ModelsAdapter extends ProjectionAwareAdapter {
   override async listModels(id: string) {
     const r = this.route(id);
     if (
+      r.chatGPT ? !(await r.chatGPT.getSession()).sharing :
       r.connection.kind !== "ollama" &&
       !(await this.store.read(credentialKey(r.connection)))
     )
@@ -224,6 +229,7 @@ interface AuthRun {
   done: Promise<void>;
 }
 export interface ModelsServiceOptions {
+  createChatGPTAccount?: (dir: string, openBrowser: (url: string) => void) => ChatGPTAccount;
   llm: Pick<
     LlmRuntime,
     "registerAdapter" | "resolveCallConfig" | "discoverModels"
@@ -315,6 +321,20 @@ export class KiokukoModelsService {
     string,
     { requested: InfronServiceTier; actual: InfronServiceTier | "unknown" }
   >();
+  private readonly accounts = new Map<string, ChatGPTAccount>();
+  private account(id: string): ChatGPTAccount {
+    let account = this.accounts.get(id);
+    if (!account) {
+      const dir = join(dirname(this.options.config.path), "chatgpt", id);
+      account = (this.options.createChatGPTAccount ?? chatGPTAccount)(dir, url => {
+        const run = [...this.logins.values()].find(r => r.connectionId === id && r.status === "pending" && !r.abort.signal.aborted);
+        if (!run) throw new Error("Authentication cancelled");
+        run.events.push({ type: "auth_url", url, instructions: "Sign in and allow ChatGPT plan usage in your browser." });
+      });
+      this.accounts.set(id, account);
+    }
+    return account;
+  }
   private readonly logins = new Map<string, AuthRun>();
   private mutations: Promise<unknown> = Promise.resolve();
   private releaseMetadata: (() => void) | undefined;
@@ -392,7 +412,7 @@ export class KiokukoModelsService {
     return {
       provider: id,
       family:
-        c.kind === "codex"
+        c.kind === "codex" || c.kind === "chatgpt"
           ? "openai"
           : ["openai", "deepseek", "openrouter", "ollama"].includes(c.kind)
             ? (c.kind as ModelRoute["family"])
@@ -431,6 +451,8 @@ export class KiokukoModelsService {
   async list(sessionId?: string) {
     const candidates = await headWorkerCandidates(await readModelCatalog(this.catalog()).catch(() => ({ providers: [], models: [], failures: [] })), []);
     const auth = await this.options.credentials.describe();
+    const sessions = new Map(await Promise.all(this.document.connections.filter(c => c.kind === "chatgpt").map(async c =>
+      [c.id, await this.account(c.id).getSession()] as const)));
     return {
       revision: this.document.revision,
       headWorker: {
@@ -443,6 +465,7 @@ export class KiokukoModelsService {
         ) ? null : false,
       },
       connections: this.document.connections.map((c) => {
+        const session = sessions.get(c.id);
         const row = auth.find((a) => a.provider === credentialKey(c));
         const run = [...this.logins.values()].find(
           (r) => r.connectionId === c.id && r.status === "pending",
@@ -450,17 +473,18 @@ export class KiokukoModelsService {
         return {
           ...c,
           credentialKey: credentialKey(c),
-          connected: c.kind === "ollama" || !!row,
+          connected: session ? session.sharing : c.kind === "ollama" || !!row,
           authState: run
             ? "authenticating"
+            : session ? (session.sharing ? "connected" : session.status === "connected" ? "plan sharing disabled" : session.status)
             : row?.expired
               ? "reauthentication-may-be-required"
               : row || c.kind === "ollama"
                 ? "connected"
                 : "disconnected",
           oauth:
-            c.kind === "nous" ||
-            !!adapterBuiltinProviders().find((p) => p.id === credentialKey(c))
+            c.kind === "chatgpt" || c.kind === "nous" ||
+            c.kind !== "openai" && !!adapterBuiltinProviders().find((p) => p.id === credentialKey(c))
               ?.auth.oauth,
           requestedTier: c.kind === "infron" ? c.serviceTier : undefined,
           actualTier:
@@ -546,9 +570,10 @@ export class KiokukoModelsService {
           }),
         });
       } else {
+        const account = c.kind === "chatgpt" ? this.account(c.id) : undefined;
         const profile = connectionProfile(c, (tier) =>
             this.tiers.set(c.id, { requested: c.serviceTier, actual: tier }),
-          ),
+          account),
           credentials = sharedCredentialStore(this.options.credentials, [c]);
         const adapter = new PiAiAdapter({
           profiles: () => new Map([[c.id, profile]]),
@@ -564,7 +589,7 @@ export class KiokukoModelsService {
             ? { resolveAttachments: this.options.attachments }
             : {}),
         });
-        routes.set(c.id, { connection: c, underlying: c.id, adapter,
+        routes.set(c.id, { connection: c, underlying: c.id, adapter, ...(account ? { chatGPT: account } : {}),
           models: () => profile.piProvider!.getModels().map(m => ({provider:c.id,id:m.id,name:m.name,inputModalities:[...m.input]})) });
       }
     }
@@ -587,6 +612,7 @@ export class KiokukoModelsService {
   }
   private async apiKey(c: Connection): Promise<string | undefined> {
     this.lifecycle.signal.throwIfAborted();
+    if (c.kind === "chatgpt") return "devkit-managed";
     if (c.kind === "ollama") return "ollama";
     const current = await this.options.credentials.read(credentialKey(c));
     if (!current)
@@ -610,7 +636,7 @@ export class KiokukoModelsService {
   }
   async setKey(id: string, key: string): Promise<void> {
     const c = this.require(id);
-    if (c.kind === "codex" || c.kind === "ollama")
+    if (c.kind === "chatgpt" || c.kind === "codex" || c.kind === "ollama")
       throw new Error("This connection does not use API keys");
     if (!key.trim() || key.length > 16_384)
       throw new Error("Enter a valid API key");
@@ -632,19 +658,28 @@ export class KiokukoModelsService {
   async logout(id: string): Promise<void> {
     const c = this.require(id);
     this.cancelConnectionLogins(c);
-    await this.options.credentials.delete(credentialKey(c));
+    if (c.kind === "chatgpt") await this.account(id).disconnect();
+    else await this.options.credentials.delete(credentialKey(c));
     this.registration?.replace([...this.adapter.routes.keys()]);
   }
   async models(id: string) {
     this.require(id);
     return this.adapter.listModels(id);
   }
-  async refresh(id: string): Promise<void> {
+  async refresh(id: string, signal = this.lifecycle.signal): Promise<void> {
     const c = this.require(id);
     if (c.kind === "opencode" || c.kind === "opencode-go") {
       const state = await this.catalogs.get(c.kind)!.refresh();
       if (state.warning) throw new Error(state.warning);
       this.publish(this.build(this.document.connections));
+      return;
+    }
+    if (c.kind === "chatgpt") {
+      const revision = this.document.revision;
+      const listed = await this.account(id).listModels({ signal });
+      signal.throwIfAborted();
+      const models = this.adopt(c, listed.map(m => ({ id: m.slug, name: m.displayName })));
+      await this.save({ ...c, models }, revision);
       return;
     }
     if (c.kind === "codex") return;
@@ -750,7 +785,7 @@ export class KiokukoModelsService {
   ): ManualModel[] {
     const shipped =
       adapterBuiltinProviders()
-        .find((p) => p.id === credentialKey(c))
+        .find((p) => p.id === (c.kind === "chatgpt" ? "openai" : credentialKey(c)))
         ?.getModels() ?? [],
       // The Infron gateway mirrors the canonical chat-completions model ids, and
       // the bundled catalog is where those ids publish a reasoning capability.
@@ -944,10 +979,11 @@ export class KiokukoModelsService {
       )
     )
       throw new Error("Authentication is already running");
+    if (c.kind === "openai") throw new Error("OAuth sign-in is available under ChatGPT plan");
     const oauth = adapterBuiltinProviders().find(
       (p) => p.id === credentialKey(c),
     )?.auth.oauth;
-    if (!oauth && c.kind !== "nous")
+    if (!oauth && c.kind !== "nous" && c.kind !== "chatgpt")
       throw new Error("OAuth is unavailable for this connection");
     const run: AuthRun = {
       id: randomUUID(),
@@ -983,6 +1019,14 @@ export class KiokukoModelsService {
     );
     run.done = (async () => {
       try {
+        if (c.kind === "chatgpt") {
+          const session = await this.account(id).signIn({ signal: run.abort.signal, reconsent: true });
+          if (!session.sharing) throw new ChatGPTError("sharing_not_enabled", "ChatGPT plan usage was not enabled. Sign in again and allow usage.");
+          await this.refresh(id, AbortSignal.any([run.abort.signal, this.lifecycle.signal]));
+          run.abort.signal.throwIfAborted();
+          run.status = "success";
+          return;
+        }
         const credential = asStoredCredential(
           c.kind === "nous"
             ? await loginNous(bridge, "hermes-cli")
@@ -997,11 +1041,11 @@ export class KiokukoModelsService {
         run.abort.signal.throwIfAborted();
         run.status = "success";
         this.registration?.replace([...this.adapter.routes.keys()]);
-      } catch {
+      } catch (error) {
         run.status = run.abort.signal.aborted ? "cancelled" : "error";
         run.error =
           run.status === "error"
-            ? "Authentication failed; retry login"
+            ? error instanceof ChatGPTError ? error.message : c.kind === "chatgpt" ? "Could not enable ChatGPT plan usage. Check consent and refresh models, or sign in again." : "Authentication failed; retry login"
             : "Authentication cancelled";
       } finally {
         delete run.answer;
