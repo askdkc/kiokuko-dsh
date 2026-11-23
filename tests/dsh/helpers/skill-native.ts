@@ -92,7 +92,7 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
       return{id:q.id,selected:[(q.id.startsWith('coding-lisp-') || q.id.startsWith('lisp-early-')) ? '使わない' : q.id==='taskType'?'chat':'通常実行']}
     })})})}}))
   }
-  const initial=explicit==='prompt-only'?[llm,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
+  const initial=explicit==='prompt-only'?[llm,projection,prompt,skills]:[llm,session,projection,prompt,tools,agents,skills,commands,subagents,skillTool]
   for(const m of initial) {
     if (m === tools && options.ptc) {
       for (const name of ['dsh-subprocess-local', 'dsh-sandbox-local', 'dsh-sandbox-policy', 'dsh-ptc-runtime-node']) {
@@ -120,11 +120,12 @@ export async function nativeSkillFixture(options: { packages: string; packageRoo
     hostFiber = await ctx.plugin({name:'explicit-skill-host',apply(c:any){return c.provide('kiokukoDsh',adapter!.host)}})
     fibers.push(hostFiber)
   }
+  if (explicit === 'prompt-only') assert.ok(ctx.get('systemPrompt'), 'prompt-only fixture requires an active DSH prompt service before plugin mount')
   plugin = prompts
     ? await subject.mountDshComposition(ctx, adapter!.host, subject.Config.parse({ ...extra }).lisp, prompts)
     : await mountPlugin(mode)
   if(explicit==='prompt-only'){
-    for(const m of [session,projection,tools,agents,commands,skillTool]) {
+    for(const m of [session,tools,agents,commands,skillTool]) {
       if (m === tools) await mountNativeTools(ctx, tools, packages, fibers)
       else if (m !== skillTool || skillToolPlacement === 'global') fibers.push(await ctx.plugin(m.default??m))
     }
