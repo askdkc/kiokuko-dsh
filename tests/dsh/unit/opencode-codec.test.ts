@@ -65,6 +65,23 @@ test('valid and malformed parallel calls preserve successful calls, results, ord
   assert.deepEqual(history, before)
 })
 
+test('replaying a failed call after a successful retry makes further retries conditional', async () => {
+  const history = [
+    assistant([{ type: 'tool-call', id: 'bad', name: 'write', arguments: '{"path":"x"' }]),
+    toolResult('bad', 'Invalid arguments', true),
+    assistant([{ type: 'tool-call', id: 'retry', name: 'write', arguments: '{"path":"x"}' }], 'assistant-2'),
+    toolResult('retry', 'File written', false),
+  ]
+  const prompt = await encodePrompt(options(history), chatModel)
+  const feedback = prompt.flatMap(message => message.role === 'assistant' ? message.content : [])
+    .find(part => part.type === 'text')
+  assert.ok(feedback?.type === 'text')
+  assert.match(feedback.text, /only if the operation is still necessary and has not already succeeded/u)
+  assert.match(feedback.text, /Do not reuse or repair the stored arguments/u)
+  const result = prompt.find(message => message.role === 'tool')
+  assert.ok(result?.content.some(part => part.type === 'tool-result' && part.toolCallId === 'retry'))
+})
+
 test('malformed calls with missing, duplicate, successful, or colliding pairs remain invalid replay state', async () => {
   const malformed = { type: 'tool-call', id: 'call', name: 'write', arguments: '{"x":1}}' }
   const cases = [

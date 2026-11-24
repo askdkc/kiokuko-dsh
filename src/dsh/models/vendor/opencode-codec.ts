@@ -67,7 +67,7 @@ function recoverableMalformedCalls(messages: readonly GenerateOptions['messages'
 }
 
 function recoveredCallText(callId: string, call: RecoverableMalformedCall): string {
-  return `[Previous tool call ${JSON.stringify(boundedLabel(call.name))} (id ${JSON.stringify(boundedLabel(callId))}) was rejected because its arguments were not valid JSON. The tool returned: ${call.feedback}\nRetry by generating a new call with valid JSON arguments. Do not reuse or repair the stored arguments.]`
+  return `[Previous tool call ${JSON.stringify(boundedLabel(call.name))} (id ${JSON.stringify(boundedLabel(callId))}) was rejected because its arguments were not valid JSON. The tool returned: ${call.feedback}\nGenerate a new call with valid JSON arguments only if the operation is still necessary and has not already succeeded. Do not reuse or repair the stored arguments.]`
 }
 
 export async function encodePrompt(options: GenerateOptions, model: OpenCodeModel, attachments?: () => AttachmentStore | undefined, warn?: (reason: string) => void): Promise<LanguageModelV4Prompt> {
