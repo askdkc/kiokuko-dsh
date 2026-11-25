@@ -1,6 +1,8 @@
 name: CI
 on:
-  push: null
+  push:
+    branches: ['**']
+    tags-ignore: ['v*.*.*'] # Published releases run CI below.
   pull_request: null
   workflow_dispatch: null
   schedule:
