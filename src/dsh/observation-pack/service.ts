@@ -8,6 +8,21 @@ import type { SessionProgress } from '../semantic-compaction/progress.js'
 import { ObservationPackConfig, ObservationReadInput, hasObservationSourceExcerpt, packedMessage, packedSource, plainResult, resolveObservation, textDigest } from './policy.js'
 
 interface Host { get(name: string, strict?: boolean): any; on(name: string, listener: (...args: any[]) => any): () => void }
+
+function observationPage(source: string, offset: number, limit: number) {
+  let characters = 0
+  let start = source.length
+  let end = source.length
+  // Keep UTF-16 slice boundaries while counting the total in code points.
+  for (let index = 0; index < source.length; characters++) {
+    if (characters === offset) start = index
+    if (characters === offset + limit) end = index
+    index += source.codePointAt(index)! > 0xffff ? 2 : 1
+  }
+  if (offset > characters) throw new Error('Observation offset exceeds original size')
+  return { text: source.slice(start, end), nextOffset: end < source.length ? offset + limit : null, characters }
+}
+
 export class ObservationPack {
   readonly config: z.infer<typeof ObservationPackConfig>
   readonly stats = { packed: 0, restored: 0, originalBytes: 0, packedBytes: 0, reads: 0, readBytes: 0, toolDefinitionBytes: 0,
@@ -59,15 +74,13 @@ export class ObservationPack {
     if (!agent || !session || this.ctx.get('tools', false)?.get('observation_read', agent) !== this.definition) throw new Error('Observation reader unavailable')
     this.stopped.throwIfAborted(); execution.signal?.throwIfAborted()
     const owner = await this.authorize(agent, session), event = resolveObservation(session, handle), original = plainResult(event)!
-    const points = Array.from(original.text)
-    if (offset > points.length) throw new Error('Observation offset exceeds original size')
-    const text = points.slice(offset, offset + limit).join(''), nextOffset = offset + limit < points.length ? offset + limit : null
+    const page = observationPage(original.text, offset, limit)
     const current = await this.authorize(agent, session)
     this.stopped.throwIfAborted(); execution.signal?.throwIfAborted()
     if (canonicalContentHash(current) !== canonicalContentHash(owner) || session.eventAt(event.seq) !== event
       || this.ctx.get('tools', false)?.get('observation_read', agent) !== this.definition) throw new Error('Observation authority changed')
-    this.stats.reads++; this.stats.readBytes += Buffer.byteLength(text)
-    return { text, nextOffset, characters: points.length, bytes: Buffer.byteLength(original.text), digest: textDigest(original.text) }
+    this.stats.reads++; this.stats.readBytes += Buffer.byteLength(page.text)
+    return { ...page, bytes: Buffer.byteLength(original.text), digest: textDigest(original.text) }
   }
   private observe(execution: any, result: any): void {
     const session = execution.agent?.session as CompactionSession | undefined
