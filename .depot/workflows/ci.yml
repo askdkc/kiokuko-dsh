@@ -154,6 +154,16 @@ jobs:
           path: ${{ runner.temp }}/native-input
       - name: Assemble exactly the selected, current native test bundle
         run: node scripts/merge-micro-judge-artifacts.mjs "${{ runner.temp }}/native-input" --ci-plan="${{ runner.temp }}/ci-plan/selected-ci.json"
+      - name: Use Ubuntu package sources for Linux test prerequisites
+        if: runner.os == 'Linux' && (matrix.sbcl || matrix.browser)
+        shell: bash
+        run: |
+          # Keep the runner's Ubuntu mirrors for apt and Playwright's later --with-deps install.
+          sudo install -d /etc/apt/kiokuko-sources
+          if [[ -f /etc/apt/sources.list.d/ubuntu.sources ]]; then
+            sudo cp /etc/apt/sources.list.d/ubuntu.sources /etc/apt/kiokuko-sources/
+          fi
+          echo 'Dir::Etc::sourceparts "/etc/apt/kiokuko-sources";' | sudo tee /etc/apt/apt.conf.d/99-kiokuko-sources
       - name: Install selected native test prerequisites
         if: matrix.sbcl
         shell: bash
