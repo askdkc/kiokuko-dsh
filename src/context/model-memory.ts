@@ -10,7 +10,10 @@ export function renderModelMemory(item: { workspace?: string; entryId: string; t
 }
 
 export function renderModelRelations(relationDelivery: RelationDelivery): string {
-  return 'Stored relation data. complete means coverage of stored links between provided items only; it does not establish freshness or truth. Selection omissions may hide other relevant or contradictory items.\n'
+  const partialNotice = relationDelivery.status === 'partial'
+    ? ' Some stored links were omitted to fit the character budget, possibly including contradictions.'
+    : '';
+  return 'Stored relation data. complete means coverage of stored links between provided items only; it does not establish freshness or truth. Selection omissions may hide other relevant or contradictory items.' + partialNotice + '\n'
     + JSON.stringify(relationDelivery);
 }
 

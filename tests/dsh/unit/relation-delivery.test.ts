@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs'
 import assert from 'node:assert/strict'
 import { fixture } from '../integration/evolution/fixture.js'
 import { recordEntry } from '../../../src/memory/entries.js'
+import { normalizeStoredModelContext, renderModelRelations, serializeModelMemoryContext } from '../../../src/context/model-memory.js'
 import { retrieveFederatedMemory } from '../../../src/memory/federated-retrieval.js'
 import { RELATION_TYPES, readRelationDelivery, packRelationDelivery, filterRelationDelivery, legacyRelationDelivery, validateRelationDelivery, relationDeliveryCharacterCount } from '../../../src/memory/relation-delivery.js'
 
@@ -18,10 +19,19 @@ test('stored typed links retain direction and cover only the exact provided iden
     assert.deepEqual(new Set(result.edges.map(edge => edge.type)), new Set(RELATION_TYPES))
     assert.equal(result.edges.find(edge => edge.type === 'contradicts')?.from.entryId, entries[1]!.id)
     assert.ok(result.edges.every(edge => edge.from.workspace === 'project:test' && edge.to.entryId !== entries[2]!.id))
+    const items = entries.slice(0, 2).map(entry => ({ workspace: entry.workspace, entryId: entry.id,
+      title: entry.title, summary: null, bodyPreview: entry.title }))
+    const relationCharacterBudget = 350
+    const partial = readRelationDelivery(db, items, { relationCharacterBudget })
+    const context = serializeModelMemoryContext({ items, relationDelivery: partial, relationCharacterBudget })
+    const replay = JSON.parse(normalizeStoredModelContext(context))
+    assert.equal(replay.relationDelivery.status, 'partial')
+    assert.deepEqual(replay.relationDelivery.edges, result.edges.filter(edge => edge.type === 'contradicts'))
+    assert.match(renderModelRelations(partial), /stored links were omitted/)
     assert.throws(() => readRelationDelivery(db, [{ entryId: entries[0]!.id, workspace: 'project:foreign' }]))
   } finally { db.close() }
 })
-test('relation JSON uses a separate Unicode budget with exact threshold and all-or-none omissions', () => {
+test('relation JSON uses a separate Unicode budget with exact thresholds and explicit omissions', () => {
   const complete = packRelationDelivery([row()])
   const count = Array.from(JSON.stringify({relationDelivery:complete})).length
   assert.ok(count < JSON.stringify({relationDelivery:complete}).length)
@@ -31,6 +41,33 @@ test('relation JSON uses a separate Unicode budget with exact threshold and all-
   assert.equal(packRelationDelivery([row(), row('supports')], { relationEdgeCap: 1 }).status, 'omitted_edge_cap')
   assert.equal(packRelationDelivery([row('future_kind')]).status, 'omitted_unknown_type')
   assert.throws(() => packRelationDelivery([], { relationCharacterBudget: 1 }), /explicit delivery status/)
+})
+test('partial delivery prioritizes contradictions, skips oversized links and fills the exact remaining budget', () => {
+  const rows = [
+    { ...row(), from_id: 'a'.repeat(250) },
+    { ...row('supports'), from_id: 'b' },
+    { ...row('related_to'), from_id: 'c' },
+    { ...row(), from_id: '😀z' },
+  ]
+  const expected = [rows[3]!, rows[1]!].map(r => ({
+    from: { workspace: r.from_workspace, entryId: r.from_id },
+    to: { workspace: r.to_workspace, entryId: r.to_id }, type: r.relation,
+  }))
+  const envelope = { scope: 'provided_items', status: 'partial', edges: expected, selectionOmissions: [] }
+  const budget = Array.from(JSON.stringify({ relationDelivery: envelope })).length
+  for (const input of [rows, [...rows].reverse()]) {
+    const partial = packRelationDelivery(input, { relationCharacterBudget: budget })
+    assert.deepEqual(partial, envelope)
+    assert.deepEqual(validateRelationDelivery(partial, { relationCharacterBudget: budget }), envelope)
+    assert.deepEqual(packRelationDelivery(input, { relationCharacterBudget: budget - 1 }).edges, expected.slice(0, 1))
+    const filtered = filterRelationDelivery(partial, [expected[1]!.from, expected[1]!.to])
+    assert.equal(filtered.status, 'partial')
+    assert.deepEqual(filtered.edges, expected.slice(1))
+    assert.deepEqual(filtered.selectionOmissions, ['final_filter'])
+    const empty = filterRelationDelivery(partial, [])
+    assert.equal(empty.status, 'omitted_budget')
+    assert.deepEqual(empty.edges, [])
+  }
 })
 test('final filters restrict complete snapshots, retain omissions and never upgrade omitted or legacy relations', () => {
   const complete = packRelationDelivery([row()], { selectionOmissions: ['body_budget'] })
@@ -47,6 +84,7 @@ test('final filters restrict complete snapshots, retain omissions and never upgr
 test('invalid or partial relation envelopes cannot claim complete delivery', () => {
   const complete = packRelationDelivery([row()])
   assert.throws(() => validateRelationDelivery({ ...complete, status: 'omitted_edge_cap' }))
+  assert.throws(() => validateRelationDelivery({ ...complete, status: 'partial', edges: [] }))
   assert.throws(() => validateRelationDelivery({ ...complete, scope: 'all_memory' }))
   assert.throws(() => validateRelationDelivery({ ...complete, edges: [{ ...complete.edges[0], type: 'invented' }] }))
   assert.throws(() => validateRelationDelivery({ ...complete, extra: true }))

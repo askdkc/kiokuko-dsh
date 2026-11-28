@@ -10,7 +10,7 @@ export interface DeliveredRelation { from: RelationEndpoint; to: RelationEndpoin
 export type SelectionOmission = 'body_budget' | 'item_limit' | 'final_filter';
 export interface RelationDelivery {
   scope: 'provided_items';
-  status: 'complete' | 'omitted_budget' | 'omitted_edge_cap' | 'omitted_unknown_type' | 'omitted_legacy';
+  status: 'complete' | 'partial' | 'omitted_budget' | 'omitted_edge_cap' | 'omitted_unknown_type' | 'omitted_legacy';
   edges: DeliveredRelation[];
   selectionOmissions: SelectionOmission[];
 }
@@ -36,16 +36,33 @@ function limits(options: RelationDeliveryOptions) {
   return { characters, edgeCap };
 }
 
-/** All edges or none. A complete result covers stored links between provided items only. */
+function fitRelationDelivery(value: RelationDelivery, characters: number): RelationDelivery {
+  if (relationDeliveryCharacterCount(value) <= characters) return value;
+  if (value.status === 'complete' || value.status === 'partial') {
+    const partial: RelationDelivery = { ...value, status: 'partial', edges: [] };
+    let remaining = characters - relationDeliveryCharacterCount(partial);
+    // "partial" is one character shorter than "complete" and must represent a genuine omission.
+    const maxEdges = value.status === 'complete' ? value.edges.length - 1 : value.edges.length;
+    const prioritized = [...value.edges].sort((a, b) => Number(b.type === 'contradicts') - Number(a.type === 'contradicts'));
+    for (const edge of prioritized) {
+      if (partial.edges.length >= maxEdges) break;
+      const cost = Array.from(JSON.stringify(edge)).length + (partial.edges.length ? 1 : 0);
+      if (cost > remaining) continue;
+      partial.edges.push(edge);
+      remaining -= cost;
+    }
+    if (partial.edges.length) return partial;
+    return fitRelationDelivery({ ...value, status: 'omitted_budget', edges: [] }, characters);
+  }
+  throw new KiokukoError('VALIDATION_ERROR', 'Relation metadata budget cannot fit its explicit delivery status');
+}
+
+/** A complete result covers every stored link between the provided items. */
 export function packRelationDelivery(rows: readonly StoredRelation[], options: RelationDeliveryOptions = {}): RelationDelivery {
   const { characters, edgeCap } = limits(options);
-  const fit = (status: RelationDelivery['status'], edges: DeliveredRelation[]): RelationDelivery => {
-    const value: RelationDelivery = { scope: 'provided_items', status, edges,
-      selectionOmissions: [...new Set(options.selectionOmissions ?? [])].sort() };
-    if (relationDeliveryCharacterCount(value) <= characters) return value;
-    if (status === 'complete') return fit('omitted_budget', []);
-    throw new KiokukoError('VALIDATION_ERROR', 'Relation metadata budget cannot fit its explicit delivery status');
-  };
+  const fit = (status: RelationDelivery['status'], edges: DeliveredRelation[]) => fitRelationDelivery({
+    scope: 'provided_items', status, edges, selectionOmissions: [...new Set(options.selectionOmissions ?? [])].sort(),
+  }, characters);
   if (rows.length > edgeCap) return fit('omitted_edge_cap', []);
   if (rows.some(row => !RELATION_TYPES.includes(row.relation as RelationType))) return fit('omitted_unknown_type', []);
   const edges = rows.map(row => ({ from: { workspace: row.from_workspace, entryId: row.from_id },
@@ -137,11 +154,13 @@ export function attachRelationDelivery<T extends { items: readonly ModelMemoryIt
 const Endpoint = z.object({ workspace: z.string().min(1).max(256), entryId: z.string().min(1).max(256) }).strict();
 export const RelationDeliverySchema = z.object({
   scope: z.literal('provided_items'),
-  status: z.enum(['complete', 'omitted_budget', 'omitted_edge_cap', 'omitted_unknown_type', 'omitted_legacy']),
+  status: z.enum(['complete', 'partial', 'omitted_budget', 'omitted_edge_cap', 'omitted_unknown_type', 'omitted_legacy']),
   edges: z.array(z.object({ from: Endpoint, to: Endpoint, type: z.enum(RELATION_TYPES) }).strict()).max(1024),
   selectionOmissions: z.array(z.enum(['body_budget', 'item_limit', 'final_filter'])).max(3),
 }).strict().superRefine((value, ctx) => {
-  if (value.status !== 'complete' && value.edges.length !== 0)
+  if (value.status === 'partial' && value.edges.length === 0)
+    ctx.addIssue({ code: 'custom', message: 'Partial delivery must include at least one relation' });
+  if (value.status !== 'complete' && value.status !== 'partial' && value.edges.length !== 0)
     ctx.addIssue({ code: 'custom', message: 'Omitted relations must not contain a partial edge set' });
   if (new Set(value.selectionOmissions).size !== value.selectionOmissions.length)
     ctx.addIssue({ code: 'custom', message: 'Selection omission reasons must be distinct' });
@@ -156,7 +175,7 @@ export function validateRelationDelivery(value: unknown, options: RelationDelive
   return parsed.data;
 }
 
-/** A final filter can restrict complete snapshots; an omitted snapshot is never upgraded without a new read. */
+/** A final filter restricts visible endpoints and cannot recover missing links. */
 export function filterRelationDelivery(value: RelationDelivery | undefined, items: readonly RelationEndpoint[],
   options: RelationDeliveryOptions & { finalFilter?: boolean } = {}): RelationDelivery {
   if (value === undefined) return legacyRelationDelivery({ ...options,
@@ -167,6 +186,11 @@ export function filterRelationDelivery(value: RelationDelivery | undefined, item
     && ids.has(JSON.stringify([edge.to.workspace, edge.to.entryId])));
   const selectionOmissions = [...new Set([...parsed.selectionOmissions, ...(options.selectionOmissions ?? []),
     ...(options.finalFilter || edges.length !== parsed.edges.length ? ['final_filter' as const] : [])])].sort();
+  if (parsed.status === 'partial') {
+    const { characters, edgeCap } = limits({ ...options, selectionOmissions });
+    if (edges.length > edgeCap) return fitRelationDelivery({ ...parsed, status: 'omitted_edge_cap', edges: [], selectionOmissions }, characters);
+    return fitRelationDelivery({ ...parsed, status: edges.length ? 'partial' : 'omitted_budget', edges, selectionOmissions }, characters);
+  }
   if (parsed.status !== 'complete') return validateRelationDelivery({ ...parsed, selectionOmissions }, options);
   return packRelationDelivery(edges.map(edge => ({ kind: 'edge', from_id: edge.from.entryId, from_workspace: edge.from.workspace,
     to_id: edge.to.entryId, to_workspace: edge.to.workspace, relation: edge.type })), { ...options, selectionOmissions });

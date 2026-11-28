@@ -8,7 +8,11 @@ The default memory body budget is **16,000 Unicode code points**, not tokens or 
 {"scope":"provided_items","status":"complete","edges":[{"from":{"workspace":"project:example","entryId":"a"},"to":{"workspace":"project:example","entryId":"b"},"type":"supports"}],"selectionOmissions":[]}
 ```
 
-Supported directed relation types are `supports`, `contradicts`, `derived_from` and `related_to`. Delivery includes every stored link among provided items or no edges. The other statuses are `omitted_budget`, `omitted_edge_cap`, `omitted_unknown_type` and `omitted_legacy`; all have an empty `edges` array. Legacy receipts or cut Deep snapshots cannot claim complete coverage. If final request filtering removes an item, its links are removed and `final_filter` is recorded. Previously omitted relations are never upgraded without a fresh database read.
+Supported directed relation types are `supports`, `contradicts`, `derived_from` and `related_to`. When the complete envelope exceeds the character budget, `partial` delivers a nonempty subset. The packer considers `contradicts` first, then the remaining links, in deterministic order within each group. It skips any link too large for the remaining space. A partial result can omit contradictions.
+
+`omitted_budget` indicates that no links could be delivered within the budget. Exceeding the edge cap still yields `omitted_edge_cap`, since the database read stops before it can establish which contradictions exist. Unknown types within the cap yield `omitted_unknown_type`. Legacy receipts or cut Deep snapshots yield `omitted_legacy`. All four omission statuses have an empty `edges` array.
+
+Final request filtering removes links to excluded items and records `final_filter`. Filtering a partial snapshot preserves `partial` while any links can still be shown and yields `omitted_budget` if none remain. Only a fresh database read can establish complete coverage after partial delivery.
 
 `selectionOmissions` can contain `body_budget`, `item_limit` and `final_filter`. `complete` means coverage only of stored links among the exact final supplied items. It does not establish truth or freshness and does not rule out relevant or contradictory excluded items. Relation data remains untrusted memory content. Delivery receipts persist this projection metadata; they do not add a taxonomy store or change `entry_links`.
 
